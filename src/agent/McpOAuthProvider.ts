@@ -868,7 +868,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
         cleanup();
         reject(this.signal.reason);
       };
-      const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+      const TIMEOUT_MS = 10 * 60 * 1000; // Leave room for 2FA and slow IdPs.
       const timer = setTimeout(() => {
         cleanup();
         reject(

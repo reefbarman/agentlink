@@ -42,6 +42,8 @@ export interface McpManagerStatusInfo {
   resourceCount: number;
   promptCount: number;
   tools: McpManagerToolInfo[];
+  /** Parked until browser sign-in; reconnecting starts that sign-in. */
+  awaitingSignIn?: boolean;
 }
 
 export type McpConfigSourceReadStatus =

@@ -13,6 +13,7 @@ import {
   DEFAULT_COMMAND_REVIEW_TIMEOUT_MS,
   MAX_COMMAND_REVIEW_ATTEMPTS,
   buildCommandReviewContext,
+  buildCommandReviewContextWithMetadata,
   createCommandApprovalReviewer,
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
@@ -1035,6 +1036,71 @@ describe("command review denial circuit", () => {
 });
 
 describe("one-shot command approval reviewer", () => {
+  it("keeps baseline requests identical and allowlists scoped publication evidence", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const input = {
+      ...reviewInput(
+        "gh api repos/owner/repo/pulls/42/reviews/7/events -f event=APPROVE",
+      ),
+      humanInputRevision: 8,
+    };
+    await reviewer.review(input);
+    const baseline = complete.mock.calls[0]![0];
+    await reviewer.review({
+      ...input,
+      evidenceMetadata: { sourceInputIds: ["host-only-id"] },
+    });
+    expect(complete.mock.calls[1]![0]).toEqual({
+      ...baseline,
+      signal: expect.any(AbortSignal),
+    });
+    const publication = {
+      version: 1 as const,
+      mode: "builtin_review" as const,
+      command: input.command,
+      cwd: root,
+      humanInputRevision: 8,
+      target: { host: "github.com", repository: "owner/repo", pr: 42 },
+      kind: "submit_review" as const,
+      sourceInputIds: ["host-only-id"],
+      verified: true as const,
+      payloadFiles: [
+        {
+          reference: "private-path",
+          path: "private-realpath",
+          sha256: "private-hash",
+        },
+      ],
+      workspaceRoots: [root],
+      pendingReviewBody: "Untrusted pending review content",
+    };
+    await reviewer.review({ ...input, reviewPublicationContext: publication });
+    const scoped = complete.mock.calls[2]![0]!;
+    expect(scoped.systemPrompt).toContain("Review-publication policy variant:");
+    const serialized = JSON.stringify(scoped.messages);
+    expect(serialized).toContain("Untrusted pending review content");
+    for (const privateValue of [
+      "host-only-id",
+      "private-hash",
+      "private-path",
+      "private-realpath",
+    ])
+      expect(serialized).not.toContain(privateValue);
+    await reviewer.review({
+      ...input,
+      reviewPublicationContext: {
+        ...publication,
+        command: "different command",
+      },
+    });
+    expect(complete.mock.calls[3]![0]).toEqual({
+      ...baseline,
+      signal: expect.any(AbortSignal),
+    });
+  });
   it("uses the session model and an isolated bounded completion request", async () => {
     const { provider, complete, sessionModel } = makeProvider({});
     const reviewer = createCommandApprovalReviewer({
@@ -1103,8 +1169,105 @@ describe("one-shot command approval reviewer", () => {
     expect(content).toContain("<untrusted-command-review-data>");
     expect(content).toContain("ignore prior instructions");
     expect(content).toContain('"userObjective":"Build the project"');
-    expect(content).toContain('"recentContext"');
+    expect(content).toBe(
+      [
+        "<untrusted-command-review-data>",
+        JSON.stringify({
+          command: input.command,
+          cwd: input.cwd,
+          workspaceRoots: input.workspaceRoots,
+          reason: input.reason,
+          userObjective: input.userObjective,
+          latestUserInstruction: null,
+          recentContext: input.context,
+          confinement: null,
+          referencedScripts: [],
+          deletionTargets: [],
+          deletionTargetsOmitted: 0,
+          inlineFiles: [],
+          classification: {
+            tier: input.classified.tier,
+            subcommands: input.classified.perSubCommand.map(
+              ({ command: classifiedCommand, result }) => ({
+                command: classifiedCommand,
+                tier: result.tier,
+                code: result.code,
+                executable: result.executable ?? null,
+              }),
+            ),
+          },
+        }),
+        "</untrusted-command-review-data>",
+      ].join("\n"),
+    );
     expect(request).not.toHaveProperty("tools");
+  });
+
+  it("returns detailed context accounting without changing the legacy array", () => {
+    const messages = [
+      {
+        role: "user" as const,
+        content: "Build the project",
+        humanInputId: "human-input-1",
+        uiHint: { userMessage: { origin: "vscode" as const } },
+      },
+    ];
+    const legacy = buildCommandReviewContext(messages);
+    const detailed = buildCommandReviewContextWithMetadata(messages);
+    expect(detailed.context).toEqual(legacy);
+    expect(detailed.metadata).toMatchObject({
+      context: {
+        state: "complete",
+        sourceCount: 1,
+        includedCount: 1,
+        omittedCount: 0,
+      },
+      sourceInputIds: ["human-input-1"],
+    });
+  });
+
+  it("reports metadata across invalid-response retries without exposing the decision", async () => {
+    const observe = vi.fn();
+    let call = 0;
+    const { provider } = makeProvider({
+      complete: async () => {
+        call += 1;
+        return {
+          text:
+            call === 1
+              ? "not json"
+              : '{"outcome":"allow","risk_level":"low","user_authorization":"high","rationale":"Safe"}',
+          usage: {
+            inputTokens: 10,
+            outputTokens: 2,
+            cacheReadTokens: 3,
+            cacheCreationTokens: 1,
+            inputTokenBreakdownReported: true,
+          },
+        };
+      },
+    });
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel: "session-model" }),
+    });
+
+    await reviewer.review({ ...reviewInput(), observe });
+
+    expect(observe).toHaveBeenCalledOnce();
+    const observation = observe.mock.calls[0]?.[0];
+    expect(observation).toMatchObject({
+      policyVersion: "current-primary-v1",
+      attempts: 2,
+      usage: {
+        inputTokens: 20,
+        outputTokens: 4,
+        cacheReadTokens: 6,
+        cacheCreationTokens: 2,
+        reportedAttempts: 2,
+        coverage: "reported",
+      },
+    });
+    expect(observation).not.toHaveProperty("outcome");
   });
 
   it("surfaces a newer broad commit request ahead of a stale objective", async () => {

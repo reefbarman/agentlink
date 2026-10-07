@@ -22,9 +22,16 @@ import type { ApprovalProjectContext } from "@agentlink/protocol/approval-transp
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import {
   buildCommandReviewContext,
+  buildCommandReviewContextWithMetadata,
   createCommandApprovalReviewer,
   selectCommandReviewObjective,
 } from "./approvals/commandApprovalReview.js";
+import {
+  createReviewPublicationHost,
+  isReviewPublicationCommand,
+  type ReviewPublicationHost,
+} from "./approvals/reviewPublicationPolicy.js";
+import { BUILT_IN_MODES } from "./agent/modes.js";
 import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
 import { createActionApprovalReviewer } from "./approvals/actionApprovalReview.js";
 import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCommands.js";
@@ -3008,6 +3015,41 @@ export async function activate(
   });
   context.subscriptions.push(fleetAutomationLifecycle);
 
+  const publicationEvidenceHost = createReviewPublicationHost({
+    getSessionSnapshot: (sessionId) => {
+      const session = agentSessionManager.getSession(sessionId);
+      if (!session || session.isAborted) return undefined;
+      return {
+        builtinReview:
+          session.mode === "review" &&
+          session.agentMode ===
+            BUILT_IN_MODES.find((mode) => mode.slug === "review"),
+        foreground: !session.background,
+        humanInputRevision: session.humanInputRevision,
+        humanDecisions: session.getHumanDecisionRecord(),
+        queuedHumanInputs: session.getPendingHumanInterjections(),
+      };
+    },
+  });
+  const reviewPublicationHost: ReviewPublicationHost = {
+    ...publicationEvidenceHost,
+    prepare(request) {
+      const result = publicationEvidenceHost.prepare(request);
+      try {
+        if (isReviewPublicationCommand(request.command)) {
+          sessionOutcomeTelemetry?.record({
+            type: "review_publication_attempt",
+            sessionId: request.sessionId,
+            scopeEvidence: result ? "verified" : "unavailable",
+            stage: "guardian_attempt",
+          });
+        }
+      } catch {
+        // Diagnostics cannot alter approval or execution.
+      }
+      return result;
+    },
+  };
   const resolveApprovalReviewerContext = (sessionId: string) => {
     const session = agentSessionManager.getSession(sessionId);
     if (!session || session.isAborted) return undefined;
@@ -3082,6 +3124,16 @@ export async function activate(
     commandApprovalReviewer,
     networkApprovalReviewer,
     actionApprovalReviewer,
+    reviewPublicationHost,
+    getCommandReviewContextWithMetadata: (sessionId) => {
+      const session = agentSessionManager.getSession(sessionId);
+      return buildCommandReviewContextWithMetadata(
+        session?.getAllMessages() ?? [],
+        sessionId,
+        session?.getPendingHumanInterjections() ?? [],
+        session?.getHumanDecisionRecord(),
+      );
+    },
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);
       return Boolean(session && !session.isAborted);

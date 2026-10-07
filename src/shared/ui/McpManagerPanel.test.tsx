@@ -207,10 +207,42 @@ describe("McpManagerPanel", () => {
 
     const fullError = screen.getByRole("note");
     expect(fullError.textContent).toBe(error);
-    expect((fullError as HTMLElement).style.whiteSpace).toBe("pre-wrap");
-    expect((fullError as HTMLElement).style.overflowWrap).toBe("anywhere");
-    expect((fullError as HTMLElement).style.userSelect).toBe("text");
+    expect(fullError.classList.contains("mcp-manager-server-error")).toBe(true);
     expect(detailsButton.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("offers Sign in instead of Reconnect/Reauthenticate for servers awaiting sign-in", () => {
+    const onServerAction = vi.fn();
+    render(
+      <McpManagerPanel
+        snapshot={snapshot({
+          statusInfos: [
+            {
+              name: "runtime-only",
+              status: "disconnected",
+              error: "Sign-in required.",
+              toolCount: 0,
+              resourceCount: 0,
+              promptCount: 0,
+              tools: [],
+              awaitingSignIn: true,
+            },
+          ],
+        })}
+        onServerAction={onServerAction}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Reconnect runtime-only" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reauthenticate runtime-only" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in to runtime-only" }),
+    );
+    expect(onServerAction).toHaveBeenCalledWith("runtime-only", "reconnect");
   });
 
   it("offers Connect for configured servers without a runtime entry", () => {

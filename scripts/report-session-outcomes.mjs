@@ -173,6 +173,13 @@ export function readSessionOutcomes(inputPath, filters = {}) {
       mergeBackground(report, record);
     } else if (record.type === "approval_interruption") {
       mergeApprovalInterruption(report, record);
+    } else if (record.type === "review_publication_attempt") {
+      report.reviewPublication.guardianAttempts += 1;
+      const scope = ["verified", "unavailable"].includes(record.scopeEvidence)
+        ? record.scopeEvidence
+        : "unreported";
+      report.reviewPublication.scopeEvidence[scope] =
+        (report.reviewPublication.scopeEvidence[scope] ?? 0) + 1;
     } else if (record.type === "guardian_shadow_comparison") {
       mergeGuardianShadowComparison(report, record);
     } else report.unknownEvents += 1;
@@ -268,6 +275,18 @@ function createEmptyReport() {
       byReason: {},
       byGuardianStatus: {},
       byRisk: {},
+    },
+    reviewPublication: {
+      guardianAttempts: 0,
+      scopeEvidence: {},
+      prompts: 0,
+      promptSources: {},
+      promptsWithGuardianReview: 0,
+    },
+    guardianComparison: {
+      ...createComparisonAggregate(),
+      operationalByStatus: {},
+      cohorts: {},
     },
     guardianShadow: {
       count: 0,
@@ -762,6 +781,33 @@ function mergeBackground(report, record) {
 }
 
 function mergeApprovalInterruption(report, record) {
+  if (record.reviewPublicationCommand === true) {
+    const publication = report.reviewPublication;
+    publication.prompts += 1;
+    const source = [
+      "guardian_denied",
+      "guardian_unavailable",
+      "guardian_timed_out",
+      "guardian_invalid",
+      "guardian_cancelled",
+      "guardian_stale",
+      "guardian_circuit_open",
+      "sandbox_native_retry",
+      "human_only",
+      "prompt_rule",
+      "forbidden_rule",
+      "native_execution_human_only",
+      "network_destination_approval",
+      "outside_path_approval",
+      "other_approval",
+    ].includes(record.reason)
+      ? record.reason
+      : "other";
+    publication.promptSources[source] =
+      (publication.promptSources[source] ?? 0) + 1;
+    if (typeof record.guardianStatus === "string")
+      publication.promptsWithGuardianReview += 1;
+  }
   const interruptions = report.approvalInterruptions;
   interruptions.count += 1;
   if (record.background === true) interruptions.backgroundCount += 1;
@@ -785,6 +831,12 @@ function mergeApprovalInterruption(report, record) {
 }
 
 function mergeGuardianShadowComparison(report, record) {
+  if (record.comparisonVersion === 2 && record.comparison) {
+    mergeGuardianComparison(report.guardianComparison, record);
+    if (typeof record.sessionId === "string")
+      report.sessions.add(record.sessionId);
+    return;
+  }
   const shadow = report.guardianShadow;
   shadow.count += 1;
   const status =
@@ -804,7 +856,10 @@ function mergeGuardianShadowComparison(report, record) {
     ) {
       const pair = `${record.primaryOutcome}/${record.shadowOutcome}`;
       shadow.byOutcomePair[pair] = (shadow.byOutcomePair[pair] ?? 0) + 1;
-      if (Number.isFinite(record.shadowAllowProbabilityPermille)) {
+      if (
+        record.comparisonVersion !== 2 &&
+        Number.isFinite(record.shadowAllowProbabilityPermille)
+      ) {
         const risk = record.shadowRiskProbabilitiesPermille;
         shadow.fastPathSamples.push({
           guardianDenied: record.primaryOutcome === "deny",
@@ -836,6 +891,148 @@ function mergeGuardianShadowComparison(report, record) {
   }
   if (typeof record.sessionId === "string")
     report.sessions.add(record.sessionId);
+}
+
+const GUARDIAN_COMPARISON_PROJECTION_KINDS = new Set([
+  "primary_legacy",
+  "primary_review_publication",
+  "jev_shadow",
+]);
+
+function comparisonDimension(value) {
+  return typeof value === "string" &&
+    value.length <= 100 &&
+    /^[A-Za-z0-9._:/+-]+$/.test(value)
+    ? value
+    : "unreported";
+}
+
+function comparisonObservationKey(observation) {
+  if (!observation || typeof observation !== "object") return "unreported";
+  const projection = observation.projection;
+  return [
+    comparisonDimension(observation.policyVersion),
+    comparisonDimension(observation.policyFingerprint),
+    comparisonDimension(observation.adapterVersion),
+    GUARDIAN_COMPARISON_PROJECTION_KINDS.has(projection?.kind)
+      ? projection.kind
+      : "unreported",
+    comparisonDimension(observation.requestedModel),
+    comparisonDimension(observation.reportedModel),
+  ].join("|");
+}
+
+function comparisonClass(comparison) {
+  if (!comparison || typeof comparison !== "object") return "legacy_unknown";
+  if (comparison.policyEqual === false) return "unequal_policy";
+  if (comparison.evidenceEqual === false) return "unequal_evidence";
+  if (comparison.policyEqual === true && comparison.evidenceEqual === true) {
+    return comparison.evidenceComplete === true
+      ? "equal_policy_equal_evidence_complete"
+      : comparison.evidenceComplete === false
+        ? "equal_policy_equal_evidence_incomplete"
+        : "equal_policy_equal_evidence_completeness_unknown";
+  }
+  return "legacy_unknown";
+}
+
+function createComparisonAggregate() {
+  return {
+    count: 0,
+    byOperationalStatus: {},
+    byClass: {},
+    byOutcomeDirection: {},
+    usageObservations: 0,
+    usageMissingObservations: 0,
+    usageReported: 0,
+    usagePartial: 0,
+    usageNotReported: 0,
+    usageInputTokens: 0,
+    usageInputSamples: 0,
+    usageOutputTokens: 0,
+    usageOutputSamples: 0,
+    usageCacheReadTokens: 0,
+    usageCacheReadSamples: 0,
+    usageCacheCreationTokens: 0,
+    usageCacheCreationSamples: 0,
+  };
+}
+
+function mergeComparisonUsage(target, observation) {
+  const usage = observation?.usage;
+  if (!usage || typeof usage !== "object") return;
+  target.usageObservations += 1;
+  const coverage = ["reported", "partial", "not_reported"].includes(
+    usage.coverage,
+  )
+    ? usage.coverage
+    : "unreported";
+  if (coverage === "reported") target.usageReported += 1;
+  else if (coverage === "partial") target.usagePartial += 1;
+  else target.usageNotReported += 1;
+  for (const [field, totalKey, samplesKey] of [
+    ["inputTokens", "usageInputTokens", "usageInputSamples"],
+    ["outputTokens", "usageOutputTokens", "usageOutputSamples"],
+    ["cacheReadTokens", "usageCacheReadTokens", "usageCacheReadSamples"],
+    [
+      "cacheCreationTokens",
+      "usageCacheCreationTokens",
+      "usageCacheCreationSamples",
+    ],
+  ]) {
+    if (Number.isSafeInteger(usage[field]) && usage[field] >= 0) {
+      target[totalKey] += usage[field];
+      target[samplesKey] += 1;
+    }
+  }
+}
+
+function mergeGuardianComparison(report, record) {
+  const summary = report;
+  const comparison = record.comparison;
+  const status = comparisonDimension(record.shadowStatus);
+  const classification = comparisonClass(comparison);
+  summary.count += 1;
+  summary.operationalByStatus[status] =
+    (summary.operationalByStatus[status] ?? 0) + 1;
+  summary.byClass[classification] = (summary.byClass[classification] ?? 0) + 1;
+  const cohortKey = `${comparisonObservationKey(comparison.primary)} => ${comparisonObservationKey(comparison.shadow)}`;
+  const cohort = (summary.cohorts[cohortKey] ??= {
+    ...createComparisonAggregate(),
+    primary: comparisonObservationKey(comparison.primary),
+    shadow: comparisonObservationKey(comparison.shadow),
+  });
+  cohort.count += 1;
+  cohort.byOperationalStatus[status] =
+    (cohort.byOperationalStatus[status] ?? 0) + 1;
+  cohort.byClass[classification] = (cohort.byClass[classification] ?? 0) + 1;
+  const primaryOutcome = record.primaryOutcome;
+  const shadowOutcome = record.shadowOutcome;
+  if (
+    ["allow", "deny"].includes(primaryOutcome) &&
+    ["allow", "deny"].includes(shadowOutcome)
+  ) {
+    const direction = `${primaryOutcome}/${shadowOutcome}`;
+    cohort.byOutcomeDirection[direction] =
+      (cohort.byOutcomeDirection[direction] ?? 0) + 1;
+  }
+  for (const target of [summary, cohort]) {
+    const observationCount =
+      (comparison.primary ? 1 : 0) + (comparison.shadow ? 1 : 0);
+    target.usageMissingObservations += 2 - observationCount;
+  }
+  mergeComparisonUsage(summary, comparison.primary);
+  mergeComparisonUsage(summary, comparison.shadow);
+  mergeComparisonUsage(cohort, comparison.primary);
+  mergeComparisonUsage(cohort, comparison.shadow);
+  for (const target of [summary, cohort]) {
+    target.usageMissingObservations +=
+      target === summary
+        ? Number(Boolean(comparison.primary && !comparison.primary.usage)) +
+          Number(Boolean(comparison.shadow && !comparison.shadow.usage))
+        : Number(Boolean(comparison.primary && !comparison.primary.usage)) +
+          Number(Boolean(comparison.shadow && !comparison.shadow.usage));
+  }
 }
 
 function createGuardianShadowDisagreement() {
@@ -1353,10 +1550,33 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  const publication = report.reviewPublication;
+  if (publication.guardianAttempts || publication.prompts) {
+    console.log("");
+    console.log(
+      "Review publication diagnostics (supported literal commands only)",
+    );
+    printTable(
+      ["metric", "value"],
+      [
+        ["Guardian attempts", publication.guardianAttempts],
+        ["scope evidence", formatCounts(publication.scopeEvidence)],
+        ["tagged approval cards", publication.prompts],
+        ["prompt sources", formatCounts(publication.promptSources)],
+        ["cards with Guardian review", publication.promptsWithGuardianReview],
+      ],
+    );
+    console.log(
+      "Counts are not a prompt rate: retries and untagged destination/profile gates are not joined to attempts.",
+    );
+  }
+
   const shadow = report.guardianShadow;
   if (shadow.count > 0) {
     console.log("");
-    console.log("TypeSafe Guardian shadow comparisons (non-authoritative)");
+    console.log(
+      "Legacy TypeSafe Guardian shadow aggregate (non-authoritative, not a rollout comparison)",
+    );
     printTable(
       ["metric", "value"],
       [
@@ -1417,7 +1637,84 @@ function printSummary(report, inputPath, top) {
       shadow.denyAllow,
       ["share of Guardian denials", guardianDenies],
     );
-    printGuardianShadowFastPath(shadow.fastPathSamples);
+    if (shadow.fastPathSamples.length > 0) {
+      console.log(
+        "Legacy-only simulated fast-path analysis (non-authoritative; excludes comparisonVersion 2)",
+      );
+      printGuardianShadowFastPath(shadow.fastPathSamples);
+    }
+  }
+
+  const comparisonReport = report.guardianComparison;
+  if (comparisonReport.count > 0) {
+    console.log("");
+    console.log(
+      "Guardian comparison cohorts (observational only, not safety labels)",
+    );
+    printTable(
+      ["metric", "value"],
+      [
+        ["comparisonVersion 2 records", comparisonReport.count],
+        [
+          "operational status",
+          formatCounts(comparisonReport.operationalByStatus),
+        ],
+        ["comparison class", formatCounts(comparisonReport.byClass)],
+
+        ["token usage observations", comparisonReport.usageObservations],
+        [
+          "usage coverage reported / partial / not reported / missing",
+          `${comparisonReport.usageReported} / ${comparisonReport.usagePartial} / ${comparisonReport.usageNotReported} / ${comparisonReport.usageMissingObservations}`,
+        ],
+        [
+          "input token samples / total",
+          `${comparisonReport.usageInputSamples} / ${comparisonReport.usageInputSamples ? comparisonReport.usageInputTokens : "n/a"}`,
+        ],
+        [
+          "output token samples / total",
+          `${comparisonReport.usageOutputSamples} / ${comparisonReport.usageOutputSamples ? comparisonReport.usageOutputTokens : "n/a"}`,
+        ],
+        [
+          "cache-read samples / total",
+          `${comparisonReport.usageCacheReadSamples} / ${comparisonReport.usageCacheReadSamples ? comparisonReport.usageCacheReadTokens : "n/a"}`,
+        ],
+        [
+          "cache-creation samples / total",
+          `${comparisonReport.usageCacheCreationSamples} / ${comparisonReport.usageCacheCreationSamples ? comparisonReport.usageCacheCreationTokens : "n/a"}`,
+        ],
+      ],
+    );
+    console.log(
+      "  agreement/equality describes evidence only and is not a safety label.",
+    );
+    for (const [key, cohort] of Object.entries(comparisonReport.cohorts)) {
+      console.log("");
+      console.log(`Comparison cohort: ${key}`);
+      printTable(
+        ["metric", "value"],
+        [
+          ["records", cohort.count],
+          ["operational status", formatCounts(cohort.byOperationalStatus)],
+          ["comparison class", formatCounts(cohort.byClass)],
+          [
+            "outcome direction (primary/shadow)",
+            formatCounts(cohort.byOutcomeDirection),
+          ],
+          [
+            "usage coverage reported / partial / not reported / missing",
+            `${cohort.usageReported} / ${cohort.usagePartial} / ${cohort.usageNotReported} / ${cohort.usageMissingObservations}`,
+          ],
+          [
+            "input samples / total",
+            `${cohort.usageInputSamples} / ${cohort.usageInputSamples ? cohort.usageInputTokens : "n/a"}`,
+          ],
+          [
+            "output samples / total",
+            `${cohort.usageOutputSamples} / ${cohort.usageOutputSamples ? cohort.usageOutputTokens : "n/a"}`,
+          ],
+        ],
+      );
+    }
   }
 
   if (report.tasks.count > 0) {

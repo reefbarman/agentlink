@@ -8474,6 +8474,28 @@ describe("ChatViewProvider session state sync", () => {
       authorityReason: undefined,
       routeReason: undefined,
     });
+    provider.forwardApproval(
+      {
+        sessionId: session.id,
+        request: {
+          ...request,
+          id: "publication-prompt",
+          command:
+            "gh pr review 42 --repo private/repo --approve --body 'private review body'",
+        },
+      },
+      vi.fn(() => true),
+    );
+    expect(record).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reviewPublicationCommand: true,
+        reason: "guardian_denied",
+      }),
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain(
+      "private review body",
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain("private/repo");
     expect(JSON.stringify(record.mock.calls)).not.toContain("private command");
     expect(JSON.stringify(record.mock.calls)).not.toContain(
       "private rationale",

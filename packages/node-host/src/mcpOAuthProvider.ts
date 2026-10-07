@@ -19,7 +19,7 @@ import type {
 import { createNodeHostMcpOAuthCallbackHandler } from "./mcpOAuthCallback.js";
 import { registerMcpOAuthFetch } from "./mcpOAuthFetch.js";
 
-const DEFAULT_AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_AUTHORIZATION_TIMEOUT_MS = 10 * 60_000;
 const MAX_CREDENTIAL_WRITE_ATTEMPTS = 4;
 
 export interface NodeHostMcpOAuthAuthorizationRequest<

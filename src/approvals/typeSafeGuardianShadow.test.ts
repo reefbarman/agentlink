@@ -12,6 +12,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { classifyCommand } from "./commandTierClassifier.js";
+import { getGuardianPolicy } from "./guardianPolicy.js";
 
 const root = path.resolve("/workspace/project");
 
@@ -101,6 +102,95 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("withholds private publication verification and pending draft contents", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = { ...reviewInput(), humanInputRevision: 9 };
+    await reviewer.review({
+      ...input,
+      reviewPublicationContext: {
+        version: 1,
+        mode: "builtin_review",
+        command: input.command,
+        cwd: input.cwd,
+        humanInputRevision: 9,
+        target: {
+          host: "private-host",
+          repository: "private-owner/private-repo",
+          pr: 994,
+        },
+        kind: "submit_review",
+        sourceInputIds: ["private-source"],
+        verified: true,
+        payloadFiles: [
+          {
+            reference: "private-ref",
+            path: "private-file",
+            sha256: "private-hash",
+          },
+        ],
+        payloadPreviews: [
+          { reference: "private-ref", content: "private-preview" },
+        ],
+        pendingReviewBody: "private-draft",
+        workspaceRoots: input.workspaceRoots,
+      },
+    });
+    const wire = String(fetch.mock.calls[0]![1]?.body);
+    for (const value of [
+      "private-host",
+      "private-owner",
+      "private-repo",
+      "private-source",
+      "private-ref",
+      "private-file",
+      "private-hash",
+      "private-preview",
+      "private-draft",
+    ])
+      expect(wire).not.toContain(value);
+    expect(JSON.parse(wire).state.action.reviewPublicationContext).toEqual({
+      mode: "builtin_review",
+      scopeMatch: true,
+      kind: "submit_review",
+      verification: "verified",
+      privateEvidenceWithheld: true,
+    });
+  });
+
+  it("accounts for projection limits in the affected evidence category", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.classified.perSubCommand = Array.from(
+      { length: 25 },
+      () => input.classified.perSubCommand[0]!,
+    );
+    await reviewer.review(input);
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+    expect(
+      body.state.action.projectionManifest.coverage.classification,
+    ).toMatchObject({
+      state: "partial",
+      reasons: ["projection_budget"],
+      sourceCount: 25,
+      includedCount: 24,
+      omittedCount: 1,
+    });
+  });
+
   it("requires a stored BYOK credential", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const reviewer = createTypeSafeGuardianShadowReviewer({
@@ -129,7 +219,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       fetch,
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toEqual({
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
       status: "completed",
       outcome: "allow",
       risk: "medium",
@@ -188,13 +278,11 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     );
     expect(body.state.policy).toEqual(
       expect.objectContaining({
-        trust: expect.any(String),
-        authorization: expect.any(Array),
-        risk: expect.any(Array),
-        evidence: expect.any(Array),
+        clauses: getGuardianPolicy(false).clauses,
+        projectionGuidance: expect.any(Array),
       }),
     );
-    const authorizationPolicy = body.state.policy.authorization.join(" ");
+    const authorizationPolicy = body.state.policy.clauses.join(" ");
     expect(authorizationPolicy).toContain(
       "Index-only unstaging (git restore --staged or -S, without --worktree/-W or a source override)",
     );
@@ -202,7 +290,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       "with no pre-existing, user-authored, or concurrent edits mixed in",
     );
     expect(authorizationPolicy).toContain(
-      "Do not infer ownership from withheld task history or inspected changes",
+      "A file being relevant to the task, an assistant plan, or a command rationale saying 'cleanup' is not sufficient evidence",
     );
     expect(body.state.action.command).toBe("rm -rf generated");
     expect(body.state.action.latestUserInstruction).toBe(
@@ -268,8 +356,8 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       afterLatestUserInstruction: true,
       agentAuthoredSubject: { context: "Publishing" },
     });
-    expect(body.state.policy.authorization.join(" ")).toContain(
-      "`action.humanDecisions`",
+    expect(body.state.policy.projectionGuidance.join(" ")).toContain(
+      "action.humanDecisions",
     );
   });
 
@@ -350,9 +438,80 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     const questions = JSON.stringify(body.questions);
     expect(questions).not.toMatch(/incomplete evidence require a deny/i);
     expect(questions).not.toMatch(/only latestUserInstruction grants/i);
-    const evidencePolicy = body.state.policy.evidence.join(" ");
-    expect(evidencePolicy).toContain("not whether it is dangerous");
-    expect(evidencePolicy).toContain("Script bodies are withheld");
+    const evidencePolicy = body.state.policy.projectionGuidance.join(" ");
+    expect(evidencePolicy).toContain("not proof of danger");
+    expect(evidencePolicy).toContain("Script bodies");
+    expect(evidencePolicy).toContain("withheld");
+  });
+
+  it("records requested and reported model identities separately", async () => {
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true, model: "jev-latest" }),
+      getApiKey: async () => "typesafe-key",
+      fetch: vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValue(typeSafeResponse({ model: "jev-1.13.0" })),
+    });
+    const result = await reviewer.review(reviewInput());
+    expect(result.observation).toMatchObject({
+      requestedModel: "jev-latest",
+      reportedModel: "jev-1.13.0",
+      modelProvenance: "reported",
+      usage: { inputTokens: 321, outputTokens: 45, coverage: "reported" },
+    });
+    expect(result.model).toBe("jev-latest");
+  });
+
+  it("never presents a truncated executable prefix as the exact command", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const result = await reviewer.review(
+      reviewInput(`printf '${"x".repeat(2_100)}' && rm -rf important`),
+    );
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(body.state.action.command).toBe(
+      "[EXACT COMMAND UNAVAILABLE: projection budget]",
+    );
+    expect(body.state.action.commandExact).toBe(false);
+    expect(result.outcome).toBe("allow");
+    expect(result.observation?.assessment).toBe("incomplete_evidence");
+    expect(result.observation?.projection.coverage.command.reasons).toContain(
+      "projection_budget",
+    );
+  });
+
+  it("does not retain an apparent consent prefix from an overlong human instruction", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      {
+        role: "user",
+        directUserInstruction: true,
+        content: `Publish the review. ${"context ".repeat(200)} Do not actually post anything.`,
+      },
+    ];
+    const result = await reviewer.review(input);
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(body.state.action.latestUserInstruction).toContain(
+      "evidenceOmitted",
+    );
+    expect(body.state.action.latestUserInstruction).not.toContain(
+      "Publish the review",
+    );
+    expect(result.observation?.assessment).toBe("incomplete_evidence");
   });
 
   it.each([

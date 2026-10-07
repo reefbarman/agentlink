@@ -509,6 +509,7 @@ export type GatewaySnapshot = {
       resourceCount: number;
       promptCount: number;
       tools: Array<{ name: string; description?: string }>;
+      awaitingSignIn?: boolean;
     }>;
   };
   session: {

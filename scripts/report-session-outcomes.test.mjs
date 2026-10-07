@@ -47,6 +47,46 @@ function event(overrides) {
   };
 }
 
+test("separates publication attempts from tagged prompt sources without inferring a rate", () => {
+  const input = path.join(makeTempDirectory(), "events.jsonl");
+  writeEvents(input, [
+    event({
+      type: "review_publication_attempt",
+      sessionId: "s",
+      stage: "guardian_attempt",
+      scopeEvidence: "verified",
+    }),
+    event({
+      type: "review_publication_attempt",
+      sessionId: "s",
+      stage: "guardian_attempt",
+      scopeEvidence: "unavailable",
+    }),
+    event({
+      type: "approval_interruption",
+      reviewPublicationCommand: true,
+      reason: "guardian_denied",
+      guardianStatus: "reviewed",
+    }),
+    event({
+      type: "approval_interruption",
+      reviewPublicationCommand: true,
+      reason: "prompt_rule",
+    }),
+    event({
+      type: "approval_interruption",
+      reason: "network_destination_approval",
+    }),
+  ]);
+  assert.deepEqual(readSessionOutcomes(input).reviewPublication, {
+    guardianAttempts: 2,
+    scopeEvidence: { verified: 1, unavailable: 1 },
+    prompts: 2,
+    promptSources: { guardian_denied: 1, prompt_rule: 1 },
+    promptsWithGuardianReview: 1,
+  });
+});
+
 function efficiency(overrides = {}) {
   return {
     ordinaryAgentProviderAttempts: 2,
@@ -403,6 +443,82 @@ test("labels missing TypeSafe diagnostic fields as unreported", () => {
     byDecisionBasis: { unreported: 1 },
     byAuthorizationEvidence: { unreported: 1 },
   });
+});
+
+test("reports versioned comparison cohorts without merging outcomes across variants", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  const observation = (overrides = {}) => ({
+    policyVersion: "policy-v1",
+    policyFingerprint: "fingerprint-a",
+    adapterVersion: "adapter-a",
+    requestedModel: "model-requested",
+    reportedModel: "model-reported",
+    modelProvenance: "reported",
+    attempts: 1,
+    projection: { kind: "jev_shadow" },
+    ...overrides,
+  });
+  const comparison = (primaryOutcome, shadowOutcome, extra = {}) =>
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s1",
+      primaryOutcome,
+      shadowOutcome,
+      primaryStatus: "reviewed",
+      shadowStatus: "completed",
+      shadowAllowProbabilityPermille: 999,
+      shadowRiskProbabilitiesPermille: { high: 0, critical: 0 },
+      comparisonVersion: 2,
+      comparison: {
+        snapshotId: "snapshot",
+        policyEqual: true,
+        evidenceEqual: true,
+        evidenceComplete: true,
+        primary: observation({
+          usage: { inputTokens: 0, coverage: "reported" },
+        }),
+        shadow: observation({
+          policyFingerprint: "fingerprint-b",
+          adapterVersion: "adapter-b",
+          projection: { kind: "primary_legacy" },
+          usage: { outputTokens: 25, coverage: "partial" },
+        }),
+      },
+      ...extra,
+    });
+  writeEvents(inputPath, [
+    comparison("deny", "allow"),
+    comparison("allow", "deny"),
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "legacy",
+      primaryOutcome: "deny",
+      shadowOutcome: "allow",
+      primaryStatus: "reviewed",
+      shadowStatus: "completed",
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.guardianComparison.count, 2);
+  assert.deepEqual(report.guardianComparison.byClass, {
+    equal_policy_equal_evidence_complete: 2,
+  });
+  assert.equal(Object.keys(report.guardianComparison.cohorts).length, 1);
+  const [cohort] = Object.values(report.guardianComparison.cohorts);
+  assert.deepEqual(cohort.byOutcomeDirection, {
+    "deny/allow": 1,
+    "allow/deny": 1,
+  });
+  assert.equal(cohort.usageInputSamples, 2);
+  assert.equal(cohort.usageInputTokens, 0);
+  assert.equal(cohort.usageOutputSamples, 2);
+  assert.equal(cohort.usageOutputTokens, 50);
+  assert.equal(cohort.usageMissingObservations, 0);
+  assert.equal(report.guardianShadow.fastPathSamples.length, 0);
+  assert.equal(report.guardianShadow.byOutcomePair["deny/allow"], 1);
+  assert.deepEqual(report.guardianComparison.byOutcomeDirection, {});
 });
 
 test("simulates TypeSafe fast-path thresholds against Guardian decisions", () => {

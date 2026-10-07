@@ -78,6 +78,8 @@ export interface McpServerInfo {
   resourceCount: number;
   promptCount: number;
   tools: McpToolInfo[];
+  /** Parked until browser sign-in; reconnecting starts that sign-in. */
+  awaitingSignIn?: boolean;
 }
 
 export interface McpResource {
@@ -305,6 +307,12 @@ interface ConnectedServer {
  * connect reuse the tokens the first one just saved.
  */
 const httpConnectQueues = new Map<string, Promise<unknown>>();
+/**
+ * Browser sign-in runs inside the initialize request, so an interactive
+ * connect must outlast the OAuth callback window (10 minutes) rather than the
+ * SDK's 60s request default.
+ */
+const INTERACTIVE_CONNECT_TIMEOUT_MS = 11 * 60_000;
 const MAX_MCP_CATALOG_PAGES = 100;
 const MAX_MCP_CATALOG_ITEMS = 10_000;
 
@@ -1249,6 +1257,7 @@ export class McpClientHub {
           await this.authCoordinator.incrementTokenGeneration(
             request.serverIdentityHash,
           );
+          this.reconnectAfterLateSignIn(cfg);
         };
         oauthProvider.readTokenGeneration = (identity) =>
           this.authCoordinator.readTokenGeneration(identity);
@@ -1484,7 +1493,12 @@ export class McpClientHub {
           async () => {
             signal.throwIfAborted();
             if (this.servers.get(cfg.name) !== entry) return;
-            await entry.client.connect(transport, { signal });
+            await entry.client.connect(transport, {
+              signal,
+              ...(authMode === "interactive"
+                ? { timeout: INTERACTIVE_CONNECT_TIMEOUT_MS }
+                : {}),
+            });
           },
           signal,
         );
@@ -1646,14 +1660,20 @@ export class McpClientHub {
             );
           }
           this.authFailureCounts.delete(cfg.name);
-          entry.status = "error";
-          entry.error = `Authentication did not succeed for '${cfg.name}' (redirect URI/client registration mismatch). Retrying once with fresh OAuth client registration…`;
-          void this.host.notify(
-            "warning",
-            `AgentLink: Authentication did not succeed for '${cfg.name}' (redirect URI/client registration mismatch). Retrying once with fresh OAuth client registration…`,
-          );
-          this.scheduleReconnect(cfg, retryCount + 1, "auth-failure");
+          if (this.connectionAttempts.get(cfg.name)?.controller !== controller)
+            return;
+          // Routine self-healing: retry immediately with the caller's intent so
+          // an interactive first-use sign-in can still open the browser. Only a
+          // failed retry is worth surfacing to the user.
+          await this.disconnectServer(cfg.name);
           this.onStatusChange?.(this.getServerInfos());
+          await this.connectServer(cfg, {
+            authMode,
+            trigger,
+            userInitiated: authorizationAttempt.userInitiated,
+            rootAttemptId,
+            parentAttemptId: attemptId,
+          });
           return;
         }
 
@@ -1968,6 +1988,36 @@ export class McpClientHub {
     return message;
   }
 
+  /**
+   * A browser sign-in can finish after its connect attempt already failed
+   * (for example a timeout). Reconnect with the fresh tokens instead of
+   * leaving the server in an error state the user has to clear manually.
+   */
+  private reconnectAfterLateSignIn(cfg: McpServerConfig): void {
+    if (
+      this.servers.get(cfg.name)?.status !== "error" ||
+      this.connectionAttempts.has(cfg.name)
+    )
+      return;
+    this.log(
+      `[mcp:${cfg.name}] sign-in completed after connect gave up; reconnecting with saved tokens`,
+    );
+    if (cfg.url) {
+      this.authCoordinator.clearManualReauth(
+        mcpServerIdentityHash(cfg.name, cfg.url),
+      );
+    }
+    this.authFailureCounts.delete(cfg.name);
+    void this.connectServer(cfg, {
+      authMode: "noninteractive",
+      trigger: "scheduled-retry",
+    })
+      .catch((err) =>
+        this.log(`[mcp:${cfg.name}] late sign-in reconnect failed: ${err}`),
+      )
+      .finally(() => this.onStatusChange?.(this.getServerInfos()));
+  }
+
   private scheduleReconnect(
     cfg: McpServerConfig,
     attempt: number,
@@ -2197,12 +2247,13 @@ export class McpClientHub {
   }
 
   /**
-   * Start sign-in for one deferred server when an agent first uses it.
-   * Resolves true once the server is connected.
+   * Start sign-in for one deferred server when an agent first uses it, or
+   * when the user explicitly connects it. Resolves true once connected.
    */
   async activatePendingServer(
     name: string,
     signal?: AbortSignal,
+    trigger: McpAuthTrigger = "tool-use",
   ): Promise<boolean> {
     if (signal?.aborted) return false;
     let activation = this.pendingActivations.get(name);
@@ -2229,7 +2280,7 @@ export class McpClientHub {
         signal?.addEventListener("abort", onAbort, { once: true });
         activation = this.connectServer(config, {
           authMode: "interactive",
-          trigger: "tool-use",
+          trigger,
           userInitiated: true,
         }).finally(async () => {
           signal?.removeEventListener("abort", onAbort);
@@ -2315,7 +2366,13 @@ export class McpClientHub {
   /** Reconnect a server by name using its stored config. */
   async reconnectServer(name: string, signal?: AbortSignal): Promise<void> {
     const entry = this.servers.get(name);
-    const cfg = entry?.config ?? this.pendingInteractiveServers.get(name);
+    if (!entry && this.pendingInteractiveServers.has(name)) {
+      // A parked server can only connect through browser sign-in; a manual
+      // reconnect is the user asking for it now rather than on first use.
+      await this.activatePendingServer(name, signal, "manual-reconnect");
+      return;
+    }
+    const cfg = entry?.config;
     if (!cfg) return;
     this.authFailureCounts.delete(name);
     this.invalidRedirectRecoveryAttempted.delete(name);
@@ -2552,11 +2609,12 @@ export class McpClientHub {
         name: config.name,
         status: "disconnected" as const,
         error:
-          "Sign-in will start the first time an agent turn uses this server.",
+          "Sign-in required. Sign in now, or it starts the first time an agent uses this server.",
         toolCount: 0,
         resourceCount: 0,
         promptCount: 0,
         tools: [],
+        awaitingSignIn: true,
       })),
       ...Array.from(this.disabledServers.values()).map((config) => ({
         name: config.name,

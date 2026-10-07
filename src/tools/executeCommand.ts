@@ -73,7 +73,11 @@ import {
   type CommandReviewTurnCircuit,
   type RetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
-import { collectCommandReviewEvidence } from "../approvals/commandReviewEvidence.js";
+import { collectCommandReviewEvidenceWithMetadata } from "../approvals/commandReviewEvidence.js";
+import type {
+  ReviewPublicationContext,
+  ReviewPublicationHost,
+} from "../approvals/reviewPublicationPolicy.js";
 import type {
   CommandRecoveryAttempt,
   CommandReviewSummary,
@@ -179,6 +183,12 @@ export interface ExecuteCommandProviders {
   toolAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
+  getReviewContextWithMetadata?: (
+    sessionId: string,
+  ) => ReturnType<
+    typeof import("../approvals/commandApprovalReview.js").buildCommandReviewContextWithMetadata
+  >;
+  reviewPublicationHost?: ReviewPublicationHost;
   /** Advances on every direct human input, including input queued mid-run. */
   getHumanInputRevision?: (sessionId: string) => number | undefined;
   commandExecutionPolicy?: CommandExecutionPolicy;
@@ -2144,9 +2154,16 @@ export async function handleExecuteCommand(
   // Set only for automatic reviewer approvals: the human-input revision that
   // review saw. Dispatch is revoked if newer human input has arrived since.
   let reviewedHumanInputRevision: number | undefined;
+  let reviewedPublicationContext: ReviewPublicationContext | undefined;
   const humanInputIsStale = () =>
-    reviewedHumanInputRevision !== undefined &&
-    providers.getHumanInputRevision?.(sessionId) !== reviewedHumanInputRevision;
+    (reviewedHumanInputRevision !== undefined &&
+      providers.getHumanInputRevision?.(sessionId) !==
+        reviewedHumanInputRevision) ||
+    (reviewedPublicationContext !== undefined &&
+      !providers.reviewPublicationHost?.isCurrent(
+        sessionId,
+        reviewedPublicationContext,
+      ));
   try {
     if (!params.command || params.command.trim().length === 0) {
       return {
@@ -2905,6 +2922,9 @@ export async function handleExecuteCommand(
                 temporaryHome ||
                 Boolean(params.env && Object.keys(params.env).length > 0),
               forceRequested: Boolean(params.force || params.force_reason),
+              publicationEnvironmentOpaque: Boolean(
+                params.terminal_id || params.terminal_name || temporaryHome,
+              ),
               routeContext,
               providers,
               security: preparedExecution.security,
@@ -2913,6 +2933,7 @@ export async function handleExecuteCommand(
           );
           reviewedHumanInputRevision =
             approvalResult.reviewedHumanInputRevision;
+          reviewedPublicationContext = approvalResult.reviewPublicationContext;
 
           if (approvalResult.policyDrift) {
             const driftedPreparation = preparedExecution;
@@ -3201,6 +3222,8 @@ export async function handleExecuteCommand(
       commitApprovalMutations?.();
       const execution = preparedExecution;
       preparedExecution = undefined;
+      const executionHumanInputRevision =
+        providers.getHumanInputRevision?.(sessionId);
       let result = await execution.execute();
       result.security = execution.security;
       const replayableWithNarrowSandboxCapabilities =
@@ -3417,6 +3440,9 @@ export async function handleExecuteCommand(
                     temporaryHome ||
                     Boolean(params.env && Object.keys(params.env).length > 0),
                   forceRequested: Boolean(params.force || params.force_reason),
+                  publicationEnvironmentOpaque: Boolean(
+                    params.terminal_id || params.terminal_name || temporaryHome,
+                  ),
                   routeContext: retryRouteContext,
                   providers,
                   security: retryExecution.security,
@@ -3750,6 +3776,25 @@ export async function handleExecuteCommand(
           cwd,
           workspaceRoots,
         });
+      }
+      try {
+        providers.reviewPublicationHost?.observe({
+          sessionId,
+          command: commandToRun,
+          cwd,
+          workspaceRoots,
+          humanInputRevision: executionHumanInputRevision,
+          hasEnvOverrides: Boolean(
+            params.env && Object.keys(params.env).length,
+          ),
+          environmentOpaque: Boolean(
+            params.terminal_id || params.terminal_name || temporaryHome,
+          ),
+          signal: providers.toolAbortSignal,
+          result,
+        });
+      } catch {
+        // Receipt accounting is not an execution result or an approval gate.
       }
       if (result.output_captured && result.output) {
         const fullOutput = result.output;
@@ -4548,6 +4593,7 @@ async function approveSubCommands(
 
     skipAutomaticReviewer?: boolean;
     hasEnvOverrides?: boolean;
+    publicationEnvironmentOpaque?: boolean;
     forceRequested?: boolean;
     recoveryAttempt?: CommandRecoveryAttempt;
     routeContext: TerminalExecutionRouteContext;
@@ -4566,6 +4612,7 @@ async function approveSubCommands(
   policyDrift?: boolean;
   /** Human-input revision an automatic reviewer approval was based on. */
   reviewedHumanInputRevision?: number;
+  reviewPublicationContext?: ReviewPublicationContext;
   priorReview?: PriorCommandReview;
 
   commitMutations?: () => void;
@@ -4758,6 +4805,7 @@ async function approveSubCommands(
       let reviewId = "";
       let reviewedRevision: number | undefined;
       let staleReview = false;
+      let reviewPublicationContext: ReviewPublicationContext | undefined;
       // Context is read when each review starts. Human input received while a
       // review is in flight makes that decision stale, so review once more
       // against the newer context instead of approving under old authority.
@@ -4771,6 +4819,23 @@ async function approveSubCommands(
             options.security,
           );
         }
+        const contextSnapshot =
+          reviewProviders.getReviewContextWithMetadata?.(sessionId);
+        const collectedEvidence = collectCommandReviewEvidenceWithMetadata(
+          reviewedCommand,
+          { cwd, workspaceRoots },
+        );
+        reviewPublicationContext =
+          reviewProviders.reviewPublicationHost?.prepare({
+            sessionId,
+            command: reviewedCommand,
+            cwd,
+            workspaceRoots,
+            humanInputRevision: reviewedRevision,
+            hasEnvOverrides,
+            environmentOpaque: options?.publicationEnvironmentOpaque,
+            signal: reviewProviders.toolAbortSignal,
+          });
         review = await reviewProviders.commandApprovalReviewer.review({
           sessionId,
           command: reviewedCommand,
@@ -4778,14 +4843,18 @@ async function approveSubCommands(
           workspaceRoots,
           reason,
           userObjective: reviewProviders.getUserObjective?.(sessionId),
-          context: reviewProviders.getReviewContext?.(sessionId),
+          context:
+            contextSnapshot?.context ??
+            reviewProviders.getReviewContext?.(sessionId),
           classified: tierInfo,
           security: options?.security,
           inlineFiles,
-          evidence: collectCommandReviewEvidence(reviewedCommand, {
-            cwd,
-            workspaceRoots,
-          }),
+          evidence: collectedEvidence.evidence,
+          evidenceMetadata: {
+            ...contextSnapshot?.metadata,
+            ...collectedEvidence.metadata,
+          },
+          ...(reviewPublicationContext ? { reviewPublicationContext } : {}),
           signal: reviewProviders.toolAbortSignal,
           reviewId,
           ...(reviewedRevision !== undefined
@@ -4801,7 +4870,13 @@ async function approveSubCommands(
             { resultStatus: review.status },
           );
         }
-        staleReview = currentHumanInputRevision() !== reviewedRevision;
+        staleReview =
+          currentHumanInputRevision() !== reviewedRevision ||
+          (reviewPublicationContext !== undefined &&
+            !reviewProviders.reviewPublicationHost?.isCurrent(
+              sessionId,
+              reviewPublicationContext,
+            ));
         if (!staleReview || reviewProviders.toolAbortSignal?.aborted) break;
       }
       if (
@@ -4863,6 +4938,7 @@ async function approveSubCommands(
             ...(reviewedRevision !== undefined
               ? { reviewedHumanInputRevision: reviewedRevision }
               : {}),
+            ...(reviewPublicationContext ? { reviewPublicationContext } : {}),
           };
         }
         if (!reviewerApproved) {

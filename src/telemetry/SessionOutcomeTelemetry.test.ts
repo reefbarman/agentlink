@@ -4,6 +4,7 @@ import * as path from "path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { GuardianComparisonMetadata } from "../approvals/guardianReviewEvidence.js";
 import { SessionOutcomeTelemetry } from "./SessionOutcomeTelemetry.js";
 
 let tmpDir: string;
@@ -171,6 +172,51 @@ describe("SessionOutcomeTelemetry", () => {
       boundedImpactPermille: 890,
       shadowInputTokens: 321,
       shadowOutputTokens: 45,
+      comparisonVersion: 2,
+      comparison: {
+        snapshotId: "snapshot-1",
+        policyEqual: true,
+        evidenceEqual: true,
+        evidenceComplete: false,
+        primary: {
+          policyVersion: "guardian-v1",
+          policyFingerprint: "policy-hash-1",
+          adapterVersion: "adapter-1",
+          requestedModel: "model-a",
+          reportedModel: "model-a-reported",
+          modelProvenance: "reported",
+          attempts: 1,
+          projection: {
+            version: 1,
+            kind: "primary_review_publication",
+            commandExact: true,
+            coverage: Object.fromEntries(
+              [
+                "command",
+                "context",
+                "human_authority",
+                "scripts",
+                "inline_files",
+                "deletion_targets",
+                "classification",
+                "confinement",
+                "review_publication",
+              ].map((category) => [
+                category,
+                { state: "complete", reasons: [] },
+              ]),
+            ),
+          },
+          usage: {
+            inputTokens: 123,
+            outputTokens: 45,
+            estimated: true,
+            reportedAttempts: 1,
+            coverage: "partial",
+          },
+        },
+        rawEvidence: "secret command payload",
+      } as unknown as GuardianComparisonMetadata,
     });
 
     await telemetry.flush();
@@ -258,7 +304,45 @@ describe("SessionOutcomeTelemetry", () => {
       shadowEvidenceWithheld: true,
       shadowInputTokens: 321,
       shadowOutputTokens: 45,
+      comparisonVersion: 2,
+      comparison: {
+        snapshotId: "snapshot-1",
+        policyEqual: true,
+        evidenceEqual: true,
+        evidenceComplete: false,
+        primary: {
+          policyVersion: "guardian-v1",
+          policyFingerprint: "policy-hash-1",
+          adapterVersion: "adapter-1",
+          requestedModel: "model-a",
+          reportedModel: "model-a-reported",
+          modelProvenance: "reported",
+          attempts: 1,
+          projection: {
+            kind: "primary_review_publication",
+            coverage: {
+              command: { state: "complete", reasons: [] },
+            },
+          },
+          usage: { inputTokens: 123, outputTokens: 45, coverage: "partial" },
+        },
+      },
     });
+    expect(records[4]).toMatchObject({
+      comparisonVersion: 2,
+      comparison: {
+        snapshotId: "snapshot-1",
+        policyEqual: true,
+        primary: {
+          requestedModel: "model-a",
+          usage: { inputTokens: 123, outputTokens: 45, coverage: "partial" },
+        },
+      },
+    });
+    expect(JSON.stringify(records[4].comparison)).not.toContain("rawEvidence");
+    expect(JSON.stringify(records[4].comparison)).not.toContain(
+      "secret command payload",
+    );
   });
 
   it("drops non-finite numbers and events without a session id", async () => {

@@ -4156,6 +4156,49 @@ describe("dispatchToolCall", () => {
     ]);
   });
 
+  it("forwards host-only Guardian metadata and the complete publication host to the terminal consumer", async () => {
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    vi.mocked(handleExecuteCommand).mockClear();
+    const sourceMetadata = {
+      sourceInputIds: ["distinctive-host-input"],
+      humanAuthority: {
+        state: "partial" as const,
+        reasons: ["source_truncated" as const],
+        sourceCount: 7,
+        includedCount: 3,
+        omittedCount: 4,
+      },
+    };
+    const contextSnapshot = { context: [], metadata: sourceMetadata };
+    const getCommandReviewContextWithMetadata = vi.fn(() => contextSnapshot);
+    const reviewPublicationHost = {
+      prepare: vi.fn(),
+      isCurrent: vi.fn(() => true),
+      observe: vi.fn(),
+    };
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      getCommandReviewContextWithMetadata,
+      reviewPublicationHost,
+    });
+    await runtime.executeTool({
+      name: "execute_command",
+      input: {
+        command: "gh api repos/owner/repo/pulls/42",
+        cwd: "/tmp/project",
+      },
+      context: { sessionId: "session-a", mode: "review" },
+    });
+    const providers = vi.mocked(handleExecuteCommand).mock.calls[0]![5]!;
+    expect(providers.reviewPublicationHost).toBe(reviewPublicationHost);
+    expect(providers.getReviewContextWithMetadata?.("session-a")).toBe(
+      contextSnapshot,
+    );
+    expect(getCommandReviewContextWithMetadata).toHaveBeenCalledWith(
+      "session-a",
+    );
+  });
+
   it("searches and hydrates the current session transcript with append-safe snapshots", async () => {
     const messages = [
       {

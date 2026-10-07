@@ -2079,6 +2079,12 @@ export interface ToolDispatchContext {
   getCommandReviewContext?: (
     sessionId: string,
   ) => import("../approvals/commandApprovalReview.js").CommandReviewContextEntry[];
+  getCommandReviewContextWithMetadata?: (
+    sessionId: string,
+  ) => ReturnType<
+    typeof import("../approvals/commandApprovalReview.js").buildCommandReviewContextWithMetadata
+  >;
+  reviewPublicationHost?: import("../approvals/reviewPublicationPolicy.js").ReviewPublicationHost;
   /** Advances on every direct human input, including input queued mid-run. */
   getHumanInputRevision?: (sessionId: string) => number | undefined;
   delegationPolicy?: {
@@ -4427,6 +4433,8 @@ async function dispatchToolCallWithTrackedApprovals(
           toolAbortSignal,
           getUserObjective: ctx.getCommandReviewObjective,
           getReviewContext: ctx.getCommandReviewContext,
+          getReviewContextWithMetadata: ctx.getCommandReviewContextWithMetadata,
+          reviewPublicationHost: ctx.reviewPublicationHost,
           getHumanInputRevision: ctx.getHumanInputRevision,
           commandExecutionPolicy:
             ctx.commandExecutionPolicy ??

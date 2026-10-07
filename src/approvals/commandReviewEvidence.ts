@@ -4,8 +4,9 @@ import * as os from "os";
 import * as path from "path";
 
 import { expandSubCommands, splitCompoundCommand } from "./commandSplitter.js";
-import { isCommandPathInsideWorkspace } from "./commandTierClassifier.js";
 
+import type { GuardianEvidenceSourceMetadata } from "./guardianReviewEvidence.js";
+import { isCommandPathInsideWorkspace } from "./commandTierClassifier.js";
 import { scanShellLexWords } from "../util/shellLex.js";
 
 export const MAX_REFERENCED_SCRIPTS = 4;
@@ -87,6 +88,74 @@ export function collectCommandReviewEvidence(
   command: string,
   ctx: CommandReviewEvidenceContext,
 ): CommandReviewEvidence {
+  return collectCommandReviewEvidenceInternal(command, ctx);
+}
+
+export function collectCommandReviewEvidenceWithMetadata(
+  command: string,
+  ctx: CommandReviewEvidenceContext,
+): {
+  evidence: CommandReviewEvidence;
+  metadata: GuardianEvidenceSourceMetadata;
+} {
+  let collectionFailed = false;
+  const evidence = collectCommandReviewEvidenceInternal(
+    command,
+    ctx,
+    () => (collectionFailed = true),
+  );
+  const scripts = evidence.referencedScripts;
+  const scriptIssues = scripts.filter(
+    (script) =>
+      script.contentTruncated || script.contentUnavailableReason !== null,
+  ).length;
+  const scriptCountMayBeCapped = scripts.length === MAX_REFERENCED_SCRIPTS;
+  const deletionIncomplete = evidence.deletionTargetsOmitted > 0;
+  return {
+    evidence,
+    metadata: {
+      scripts: collectionFailed
+        ? { state: "unavailable", reasons: ["collection_failed"] }
+        : scripts.length === 0
+          ? {
+              state: "not_applicable",
+              reasons: [],
+              sourceCount: 0,
+              includedCount: 0,
+              omittedCount: 0,
+            }
+          : {
+              state:
+                scriptIssues || scriptCountMayBeCapped ? "partial" : "complete",
+              reasons: [
+                ...(scriptIssues ? ["source_truncated" as const] : []),
+                ...(scriptCountMayBeCapped
+                  ? ["projection_budget" as const]
+                  : []),
+              ],
+              sourceCount: scriptCountMayBeCapped ? undefined : scripts.length,
+              includedCount: scripts.length,
+              omittedCount: scriptCountMayBeCapped ? undefined : 0,
+            },
+      deletionTargets: collectionFailed
+        ? { state: "unavailable", reasons: ["collection_failed"] }
+        : {
+            state: deletionIncomplete ? "partial" : "complete",
+            reasons: deletionIncomplete ? ["projection_budget"] : [],
+            sourceCount:
+              evidence.deletionTargets.length + evidence.deletionTargetsOmitted,
+            includedCount: evidence.deletionTargets.length,
+            omittedCount: evidence.deletionTargetsOmitted,
+          },
+    },
+  };
+}
+
+function collectCommandReviewEvidenceInternal(
+  command: string,
+  ctx: CommandReviewEvidenceContext,
+  onFailure?: () => void,
+): CommandReviewEvidence {
   try {
     const subCommands = expandSubCommands(splitCompoundCommand(command));
     const scriptReferences: string[] = [];
@@ -118,6 +187,7 @@ export function collectCommandReviewEvidence(
       ...buildDeletionTargets(deletionTargetArgs, ctx),
     };
   } catch {
+    onFailure?.();
     return {
       referencedScripts: [],
       deletionTargets: [],

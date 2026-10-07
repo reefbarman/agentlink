@@ -7151,6 +7151,24 @@ body.chat-activity-shelf-resizing * {
   padding: 1px 8px 5px 34px;
 }
 
+.mcp-manager-server-error {
+  margin: 0 8px 6px 34px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--vscode-panel-border);
+  border-radius: 2px;
+  background: var(--vscode-textBlockQuote-background, transparent);
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mcp-status-error .mcp-manager-server-error {
+  border-left-color: var(--vscode-errorForeground);
+}
+
 .mcp-manager-empty-state {
   padding: 12px;
 }

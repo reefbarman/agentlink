@@ -187,7 +187,7 @@ describe("McpOAuthProvider cancellation", () => {
     expect(auth).not.toHaveBeenCalled();
   });
 
-  it("retains the five-minute callback deadline", async () => {
+  it("allows a ten-minute callback window for slow sign-in", async () => {
     const { provider, complete } = setup();
     await provider.start();
     const server = (provider as unknown as { _server: http.Server })._server;
@@ -197,6 +197,8 @@ describe("McpOAuthProvider cancellation", () => {
       kind: "callback_timeout",
     });
     await vi.waitFor(() => expect(server.listenerCount("request")).toBe(1));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(server.listenerCount("request")).toBe(1);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     await rejected;
     expect(server.listenerCount("request")).toBe(0);

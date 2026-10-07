@@ -1544,20 +1544,23 @@ export function McpManagerPanel({
                             <button
                               class="icon-button"
                               type="button"
-                              aria-label={`Reconnect ${name}`}
-                              title="Reconnect"
+                              aria-label={`${info.awaitingSignIn ? "Sign in to" : "Reconnect"} ${name}`}
+                              title={
+                                info.awaitingSignIn ? "Sign in" : "Reconnect"
+                              }
                               onClick={() =>
                                 onServerAction?.(name, "reconnect")
                               }
                             >
                               <i
-                                class="codicon codicon-refresh"
+                                class={`codicon codicon-${info.awaitingSignIn ? "sign-in" : "refresh"}`}
                                 aria-hidden="true"
                               />
                             </button>
                           )}
                         {snapshot.capabilities.canReauthenticate &&
                           info &&
+                          !info.awaitingSignIn &&
                           effectiveStatus !== "disabled" && (
                             <button
                               class="icon-button"
@@ -1647,15 +1650,7 @@ export function McpManagerPanel({
                     {expanded && info && (
                       <>
                         {info.error && (
-                          <div
-                            class="mcp-manager-server-error"
-                            role="note"
-                            style={{
-                              whiteSpace: "pre-wrap",
-                              overflowWrap: "anywhere",
-                              userSelect: "text",
-                            }}
-                          >
+                          <div class="mcp-manager-server-error" role="note">
                             {info.error}
                           </div>
                         )}

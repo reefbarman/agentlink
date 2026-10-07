@@ -2,13 +2,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
 import {
   MAX_DELETION_TARGETS,
   MAX_REFERENCED_SCRIPT_CONTENT_CHARS,
   collectCommandReviewEvidence,
+  collectCommandReviewEvidenceWithMetadata,
 } from "./commandReviewEvidence.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("collectCommandReviewEvidence", () => {
   let root: string;
@@ -237,6 +237,27 @@ describe("collectCommandReviewEvidence", () => {
       expect(evidence.deletionTargets).toHaveLength(MAX_DELETION_TARGETS);
       expect(evidence.deletionTargetsOmitted).toBe(11 - MAX_DELETION_TARGETS);
     });
+  });
+
+  it("reports source limits and collection coverage without changing evidence", () => {
+    const targets = Array.from(
+      { length: MAX_DELETION_TARGETS + 2 },
+      (_, i) => `f${i}.txt`,
+    );
+    const legacy = collectCommandReviewEvidence(`rm ${targets.join(" ")}`, ctx);
+    const detailed = collectCommandReviewEvidenceWithMetadata(
+      `rm ${targets.join(" ")}`,
+      ctx,
+    );
+    expect(detailed.evidence).toEqual(legacy);
+    expect(detailed.metadata.deletionTargets).toMatchObject({
+      state: "partial",
+      sourceCount: MAX_DELETION_TARGETS + 2,
+      includedCount: MAX_DELETION_TARGETS,
+      omittedCount: 2,
+      reasons: ["projection_budget"],
+    });
+    expect(detailed.metadata.scripts?.state).toBe("not_applicable");
   });
 
   it("returns empty evidence for commands without scripts or deletions", () => {

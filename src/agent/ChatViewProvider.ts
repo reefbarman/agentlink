@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import { isReviewPublicationCommand } from "../approvals/reviewPublicationPolicy.js";
 import {
   isCoreReasoningEffort,
   isCoreServiceTierSelection,
@@ -3366,6 +3367,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         permissionIntent: request.security?.permissionIntent,
         authorityReason: request.security?.authorityReason,
         routeReason: request.security?.routeReason,
+        ...(request.command && isReviewPublicationCommand(request.command)
+          ? { reviewPublicationCommand: true }
+          : {}),
       });
     } catch (err) {
       this.log(

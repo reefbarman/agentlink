@@ -8374,6 +8374,8 @@ describe("handleExecuteCommand", () => {
       enqueueCommandApproval = vi.fn(() => ({
         promise: Promise.resolve({ decision: "reject" }),
       })),
+      command = "git fetch --depth=1 origin",
+      terminalOptions: { terminal_name?: string; terminal_id?: string } = {},
     ) => {
       getConfiguration.mockReturnValue({
         get: vi.fn((key: string, fallback?: unknown) =>
@@ -8382,7 +8384,7 @@ describe("handleExecuteCommand", () => {
       });
       const { handleExecuteCommand } = await import("./executeCommand.js");
       return handleExecuteCommand(
-        { command: "git fetch --depth=1 origin" },
+        { command, ...terminalOptions },
         {
           isCommandApproved: () => false,
           findMatchingCommandRule: () => undefined,
@@ -8432,6 +8434,143 @@ describe("handleExecuteCommand", () => {
         )[0].reviewId,
       });
       expect(executeCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it("carries one host-bound publication snapshot through the real command and shadow composition", async () => {
+      const { createReviewPublicationHost } =
+        await import("../approvals/reviewPublicationPolicy.js");
+      const { createShadowingCommandApprovalReviewer } =
+        await import("../approvals/typeSafeGuardianShadow.js");
+      const command =
+        "gh api repos/owner/repo/issues/42/comments -f body='Review findings'";
+      const host = createReviewPublicationHost({
+        getSessionSnapshot: () => ({
+          builtinReview: true,
+          foreground: true,
+          humanInputRevision: 17,
+          queuedHumanInputs: [],
+          humanDecisions: {
+            incomplete: false,
+            entries: [
+              {
+                kind: "instruction",
+                sequence: 1,
+                recordedAt: 1,
+                inputId: "review-intent-17",
+                text: "review https://github.com/owner/repo/pull/42",
+              },
+            ],
+          },
+        }),
+      });
+      host.observe({
+        sessionId: "session-human-input",
+        command: "gh api repos/owner/repo/pulls/42",
+        cwd: "/workspace",
+        workspaceRoots: ["/workspace"],
+        humanInputRevision: 17,
+        result: {
+          exit_code: 0,
+          output_complete: true,
+          output_finalized: true,
+          output: JSON.stringify({
+            number: 42,
+            html_url: "https://github.com/owner/repo/pull/42",
+          }),
+        },
+      });
+      const primary = vi.fn(async () => allowReview());
+      const shadow = vi.fn(async () => ({
+        status: "completed" as const,
+        outcome: "deny" as const,
+      }));
+      const record = vi.fn();
+      const reviewer = createShadowingCommandApprovalReviewer({
+        primary: { review: primary },
+        shadow: { review: shadow },
+        record,
+      });
+      const contextSnapshot = {
+        context: [
+          {
+            role: "user" as const,
+            directUserInstruction: true,
+            content: "review https://github.com/owner/repo/pull/42",
+          },
+        ],
+        metadata: {
+          sourceInputIds: ["distinctive-source-17"],
+          humanAuthority: {
+            state: "complete" as const,
+            reasons: [],
+            sourceCount: 1,
+            includedCount: 1,
+            omittedCount: 0,
+          },
+        },
+      };
+      const enqueueCommandApproval = vi.fn();
+      const result = await run(
+        {
+          commandApprovalReviewer: reviewer,
+          getHumanInputRevision: () => 17,
+          getReviewContextWithMetadata: () => contextSnapshot,
+          reviewPublicationHost: host,
+        },
+        enqueueCommandApproval,
+        command,
+      );
+      await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+      for (const consumer of [primary, shadow]) {
+        expect(consumer).toHaveBeenCalledWith(
+          expect.objectContaining({
+            command,
+            humanInputRevision: 17,
+            reviewPublicationContext: expect.objectContaining({
+              kind: "comment",
+              sourceInputIds: ["review-intent-17"],
+              target: { host: "github.com", repository: "owner/repo", pr: 42 },
+            }),
+            evidenceMetadata: expect.objectContaining({
+              sourceInputIds: ["distinctive-source-17"],
+            }),
+          }),
+        );
+      }
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result).approval).toMatchObject({
+        by: "model_reviewer",
+        outcome: "allow",
+      });
+      expect(executeCommand).toHaveBeenCalledOnce();
+    });
+
+    it("forwards opaque named-terminal state only to the publication evidence host", async () => {
+      const prepare = vi.fn(() => undefined);
+      const observe = vi.fn();
+      const review = vi.fn(async (_input: unknown) => allowReview());
+      await run(
+        {
+          commandApprovalReviewer: { review },
+          getHumanInputRevision: () => 17,
+          reviewPublicationHost: { prepare, observe, isCurrent: () => false },
+        },
+        vi.fn(),
+        "gh pr review 42 --repo owner/repo --approve",
+        { terminal_name: "Review terminal" },
+      );
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentOpaque: true,
+          humanInputRevision: 17,
+        }),
+      );
+      expect(review.mock.calls[0]![0]).not.toHaveProperty(
+        "reviewPublicationContext",
+      );
+      expect(observe).toHaveBeenCalledWith(
+        expect.objectContaining({ environmentOpaque: true }),
+      );
     });
 
     it("requires direct approval when input keeps arriving during review", async () => {

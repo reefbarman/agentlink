@@ -26,7 +26,9 @@ const mocks = vi.hoisted(() => ({
       ..._items: string[]
     ): Promise<string | undefined> => undefined,
   ),
-  createTransportConnect: vi.fn<() => Promise<void>>(async () => {
+  createTransportConnect: vi.fn<
+    (options?: { timeout?: number }) => Promise<void>
+  >(async () => {
     throw new Error("not configured");
   }),
   createTransportClose: vi.fn(async () => {}),
@@ -72,10 +74,10 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
     async connect(
       transport: unknown,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; timeout?: number },
     ): Promise<void> {
       options?.signal?.throwIfAborted();
-      return mocks.createTransportConnect.call(transport);
+      return mocks.createTransportConnect.call(transport, options);
     }
 
     async close(): Promise<void> {
@@ -359,30 +361,32 @@ describe("McpClientHub OAuth recovery", () => {
     await hub.disconnectAll();
   });
 
-  it("clears cached oauth client registration (not all credentials) on stale_client_redirect and schedules recovery", async () => {
+  it("clears cached oauth client registration (not all credentials) on stale_client_redirect and retries silently", async () => {
     mocks.providerTokens.mockResolvedValue({
       access_token: "a",
       refresh_token: "r",
       token_type: "bearer",
     });
-    mocks.createTransportConnect.mockRejectedValueOnce(
-      new McpOAuthError(
-        "stale_client_redirect",
-        "stale redirect uri/client registration",
-      ),
-    );
+    mocks.createTransportConnect
+      .mockRejectedValueOnce(
+        new McpOAuthError(
+          "stale_client_redirect",
+          "stale redirect uri/client registration",
+        ),
+      )
+      .mockResolvedValue(undefined);
 
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([notionCfg]);
 
     expect(mocks.providerInvalidateCredentials).toHaveBeenCalledTimes(1);
     expect(mocks.providerInvalidateCredentials).toHaveBeenCalledWith("client");
-    expect(mocks.showWarningMessage).toHaveBeenCalledWith(
-      "AgentLink: Authentication did not succeed for 'notion' (redirect URI/client registration mismatch). Retrying once with fresh OAuth client registration…",
-    );
+    expect(mocks.showWarningMessage).not.toHaveBeenCalled();
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
     expect(hub.getServerInfos().find((s) => s.name === "notion")?.status).toBe(
-      "error",
+      "connected",
     );
+    await hub.disconnectAll();
   });
 
   it("pauses retries on a rejected OAuth client registration and keeps Reconnect working", async () => {
@@ -511,6 +515,76 @@ describe("McpClientHub OAuth recovery", () => {
       expect(
         hub.getServerInfos().find((info) => info.name === "notion")?.status,
       ).toBe("connected");
+    } finally {
+      await hub.disconnectAll();
+    }
+  });
+
+  it("starts interactive sign-in when the user reconnects a parked server", async () => {
+    mocks.createTransportConnect.mockImplementation(
+      async function (this: {
+        authProvider?: { authorizationAttempt?: { authMode: string } };
+      }) {
+        if (
+          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+        )
+          throw new McpOAuthError("interactive_required", "sign-in needed");
+      },
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([notionCfg]);
+      expect(
+        hub.getServerInfos().find((info) => info.name === "notion"),
+      ).toMatchObject({ status: "disconnected", awaitingSignIn: true });
+      await hub.reconnectServer("notion");
+      expect(hub.getPendingServerNames()).toEqual([]);
+      const info = hub.getServerInfos().find((s) => s.name === "notion");
+      expect(info?.status).toBe("connected");
+      expect(info?.awaitingSignIn).toBeUndefined();
+    } finally {
+      await hub.disconnectAll();
+    }
+  });
+
+  it("outlasts slow browser sign-in and recovers when tokens arrive after a timeout", async () => {
+    type Provider = {
+      authorizationAttempt?: { authMode: string };
+      onTokensSaved?: (request: { serverIdentityHash: string }) => unknown;
+    };
+    let interactiveProvider: Provider | undefined;
+    const interactiveTimeouts: Array<number | undefined> = [];
+    mocks.createTransportConnect.mockImplementation(async function (
+      this: { authProvider?: Provider },
+      options?: { timeout?: number },
+    ) {
+      const mode = this.authProvider?.authorizationAttempt?.authMode;
+      if (mode === "interactive") {
+        interactiveProvider = this.authProvider;
+        interactiveTimeouts.push(options?.timeout);
+        throw new Error("MCP error -32001: Request timed out");
+      }
+      if (!interactiveProvider)
+        throw new McpOAuthError("interactive_required", "sign-in needed");
+    });
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([notionCfg]);
+      expect(await hub.activatePendingServer("notion")).toBe(false);
+
+      expect(interactiveTimeouts[0]).toBeGreaterThan(10 * 60_000);
+      expect(
+        hub.getServerInfos().find((info) => info.name === "notion")?.status,
+      ).toBe("error");
+
+      await interactiveProvider?.onTokensSaved?.({
+        serverIdentityHash: "late-sign-in",
+      });
+      await vi.waitFor(() =>
+        expect(
+          hub.getServerInfos().find((info) => info.name === "notion")?.status,
+        ).toBe("connected"),
+      );
     } finally {
       await hub.disconnectAll();
     }

@@ -82,7 +82,7 @@ describe("createNodeHostMcpOAuthProvider", () => {
       redirectUrl: "http://127.0.0.1:47138/mcp/oauth/callback",
       transactionId: "transaction-1",
       state: "state-1",
-      timeoutMs: 5 * 60_000,
+      timeoutMs: 10 * 60_000,
       signal: expect.any(AbortSignal),
     });
     expect(mocks.auth).toHaveBeenCalledWith(
