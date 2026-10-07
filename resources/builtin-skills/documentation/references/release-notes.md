@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.29.1
+
 - Restyled the Desktop title-bar update check as a compact outlined button with a refresh icon and a single-line label, instead of squeezing the text into an icon-only control.
 
 ## 1.29.0

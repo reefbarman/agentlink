@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
-  "createdAt": "2026-10-07T02:04:50.368Z",
+  "sourceSha": "8319dca1f07fad6da862f0377a55c5e6b411abc5",
+  "createdAt": "2026-10-07T04:02:10.603Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,107 +10,128 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.28.1",
-      "baselineRef": "v1.28.1",
-      "reserved": "1.28.1",
+      "published": "1.29.0",
+      "baselineRef": "v1.29.0",
+      "reserved": "1.29.0",
       "commits": [
-        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
+        "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+        "8319dca1f07fad6da862f0377a55c5e6b411abc5"
       ],
-      "unknownPaths": [],
+      "unknownPaths": [
+        "docs/assets/screenshots/cli-tui.png",
+        "docs/assets/screenshots/desktop-ask-agent.png",
+        "docs/assets/screenshots/desktop-quick-ask.png",
+        "docs/assets/screenshots/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/cli-tui.png",
+        "docs/assets/screenshots/originals/desktop-ask-agent.png",
+        "docs/assets/screenshots/originals/desktop-quick-ask.png",
+        "docs/assets/screenshots/originals/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/vscode-command-approval.png",
+        "docs/assets/screenshots/originals/vscode-diff-review.png",
+        "docs/assets/screenshots/source/build-ask-agent-demo-history.mjs",
+        "docs/assets/screenshots/vscode-command-approval.png",
+        "docs/assets/screenshots/vscode-diff-review.png"
+      ],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.29.0",
-      "effectiveBump": "minor",
+      "version": "1.29.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.29.0",
+      "tag": "v1.29.1",
       "notes": [
         {
-          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
-          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+          "sha": "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+          "subject": "docs(readme): add product screenshots for VS Code, Desktop, and CLI",
+          "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
           "breaking": false
         },
         {
-          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
-          "subject": "feat(cli): move MCP server status from the status line to /mcp",
-          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+          "sha": "8319dca1f07fad6da862f0377a55c5e6b411abc5",
+          "subject": "fix(desktop): style the update check as an outlined button",
+          "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.7.1",
-      "baselineRef": "desktop-v0.7.1",
-      "reserved": "0.7.1",
+      "published": "0.8.0",
+      "baselineRef": "desktop-v0.8.0",
+      "reserved": "0.8.0",
       "commits": [
-        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
+        "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+        "8319dca1f07fad6da862f0377a55c5e6b411abc5"
       ],
-      "unknownPaths": [],
+      "unknownPaths": [
+        "docs/assets/screenshots/cli-tui.png",
+        "docs/assets/screenshots/desktop-ask-agent.png",
+        "docs/assets/screenshots/desktop-quick-ask.png",
+        "docs/assets/screenshots/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/cli-tui.png",
+        "docs/assets/screenshots/originals/desktop-ask-agent.png",
+        "docs/assets/screenshots/originals/desktop-quick-ask.png",
+        "docs/assets/screenshots/originals/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/vscode-command-approval.png",
+        "docs/assets/screenshots/originals/vscode-diff-review.png",
+        "docs/assets/screenshots/source/build-ask-agent-demo-history.mjs",
+        "docs/assets/screenshots/vscode-command-approval.png",
+        "docs/assets/screenshots/vscode-diff-review.png"
+      ],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.8.0",
-      "effectiveBump": "minor",
+      "version": "0.8.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.8.0",
+      "tag": "desktop-v0.8.1",
       "notes": [
         {
-          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
-          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+          "sha": "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+          "subject": "docs(readme): add product screenshots for VS Code, Desktop, and CLI",
+          "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
           "breaking": false
         },
         {
-          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
-          "subject": "feat(cli): move MCP server status from the status line to /mcp",
-          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+          "sha": "8319dca1f07fad6da862f0377a55c5e6b411abc5",
+          "subject": "fix(desktop): style the update check as an outlined button",
+          "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.9.0",
-      "baselineRef": "cli-v0.9.0",
-      "reserved": "0.9.0",
-      "commits": [
-        "58354021594378ac2e4b0af798a0d839f2353afa",
-        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
+      "published": "0.10.0",
+      "baselineRef": "cli-v0.10.0",
+      "reserved": "0.10.0",
+      "commits": ["c41c4eb8a1dfd8d54e3914ae2853de59071eba75"],
+      "unknownPaths": [
+        "docs/assets/screenshots/cli-tui.png",
+        "docs/assets/screenshots/desktop-ask-agent.png",
+        "docs/assets/screenshots/desktop-quick-ask.png",
+        "docs/assets/screenshots/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/cli-tui.png",
+        "docs/assets/screenshots/originals/desktop-ask-agent.png",
+        "docs/assets/screenshots/originals/desktop-quick-ask.png",
+        "docs/assets/screenshots/originals/desktop-vscode-view.png",
+        "docs/assets/screenshots/originals/vscode-command-approval.png",
+        "docs/assets/screenshots/originals/vscode-diff-review.png",
+        "docs/assets/screenshots/source/build-ask-agent-demo-history.mjs",
+        "docs/assets/screenshots/vscode-command-approval.png",
+        "docs/assets/screenshots/vscode-diff-review.png"
       ],
-      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.10.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.10.0",
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
       "notes": [
         {
-          "sha": "58354021594378ac2e4b0af798a0d839f2353afa",
-          "subject": "feat(cli): restyle TUI transcript, tool blocks, activity shelf and control panel",
-          "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
-          "breaking": false
-        },
-        {
-          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
-          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
-          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
-          "breaking": false
-        },
-        {
-          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
-          "subject": "feat(cli): move MCP server status from the status line to /mcp",
-          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+          "sha": "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+          "subject": "docs(readme): add product screenshots for VS Code, Desktop, and CLI",
+          "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
           "breaking": false
         }
       ]
@@ -149,6 +170,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c41c4eb8a1dfd8d54e3914ae2853de59071eba75": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8319dca1f07fad6da862f0377a55c5e6b411abc5": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
