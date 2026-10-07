@@ -1361,6 +1361,7 @@ function isImmediateCommand(command: string): boolean {
     "/model",
     "/reasoning",
     "/mode",
+    "/mcp",
     "/sessions",
     "/processes",
     "/agents",

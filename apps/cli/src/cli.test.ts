@@ -388,6 +388,7 @@ describe("runCli", () => {
 
   it("routes MCP status and form elicitation through the control presenter", async () => {
     const onStatus = vi.fn();
+    const onMcpServers = vi.fn();
     const presentControl = vi.fn(async (request) => ({
       requestId: request.id,
       cancelled: false as const,
@@ -402,6 +403,7 @@ describe("runCli", () => {
       mcpNetworkGrants: new Set(),
       presentControl,
       onStatus,
+      onMcpServers,
     });
     broker.notifyMcpStatus("MCP server disconnected");
     expect(onStatus).toHaveBeenCalledWith("MCP server disconnected");
@@ -415,13 +417,8 @@ describe("runCli", () => {
       tools: [],
     };
     broker.notifyMcpServers([server]);
-    expect(onStatus).toHaveBeenLastCalledWith(
-      "MCP records: error (auth failed)",
-    );
-    broker.notifyMcpServers([
-      { ...server, status: "connected", error: undefined },
-    ]);
-    expect(onStatus).toHaveBeenLastCalledWith("MCP records: connected");
+    expect(onMcpServers).toHaveBeenLastCalledWith([server]);
+    expect(onStatus).toHaveBeenCalledTimes(1);
     await expect(
       broker.elicitMcpForm({
         principal: { tenantId: "tenant", subjectId: "user" },

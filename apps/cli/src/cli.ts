@@ -1066,6 +1066,7 @@ async function runInkInteractiveChat(
   let unsubscribeUpdates: (() => void) | undefined;
   const mcpLaunchGrants = new Set<string>();
   const mcpNetworkGrants = new Set<string>();
+  let mcpServerStatus: readonly McpServerInfo[] = [];
   const loadFileSuggestions = (query: string) =>
     listTuiFileSuggestions(controller.getState().projectRoot, query);
   const reportError = (error: unknown) => {
@@ -1268,6 +1269,9 @@ async function runInkInteractiveChat(
           return {};
         case "mode":
           await showMode();
+          return {};
+        case "mcp":
+          await showMcp();
           return {};
         case "new":
           sessionId = await controller.newSession();
@@ -1507,6 +1511,34 @@ async function runInkInteractiveChat(
       options: [{ id: "prompt", label: "Prompt", detail: "active" }],
     });
   };
+  const showMcp = async () => {
+    const live = new Map(
+      mcpServerStatus.map((server) => [server.name, server]),
+    );
+    const configured = controller.getState().mcpServers;
+    const names = [
+      ...new Set([
+        ...configured.map((server) => server.id),
+        ...mcpServerStatus.map((server) => server.name),
+      ]),
+    ];
+    await requestControl({
+      id: `mcp:${Date.now()}`,
+      title: "MCP servers",
+      body:
+        names.length === 0
+          ? ["No MCP servers are configured for this project."]
+          : names.map((name) => {
+              const server = live.get(name);
+              const source = configured.find((entry) => entry.id === name);
+              const status = server
+                ? `${server.status} · ${server.toolCount} tools${server.error ? ` · ${server.error}` : ""}`
+                : "not started";
+              return `${name}${source ? ` (${source.source}, ${source.transport})` : ""}: ${status}`;
+            }),
+      options: [{ id: "close", label: "Close" }],
+    });
+  };
   const showHelp = async () => {
     await requestControl({
       id: `help:${Date.now()}`,
@@ -1649,6 +1681,7 @@ async function runInkInteractiveChat(
         { id: "model", label: "Model" },
         { id: "reasoning", label: "Reasoning" },
         { id: "mode", label: "Mode" },
+        { id: "mcp", label: "MCP servers" },
         { id: "write-policy", label: "Write policy" },
         { id: "help", label: "Keyboard shortcuts" },
       ],
@@ -1662,6 +1695,7 @@ async function runInkInteractiveChat(
     if (response.optionId === "model") await chooseModel();
     if (response.optionId === "reasoning") await chooseReasoning();
     if (response.optionId === "mode") await showMode();
+    if (response.optionId === "mcp") await showMcp();
     if (response.optionId === "write-policy") await showWritePolicy();
     if (response.optionId === "help") await showHelp();
   };
@@ -1672,6 +1706,9 @@ async function runInkInteractiveChat(
     mcpNetworkGrants,
     presentControl: requestControl,
     onStatus: updateExternalStatus,
+    onMcpServers: (servers) => {
+      mcpServerStatus = servers;
+    },
   });
   const unsubscribeActivity = controller.subscribe((_state, action) => {
     if (action.type === "turn.event" || action.type === "turn.result") {
@@ -1801,21 +1838,14 @@ export function createInkInteractionBroker(options: {
   readonly mcpNetworkGrants: Set<string>;
   readonly presentControl: PresentTuiControl;
   readonly onStatus: (status: string) => void;
+  readonly onMcpServers?: (servers: readonly McpServerInfo[]) => void;
 }): CliInteractionBroker {
   return {
     notifyMcpStatus(message) {
       options.onStatus(message);
     },
     notifyMcpServers(servers) {
-      if (servers.length === 0) return;
-      options.onStatus(
-        servers
-          .map(
-            (server) =>
-              `MCP ${server.name}: ${server.status}${server.error ? ` (${server.error})` : ""}`,
-          )
-          .join("; "),
-      );
+      options.onMcpServers?.(servers);
     },
     async elicitMcpForm(request) {
       if (request.signal?.aborted) return { action: "cancel" };

@@ -16,6 +16,7 @@ export type TuiCommand =
   | { readonly type: "approvals" }
   | { readonly type: "exit" }
   | { readonly type: "help" }
+  | { readonly type: "mcp" }
   | { readonly type: "model" }
   | { readonly type: "reasoning" }
   | { readonly type: "mode" }
@@ -44,6 +45,8 @@ export function parseTuiCommand(input: string): TuiCommand | undefined {
       return { type: "reasoning" };
     case "/mode":
       return { type: "mode" };
+    case "/mcp":
+      return { type: "mcp" };
     case "/sessions":
       return args[0]
         ? { type: "session-select", sessionId: args[0] }
@@ -80,7 +83,7 @@ export function parseTuiCommand(input: string): TuiCommand | undefined {
 
 export function renderTuiHelp(): string {
   return [
-    "Commands: /new, /sessions, /model, /reasoning, /mode, /processes, /output ID,",
+    "Commands: /new, /sessions, /model, /reasoning, /mode, /mcp, /processes, /output ID,",
     "/stop ID, /agents, /approvals, /agent-steer ID MESSAGE, /agent-stop ID, /exit",
     "Keys: Enter send, Ctrl+J newline, Tab focus, Ctrl+O controls, Ctrl+T TODOs, Ctrl+Z suspend; transcript Page Up/Down/Home/End and Enter tool details; activity Up/Down/Home/End and Enter/Space details; Ctrl+C cancel/exit",
     "Composer: type / for commands and @ for project file attachments; pasting a project file path also attaches it.",

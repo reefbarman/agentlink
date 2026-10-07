@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Refined the CLI welcome branding with clearer lowercase pixel lettering, open chain-link outlines, and a teal symbol beside a near-white wordmark. The composer retains its gradient edge, with compact title fallbacks for narrow or short terminals.
+- The CLI no longer shows MCP server connection updates in the status line beside the composer. Use the new `/mcp` command (also in the `Ctrl+O` control centre) to see each configured server's source, transport, connection state, tool count, and last error. MCP warnings and errors still appear in the status line.
 
 ## 1.28.1
 

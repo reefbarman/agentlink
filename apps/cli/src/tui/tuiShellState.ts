@@ -93,6 +93,12 @@ export const TUI_COMMANDS: readonly TuiPickerItem[] = [
     insertText: "/mode",
   },
   {
+    id: "/mcp",
+    label: "/mcp",
+    detail: "Show MCP server status",
+    insertText: "/mcp",
+  },
+  {
     id: "/sessions",
     label: "/sessions",
     detail: "List project sessions",
