@@ -8232,7 +8232,7 @@ export function BrowserGatewayApp({
                 !desktopProductUpdate.candidate &&
                 !desktopProductUpdateDetailsOpen && (
                   <button
-                    class="icon-button"
+                    class="desktop-update-button"
                     type="button"
                     disabled={desktopProductUpdate.status === "checking"}
                     onClick={() => {
@@ -8243,7 +8243,8 @@ export function BrowserGatewayApp({
                         .catch(() => undefined);
                     }}
                   >
-                    Check for updates
+                    <i class="codicon codicon-refresh" aria-hidden="true" />
+                    <span>Check for updates</span>
                   </button>
                 )}
               <ReleaseUpdateIndicator

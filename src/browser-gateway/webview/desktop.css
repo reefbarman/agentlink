@@ -408,6 +408,48 @@
   -webkit-app-region: no-drag;
 }
 
+.browser-shell.browser-shell-desktop .desktop-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ag-accent-2);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ag-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-update-button:hover:not(:disabled) {
+  border-color: var(--ag-accent);
+  background: #4ec9b015;
+  color: #b9efdc;
+}
+
+.browser-shell.browser-shell-desktop .desktop-update-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.browser-shell.browser-shell-desktop
+  .browser-header
+  .desktop-update-button
+  .codicon {
+  font-size: 14px;
+}
+
 .browser-shell.browser-shell-desktop .desktop-mcp-button {
   min-height: 32px;
   padding: 0 12px;
