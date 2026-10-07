@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
 import { render } from "ink-testing-library";
+import { stripVTControlCharacters } from "node:util";
 
 describe("activity shelf", () => {
   it("projects only relevant activity categories and runtime summaries", () => {
@@ -93,7 +94,9 @@ describe("activity shelf", () => {
       />,
     );
 
-    expect(screen.lastFrame()).toContain("› ▸ Agents");
+    expect(stripVTControlCharacters(screen.lastFrame()!)).toContain(
+      "❯ ▸ Agents",
+    );
     screen.unmount();
   });
 
@@ -108,7 +111,9 @@ describe("activity shelf", () => {
       />,
     );
 
-    expect(screen.lastFrame()).toContain("› ▾ Agents");
+    expect(stripVTControlCharacters(screen.lastFrame()!)).toContain(
+      "❯ ▾ Agents",
+    );
     expect(screen.lastFrame()).toContain("Review the renderer fixture");
     screen.unmount();
   });
@@ -133,7 +138,7 @@ describe("activity shelf", () => {
       />,
     );
 
-    expect(screen.lastFrame()).toContain("Activity (focused) · 4 live");
+    expect(screen.lastFrame()).toContain("activity · 4 live · focused");
     expect(screen.lastFrame()).toContain("printf '␛[2J'");
     expect(screen.lastFrame()).not.toContain("printf '\u001b[2J'");
     screen.unmount();

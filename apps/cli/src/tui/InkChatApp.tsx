@@ -280,8 +280,11 @@ export function InkChatApp({
     activityItems.length,
     shell.expandedActivityIds.length > 0,
   );
-  const transcriptRows = Math.max(1, layout.transcriptRows - 2);
-  const transcriptWidth = Math.max(20, columns - 6);
+  // One row of top padding; the focus rail takes a column, not a row.
+  const transcriptRows = Math.max(1, layout.transcriptRows - 1);
+  // Body text sits at columns - 5 (rail, padding, indent); estimate two
+  // columns narrower so word wrapping never outgrows the row budget.
+  const transcriptWidth = Math.max(20, columns - 7);
   const transcriptItems = visibleTranscriptWindow(
     projection,
     shell,
@@ -652,15 +655,21 @@ export function InkChatApp({
     <Box width={columns} height={rows} flexDirection="column">
       <ShellHeader projection={projection} columns={columns} />
       <Box
-        borderStyle="round"
+        borderStyle={FOCUS_RAIL}
+        borderTop={false}
+        borderRight={false}
+        borderBottom={false}
         borderColor={transcript.isFocused ? tuiTheme.accent : tuiTheme.border}
         flexDirection="column"
         height={layout.transcriptRows}
+        flexShrink={0}
         overflow="hidden"
-        paddingX={1}
+        paddingTop={1}
+        paddingLeft={1}
+        paddingRight={1}
       >
         {transcriptItems.length === 0 ? (
-          <Text dimColor>Start a coding task below.</Text>
+          <Text color={tuiTheme.faint}>Start a coding task below.</Text>
         ) : (
           transcriptItems.map((item) => (
             <Box
@@ -706,10 +715,12 @@ export function InkChatApp({
           expandedIds={shell.expandedActivityIds}
           focused={activity.isFocused}
           height={layout.activityRows}
+          width={columns}
         />
       ) : null}
       {controlRequest ? (
         <ControlPanel
+          width={columns}
           request={controlRequest}
           selectedIndex={controlSelection}
           bodyOffset={controlBodyOffset}
@@ -858,7 +869,7 @@ function ComposerAttachments({
 }): React.JSX.Element | null {
   if (files.length === 0) return null;
   return (
-    <Text color="#4EC9B0" wrap="truncate-end">
+    <Text color={tuiTheme.accent} wrap="truncate-end">
       {files.map((file) => `▣ ${sanitizeTerminalText(file.label)}`).join("  ")}
     </Text>
   );
@@ -877,24 +888,48 @@ function TranscriptMessage({
   readonly attachments?: readonly StandaloneTranscriptAttachment[];
   readonly width: number;
 }): React.JSX.Element {
+  const user = role === "user";
+  // Row budget (see transcriptMessageRows): header + body + one gap row.
   return (
     <Box flexDirection="column" flexShrink={0} marginBottom={1}>
-      <Text bold color={role === "user" ? "cyan" : "#4EC9B0"}>
-        {role === "user" ? "You" : "AgentLink"}
-      </Text>
-      {role === "assistant" ? (
-        <MarkdownText width={width}>{text}</MarkdownText>
-      ) : (
-        <Text>{sanitizeTerminalText(text)}</Text>
-      )}
-      {attachments?.map((attachment) => (
-        <AttachmentBlock
-          key={`${attachment.kind}:${attachment.name}`}
-          attachment={attachment}
-          width={width}
-        />
-      ))}
-      {streaming ? <Text>▌</Text> : null}
+      <Box
+        flexDirection="column"
+        flexShrink={0}
+        {...(user ? { backgroundColor: tuiTheme.surface } : {})}
+      >
+        <Text>
+          {user ? (
+            <>
+              <Text bold color={tuiTheme.accent}>
+                ❯{" "}
+              </Text>
+              <Text color={tuiTheme.muted}>you</Text>
+            </>
+          ) : (
+            <>
+              <Text color={tuiTheme.accent}>◆ </Text>
+              <Text bold color={tuiTheme.accentSoft}>
+                agentlink
+              </Text>
+            </>
+          )}
+        </Text>
+        <Box flexDirection="column" flexShrink={0} paddingLeft={2}>
+          {user ? (
+            <Text color={tuiTheme.text}>{sanitizeTerminalText(text)}</Text>
+          ) : (
+            <MarkdownText width={width}>{text}</MarkdownText>
+          )}
+          {attachments?.map((attachment) => (
+            <AttachmentBlock
+              key={`${attachment.kind}:${attachment.name}`}
+              attachment={attachment}
+              width={width}
+            />
+          ))}
+          {streaming ? <Text color={tuiTheme.accent}>▌</Text> : null}
+        </Box>
+      </Box>
     </Box>
   );
 }
@@ -918,7 +953,7 @@ function TurnActivityBlocks({
     .sort((left, right) => left.sequence - right.sequence);
   if (thinking.length === 0 && tools.length === 0) return <></>;
   return (
-    <Box flexDirection="column" flexShrink={0} marginBottom={1}>
+    <Box flexDirection="column" flexShrink={0} marginBottom={1} paddingLeft={2}>
       {thinking.map((item) => (
         <ThinkingBlock
           key={`thinking:${item.thinkingId}`}
@@ -943,7 +978,7 @@ function AttachmentBlock({
   const label = sanitizeTerminalText(attachment.name);
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text color="#4EC9B0">
+      <Text color={tuiTheme.accent}>
         {attachment.kind === "image" ? "▣" : "▤"} {label}
       </Text>
       {attachment.kind === "image" && attachment.base64 ? (
@@ -966,11 +1001,18 @@ function ThinkingBlock({
   readonly thinking: StandaloneThinkingActivity;
   readonly spinner: string;
 }): React.JSX.Element {
+  const running = thinking.status === "running";
   return (
-    <Box flexShrink={0} paddingLeft={1}>
-      <Text color="#4EC9B0" wrap="truncate-end">
-        {thinking.status === "running" ? `${spinner} Thinking` : "✓ Thought"}
-        {thinking.text ? ` · ${sanitizeTerminalText(thinking.text)}` : ""}
+    <Box flexShrink={0} height={1} overflow="hidden">
+      <Text wrap="truncate-end">
+        <Text color={tuiTheme.violet}>{running ? spinner : "✓"}</Text>
+        <Text color={tuiTheme.muted}> {running ? "thinking" : "thought"}</Text>
+        {thinking.text ? (
+          <Text italic color={tuiTheme.faint}>
+            {"  "}
+            {singleLineStatus(thinking.text)}
+          </Text>
+        ) : null}
       </Text>
     </Box>
   );
@@ -990,27 +1032,69 @@ function ToolGroup({
     (tool) => tool.status === "requested" || tool.status === "running",
   ).length;
   const marker = active > 0 ? spinner : failed > 0 ? "✗" : "✓";
-  const color = failed > 0 ? "red" : "#4EC9B0";
+  const color =
+    active > 0 ? tuiTheme.blue : failed > 0 ? tuiTheme.danger : tuiTheme.accent;
   return (
-    <Box flexDirection="column" flexShrink={0} paddingLeft={1}>
-      <Text color={color} wrap="truncate-end">
-        {expanded ? "▾" : "▸"} {marker} Tools · {toolGroupSummary(tools)} ·
-        Enter {expanded ? "collapse" : "expand"}
-      </Text>
+    <Box flexDirection="column" flexShrink={0}>
+      <Box height={1} overflow="hidden">
+        <Text wrap="truncate-end">
+          <Text color={tuiTheme.faint}>{expanded ? "▾" : "▸"} </Text>
+          <Text color={color}>{marker}</Text>
+          <Text color={tuiTheme.muted}>
+            {" "}
+            {tools.length} {tools.length === 1 ? "tool" : "tools"}
+          </Text>
+          <Text color={tuiTheme.faint}> · </Text>
+          <Text color={tuiTheme.text}>{toolGroupSummary(tools)}</Text>
+          {active > 0 ? (
+            <Text color={tuiTheme.blue}> · {active} running</Text>
+          ) : null}
+          {failed > 0 ? (
+            <Text color={tuiTheme.danger}> · {failed} failed</Text>
+          ) : null}
+          <Text color={tuiTheme.faint}>
+            {"   ⏎ "}
+            {expanded ? "collapse" : "expand"}
+          </Text>
+        </Text>
+      </Box>
       {expanded
         ? tools.flatMap((tool) => [
-            <Text key={`${tool.toolCallId}:header`} bold>
-              {toolStatusMarker(tool, spinner)}{" "}
-              {sanitizeTerminalText(tool.toolName)} · {tool.status}
-            </Text>,
-            ...expandedToolDetails(tool).map(({ label, value }) => (
-              <Text
-                key={`${tool.toolCallId}:${label}`}
-                dimColor
-                wrap="truncate-end"
-              >
-                {label} · {value}
+            <Box
+              key={`${tool.toolCallId}:header`}
+              height={1}
+              overflow="hidden"
+              paddingLeft={2}
+            >
+              <Text wrap="truncate-end">
+                <Text color={toolStatusColor(tool)}>
+                  {toolStatusMarker(tool, spinner)}
+                </Text>
+                <Text bold color={tuiTheme.text}>
+                  {" "}
+                  {sanitizeTerminalText(tool.toolName)}
+                </Text>
+                {tool.status === "completed" ? null : (
+                  <Text color={tuiTheme.faint}> · {tool.status}</Text>
+                )}
               </Text>
+            </Box>,
+            ...expandedToolDetails(tool).map(({ label, value }) => (
+              <Box
+                key={`${tool.toolCallId}:${label}`}
+                height={1}
+                overflow="hidden"
+                paddingLeft={4}
+              >
+                <Text wrap="truncate-end">
+                  <Text color={tuiTheme.faint}>{label.padEnd(8)}</Text>
+                  <Text
+                    color={label === "error" ? tuiTheme.danger : tuiTheme.muted}
+                  >
+                    {value}
+                  </Text>
+                </Text>
+              </Box>
             )),
           ])
         : null}
@@ -1019,11 +1103,15 @@ function ToolGroup({
 }
 
 function toolGroupSummary(tools: readonly StandaloneToolActivity[]): string {
-  const names = tools.map((tool) => sanitizeTerminalText(tool.toolName));
-  const unique = [...new Set(names)];
-  return unique.length === 1
-    ? `${tools.length} ${unique[0]}`
-    : `${tools.length} calls`;
+  return [
+    ...new Set(tools.map((tool) => sanitizeTerminalText(tool.toolName))),
+  ].join(", ");
+}
+
+function toolStatusColor(tool: StandaloneToolActivity): string {
+  if (tool.status === "requested" || tool.status === "running")
+    return tuiTheme.blue;
+  return tool.status === "completed" ? tuiTheme.accent : tuiTheme.danger;
 }
 
 function toolStatusMarker(
@@ -1038,14 +1126,14 @@ function expandedToolDetails(
   tool: StandaloneToolActivity,
 ): readonly { readonly label: string; readonly value: string }[] {
   if (tool.error)
-    return [{ label: "Error", value: sanitizeTerminalText(tool.error) }];
+    return [{ label: "error", value: singleLineStatus(tool.error) }];
   return [
     tool.displayInput === undefined
       ? undefined
-      : { label: "Input", value: formatToolJson(tool.displayInput) },
+      : { label: "input", value: formatToolJson(tool.displayInput) },
     tool.displayContent === undefined
       ? undefined
-      : { label: "Result", value: formatToolJson(tool.displayContent) },
+      : { label: "result", value: formatToolJson(tool.displayContent) },
   ].filter(
     (
       section,
@@ -1069,62 +1157,126 @@ function formatToolJson(value: unknown): string {
   }
 }
 
+/**
+ * Approval / question / selector card. Same filled surface as the composer,
+ * with a top strip coloured by kind. Rows: strip, title, body, gap, options,
+ * input, hints (matches controlRows).
+ */
 function ControlPanel({
+  width,
   request,
   selectedIndex,
   bodyOffset,
   text,
 }: {
+  readonly width: number;
   readonly request: TuiControlRequest;
   readonly selectedIndex: number;
   readonly bodyOffset: number;
   readonly text: string;
 }): React.JSX.Element {
-  const visibleOptions = visibleControlOptions(
-    request.options ?? [],
-    selectedIndex,
-    10,
-  );
+  const options = request.options ?? [];
+  const visibleOptions = visibleControlOptions(options, selectedIndex, 10);
+  const tone =
+    request.kind === "approval"
+      ? tuiTheme.warn
+      : request.kind === "question"
+        ? tuiTheme.violet
+        : tuiTheme.accent;
+  const hints: KeyHint[] = [
+    ...(options.length > 1 ? [{ key: "↑↓", label: "select" }] : []),
+    ...(request.body.length > 6
+      ? [{ key: "pgup/pgdn", label: "details" }]
+      : []),
+    { key: "⏎", label: "confirm" },
+    ...(request.cancellable === false ? [] : [{ key: "esc", label: "cancel" }]),
+  ];
   return (
     <Box
-      borderStyle="double"
-      borderColor="yellow"
       flexDirection="column"
+      width={width}
       height={controlRows(request)}
+      flexShrink={0}
       overflow="hidden"
-      paddingX={1}
+      backgroundColor={tuiTheme.surface}
     >
-      <Text bold>{sanitizeTerminalText(request.title)}</Text>
-      {request.body.slice(bodyOffset, bodyOffset + 6).map((line, index) => (
-        <Text
-          key={`${request.id}:body:${bodyOffset + index}`}
-          wrap="truncate-end"
-        >
-          {sanitizeTerminalText(line)}
+      <Text color={tone}>{"▔".repeat(Math.max(1, width))}</Text>
+      <Box flexDirection="column" paddingX={1}>
+        <Text wrap="truncate-end">
+          <Text color={tone}>◆ </Text>
+          {request.kind ? <Text color={tone}>{request.kind} </Text> : null}
+          {request.kind ? <Text color={tuiTheme.faint}>· </Text> : null}
+          <Text bold color={tuiTheme.text}>
+            {sanitizeTerminalText(request.title)}
+          </Text>
         </Text>
-      ))}
-      {visibleOptions.map(({ option, index }) => (
-        <Text
-          key={option.id}
-          inverse={index === selectedIndex}
-          color={option.tone === "danger" ? "red" : undefined}
-        >
-          {index === selectedIndex ? "› " : "  "}
-          {sanitizeTerminalText(option.label)}
-          {option.detail ? ` · ${sanitizeTerminalText(option.detail)}` : ""}
+        {request.body.slice(bodyOffset, bodyOffset + 6).map((line, index) => (
+          <Box key={`${request.id}:body:${bodyOffset + index}`} paddingLeft={2}>
+            <Text color={tuiTheme.muted} wrap="truncate-end">
+              {sanitizeTerminalText(line)}
+            </Text>
+          </Box>
+        ))}
+        <Text> </Text>
+        {visibleOptions.map(({ option, index }) => {
+          const active = index === selectedIndex;
+          const danger = option.tone === "danger";
+          return (
+            <Text key={option.id} wrap="truncate-end">
+              <Text bold color={active ? tone : tuiTheme.faint}>
+                {active ? "❯ " : "  "}
+              </Text>
+              <Text
+                bold={active}
+                color={
+                  danger
+                    ? tuiTheme.danger
+                    : active
+                      ? tuiTheme.text
+                      : tuiTheme.muted
+                }
+              >
+                {sanitizeTerminalText(option.label)}
+              </Text>
+              {option.detail ? (
+                <Text color={tuiTheme.faint}>
+                  {"  "}
+                  {sanitizeTerminalText(option.detail)}
+                </Text>
+              ) : null}
+            </Text>
+          );
+        })}
+        {request.input ? (
+          <Text wrap="truncate-start">
+            <Text bold color={tone}>
+              ❯{" "}
+            </Text>
+            {text ? (
+              <>
+                <Text color={tuiTheme.text}>{sanitizeTerminalText(text)}</Text>
+                <Text color={tuiTheme.accent}>▌</Text>
+              </>
+            ) : (
+              <>
+                <Text color={tuiTheme.accent}>▌</Text>
+                <Text color={tuiTheme.faint}>
+                  {sanitizeTerminalText(request.input.placeholder)}
+                </Text>
+              </>
+            )}
+          </Text>
+        ) : null}
+        <Text wrap="truncate-end">
+          {hints.map((hint, index) => (
+            <React.Fragment key={hint.key}>
+              {index > 0 ? "   " : ""}
+              <Text color={tuiTheme.muted}>{hint.key}</Text>
+              <Text color={tuiTheme.faint}> {hint.label}</Text>
+            </React.Fragment>
+          ))}
         </Text>
-      ))}
-      {request.input ? (
-        <Text inverse>
-          {text
-            ? sanitizeTerminalText(text)
-            : sanitizeTerminalText(request.input.placeholder)}
-        </Text>
-      ) : null}
-      <Text dimColor>
-        ↑↓ select · PgUp/PgDn details · Enter confirm
-        {request.cancellable === false ? "" : " · Esc cancel"}
-      </Text>
+      </Box>
     </Box>
   );
 }
@@ -1288,6 +1440,18 @@ export function controllerStatus(result: AgentTurnResult): string | undefined {
   if (result.status === "cancelled") return "Cancelled";
   return undefined;
 }
+
+/** Left-edge-only border: a thin rail that lights up when its pane has focus. */
+const FOCUS_RAIL = {
+  topLeft: " ",
+  top: " ",
+  topRight: " ",
+  right: " ",
+  bottomRight: " ",
+  bottom: " ",
+  bottomLeft: " ",
+  left: "▏",
+} as const;
 
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 // Shared frame counter; a multiple of every spinner's frame count.

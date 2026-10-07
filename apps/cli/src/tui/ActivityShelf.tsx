@@ -3,8 +3,9 @@ import { Box, Text } from "ink";
 import React from "react";
 import type { StandaloneSessionProjection } from "../sessionProjection.js";
 import { sanitizeTerminalText } from "./terminalText.js";
+import { tuiTheme } from "./theme.js";
 
-const BRAND = "#4EC9B0";
+const LABEL_WIDTH = 13;
 
 export interface ActivityShelfItem {
   readonly id: string;
@@ -20,17 +21,20 @@ export function ActivityShelf({
   expandedIds,
   focused,
   height,
+  width = 80,
 }: {
   readonly projection: StandaloneSessionProjection;
   readonly selectedIndex: number;
   readonly expandedIds: readonly string[];
   readonly focused: boolean;
   readonly height: number;
+  readonly width?: number;
 }): React.JSX.Element | null {
   const items = buildActivityShelfItems(projection);
   if (items.length === 0 || height <= 0) return null;
   const selected = Math.min(Math.max(0, selectedIndex), items.length - 1);
-  const bodyRows = Math.max(1, height - 3);
+  // The title rule is the only chrome row.
+  const bodyRows = Math.max(1, height - 1);
   const expanded = new Set(expandedIds);
   const selectedItem = items[selected];
   const detailRows =
@@ -45,42 +49,105 @@ export function ActivityShelf({
 
   return (
     <Box
-      borderStyle="round"
-      borderColor={focused ? BRAND : "gray"}
       flexDirection="column"
+      width={width}
       height={height}
+      flexShrink={0}
       overflow="hidden"
-      paddingX={1}
     >
-      <Box flexShrink={0}>
-        <Text bold inverse={focused}>
-          Activity{focused ? " (focused)" : ""} · {items.length} live ·
-          Enter/Space expand · Ctrl+T TODOs
+      <ShelfRule
+        width={width}
+        focused={focused}
+        title={`activity · ${items.length} live${focused ? " · focused" : ""}`}
+        hint="⏎ expand · ^t todos"
+      />
+      {visible.map(({ item, index }) => {
+        const active = index === selected;
+        const open = expanded.has(item.id);
+        return (
+          <Box key={item.id} flexDirection="column" flexShrink={0} paddingX={1}>
+            <Box height={1} overflow="hidden">
+              <Text wrap="truncate-end">
+                <Text bold color={active ? tuiTheme.accent : tuiTheme.faint}>
+                  {active ? "❯" : " "}
+                </Text>
+                <Text color={tuiTheme.faint}> {open ? "▾" : "▸"} </Text>
+                <Text
+                  bold={active}
+                  color={
+                    item.attention
+                      ? tuiTheme.warn
+                      : active
+                        ? tuiTheme.text
+                        : tuiTheme.muted
+                  }
+                >
+                  {sanitizeTerminalText(item.label).padEnd(LABEL_WIDTH)}
+                </Text>
+                <Text color={active ? tuiTheme.muted : tuiTheme.faint}>
+                  {sanitizeTerminalText(item.summary)}
+                </Text>
+              </Text>
+            </Box>
+            {open && active
+              ? boundedDetails(item.details, detailRows).map(
+                  (detail, detailIndex) => (
+                    <Box
+                      key={`${item.id}:${detailIndex}`}
+                      height={1}
+                      overflow="hidden"
+                      paddingLeft={4}
+                    >
+                      <Text color={tuiTheme.faint} wrap="truncate-end">
+                        {sanitizeTerminalText(detail)}
+                      </Text>
+                    </Box>
+                  ),
+                )
+              : null}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** `── activity · 4 live ───────── ⏎ expand · ^t todos ──` section rule. */
+function ShelfRule({
+  width,
+  focused,
+  title,
+  hint,
+}: {
+  readonly width: number;
+  readonly focused: boolean;
+  readonly title: string;
+  readonly hint: string;
+}): React.JSX.Element {
+  const lead = "── ";
+  const tail = "──";
+  const fixed = lead.length + title.length + 1;
+  const showHint = width - fixed - (hint.length + 2 + tail.length) >= 3;
+  const fill = Math.max(
+    1,
+    width - fixed - (showHint ? hint.length + 2 + tail.length : 0),
+  );
+  const line = focused ? tuiTheme.accent : tuiTheme.border;
+  return (
+    <Box height={1} flexShrink={0} overflow="hidden">
+      <Text wrap="truncate-end">
+        <Text color={line}>{lead}</Text>
+        <Text bold={focused} color={focused ? tuiTheme.accent : tuiTheme.muted}>
+          {title}
         </Text>
-      </Box>
-      {visible.map(({ item, index }) => (
-        <Box key={item.id} flexDirection="column" flexShrink={0}>
-          <Text color={item.attention ? "yellow" : undefined}>
-            {index === selected ? "›" : " "} {expanded.has(item.id) ? "▾" : "▸"}{" "}
-            {sanitizeTerminalText(item.label)} ·{" "}
-            {sanitizeTerminalText(item.summary)}
-          </Text>
-          {expanded.has(item.id) && index === selected
-            ? boundedDetails(item.details, detailRows).map(
-                (detail, detailIndex) => (
-                  <Text
-                    key={`${item.id}:${detailIndex}`}
-                    dimColor
-                    wrap="truncate-end"
-                  >
-                    {"    "}
-                    {sanitizeTerminalText(detail)}
-                  </Text>
-                ),
-              )
-            : null}
-        </Box>
-      ))}
+        <Text color={line}> {"─".repeat(fill)}</Text>
+        {showHint ? (
+          <>
+            <Text color={tuiTheme.faint}> {hint} </Text>
+            <Text color={line}>{tail}</Text>
+          </>
+        ) : null}
+      </Text>
     </Box>
   );
 }

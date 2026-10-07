@@ -14,6 +14,7 @@ export const tuiTheme = {
   border: "#2D4145",
   surface: "#223033",
   warn: "#E5C07B",
+  danger: "#F28B82",
 } as const;
 
 /** Brand gradient used for the wordmark and composer strip (desktop Quick Ask glow). */

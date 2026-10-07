@@ -85,8 +85,10 @@ describe("Ink chat app", () => {
     expect(screen.lastFrame()).toContain("▸ fixture-sess");
     expect(screen.lastFrame()).toContain("const sequence = 1000;");
     expect(screen.lastFrame()).not.toContain("```ts");
-    expect(screen.lastFrame()).toContain("Activity · 4 live");
-    expect(screen.lastFrame()).toContain("Active work · awaiting_approval");
+    expect(screen.lastFrame()).toContain("activity · 4 live");
+    expect(stripAnsi(screen.lastFrame())).toContain(
+      "Active work  awaiting_approval",
+    );
     expect(screen.lastFrame()).toContain("◆ waiting for you");
     expect(screen.lastFrame()).toContain("⏎ send   ^j newline");
     screen.unmount();
@@ -205,7 +207,9 @@ describe("Ink chat app", () => {
     screen.stdin.write("Build the feature");
     await nextInputDispatch();
     screen.stdin.write("\r");
-    await vi.waitFor(() => expect(screen.lastFrame()).toContain("You"));
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("❯ you"),
+    );
     expect(screen.lastFrame()).toContain("prompt writes");
     screen.unmount();
   });
@@ -257,8 +261,9 @@ describe("Ink chat app", () => {
     );
     const frame = stripAnsi(screen.lastFrame());
 
-    expect(frame.match(/You/g)).toHaveLength(2);
-    expect(frame.match(/AgentLink/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(frame.match(/❯ you/g)).toHaveLength(2);
+    // Session header plus the assistant message label.
+    expect(frame.match(/◆ agentlink/g)?.length).toBeGreaterThanOrEqual(2);
     expect(frame).not.toMatch(/\bAgent\b/);
     screen.unmount();
   });
@@ -317,9 +322,9 @@ describe("Ink chat app", () => {
     );
     const frame = stripAnsi(screen.lastFrame());
 
-    expect(frame).toContain("▸ ✓ Tools · 1 read_file · Enter expand");
+    expect(frame).toContain("▸ ✓ 1 tool · read_file   ⏎ expand");
     expect(frame).not.toContain('"path":"src/index.ts"');
-    expect(frame).toMatch(/Enter expand[^\n]*\n│\s*│\n│ AgentLink/);
+    expect(frame).toMatch(/⏎ expand[^\n]*\n▏[^\S\n]*\n▏ ◆ agentlink/);
     expect(frame).toContain("Done with the tool call.");
     expect(frame).not.toContain("**Done**");
     expect(frame).not.toContain("Working");
@@ -329,7 +334,7 @@ describe("Ink chat app", () => {
     screen.stdin.write("\r");
     await vi.waitFor(() =>
       expect(stripAnsi(screen.lastFrame())).toContain(
-        'Input · {"path":"src/index.ts"}',
+        'input   {"path":"src/index.ts"}',
       ),
     );
     expect(stripAnsi(screen.lastFrame())).toContain("▾");
@@ -354,7 +359,7 @@ describe("Ink chat app", () => {
     await nextInputDispatch();
     screen.stdin.write("\t");
     await vi.waitFor(() =>
-      expect(screen.lastFrame()).toContain("Activity (focused)"),
+      expect(screen.lastFrame()).toContain("activity · 4 live · focused"),
     );
     screen.stdin.write(" ");
     await vi.waitFor(() =>
@@ -408,8 +413,8 @@ describe("Ink chat app", () => {
     await vi.waitFor(() =>
       expect(screen.lastFrame()).toContain("○ Validate next item"),
     );
-    expect(screen.lastFrame()).toContain("› ▾ TODO");
-    expect(screen.lastFrame()).toContain("Activity (focused)");
+    expect(stripAnsi(screen.lastFrame())).toContain("❯ ▾ TODO");
+    expect(screen.lastFrame()).toContain("· focused");
     screen.unmount();
   });
 
