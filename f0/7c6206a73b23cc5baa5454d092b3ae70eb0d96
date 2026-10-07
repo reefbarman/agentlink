@@ -1,0 +1,44 @@
+apps/cli/src/tui/Wordmark.test.tsx
+  h_e08a86bb3a33a2 2,5-6,26-40
+  s_0a6af3ec71ff15::t_7e36d49e5979de 1,3-4,7,41-49
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 588,595,624-625,630-634,637,639,643
+  s_0a6af3ec71ff15::t_6e2cc2edcec75d 587,589-591,626-629,635-636,638,640-642
+apps/cli/src/tui/Wordmark.tsx
+  h_e08a86bb3a33a2 21-32,40,42,45-53,74-80,89-90,111,127-137
+  s_a198c43d6d9d5e::t_72994e5c55894f 41,43,138-139
+apps/cli/src/tui/ShellChrome.tsx
+  h_e08a86bb3a33a2 67,75-76,90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f07c6206a73b23cc5baa5454d092b3ae70eb0d96",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0a6af3ec71ff15": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f5d47ba2-47d6-46b9-9989-fa1f88962bd5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a198c43d6d9d5e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e9ee9b0-5aef-4f7b-aa4a-81473aeaa3b7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
