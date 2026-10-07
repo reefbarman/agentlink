@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.28.0
+
 - Unified the command Guardians' policy source while preserving the LLM Guardian's baseline requests. Added explicit evidence-projection coverage and versioned comparison cohorts with requested/reported model identity and usage coverage. Jev remains shadow-only; incomplete evidence and model disagreement never authorise execution.
 - Foreground built-in Review-mode requests for a verified PR now authorise supported comments and comment/approval/request-changes reviews through `gh pr` and REST `gh api`, without repeated publication-specific consent under Approve for Me. Explicit-ID edits and pending-review submission require same-task ownership and current-content evidence. Report-only instructions, later refusals, explicit rules, manual mode, unrelated targets, read-only profiles, destination approvals and human-only recovery retain precedence. This is not a blanket GitHub API permission.
 

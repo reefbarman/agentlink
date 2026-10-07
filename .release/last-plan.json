@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "9ca8126c193a4d00087b1cc404fb7c36ccf8fb89",
-  "createdAt": "2026-10-06T05:57:06.093Z",
+  "sourceSha": "2e3939a1830b6272b5951aaeb028c7d8a081c755",
+  "createdAt": "2026-10-07T00:39:04.216Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,135 +10,82 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.26.1",
-      "baselineRef": "v1.26.1",
-      "reserved": "1.26.3",
-      "commits": [
-        "160fb5aa78b276ce528e9c5a5336a3b27ae396ea",
-        "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c",
-        "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-        "a1adc3e5c0879ce571ec19adaf9ccdaccf97938d",
-        "c73c477d521bd22101ea01864f45cfa7879580f6",
-        "2c63105a1c83a912175475588ec7b0e20f4d2def"
-      ],
+      "published": "1.27.0",
+      "baselineRef": "v1.27.0",
+      "reserved": "1.27.0",
+      "commits": ["05bb797bbecbfca0ed2cd8989d919df8781b5859"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.27.0",
+      "version": "1.28.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.27.0",
+      "tag": "v1.28.0",
       "notes": [
         {
-          "sha": "160fb5aa78b276ce528e9c5a5336a3b27ae396ea",
-          "subject": "fix(webview): render provider citation markers safely",
-          "summary": "Chat replies now hide unresolved provider citation markers, including partial ones while streaming, and show safe HTTP(S) source links when citation metadata maps them.",
-          "breaking": false
-        },
-        {
-          "sha": "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c",
-          "subject": "fix(skills): allow reference reads in context view",
-          "summary": "Reading a skill's reference files through the context view no longer requires outside-workspace approval when the skill is in the session catalogue.",
-          "breaking": false
-        },
-        {
-          "sha": "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-          "subject": "fix(sandbox): isolate npm cache and retain early cancellation",
-          "summary": "Sandboxed commands now use a private per-command npm cache while keeping the normal HOME, honour early cancellation during startup, and give clearer npm cache recovery guidance.",
-          "breaking": false
-        },
-        {
-          "sha": "a1adc3e5c0879ce571ec19adaf9ccdaccf97938d",
-          "subject": "fix(desktop): pad the desktop update header button",
-          "summary": "Adds proper padding to the update indicator button in the Desktop header.",
-          "breaking": false
-        },
-        {
-          "sha": "c73c477d521bd22101ea01864f45cfa7879580f6",
-          "subject": "feat(skills): separate skill activation from resource reads",
-          "summary": "Adds a read_skill_resource tool for paginated, non-activating reads of built-in skill files; load_skill now activates only SKILL.md files and returns a compatibility result for legacy reference paths.",
-          "breaking": false
-        },
-        {
-          "sha": "2c63105a1c83a912175475588ec7b0e20f4d2def",
-          "subject": "feat(skills): activate user-selected skills directly",
-          "summary": "Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.",
+          "sha": "05bb797bbecbfca0ed2cd8989d919df8781b5859",
+          "subject": "feat: improve Guardian reviews and MCP sign-in",
+          "summary": "Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.5.1",
-      "baselineRef": "desktop-v0.5.1",
-      "reserved": "0.5.1",
-      "commits": [
-        "160fb5aa78b276ce528e9c5a5336a3b27ae396ea",
-        "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c",
-        "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-        "a1adc3e5c0879ce571ec19adaf9ccdaccf97938d",
-        "c73c477d521bd22101ea01864f45cfa7879580f6",
-        "2c63105a1c83a912175475588ec7b0e20f4d2def"
-      ],
+      "published": "0.6.0",
+      "baselineRef": "desktop-v0.6.0",
+      "reserved": "0.6.0",
+      "commits": ["05bb797bbecbfca0ed2cd8989d919df8781b5859"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.6.0",
+      "tag": "desktop-v0.7.0",
       "notes": [
         {
-          "sha": "160fb5aa78b276ce528e9c5a5336a3b27ae396ea",
-          "subject": "fix(webview): render provider citation markers safely",
-          "summary": "Chat replies now hide unresolved provider citation markers, including partial ones while streaming, and show safe HTTP(S) source links when citation metadata maps them.",
-          "breaking": false
-        },
-        {
-          "sha": "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c",
-          "subject": "fix(skills): allow reference reads in context view",
-          "summary": "Reading a skill's reference files through the context view no longer requires outside-workspace approval when the skill is in the session catalogue.",
-          "breaking": false
-        },
-        {
-          "sha": "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-          "subject": "fix(sandbox): isolate npm cache and retain early cancellation",
-          "summary": "Sandboxed commands now use a private per-command npm cache while keeping the normal HOME, honour early cancellation during startup, and give clearer npm cache recovery guidance.",
-          "breaking": false
-        },
-        {
-          "sha": "a1adc3e5c0879ce571ec19adaf9ccdaccf97938d",
-          "subject": "fix(desktop): pad the desktop update header button",
-          "summary": "Adds proper padding to the update indicator button in the Desktop header.",
-          "breaking": false
-        },
-        {
-          "sha": "c73c477d521bd22101ea01864f45cfa7879580f6",
-          "subject": "feat(skills): separate skill activation from resource reads",
-          "summary": "Adds a read_skill_resource tool for paginated, non-activating reads of built-in skill files; load_skill now activates only SKILL.md files and returns a compatibility result for legacy reference paths.",
-          "breaking": false
-        },
-        {
-          "sha": "2c63105a1c83a912175475588ec7b0e20f4d2def",
-          "subject": "feat(skills): activate user-selected skills directly",
-          "summary": "Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.",
+          "sha": "05bb797bbecbfca0ed2cd8989d919df8781b5859",
+          "subject": "feat: improve Guardian reviews and MCP sign-in",
+          "summary": "Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.5.1",
-      "baselineRef": "cli-v0.5.1",
-      "reserved": "0.5.1",
-      "commits": [
-        "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-        "2c63105a1c83a912175475588ec7b0e20f4d2def"
-      ],
+      "published": "0.6.0",
+      "baselineRef": "cli-v0.6.0",
+      "reserved": "0.6.0",
+      "commits": ["05bb797bbecbfca0ed2cd8989d919df8781b5859"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.7.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.7.0",
+      "notes": [
+        {
+          "sha": "05bb797bbecbfca0ed2cd8989d919df8781b5859",
+          "subject": "feat: improve Guardian reviews and MCP sign-in",
+          "summary": "Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.",
+          "breaking": false
+        }
+      ]
+    },
+    "sdk": {
+      "published": "0.5.0",
+      "baselineRef": "sdk-v0.5.0",
+      "reserved": "0.5.0",
+      "commits": ["05bb797bbecbfca0ed2cd8989d919df8781b5859"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -148,92 +95,22 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.6.0",
+      "tag": "sdk-v0.6.0",
       "notes": [
         {
-          "sha": "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
-          "subject": "fix(sandbox): isolate npm cache and retain early cancellation",
-          "summary": "Sandboxed commands now use a private per-command npm cache while keeping the normal HOME, honour early cancellation during startup, and give clearer npm cache recovery guidance.",
-          "breaking": false
-        },
-        {
-          "sha": "2c63105a1c83a912175475588ec7b0e20f4d2def",
-          "subject": "feat(skills): activate user-selected skills directly",
-          "summary": "Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.4.1",
-      "baselineRef": "sdk-v0.4.1",
-      "reserved": "0.4.1",
-      "commits": ["2c63105a1c83a912175475588ec7b0e20f4d2def"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.5.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.5.0",
-      "notes": [
-        {
-          "sha": "2c63105a1c83a912175475588ec7b0e20f4d2def",
-          "subject": "feat(skills): activate user-selected skills directly",
-          "summary": "Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.",
+          "sha": "05bb797bbecbfca0ed2cd8989d919df8781b5859",
+          "subject": "feat: improve Guardian reviews and MCP sign-in",
+          "summary": "Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "160fb5aa78b276ce528e9c5a5336a3b27ae396ea": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Chat replies now hide unresolved provider citation markers, including partial ones while streaming, and show safe HTTP(S) source links when citation metadata maps them.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Reading a skill's reference files through the context view no longer requires outside-workspace approval when the skill is in the session catalogue.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0b68cc047b1aa4e378cdd4969614c5a54a429f8c": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Sandboxed commands now use a private per-command npm cache while keeping the normal HOME, honour early cancellation during startup, and give clearer npm cache recovery guidance.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a1adc3e5c0879ce571ec19adaf9ccdaccf97938d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Adds proper padding to the update indicator button in the Desktop header.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c73c477d521bd22101ea01864f45cfa7879580f6": {
+    "05bb797bbecbfca0ed2cd8989d919df8781b5859": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Adds a read_skill_resource tool for paginated, non-activating reads of built-in skill files; load_skill now activates only SKILL.md files and returns a compatibility result for legacy reference paths.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2c63105a1c83a912175475588ec7b0e20f4d2def": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.",
+      "summary": "Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.",
       "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

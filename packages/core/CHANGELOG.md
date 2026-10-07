@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-07
+
+- Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.
+
 ## 0.5.0 — 2026-10-06
 
 - Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.
