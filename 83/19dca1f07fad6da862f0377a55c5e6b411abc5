@@ -1,0 +1,23 @@
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 8235,8246-8247
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 411-451
+  h_e08a86bb3a33a2 452
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 88
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8319dca1f07fad6da862f0377a55c5e6b411abc5",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
