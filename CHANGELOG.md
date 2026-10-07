@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refined the CLI welcome branding with clearer lowercase pixel lettering, open chain-link outlines, and a teal symbol beside a near-white wordmark. The composer retains its gradient edge, with compact title fallbacks for narrow or short terminals.
+
 ## 1.28.1
 
 - The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.

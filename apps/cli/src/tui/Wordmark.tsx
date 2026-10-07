@@ -1,33 +1,106 @@
-import { BRAND_GRADIENT, gradientColors, tuiTheme } from "./theme.js";
+import { tuiTheme } from "./theme.js";
 import { Box, Text } from "ink";
 
 import React from "react";
 
-// Lowercase pixel glyphs: rows 0-1 ascender, 2-5 x-height, 6 descender.
+// Lowercase pixel glyphs: rows 0-1 ascender, 2-7 x-height, 8-9 descender.
 // Pairs of pixel rows are folded into one terminal row with half blocks.
 const GLYPHS: Readonly<Record<string, readonly string[]>> = {
-  a: ["....", "....", ".###", "#..#", "#..#", ".###", "...."],
-  g: ["....", "....", ".###", "#..#", "#..#", ".###", "###."],
-  e: ["....", "....", ".##.", "####", "#...", ".###", "...."],
-  n: ["....", "....", "###.", "#..#", "#..#", "#..#", "...."],
-  t: ["#..", "#..", "###", "#..", "#..", ".##", "..."],
-  l: ["#.", "#.", "#.", "#.", "#.", ".#", ".."],
-  i: ["#", ".", "#", "#", "#", "#", "."],
-  k: ["#...", "#...", "#..#", "#.#.", "##..", "#.##", "...."],
+  a: [
+    ".....",
+    ".....",
+    ".###.",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".####",
+    ".....",
+    ".....",
+  ],
+  g: [
+    ".....",
+    ".....",
+    ".####",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".####",
+    "....#",
+    ".###.",
+  ],
+  e: [
+    ".....",
+    ".....",
+    ".###.",
+    "#...#",
+    "#####",
+    "#....",
+    "#....",
+    ".####",
+    ".....",
+    ".....",
+  ],
+  n: [
+    ".....",
+    ".....",
+    "####.",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".....",
+    ".....",
+  ],
+  t: [
+    ".#..",
+    ".#..",
+    "####",
+    ".#..",
+    ".#..",
+    ".#..",
+    ".#..",
+    "..##",
+    "....",
+    "....",
+  ],
+  l: ["#", "#", "#", "#", "#", "#", "#", "#", ".", "."],
+  i: ["#", ".", "#", "#", "#", "#", "#", "#", ".", "."],
+  k: [
+    "#...",
+    "#...",
+    "#..#",
+    "#.#.",
+    "##..",
+    "##..",
+    "#.#.",
+    "#..#",
+    "....",
+    "....",
+  ],
 };
 
 const WORDMARK_TEXT = "agentlink";
 
-// Two interlocking chain links, offset diagonally like media/agentlink.svg.
+// Slender adjacent stems need more breathing room than the rounded letters.
+const GLYPH_GAPS: Readonly<Record<string, string>> = { li: "..", in: ".." };
+
+// Matching open capsules, offset diagonally like media/agentlink.svg.
+// Breaks at the crossing preserve each link's outline instead of a solid knot.
+// A blank pixel row above/below makes the symbol optically smaller than the type.
 const LOGO_PIXELS = [
+  "............",
   ".######.....",
   "#......#....",
   "#......#....",
-  "#....######.",
-  ".######....#",
+  "#.....#.###.",
+  ".###.#.....#",
   "....#......#",
   "....#......#",
   ".....######.",
+  "............",
 ] as const;
 
 /** Terminal rows of the block-letter wordmark, uncoloured. */
@@ -39,7 +112,15 @@ export function wordmarkLines(text = WORDMARK_TEXT): string[] {
   const height = glyphs[0]!.length;
   return foldPixelRows(
     Array.from({ length: height }, (_, row) =>
-      glyphs.map((glyph) => glyph![row]!).join("."),
+      glyphs
+        .map((glyph, index) => {
+          const gap =
+            index === glyphs.length - 1
+              ? ""
+              : (GLYPH_GAPS[text.slice(index, index + 2)] ?? ".");
+          return glyph![row]! + gap;
+        })
+        .join(""),
     ),
   );
 }
@@ -73,7 +154,7 @@ export const WORDMARK_WIDTH = Math.max(
 
 export const LOGO_WIDTH = LOGO_PIXELS[0].length;
 
-const LOGO_GAP = 3;
+const LOGO_GAP = 2;
 
 /** Width of the full logo + wordmark lockup. */
 export const LOCKUP_WIDTH = LOGO_WIDTH + LOGO_GAP + WORDMARK_WIDTH;
@@ -86,7 +167,7 @@ function halfBlock(top: boolean, bottom: boolean): string {
 }
 
 /**
- * Chain-link logo beside the gradient block-letter "agentlink" wordmark.
+ * Teal chain-link logo beside the near-white lowercase "agentlink" wordmark.
  * Drops the logo, then the wordmark, when the terminal is too narrow or short.
  */
 export function Wordmark({
@@ -104,22 +185,11 @@ export function Wordmark({
       </Text>
     );
   }
-  // Colour runs of a few columns each: smooth enough, and far fewer nodes to
-  // re-render on every keystroke in the welcome composer.
-  const segments = Math.ceil(WORDMARK_WIDTH / COLUMNS_PER_SEGMENT);
-  const colors = gradientColors(segments, BRAND_GRADIENT);
   const wordmark = (
     <Box flexDirection="column" width={WORDMARK_WIDTH}>
       {lines.map((line, row) => (
-        <Text key={row}>
-          {colors.map((color, segment) => (
-            <Text key={segment} color={color}>
-              {line.slice(
-                segment * COLUMNS_PER_SEGMENT,
-                (segment + 1) * COLUMNS_PER_SEGMENT,
-              )}
-            </Text>
-          ))}
+        <Text key={row} color={tuiTheme.text}>
+          {line}
         </Text>
       ))}
     </Box>
@@ -138,5 +208,3 @@ export function Wordmark({
     </Box>
   );
 }
-
-const COLUMNS_PER_SEGMENT = 3;

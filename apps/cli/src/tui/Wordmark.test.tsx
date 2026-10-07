@@ -14,22 +14,25 @@ describe("Wordmark", () => {
   it("folds the pixel glyphs into half-block rows", () => {
     expect(wordmarkLines().map((line) => `|${line}|`)).toMatchInlineSnapshot(`
       [
-        "|                    █   █  ▀      █|",
-        "|▄▀▀█ ▄▀▀█ ▄██▄ █▀▀▄ █▀▀ █  █ █▀▀▄ █ ▄▀|",
-        "|▀▄▄█ ▀▄▄█ ▀▄▄▄ █  █ ▀▄▄ ▀▄ █ █  █ █▀▄▄|",
-        "|     ▀▀▀|",
+        "|                         █   █  ▀        █|",
+        "|▄▀▀▀▄ ▄▀▀▀█ ▄▀▀▀▄ █▀▀▀▄ ▀█▀▀ █  █  █▀▀▀▄ █ ▄▀|",
+        "|█   █ █   █ █▀▀▀▀ █   █  █   █  █  █   █ ██|",
+        "|▀▄▄▄█ ▀▄▄▄█ ▀▄▄▄▄ █   █  ▀▄▄ █  █  █   █ █ ▀▄|",
+        "|       ▄▄▄▀|",
       ]
     `);
-    expect(WORDMARK_WIDTH).toBeLessThanOrEqual(40);
+    expect(WORDMARK_WIDTH).toBeLessThanOrEqual(46);
+    expect(LOCKUP_WIDTH).toBeLessThanOrEqual(60);
   });
 
-  it("draws the chain-link logo at the wordmark's height", () => {
+  it("draws matching open chain links within the wordmark's height", () => {
     expect(logoLines().map((line) => `|${line}|`)).toMatchInlineSnapshot(`
       [
-        "|▄▀▀▀▀▀▀▄|",
-        "|█    ▄▄█▄▄▄|",
-        "| ▀▀▀█▀▀    █|",
-        "|    ▀▄▄▄▄▄▄▀|",
+        "| ▄▄▄▄▄▄|",
+        "|█      █|",
+        "|▀▄▄▄ ▄▀ ▀▀▀▄|",
+        "|    █      █|",
+        "|     ▀▀▀▀▀▀|",
       ]
     `);
     expect(logoLines()).toHaveLength(wordmarkLines().length);
@@ -56,5 +59,10 @@ describe("Wordmark", () => {
     expect(wide.lastFrame()).toContain(wordmarkLines()[1]);
     expect(wide.lastFrame()).not.toContain("◆ AgentLink");
     wide.unmount();
+
+    const short = render(<Wordmark columns={100} rows={15} />);
+    expect(short.lastFrame()).toContain("◆ AgentLink");
+    expect(short.lastFrame()).not.toContain(wordmarkLines()[1]);
+    short.unmount();
   });
 });
