@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-06
+
+- Selecting a skill from the slash picker now activates it directly on the host before the model request, with an Activated by you card, stale-revision handling, and queued-message recovery.
+
 ## 0.4.1 — 2026-10-05
 
 - Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.
