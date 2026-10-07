@@ -10,6 +10,8 @@ Run frontier coding agents with the editor's intelligence, visible execution, re
 
 [Get started](#get-started) · [Documentation](resources/builtin-skills/documentation/README.md) · [Why AgentLink](why-agentlink.md) · [Releases](https://github.com/reefbarman/agentlink/releases)
 
+![AgentLink in VS Code: the agent proposes an Overdue invoice badge in a Next.js app, shown in a native side-by-side diff with an Accept/Reject card in the chat panel](docs/assets/screenshots/vscode-diff-review.png)
+
 ## Why AgentLink
 
 A capable model is only part of a capable coding agent. It also needs a good working environment: editor intelligence instead of text guesses, fast feedback instead of a surprise broken build, and a way for you to supervise or redirect work without taking the controls away.
@@ -27,6 +29,8 @@ Give the agent the same semantic understanding you use: definitions, references,
 ### Autonomy is a dial, not a switch
 
 Review every action when the task is risky, or let familiar work move faster with focused rules and **Approve for Me**. Commands remain visible, approvals carry your feedback back to the agent, and checkpoints make experimentation reversible.
+
+![An AgentLink approval card asking to run a terminal command, with the command, its working directory, the agent's reason, auto-approval rules, and Run/Reject buttons beside the task list](docs/assets/screenshots/vscode-command-approval.png)
 
 ### Nothing happens in the dark
 
@@ -79,6 +83,13 @@ code --install-extension agentlink-*.vsix --force
 
 Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. The installer downloads the newest DMG for your Mac (Apple Silicon or Intel) and opens it so you can drag **AgentLink** to Applications:
 
+![The AgentLink Desktop app showing an Ask Agent conversation with chat history in the sidebar](docs/assets/screenshots/desktop-ask-agent.png)
+
+<p>
+  <img src="docs/assets/screenshots/desktop-quick-ask.png" alt="The Desktop Quick Ask prompt floating over VS Code, ready to send a question" width="49%">
+  <img src="docs/assets/screenshots/desktop-vscode-view.png" alt="Desktop connected to a running VS Code window, showing that window's agent session and its pending command approval" width="49%">
+</p>
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop
 ```
@@ -90,6 +101,8 @@ This preview is unsigned and not notarised. macOS may require you to right-click
 ### Try the standalone CLI preview
 
 The CLI is a self-contained terminal coding agent for macOS Apple Silicon, with its own Node runtime, reviewed edits and commands, project sessions, and optional TypeScript/JavaScript intelligence. The installer verifies the SHA-256 checksum and links `~/.local/bin/agentlink`:
+
+![The AgentLink CLI running a coding session in the terminal](docs/assets/screenshots/cli-tui.png)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli
