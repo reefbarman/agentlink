@@ -506,6 +506,7 @@ describe("runCli", () => {
         argumentCount: 1,
         cwd: "/project",
         environmentKeys: ["TOKEN"],
+        userConfigured: false,
         operationDigest: "shared-launch-digest",
       }),
     ).resolves.toBe(true);
@@ -517,6 +518,7 @@ describe("runCli", () => {
         destination: "https://example.test/mcp",
         headerNames: [],
         oauth: false,
+        userConfigured: false,
         operationDigest: "shared-network-digest",
       }),
     ).resolves.toBe(true);

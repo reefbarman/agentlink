@@ -409,6 +409,97 @@ describe("shared MCP workspace tools", () => {
     await tools.close();
   });
 
+  it("marks user-configured proposals and starts their connections without blocking the turn", async () => {
+    vi.clearAllMocks();
+    const stdioConfig: McpServerConfig = {
+      name: "local",
+      command: "npx",
+      args: ["server"],
+    };
+    const authorizeLaunch = vi.fn(async () => true);
+    const authorizeNetwork = vi.fn(async () => true);
+    const tools = createWorkspaceSharedMcpTools({
+      secret: "test-secret",
+      resolveConfigs: async () => [stdioConfig, config],
+      baseEnvironment: () => ({}),
+      fetch: vi.fn<typeof globalThis.fetch>(),
+      authorizeAdmission: async () => true,
+      authorizeLaunch,
+      authorizeNetwork,
+      clientVersion: "test",
+      connectUserServersInBackground: true,
+    });
+    let finishStartup!: () => void;
+    const startupHeld = new Promise<void>((resolve) => {
+      finishStartup = resolve;
+    });
+    let connected = false;
+    mocks.connect.mockImplementation(async () => {
+      const [host] = mocks.hub.mock.lastCall!;
+      await host.authorizeNativeConnection({
+        config: stdioConfig,
+        context: request,
+        transport: "stdio",
+        command: "npx",
+        args: ["server"],
+        env: {},
+      });
+      await host.authorizeNativeConnection({
+        config,
+        context: request,
+        transport: "streamable-http",
+        url: config.url,
+      });
+      await startupHeld;
+      connected = true;
+    });
+    const resolved = await tools.resolveTools(request);
+    if (Array.isArray(resolved)) throw new Error("Missing lifecycle disposer");
+    expect(connected).toBe(false);
+    await vi.waitFor(() => expect(authorizeNetwork).toHaveBeenCalled());
+    expect(authorizeLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "local", userConfigured: true }),
+      request,
+    );
+    expect(authorizeNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "records", userConfigured: true }),
+      request,
+    );
+    finishStartup();
+    await vi.waitFor(() => expect(connected).toBe(true));
+    await resolved.dispose?.();
+    await tools.close();
+  });
+
+  it("waits for startup when a project server needs an admission decision", async () => {
+    vi.clearAllMocks();
+    const projectConfig: McpServerConfig = {
+      ...config,
+      sourceProjectRoots: ["/project"],
+    };
+    const tools = createWorkspaceSharedMcpTools({
+      secret: "test-secret",
+      resolveConfigs: async () => [projectConfig],
+      baseEnvironment: () => ({}),
+      fetch: vi.fn<typeof globalThis.fetch>(),
+      authorizeAdmission: async () => true,
+      authorizeLaunch: async () => true,
+      authorizeNetwork: async () => true,
+      clientVersion: "test",
+      connectUserServersInBackground: true,
+    });
+    let connected = false;
+    mocks.connect.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      connected = true;
+    });
+    const resolved = await tools.resolveTools(request);
+    if (Array.isArray(resolved)) throw new Error("Missing lifecycle disposer");
+    expect(connected).toBe(true);
+    await resolved.dispose?.();
+    await tools.close();
+  });
+
   it("keeps connections across turns without retaining old turn authority", async () => {
     vi.clearAllMocks();
     const { tools } = fixture();

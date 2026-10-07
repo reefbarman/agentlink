@@ -681,17 +681,19 @@ async function createHost(options: {
     proposal: WorkspaceSharedMcpLaunchProposal,
     sessionId: string,
   ): Promise<boolean> =>
-    host?.isBackgroundSession(sessionId)
-      ? await host.requestBackgroundApproval({
-          childSessionId: sessionId,
-          toolName: "shared_mcp_server_launch",
-          summary: `Launch MCP server ${proposal.serverId}`,
-          operationDigest: proposal.operationDigest,
-          displayContent: proposal,
-        })
-      : await requireInteractionBroker(
-          options.interactionBridge,
-        ).confirmSharedMcpLaunch(proposal);
+    proposal.userConfigured
+      ? true
+      : host?.isBackgroundSession(sessionId)
+        ? await host.requestBackgroundApproval({
+            childSessionId: sessionId,
+            toolName: "shared_mcp_server_launch",
+            summary: `Launch MCP server ${proposal.serverId}`,
+            operationDigest: proposal.operationDigest,
+            displayContent: proposal,
+          })
+        : await requireInteractionBroker(
+            options.interactionBridge,
+          ).confirmSharedMcpLaunch(proposal);
   const authorizeSharedNetwork = async (
     proposal: WorkspaceSharedMcpNetworkProposal,
     sessionId: string,
@@ -702,6 +704,7 @@ async function createHost(options: {
     ) {
       return false;
     }
+    if (proposal.userConfigured) return true;
     return host?.isBackgroundSession(sessionId)
       ? await host.requestBackgroundApproval({
           childSessionId: sessionId,
@@ -814,6 +817,7 @@ async function createHost(options: {
             fetch: options.mcpOAuth?.fetch ?? globalThis.fetch,
             nativeFetch: globalThis.fetch,
             clientVersion: __AGENTLINK_CLI_VERSION__,
+            connectUserServersInBackground: true,
             onStatus: (message: string) =>
               options.interactionBridge.current?.notifyMcpStatus(message),
             onServerStatus: (_sessionId: string, servers: McpServerInfo[]) =>

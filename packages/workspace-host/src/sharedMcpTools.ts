@@ -43,6 +43,8 @@ export interface WorkspaceSharedMcpLaunchProposal {
   readonly argumentCount: number;
   readonly cwd: string;
   readonly environmentKeys: readonly string[];
+  /** True when the server comes from user-level config, not a project file. */
+  readonly userConfigured: boolean;
   readonly operationDigest: string;
 }
 
@@ -53,6 +55,8 @@ export interface WorkspaceSharedMcpNetworkProposal {
   readonly destination: string;
   readonly headerNames: readonly string[];
   readonly oauth: boolean;
+  /** True when the server comes from user-level config, not a project file. */
+  readonly userConfigured: boolean;
   readonly operationDigest: string;
 }
 
@@ -95,6 +99,12 @@ export interface CreateWorkspaceSharedMcpToolsOptions {
   readonly clientVersion: string;
   readonly onElicitation?: NodeHostMcpFormElicitationHandler;
   readonly runOutsideExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
+  /**
+   * Start turn-start connections without blocking the turn when no configured
+   * server needs a project admission decision. Only enable this when the host
+   * authorizes user-configured launches and destinations without interaction.
+   */
+  readonly connectUserServersInBackground?: boolean;
   readonly onStatus?: (message: string) => void;
   readonly onServerStatus?: (
     sessionId: string,
@@ -103,6 +113,10 @@ export interface CreateWorkspaceSharedMcpToolsOptions {
 }
 
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+function isUserConfigured(config: Readonly<McpServerConfig>): boolean {
+  return (config.sourceProjectRoots?.length ?? 0) === 0;
+}
 const MAX_RESULT_CHARS = 100_000;
 
 function digest(secret: string, value: unknown): string {
@@ -302,6 +316,7 @@ export function createWorkspaceSharedMcpTools(
             argumentCount: connection.args.length,
             cwd: connection.cwd ?? "",
             environmentKeys: Object.keys(connection.env).sort(),
+            userConfigured: isUserConfigured(config),
             operationDigest: digest(options.secret, {
               config,
               command: connection.command,
@@ -350,6 +365,7 @@ export function createWorkspaceSharedMcpTools(
           destination: publicUrl(destination),
           headerNames: Object.keys(config.headers ?? {}).sort(),
           oauth,
+          userConfigured: isUserConfigured(config),
           operationDigest: digest(options.secret, {
             config,
             destination,
@@ -543,9 +559,21 @@ export function createWorkspaceSharedMcpTools(
         );
     };
     try {
-      await operations.run(request, () =>
+      const startup = operations.run(request, () =>
         hub.connect(configs, { trigger: "startup" }),
       );
+      if (
+        options.connectUserServersInBackground &&
+        configs.every((config) => config.disabled || isUserConfigured(config))
+      ) {
+        void startup.catch((error: unknown) =>
+          options.onStatus?.(
+            `MCP startup failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      } else {
+        await startup;
+      }
       const validContext = async (
         context: Pick<Turn, "principal" | "sessionId" | "turnId">,
         serverName?: string,
