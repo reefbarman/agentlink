@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-07
+
+- The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.
+
 ## 0.6.0 — 2026-10-07
 
 - Adds a Sign in button for MCP servers awaiting browser sign-in, a 10-minute OAuth window with silent recovery, scoped Review-mode PR publication under Approve for Me, and versioned Guardian policy and telemetry.

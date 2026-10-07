@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.28.1
+
+- The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.
+
 ## 1.28.0
 
 - Unified the command Guardians' policy source while preserving the LLM Guardian's baseline requests. Added explicit evidence-projection coverage and versioned comparison cohorts with requested/reported model identity and usage coverage. Jev remains shadow-only; incomplete evidence and model disagreement never authorise execution.

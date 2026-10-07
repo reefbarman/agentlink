@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8262b4e91f1e7fc890c77ceb66587f41d4175aa4",
-  "createdAt": "2026-10-07T01:13:22.984Z",
+  "sourceSha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+  "createdAt": "2026-10-07T01:33:48.531Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -13,46 +13,79 @@
       "published": "1.28.0",
       "baselineRef": "v1.28.0",
       "reserved": "1.28.0",
-      "commits": [],
+      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "1.28.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "v1.28.1",
+      "notes": [
+        {
+          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
+          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
+          "breaking": false
+        }
+      ]
     },
     "desktop": {
       "published": "0.7.0",
       "baselineRef": "desktop-v0.7.0",
       "reserved": "0.7.0",
-      "commits": [],
+      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.7.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.7.1",
+      "notes": [
+        {
+          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
+          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
+          "breaking": false
+        }
+      ]
     },
     "cli": {
-      "published": "0.7.0",
-      "baselineRef": "cli-v0.7.0",
-      "reserved": "0.7.0",
-      "commits": ["8262b4e91f1e7fc890c77ceb66587f41d4175aa4"],
+      "published": "0.8.0",
+      "baselineRef": "cli-v0.8.0",
+      "reserved": "0.8.0",
+      "commits": [
+        "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2",
+        "eb2305e312c6d1069063be5f7b2eb9323fb3665b"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.8.0",
+      "tag": "cli-v0.9.0",
       "notes": [
         {
-          "sha": "8262b4e91f1e7fc890c77ceb66587f41d4175aa4",
-          "subject": "feat(cli): polish TUI welcome screen and shell chrome",
-          "summary": "The CLI TUI gets a branded gradient welcome wordmark, a restyled composer card, a status footer with spinner, elapsed time and adaptive key hints, a redesigned header, and a restyled picker.",
+          "sha": "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2",
+          "subject": "feat(cli): add chain-link logo and roomier welcome spacing",
+          "summary": "The CLI welcome screen now shows a chain-link logo beside the wordmark and uses roomier spacing around the composer and footer.",
+          "breaking": false
+        },
+        {
+          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
+          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
           "breaking": false
         }
       ]
@@ -61,13 +94,25 @@
       "published": "0.6.0",
       "baselineRef": "sdk-v0.6.0",
       "reserved": "0.6.0",
-      "commits": [],
+      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.6.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.6.1",
+      "notes": [
+        {
+          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
+          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -75,6 +120,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The CLI TUI gets a branded gradient welcome wordmark, a restyled composer card, a status footer with spinner, elapsed time and adaptive key hints, a redesigned header, and a restyled picker.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI welcome screen now shows a chain-link logo beside the wordmark and uses roomier spacing around the composer and footer.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "eb2305e312c6d1069063be5f7b2eb9323fb3665b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
