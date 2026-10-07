@@ -1,0 +1,36 @@
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 283-287,658-661,665,667-669,672,718,723,872,891-892,895-915,917-919,921,930-932,956,981,1004,1006,1008-1015,1036,1038-1060,1063,1065-1073,1075-1081,1083,1085-1087,1089-1093,1095-1097,1106-1114,1129,1133,1136,1160-1164,1166,1172,1178-1193,1197,1199,1201,1203-1211,1213-1249,1251-1277,1279,1444-1454
+  s_d1c6e8c5febc84::t_5f047710485cbf 916,920,922-929,1007,1035,1064,1074,1094,1250,1455
+apps/cli/src/tui/theme.ts
+  h_e08a86bb3a33a2 17
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 88-90,211,264-266,325,327,337,362,416-417
+  s_d1c6e8c5febc84::t_b2ec8c768feca7 91,210,212
+apps/cli/src/tui/ActivityShelf.test.tsx
+  h_e08a86bb3a33a2 11,97-98,114-115,141
+  s_d1c6e8c5febc84::t_f5f86ae15a84b0 99,116
+apps/cli/src/tui/ActivityShelf.tsx
+  h_e08a86bb3a33a2 6,8,24,31,36-37,53,55,58-141,143-148,150
+  s_d1c6e8c5febc84::t_bb5d3bb3eab41d 149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58354021594378ac2e4b0af798a0d839f2353afa",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d1c6e8c5febc84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a113fb-db97-7fb2-bdb1-afdbc5bf27ec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

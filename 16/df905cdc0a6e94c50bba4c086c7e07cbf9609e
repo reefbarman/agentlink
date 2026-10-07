@@ -1,0 +1,48 @@
+apps/cli/src/tui/tuiShellState.ts
+  h_e08a86bb3a33a2 96-100
+  s_57b0f95d78bd3b::t_c660682401d60c 95
+apps/cli/src/tui/tuiCommand.ts
+  h_e08a86bb3a33a2 19,48-49,86
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 134,136
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 1364
+CHANGELOG.md
+  h_e08a86bb3a33a2 6
+apps/cli/src/cli.test.ts
+  h_e08a86bb3a33a2 391,406,420-421
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 1069,1273-1275,1514-1539,1684,1698,1709-1711,1841,1848
+  s_65d133efbaa119::t_65f7cc04d3ea1a 1540-1541
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_57b0f95d78bd3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "988baf14-a634-4211-ab23-44badc9e619b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_65d133efbaa119": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bfd468bd-dbcb-4458-bdbb-379e7449d101",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
