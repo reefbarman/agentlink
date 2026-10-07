@@ -33,7 +33,18 @@ import type {
 import { ActivityShelf, buildActivityShelfItems } from "./ActivityShelf.js";
 import type { TuiControlRequest, TuiControlResponse } from "./controlTypes.js";
 import { MarkdownText } from "./MarkdownText.js";
+import {
+  ComposerCard,
+  type FooterTone,
+  type KeyHint,
+  SessionMeta,
+  ShellFooter,
+  ShellHeader,
+  STATUS_SPINNER_FRAMES,
+} from "./ShellChrome.js";
 import { sanitizeTerminalText } from "./terminalText.js";
+import { formatElapsed, tuiTheme } from "./theme.js";
+import { Wordmark } from "./Wordmark.js";
 import {
   initialTuiShellState,
   maxTranscriptOffset,
@@ -114,6 +125,7 @@ export function InkChatApp({
   }));
   const [busy, setBusy] = useState(false);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
+  const [workingSince, setWorkingSince] = useState<number>();
   const busyRef = useRef(false);
   const [queuedSubmissions, setQueuedSubmissions] = useState<
     QueuedSubmission[]
@@ -194,11 +206,16 @@ export function InkChatApp({
       );
     if (!animating) return;
     const timer = setInterval(
-      () => setSpinnerFrame((frame) => (frame + 1) % SPINNER_FRAMES.length),
+      () => setSpinnerFrame((frame) => (frame + 1) % SPINNER_CYCLE),
       100,
     );
     return () => clearInterval(timer);
   }, [busy, projection.phase, projection.thinking, projection.tools]);
+  const working =
+    busy || projection.phase === "running" || projection.phase === "cancelling";
+  useEffect(() => {
+    setWorkingSince((since) => (working ? (since ?? Date.now()) : undefined));
+  }, [working]);
   useEffect(() => {
     if (externalStatus !== undefined) {
       dispatch({ type: "status.changed", status: externalStatus });
@@ -538,6 +555,24 @@ export function InkChatApp({
     queuedSubmissions.length === 0 &&
     !busy &&
     !controlRequest;
+  const footer = footerState({
+    projection,
+    working,
+    elapsed: workingSince === undefined ? 0 : Date.now() - workingSince,
+    spinner:
+      STATUS_SPINNER_FRAMES[spinnerFrame % STATUS_SPINNER_FRAMES.length]!,
+    queued: queuedSubmissions.length,
+    focus: transcript.isFocused
+      ? "transcript"
+      : activity.isFocused
+        ? "activity"
+        : "composer",
+    compact,
+  });
+  const releaseNotice =
+    releaseUpdateState && hasVisibleReleaseUpdate(releaseUpdateState)
+      ? `AgentLink ${releaseUpdateState.candidate!.version} available · /updates for details`
+      : undefined;
   if (compact) {
     const compactWidth = Math.max(24, Math.min(76, columns - 4));
     return (
@@ -548,47 +583,59 @@ export function InkChatApp({
         alignItems="center"
         justifyContent="center"
       >
-        <Text bold color="#4EC9B0">
-          ◆ AgentLink
-        </Text>
-        <Text dimColor>{compactModelSummary(projection)}</Text>
-        <Box
-          borderStyle="round"
-          borderColor="#4EC9B0"
-          flexDirection="column"
-          marginTop={1}
-          paddingX={1}
-          width={compactWidth}
-        >
-          <ComposerAttachments files={attachedFiles} />
-          <TextArea
-            focus={composer.isFocused}
-            value={shell.composer}
-            onChange={(value) => dispatch({ type: "composer.changed", value })}
-            onSubmit={submit}
-            disableArrowNavigation={Boolean(shell.picker)}
-            keybindings={selected ? { Enter: false } : undefined}
-            placeholder="What would you like AgentLink to work on?"
-            initialLineCount={2}
-            viewportLines={textareaRows}
-            labels={[{ pattern: /(?:^|\s)@[^\s]+/gu, label: "mention" }]}
-            styles={{ mention: { color: "#4EC9B0" }, text: { color: "white" } }}
-          />
-        </Box>
-        <Box width={compactWidth} flexDirection="column">
+        <Wordmark columns={columns} rows={rows} />
+        <Box marginTop={1} flexDirection="column" width={compactWidth}>
+          <ComposerCard
+            width={compactWidth}
+            focused={composer.isFocused}
+            header={<ComposerAttachments files={attachedFiles} />}
+            footer={
+              <>
+                <Text> </Text>
+                <SessionMeta projection={projection} />
+              </>
+            }
+          >
+            <TextArea
+              focus={composer.isFocused}
+              value={shell.composer}
+              onChange={(value) =>
+                dispatch({ type: "composer.changed", value })
+              }
+              onSubmit={submit}
+              disableArrowNavigation={Boolean(shell.picker)}
+              keybindings={selected ? { Enter: false } : undefined}
+              placeholder="What would you like AgentLink to work on?"
+              initialLineCount={2}
+              viewportLines={textareaRows}
+              labels={[{ pattern: /(?:^|\s)@[^\s]+/gu, label: "mention" }]}
+              styles={{
+                mention: { color: tuiTheme.accent },
+                text: { color: tuiTheme.text },
+              }}
+            />
+          </ComposerCard>
           <Picker state={shell} />
+          <ShellFooter
+            width={compactWidth}
+            tone={footer.tone}
+            status={footer.status}
+            hints={footer.hints}
+          />
           {shell.status ? (
-            <Text color="yellow" wrap="truncate-end">
-              {singleLineStatus(shell.status)}
-            </Text>
+            <Box paddingX={1}>
+              <Text color={tuiTheme.warn} wrap="truncate-end">
+                {singleLineStatus(shell.status)}
+              </Text>
+            </Box>
           ) : null}
-          {releaseUpdateState && hasVisibleReleaseUpdate(releaseUpdateState) ? (
-            <Text color="#4EC9B0" wrap="truncate-end">
-              AgentLink {releaseUpdateState.candidate!.version} available ·
-              /updates for details
-            </Text>
+          {releaseNotice ? (
+            <Box paddingX={1}>
+              <Text color={tuiTheme.accent} wrap="truncate-end">
+                {releaseNotice}
+              </Text>
+            </Box>
           ) : null}
-          <Text dimColor>Enter send · / commands · @ files · Ctrl+C exit</Text>
         </Box>
       </Box>
     );
@@ -596,10 +643,10 @@ export function InkChatApp({
 
   return (
     <Box width={columns} height={rows} flexDirection="column">
-      <Header projection={projection} columns={columns} />
+      <ShellHeader projection={projection} columns={columns} />
       <Box
         borderStyle="round"
-        borderColor={transcript.isFocused ? "cyan" : "gray"}
+        borderColor={transcript.isFocused ? tuiTheme.accent : tuiTheme.border}
         flexDirection="column"
         height={layout.transcriptRows}
         overflow="hidden"
@@ -632,7 +679,9 @@ export function InkChatApp({
                   <TurnActivityBlocks
                     turnId={item.message.turnId}
                     projection={projection}
-                    spinner={SPINNER_FRAMES[spinnerFrame]!}
+                    spinner={
+                      SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length]!
+                    }
                     expanded={shell.expandedToolTurnIds.includes(
                       item.message.turnId,
                     )}
@@ -662,46 +711,27 @@ export function InkChatApp({
       ) : (
         <Picker state={shell} />
       )}
-      {releaseUpdateState && hasVisibleReleaseUpdate(releaseUpdateState) ? (
-        <Box height={1} overflow="hidden" flexShrink={0}>
-          <Text color="#4EC9B0" wrap="truncate-end">
-            AgentLink {releaseUpdateState.candidate!.version} available ·
-            /updates for details
+      {releaseNotice ? (
+        <Box height={1} overflow="hidden" flexShrink={0} paddingX={1}>
+          <Text color={tuiTheme.accent} wrap="truncate-end">
+            {releaseNotice}
           </Text>
         </Box>
       ) : null}
       {shell.status && !controlRequest ? (
-        <Box height={1} overflow="hidden" flexShrink={0}>
-          <Text color="yellow" wrap="truncate-end">
+        <Box height={1} overflow="hidden" flexShrink={0} paddingX={1}>
+          <Text color={tuiTheme.warn} wrap="truncate-end">
             {singleLineStatus(shell.status)}
           </Text>
         </Box>
       ) : null}
       {!controlRequest ? (
-        <Box
-          borderStyle="round"
-          borderColor={composer.isFocused ? "cyan" : "gray"}
-          flexDirection="column"
-          height={textareaRows + 3 + (attachedFiles.length > 0 ? 1 : 0)}
-          overflow="hidden"
-          paddingX={1}
+        <ComposerCard
+          width={columns}
+          height={textareaRows + 2 + (attachedFiles.length > 0 ? 1 : 0)}
+          focused={composer.isFocused && !activity.isFocused}
+          header={<ComposerAttachments files={attachedFiles} />}
         >
-          <Text dimColor>
-            {busy || projection.phase === "running"
-              ? `${SPINNER_FRAMES[spinnerFrame]} Working`
-              : "Ready"}
-            {queuedSubmissions.length > 0
-              ? ` · ${queuedSubmissions.length} queued`
-              : ""}{" "}
-            · Enter send · Ctrl+J newline · Tab focus · Ctrl+O controls · Ctrl+Z
-            suspend · Ctrl+C{" "}
-            {["running", "cancelling", "awaiting_approval"].includes(
-              projection.phase,
-            )
-              ? "cancel"
-              : "exit"}
-          </Text>
-          <ComposerAttachments files={attachedFiles} />
           <TextArea
             focus={composer.isFocused && !activity.isFocused}
             value={shell.composer}
@@ -723,12 +753,95 @@ export function InkChatApp({
             initialLineCount={2}
             viewportLines={textareaRows}
             labels={[{ pattern: /(?:^|\s)@[^\s]+/gu, label: "mention" }]}
-            styles={{ mention: { color: "cyan" }, text: { color: "white" } }}
+            styles={{
+              mention: { color: tuiTheme.accent },
+              text: { color: tuiTheme.text },
+            }}
           />
-        </Box>
+        </ComposerCard>
+      ) : null}
+      {!controlRequest ? (
+        <ShellFooter
+          width={columns}
+          tone={footer.tone}
+          status={footer.status}
+          hints={footer.hints}
+        />
       ) : null}
     </Box>
   );
+}
+
+function footerState({
+  projection,
+  working,
+  elapsed,
+  spinner,
+  queued,
+  focus,
+  compact,
+}: {
+  readonly projection: StandaloneSessionProjection;
+  readonly working: boolean;
+  readonly elapsed: number;
+  readonly spinner: string;
+  readonly queued: number;
+  readonly focus: "composer" | "transcript" | "activity";
+  readonly compact: boolean;
+}): {
+  readonly tone: FooterTone;
+  readonly status: string;
+  readonly hints: readonly KeyHint[];
+} {
+  const queuedSuffix = queued > 0 ? ` · ${queued} queued` : "";
+  const [tone, label]: [FooterTone, string] =
+    projection.phase === "awaiting_approval"
+      ? ["waiting", "◆ waiting for you"]
+      : projection.phase === "cancelling"
+        ? ["waiting", `${spinner} stopping`]
+        : working
+          ? ["working", `${spinner} working ${formatElapsed(elapsed)}`]
+          : ["ready", "ready"];
+  const interruptible = working || projection.phase === "awaiting_approval";
+  const exitHint: KeyHint = {
+    key: "^c",
+    label: interruptible ? "cancel" : "quit",
+  };
+  const hints: KeyHint[] =
+    focus === "transcript"
+      ? [
+          { key: "↑↓", label: "scroll" },
+          { key: "⏎", label: "tools" },
+          { key: "pgup/pgdn", label: "page" },
+          { key: "tab", label: "focus" },
+          exitHint,
+        ]
+      : focus === "activity"
+        ? [
+            { key: "↑↓", label: "select" },
+            { key: "⏎", label: "details" },
+            { key: "tab", label: "focus" },
+            exitHint,
+          ]
+        : compact
+          ? [
+              { key: "⏎", label: "send" },
+              { key: "^j", label: "newline" },
+              { key: "/", label: "commands" },
+              { key: "@", label: "files" },
+              { key: "^o", label: "controls" },
+              exitHint,
+            ]
+          : [
+              { key: "⏎", label: working ? "queue" : "send" },
+              { key: "^j", label: "newline" },
+              { key: "tab", label: "focus" },
+              { key: "^o", label: "controls" },
+              { key: "^t", label: "tasks" },
+              { key: "^z", label: "suspend" },
+              exitHint,
+            ];
+  return { tone, status: `${label}${queuedSuffix}`, hints };
 }
 
 function ComposerAttachments({
@@ -741,41 +854,6 @@ function ComposerAttachments({
     <Text color="#4EC9B0" wrap="truncate-end">
       {files.map((file) => `▣ ${sanitizeTerminalText(file.label)}`).join("  ")}
     </Text>
-  );
-}
-
-function compactModelSummary(projection: StandaloneSessionProjection): string {
-  const model = projection.model
-    ? `${projection.model.providerId}/${projection.model.modelId}`
-    : "default model";
-  return sanitizeTerminalText(
-    `${model} · ${projection.reasoningEffort ?? "default"} reasoning`,
-  );
-}
-
-function Header({
-  projection,
-  columns,
-}: {
-  readonly projection: StandaloneSessionProjection;
-  readonly columns: number;
-}): React.JSX.Element {
-  const model = projection.model
-    ? sanitizeTerminalText(
-        `${projection.model.providerId}/${projection.model.modelId}`,
-      )
-    : "default model";
-  return (
-    <Box justifyContent="space-between">
-      <Text bold color="#4EC9B0">
-        AgentLink · {projection.sessionId?.slice(0, 12) ?? "starting"}
-      </Text>
-      <Text wrap="truncate-end">
-        {projection.mode} · {projection.writePolicy} writes ·{" "}
-        {projection.reasoningEffort ?? "default"} reasoning · {model} ·{" "}
-        {columns} cols
-      </Text>
-    </Box>
   );
 }
 
@@ -1086,20 +1164,34 @@ function Picker({
   if (!picker) return null;
   return (
     <Box
-      borderStyle="single"
-      borderColor="cyan"
+      borderStyle="round"
+      borderColor={tuiTheme.border}
       flexDirection="column"
       paddingX={1}
     >
-      <Text bold>{picker.kind === "commands" ? "Commands" : "Files"}</Text>
-      {picker.items.slice(0, 8).map((item, index) => (
-        <Text key={item.id} inverse={index === picker.selectedIndex}>
-          {index === picker.selectedIndex ? "› " : "  "}
-          {sanitizeTerminalText(item.label)} ·{" "}
-          {sanitizeTerminalText(item.detail)}
-        </Text>
-      ))}
-      {picker.items.length === 0 ? <Text dimColor>No matches</Text> : null}
+      <Text bold color={tuiTheme.accent}>
+        {picker.kind === "commands" ? "commands" : "files"}
+      </Text>
+      {picker.items.slice(0, 8).map((item, index) => {
+        const active = index === picker.selectedIndex;
+        return (
+          <Text key={item.id} wrap="truncate-end">
+            <Text color={active ? tuiTheme.accent : tuiTheme.faint}>
+              {active ? "❯ " : "  "}
+            </Text>
+            <Text bold={active} color={active ? tuiTheme.text : tuiTheme.muted}>
+              {sanitizeTerminalText(item.label)}
+            </Text>
+            <Text color={tuiTheme.faint}>
+              {" · "}
+              {sanitizeTerminalText(item.detail)}
+            </Text>
+          </Text>
+        );
+      })}
+      {picker.items.length === 0 ? (
+        <Text color={tuiTheme.faint}>No matches</Text>
+      ) : null}
     </Box>
   );
 }
@@ -1191,5 +1283,7 @@ export function controllerStatus(result: AgentTurnResult): string | undefined {
 }
 
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
+// Shared frame counter; a multiple of every spinner's frame count.
+const SPINNER_CYCLE = 120;
 
 export { TUI_COMMANDS };

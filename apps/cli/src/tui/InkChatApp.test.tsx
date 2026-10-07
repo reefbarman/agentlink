@@ -12,6 +12,7 @@ import type { StandaloneSessionController } from "../sessionController.js";
 import { buildActivityShelfItems } from "./ActivityShelf.js";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
 import { render } from "ink-testing-library";
+import { wordmarkLines } from "./Wordmark.js";
 
 function controllerFixture(): StandaloneSessionController {
   const fixture = createRendererBakeoffFixture();
@@ -80,12 +81,14 @@ describe("Ink chat app", () => {
       />,
     );
 
-    expect(screen.lastFrame()).toContain("AgentLink · fixture-sess");
+    expect(screen.lastFrame()).toContain("◆ agentlink ▏");
+    expect(screen.lastFrame()).toContain("▸ fixture-sess");
     expect(screen.lastFrame()).toContain("const sequence = 1000;");
     expect(screen.lastFrame()).not.toContain("```ts");
     expect(screen.lastFrame()).toContain("Activity · 4 live");
     expect(screen.lastFrame()).toContain("Active work · awaiting_approval");
-    expect(screen.lastFrame()).toContain("Enter send · Ctrl+J newline");
+    expect(screen.lastFrame()).toContain("◆ waiting for you");
+    expect(screen.lastFrame()).toContain("⏎ send   ^j newline");
     screen.unmount();
   });
 
@@ -191,10 +194,12 @@ describe("Ink chat app", () => {
       />,
     );
 
-    expect(screen.lastFrame()).toContain("◆ AgentLink");
+    expect(screen.lastFrame()).toContain(wordmarkLines()[1]);
     expect(screen.lastFrame()).toContain(
       "What would you like AgentLink to work on?",
     );
+    expect(screen.lastFrame()).toContain("code · default model");
+    expect(screen.lastFrame()).toContain("ready");
     expect(screen.lastFrame()).not.toContain("prompt writes");
     await nextInputDispatch();
     screen.stdin.write("Build the feature");
@@ -796,7 +801,7 @@ describe("Ink chat app", () => {
     await vi.waitFor(() =>
       expect(screen.lastFrame()).toContain("Current projection"),
     );
-    expect(screen.lastFrame()).toContain("AgentLink · current-sess");
+    expect(screen.lastFrame()).toContain("▸ current-sess");
     screen.unmount();
   });
 
