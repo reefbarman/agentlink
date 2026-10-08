@@ -1,0 +1,33 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/core/model/providers/codex/standaloneWeb.test.ts
+  h_e08a86bb3a33a2 377-510
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 198
+src/core/model/providers/codex/standaloneWeb.ts
+  h_e08a86bb3a33a2 169-185,190-191,532,549,553,586-594
+  s_c325a36a83eeb3::t_ba62fd0467e370 595-596
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43b2e790a4ee656f532177b918651b89401e56af",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c325a36a83eeb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a118e3-b3fc-72f3-b4ca-2cd899b1f840",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
