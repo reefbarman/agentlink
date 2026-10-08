@@ -918,6 +918,20 @@ describe("handleExecuteCommand", () => {
   it.each([
     {
       command:
+        "git apply --cached --check /tmp/notes.patch && git apply --cached /tmp/notes.patch && git add -- src/a.ts",
+      subcommands: ["apply", "add"],
+    },
+    {
+      command: "git apply --index --check --apply /tmp/notes.patch",
+      subcommands: ["apply"],
+    },
+    {
+      command:
+        "git diff --cached --quiet && git diff -- src/a.ts | python3 -c 'import sys; print(sys.stdin.read())' | git apply --cached && git add -- docs/a.md",
+      subcommands: ["apply", "add"],
+    },
+    {
+      command:
         "git add src/a.ts && git diff --cached --stat && git diff --cached --name-only && git ls-files plans && git commit -m fix",
       subcommands: ["add", "commit"],
     },
@@ -974,6 +988,234 @@ describe("handleExecuteCommand", () => {
         retry_safe: true,
         failure_stage: "validation",
       });
+    },
+  );
+
+  it.each([
+    'git apply --cached --check "$AL_FILE(patch)" && git apply --cached "$AL_FILE(patch)" && git add -- src/a.ts',
+    "git apply --index --check --apply $AL_FILE(patch)",
+    "cat $AL_FILE(patch) | git apply --cached",
+  ])(
+    "preflights inline apply without leaving stale retry paths: %s",
+    async (command) => {
+      const actual = await vi.importActual<
+        typeof import("../util/gitMetadataWriterClassifier.js")
+      >("../util/gitMetadataWriterClassifier.js");
+      classifyPredictableGitMetadataWriter.mockImplementation(
+        actual.classifyPredictableGitMetadataWriter,
+      );
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const files = [
+        { name: "patch", content: "distinctive patch bytes\n", ext: "diff" },
+      ];
+      const result = await handleExecuteCommand(
+        { command, files },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-inline-apply-preflight",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      );
+      const prepared =
+        await terminalProvider.prepareExecution.mock.results[0].value;
+      const filePath =
+        terminalProvider.prepareExecution.mock.calls[0][0].sandboxInlineFiles[0]
+          .path;
+      expect(prepared.dispose).toHaveBeenCalledOnce();
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+      expect(fs.existsSync(filePath)).toBe(false);
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        status: "retry_required",
+        capability_code: "protected_git_metadata",
+        command_template: command,
+        command_sent: false,
+        process_launched: false,
+        inline_files: [
+          {
+            name: "patch",
+            bytes: Buffer.byteLength(files[0].content),
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        ],
+        retry_guidance: {
+          automatic_retry: false,
+          message: expect.stringContaining("original files payload"),
+          options: [
+            {
+              action: "resubmit_inline_files",
+              command,
+              sandbox_permissions: "require_escalated",
+              requires_original_files: true,
+            },
+          ],
+        },
+      });
+      expect(payload.reason).toContain("Follow retry_guidance");
+      expect(payload.reason).not.toContain("Retry the exact command");
+      expect(payload.retry_guidance.options[0].command).not.toContain(filePath);
+      expect(JSON.stringify(payload)).not.toContain(files[0].content.trim());
+    },
+  );
+
+  it.each([
+    ["--cached", false],
+    ["--index", false],
+    ["--cached", true],
+    ["--index", true],
+  ] as const)(
+    "does not request native metadata access for %s checks (inline %s)",
+    async (mode, inline) => {
+      const actual = await vi.importActual<
+        typeof import("../util/gitMetadataWriterClassifier.js")
+      >("../util/gitMetadataWriterClassifier.js");
+      classifyPredictableGitMetadataWriter.mockImplementation(
+        actual.classifyPredictableGitMetadataWriter,
+      );
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        {
+          command: `git apply ${mode} --check ${inline ? "$AL_FILE(patch)" : "/tmp/check.patch"}`,
+          ...(inline
+            ? { files: [{ name: "patch", content: "check fixture" }] }
+            : {}),
+        },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-apply-check-only",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      );
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 0,
+        security: { route: "sandbox" },
+      });
+      expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
+      expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("requires a new invocation rather than restoring an edited inline template", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((_key: string, fallback?: unknown) => fallback),
+    });
+    const actual = await vi.importActual<
+      typeof import("../util/gitMetadataWriterClassifier.js")
+    >("../util/gitMetadataWriterClassifier.js");
+    classifyPredictableGitMetadataWriter.mockImplementation(
+      actual.classifyPredictableGitMetadataWriter,
+    );
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    const prepareExecution = vi.fn(async (options, context) =>
+      terminalProvider.prepareExecution(options, {
+        ...context,
+        requiredAuthority: "sandbox",
+      }),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      {
+        command: "cat $AL_FILE(patch)",
+        files: [{ name: "patch", content: "edited patch bytes" }],
+      },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "edit",
+            editedCommand: `${prepareExecution.mock.calls[0][0].command} | git apply --cached`,
+          }),
+        })),
+      } as never,
+      "session-edit-inline-apply",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+    const payload = textPayload(result);
+    expect(payload).toMatchObject({
+      status: "retry_required",
+      original_command: "cat $AL_FILE(patch)",
+      command_sent: false,
+      process_launched: false,
+      retry_guidance: {
+        automatic_retry: false,
+        options: [],
+        message: expect.stringContaining("new explicit invocation"),
+      },
+    });
+    expect(payload.command_template).toBeUndefined();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    const prepared = await prepareExecution.mock.results[0].value;
+    expect(prepared.dispose).toHaveBeenCalledOnce();
+    expect(
+      fs.existsSync(
+        prepareExecution.mock.calls[0][0].sandboxInlineFiles[0].path,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["forbidden", "read-only"] as const)(
+    "keeps %s restrictions ahead of apply preflight",
+    async (restriction) => {
+      const actual = await vi.importActual<
+        typeof import("../util/gitMetadataWriterClassifier.js")
+      >("../util/gitMetadataWriterClassifier.js");
+      classifyPredictableGitMetadataWriter.mockImplementation(
+        actual.classifyPredictableGitMetadataWriter,
+      );
+      const command = "git apply --cached --check /tmp/notes.patch";
+      const rules = {
+        session:
+          restriction === "forbidden"
+            ? [
+                {
+                  pattern: command,
+                  mode: "exact" as const,
+                  decision: "forbidden" as const,
+                },
+              ]
+            : [],
+        project: [],
+        global: [],
+      };
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command },
+        {
+          evaluateCommandRules: (_sessionId: string, text: string) =>
+            evaluateCommandRulePolicy(rules, text),
+          isCommandApproved: () => true,
+        } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-restricted-apply",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          ...(restriction === "read-only"
+            ? { commandExecutionPolicy: "read-only" as const }
+            : {}),
+        },
+      );
+      expect(textPayload(result)).toMatchObject({
+        status: "rejected",
+        command_sent: false,
+      });
+      expect(classifyPredictableGitMetadataWriter).not.toHaveBeenCalled();
+      expect(terminalProvider.prepareExecution).not.toHaveBeenCalled();
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
     },
   );
 
@@ -6864,6 +7106,181 @@ describe("handleExecuteCommand", () => {
       },
     ]);
   });
+
+  it("rematerialises an inline apply retry through reviewed native route composition", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((_key: string, fallback?: unknown) => fallback),
+    });
+    const actual = await vi.importActual<
+      typeof import("../util/gitMetadataWriterClassifier.js")
+    >("../util/gitMetadataWriterClassifier.js");
+    classifyPredictableGitMetadataWriter.mockImplementation(
+      actual.classifyPredictableGitMetadataWriter,
+    );
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const command =
+      "git apply --cached --check $AL_FILE(patch) && git apply --cached $AL_FILE(patch)";
+    const content =
+      "diff --git a/fixture.txt b/fixture.txt\n--- a/fixture.txt\n+++ b/fixture.txt\n@@ -1 +1 @@\n-old\n+distinctive approved bytes\n";
+    const files = [{ name: "patch", content, ext: "diff" }];
+    const manager = {
+      isCommandApproved: () => false,
+      findMatchingCommandRule: vi.fn(),
+    } as never;
+    const panel = {
+      isRecentlyApproved: () => false,
+      enqueueCommandApproval: vi.fn(),
+    } as never;
+    const first = textPayload(
+      await handleExecuteCommand(
+        { command, files },
+        manager,
+        panel,
+        "session-apply-preflight-retry",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      ),
+    );
+    const oldPath =
+      terminalProvider.prepareExecution.mock.calls[0][0].sandboxInlineFiles[0]
+        .path;
+    expect(first.status).toBe("retry_required");
+    expect(fs.existsSync(oldPath)).toBe(false);
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    let consumedPath = "";
+    const nativeExecute = vi.fn(async (options) => {
+      const file = options.sandboxInlineFiles[0];
+      consumedPath = file.path;
+      expect(consumedPath).not.toBe(oldPath);
+      expect(fs.readFileSync(consumedPath, "utf8")).toBe(content);
+      expect(options.command).toContain(`'${consumedPath}'`);
+      return {
+        exit_code: 0,
+        output: "approved patch received",
+        output_captured: true,
+        terminal_id: "native-apply-retry",
+        command_sent: true,
+        process_launched: true,
+      };
+    });
+    const nativeProvider = {
+      executeCommand: nativeExecute,
+      getBackgroundState: vi.fn(),
+      interruptTerminal: vi.fn(() => false),
+      getRecentlyClosedTerminals: vi.fn(() => []),
+      listTerminals: vi.fn(() => []),
+      closeTerminals: vi.fn(() => ({ closed: 0 })),
+      dispose: vi.fn(),
+    };
+    const router = new AgentTerminalProviderRouter({
+      isEnabled: () => true,
+      getHost: () => ({
+        platform: "darwin",
+        architecture: "arm64",
+        workspaceTrusted: true,
+      }),
+      createNativeProvider: () => nativeProvider as never,
+      createNativeAgentProvider: () => nativeProvider as never,
+      createSandboxProvider: () => {
+        throw new Error("reviewed retry must not create a sandbox provider");
+      },
+      getSandboxAvailability: () => ({ status: "runtime-unavailable" }),
+    });
+    const review = vi.fn(async (_request) => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale: "Approved the full command and distinctive patch",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    try {
+      const result = await handleExecuteCommand(
+        {
+          command: first.command_template,
+          files,
+          sandbox_permissions: "require_escalated",
+          reason:
+            "Retry the exact approved staging request with protected metadata access.",
+        },
+        manager,
+        panel,
+        "session-apply-preflight-retry",
+        undefined,
+        {
+          terminalProvider: router,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0][0]).toMatchObject({
+        command,
+        inlineFiles: [{ sha256: first.inline_files[0].sha256 }],
+      });
+      expect(nativeExecute).toHaveBeenCalledOnce();
+      expect(fs.existsSync(consumedPath)).toBe(false);
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 0,
+        security: { route: "native", permissionIntent: "native-escalation" },
+        inline_files: first.inline_files,
+      });
+    } finally {
+      router.dispose();
+    }
+  });
+
+  it.each(["reject", "cancelled"] as const)(
+    "does not execute an inline apply retry after human %s",
+    async (decision) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((_key: string, fallback?: unknown) => fallback),
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const controller = new AbortController();
+      const result = await handleExecuteCommand(
+        {
+          command: "git apply --cached $AL_FILE(patch)",
+          files: [{ name: "patch", content: "never execute this patch" }],
+          sandbox_permissions: "require_escalated",
+          reason: "Request native staging for this patch.",
+        },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => false,
+          enqueueCommandApproval: vi.fn(() => {
+            if (decision === "cancelled") controller.abort();
+            return { promise: Promise.resolve({ decision: "reject" }) };
+          }),
+        } as never,
+        "session-denied-inline-apply",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "manual",
+          toolAbortSignal: controller.signal,
+        },
+      );
+      expect(textPayload(result)).toMatchObject({
+        status: decision === "reject" ? "rejected_by_user" : "cancelled",
+        command_sent: false,
+      });
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+      expect(
+        fs.existsSync(
+          terminalProvider.prepareExecution.mock.calls[0][0]
+            .sandboxInlineFiles[0].path,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("keeps approved inline-file bytes readable through native route composition", async () => {
     getConfiguration.mockReturnValue({

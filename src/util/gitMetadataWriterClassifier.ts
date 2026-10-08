@@ -3,6 +3,7 @@ import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
 export type PredictableGitMetadataWriterSubcommand =
   | "init"
   | "add"
+  | "apply"
   | "commit"
   | "rm"
   | "mv"
@@ -33,6 +34,7 @@ export interface PredictableGitMetadataWriterClassification {
 const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "init",
   "add",
+  "apply",
   "commit",
   "rm",
   "mv",
@@ -227,6 +229,42 @@ function classifyAdd(args: readonly string[], allowPatch = false): boolean {
         "--update",
         "--renormalize",
       ])),
+  );
+}
+
+function classifyApply(args: readonly string[], checkOnly = false): boolean {
+  const parsed = parseArguments(
+    args,
+    new Set([
+      "--cached",
+      "--index",
+      "--check",
+      "--apply",
+      "-R",
+      "--reverse",
+      "--recount",
+      "--unidiff-zero",
+      "--ignore-space-change",
+      "--ignore-whitespace",
+      "--allow-empty",
+      "-v",
+      "--verbose",
+      "-q",
+      "--quiet",
+    ]),
+    new Set(["--whitespace", "-p", "-C"]),
+  );
+  return Boolean(
+    parsed &&
+    hasAny(parsed.options, ["--cached", "--index"]) &&
+    (parsed.options.has("--check") && !parsed.options.has("--apply")) ===
+      checkOnly &&
+    ["-p", "-C"].every((name) =>
+      (parsed.options.get(name) ?? []).every((value) => /^\d+$/.test(value)),
+    ) &&
+    (parsed.options.get("--whitespace") ?? []).every((value) =>
+      ["nowarn", "warn", "fix", "error", "error-all"].includes(value),
+    ),
   );
 }
 
@@ -592,6 +630,7 @@ const CLASSIFIERS: Record<
 > = {
   init: classifyInit,
   add: classifyAdd,
+  apply: classifyApply,
   commit: classifyCommit,
   rm: classifyRm,
   mv: classifyMv,
@@ -671,6 +710,49 @@ function classifyInputPipedGitMetadataWriter(
     true,
   );
   return writer === "add" ? writer : null;
+}
+
+function classifyPipedGitApply(
+  command: string,
+): PredictableGitMetadataWriterSubcommand | null {
+  const scan = scanShellLexBoundaries(command, {
+    separators: ["|"],
+    comments: true,
+  });
+  if (
+    scan.boundaries.length === 0 ||
+    scan.finalState.quote !== null ||
+    scan.finalState.danglingEscape ||
+    scan.boundaries.some(
+      (boundary) => boundary.kind === "comment" || boundary.operator !== "|",
+    )
+  )
+    return null;
+  let start = 0;
+  for (const boundary of scan.boundaries) {
+    const producer = command.slice(start, boundary.start).trim();
+    if (!producer || hasUnsupportedShellSyntax(producer)) return null;
+    const words = scanShellLexWords(producer).words.map(({ raw }) =>
+      decodeWord(raw),
+    );
+    if (words.some((word) => word === null)) return null;
+    // Recognising a literal producer is capability detection, not approval of
+    // its script or payload. The complete pipeline still requires review.
+    const recognised =
+      isDirectGitInspection(producer) ||
+      (words[0] === "cat" &&
+        words.length > 1 &&
+        words.slice(1).every((word) => word && !word.startsWith("-"))) ||
+      (words[0] === "printf" && words[1] && !words[1].startsWith("-")) ||
+      (["python", "python3"].includes(words[0] ?? "") &&
+        words[1] === "-c" &&
+        words.length === 3);
+    if (!recognised) return null;
+    start = boundary.end;
+  }
+  return classifyDirectGitMetadataWriter(command.slice(start)) === "apply"
+    ? "apply"
+    : null;
 }
 
 function isDirectGitStatusFollowup(command: string): boolean {
@@ -769,6 +851,7 @@ function isDirectGitInspection(command: string): boolean {
   const subcommand = scan.words[1]?.raw;
   const args = scan.words.slice(2).map(({ raw }) => decodeWord(raw));
   if (args.some((arg) => arg === null)) return false;
+  if (subcommand === "apply") return classifyApply(args as string[], true);
   if (subcommand === "remote") return args.length === 1 && args[0] === "-v";
   if (subcommand === "var") {
     return (
@@ -822,18 +905,15 @@ function isDirectGitInspection(command: string): boolean {
  * Recognizes a deliberately narrow set of direct Git metadata writers, including
  * writer/inspection chains joined by top-level `&&` or `;`, read-only Git
  * substitutions inside `test -z`, and constrained `printf` or `git ls-files -z`
- * input piped to Git add (including patch staging). A match enables guidance only;
+ * input piped to Git add (including patch staging), and literal producer pipelines
+ * ending in an index-access Git apply. A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
  */
 export function classifyPredictableGitMetadataWriter(
   input: GitMetadataWriterClassificationInput,
 ): PredictableGitMetadataWriterClassification | null {
-  if (
-    input.hasEnvironmentOverrides ||
-    input.hasInlineFiles ||
-    !input.command.trim()
-  ) {
+  if (input.hasEnvironmentOverrides || !input.command.trim()) {
     return null;
   }
   const scan = scanShellLexBoundaries(input.command, {
@@ -869,7 +949,8 @@ export function classifyPredictableGitMetadataWriter(
     (segment) =>
       classifyDirectGitMetadataWriter(segment) ??
       classifyInputPipedGitMetadataWriter(segment) ??
-      classifyLsFilesPipedGitAdd(segment),
+      classifyLsFilesPipedGitAdd(segment) ??
+      classifyPipedGitApply(segment),
   );
   const hasInit = writers.includes("init");
   const subcommands: PredictableGitMetadataWriterSubcommand[] = [];
@@ -887,7 +968,11 @@ export function classifyPredictableGitMetadataWriter(
       continue;
     return null;
   }
-  if (subcommands.length === 0) return null;
+  if (
+    subcommands.length === 0 ||
+    (input.hasInlineFiles && !subcommands.includes("apply"))
+  )
+    return null;
   return {
     kind: "predictable_git_metadata_writer",
     subcommands,

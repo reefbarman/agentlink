@@ -1936,12 +1936,13 @@ async function protectedGitMetadataRetryResult(input: {
   cwd: string;
   workspaceRoots: readonly string[];
   hasEnvironmentOverrides: boolean;
-  hasInlineFiles: boolean;
+  inlineFiles: readonly InlineCommandFilePreview[] | undefined;
+  commandTemplate: string | undefined;
 }): Promise<ToolResult | undefined> {
   const classification = classifyPredictableGitMetadataWriter({
     command: input.command,
     hasEnvironmentOverrides: input.hasEnvironmentOverrides,
-    hasInlineFiles: input.hasInlineFiles,
+    hasInlineFiles: input.inlineFiles !== undefined,
   });
   if (!classification) return undefined;
   const gitSubcommandFields =
@@ -1952,6 +1953,36 @@ async function protectedGitMetadataRetryResult(input: {
     classification.subcommands.length === 1
       ? classification.subcommands[0]
       : classification.subcommands.join(" and ");
+  const inlineRetryFields = input.inlineFiles
+    ? {
+        ...(input.commandTemplate
+          ? { command_template: input.commandTemplate }
+          : {}),
+        inline_files: input.inlineFiles.map(({ name, bytes, sha256 }) => ({
+          name,
+          bytes,
+          sha256,
+        })),
+        retry_guidance: {
+          code: "protected_git_metadata",
+          automatic_retry: false,
+          message: input.commandTemplate
+            ? "Temporary inline files are cleaned up after this preflight stop. Resubmit command_template with the original files payload and require_escalated for reviewed native execution; do not replay the materialised temporary paths."
+            : "The command was edited and its inline-file template cannot be replayed faithfully. Temporary files are cleaned up after this stop. Submit a new explicit invocation with the intended command and fresh inline files; do not restore the original template or replay temporary paths.",
+          options: input.commandTemplate
+            ? [
+                {
+                  action: "resubmit_inline_files",
+                  command: input.commandTemplate,
+                  sandbox_permissions: "require_escalated",
+                  reason_required: true,
+                  requires_original_files: true,
+                },
+              ]
+            : [],
+        },
+      }
+    : {};
   let protection;
   try {
     protection = await resolveBaselineProtectedGitMetadataForCwd(
@@ -1987,7 +2018,7 @@ async function protectedGitMetadataRetryResult(input: {
     };
   }
   if (!protection) return undefined;
-  const suggestedReason = `Git ${subcommandDescription} ${classification.subcommands.length === 1 ? "mutates" : "mutate"} protected repository metadata and requires reviewed native execution.`;
+  const suggestedReason = `Git ${subcommandDescription} requires access to protected repository metadata and reviewed native execution.`;
   return {
     content: [
       {
@@ -1998,13 +2029,15 @@ async function protectedGitMetadataRetryResult(input: {
           ...(input.originalCommand && input.originalCommand !== input.command
             ? { original_command: input.originalCommand }
             : {}),
-          reason:
-            "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with native escalation; an applicable native allow rule or fresh review must authorize it.",
+          reason: input.inlineFiles
+            ? "The workspace sandbox keeps this repository's Git metadata read-only. Follow retry_guidance for a fresh inline-file invocation; the materialised command paths will be deleted. An applicable native allow rule or fresh review must authorise execution."
+            : "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with native escalation; an applicable native allow rule or fresh review must authorize it.",
           capability_code: "protected_git_metadata",
           ...gitSubcommandFields,
           protected_path: protection.marker,
           required_sandbox_permissions: "require_escalated",
           suggested_reason: suggestedReason,
+          ...inlineRetryFields,
           command_sent: false,
           process_launched: false,
           retry_safe: true,
@@ -2865,7 +2898,8 @@ export async function handleExecuteCommand(
           hasEnvironmentOverrides:
             temporaryHome ||
             Boolean(params.env && Object.keys(params.env).length > 0),
-          hasInlineFiles: inlineFiles !== undefined,
+          inlineFiles,
+          commandTemplate: inlineRun?.commandTemplate,
         });
         if (gitRetry) {
           const revokedPreparation = preparedExecution;
@@ -3031,7 +3065,8 @@ export async function handleExecuteCommand(
                     hasEnvironmentOverrides:
                       temporaryHome ||
                       Boolean(params.env && Object.keys(params.env).length > 0),
-                    hasInlineFiles: inlineFiles !== undefined,
+                    inlineFiles,
+                    commandTemplate: undefined,
                   })
                 : undefined;
             if (editedGitRetry) {

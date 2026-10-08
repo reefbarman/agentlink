@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Git metadata preflight now recognises explicit `git apply --cached`/`--index`, including check-then-apply chains and supported literal apply pipelines, before sandbox launch. Standalone checks keep their existing route. Inline-patch recovery preserves the original command template and payload identity for a fresh reviewed retry, instead of recommending deleted temporary paths. Approval and sandbox boundaries are unchanged.
 - Fixed Codex `web_fetch` continuation previews: explicit `start_line` reads now show the requested numbered content before inline truncation, rather than spending the preview budget on earlier navigation. Original retained content, valid overlapping pages, and truthful stalled-pagination warnings are preserved.
 - Multi-project terminal creation now asks for the project directory inside the AgentLink Terminal panel, with project names, full paths, keyboard navigation, and Cancel/Escape, instead of opening VS Code's top-of-window picker.
 

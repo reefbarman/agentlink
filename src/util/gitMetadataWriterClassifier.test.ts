@@ -38,6 +38,24 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
     ],
   ],
   [
+    "apply",
+    [
+      "git apply --cached /tmp/notes.patch",
+      "git apply --cached --check --apply /tmp/notes.patch",
+      "git apply --check --index --apply 'patch with spaces.diff'",
+      "git apply --index a.patch b.patch",
+      "git apply --cached",
+      "git apply --cached -",
+      "git apply --cached -- -odd-name.patch",
+      "git -c color.ui=false apply --cached /tmp/notes.patch",
+      "git apply --cached -R --recount --whitespace=nowarn -p 1 -C 2 a.patch",
+      "cat /tmp/notes.patch | git apply --cached",
+      "printf '%s' 'literal patch' | git apply --index --check --apply",
+      "git diff -- src/a.ts | git apply --cached",
+      "git diff -- src/a.ts | python3 -c 'import sys; print(sys.stdin.read())' | git apply --cached",
+    ],
+  ],
+  [
     "commit",
     [
       "git commit -m 'Add parser'",
@@ -154,6 +172,40 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
 ];
 
 const negatives = [
+  "git apply notes.patch",
+  "git apply --check notes.patch",
+  "git apply --cached --check notes.patch",
+  "git apply --index --check notes.patch",
+  "cat notes.patch | git apply --cached --check",
+  "git apply --cached --stat notes.patch",
+  "git apply --cached --numstat notes.patch",
+  "git apply --index --summary notes.patch",
+  "git apply --cached --stat --apply notes.patch",
+  "git apply --cached --no-cached notes.patch",
+  "git apply --3way notes.patch",
+  "git apply --cached --unsafe-paths notes.patch",
+  "git apply --index --reject notes.patch",
+  "git apply --cached --whitespace=unknown notes.patch",
+  "git apply --cached -p invalid notes.patch",
+  "git apply --cached --directory=/tmp notes.patch",
+  'git apply --cached "$PATCH"',
+  "git apply --cached $(cat patch-path)",
+  "git -C sub apply --cached notes.patch",
+  "git --git-dir=/tmp/other apply --cached notes.patch",
+  "env GIT_DIR=/tmp/other git apply --cached notes.patch",
+  "bash -c 'git apply --cached notes.patch'",
+  "cat notes.patch | 'git apply --cached'",
+  "printf 'git apply --cached notes.patch'",
+  "cat notes.patch | git apply --cached | cat",
+  "cat notes.patch > other | git apply --cached",
+  "cat $(pwd)/notes.patch | git apply --cached",
+  "cat notes.patch || git apply --cached",
+  "cat notes.patch | | git apply --cached",
+  "cd sub | git apply --cached",
+  "env GIT_DIR=/tmp/other cat notes.patch | git apply --cached",
+  "git -C sub diff | git apply --cached",
+  "git diff -- src/a.ts | bash -c 'cat' | git apply --cached",
+  'git diff -- src/a.ts | python3 -c "$FILTER" | git apply --cached',
   "git status",
   "git status --short && git diff --cached --stat",
   "git status --short; git diff --check",
@@ -310,6 +362,14 @@ describe("classifyPredictableGitMetadataWriter", () => {
 
   it.each([
     ["git add src/a.ts && git commit -m fix", ["add", "commit"]],
+    [
+      "git apply --cached --check /tmp/notes.patch && git apply --cached /tmp/notes.patch && git add -- src/a.ts",
+      ["apply", "add"],
+    ],
+    [
+      "git diff --cached --quiet && git diff -- src/a.ts | python3 -c 'import sys; print(sys.stdin.read())' | git apply --cached && git add -- docs/a.md",
+      ["apply", "add"],
+    ],
     ["git add src/a.ts && git commit -m 'keep && explain'", ["add", "commit"]],
     ["git fetch origin && git rebase main", ["fetch", "rebase"]],
     ["git status --short; git switch --detach abc123", ["switch"]],
@@ -361,6 +421,36 @@ describe("classifyPredictableGitMetadataWriter", () => {
 
   it.each(negatives)("rejects ineligible command: %s", (command) => {
     expect(classify(command)).toBeNull();
+  });
+
+  it("recognises only supported apply workflows with materialised inline inputs", () => {
+    expect(
+      classify(
+        "git apply --cached --check '/tmp/materialised patch' && git apply --cached '/tmp/materialised patch' && git add -- src/a.ts",
+        { files: true },
+      ),
+    ).toEqual({
+      kind: "predictable_git_metadata_writer",
+      subcommands: ["apply", "add"],
+    });
+    expect(
+      classify("cat '/tmp/materialised patch' | git apply --cached", {
+        files: true,
+      }),
+    ).toEqual({
+      kind: "predictable_git_metadata_writer",
+      subcommands: ["apply"],
+    });
+    expect(
+      classify("git apply --cached $AL_FILE(patch)", { files: true }),
+    ).toBeNull();
+    expect(
+      classify("git apply --cached patch", { files: true, env: true }),
+    ).toBeNull();
+    expect(classify("git apply --check patch", { files: true })).toBeNull();
+    expect(
+      classify("git apply --cached --check patch", { files: true }),
+    ).toBeNull();
   });
 
   it("rejects request data that changes execution outside the command string", () => {
