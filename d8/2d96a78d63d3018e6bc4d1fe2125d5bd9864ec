@@ -1,0 +1,27 @@
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 88
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 8420-8425,8436-8438
+  s_4422a724e36bca::t_f93ccf2eb870da 8426-8435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_4422a724e36bca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e4c7e050-3c39-403e-88a5-ebed8aedc7d4",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
