@@ -556,5 +556,3 @@ void window.agentlinkDesktop
   .openAtLogin()
   .then(renderOpenAtLogin)
   .catch(() => showLoginNote("Login item settings are unavailable.", true));
-
-export {};

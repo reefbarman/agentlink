@@ -25,13 +25,22 @@ const PACKAGE_ENTRIES = [
     source: "node_modules/@anthropic-ai/sandbox-runtime/package.json",
     destination: "node_modules/@anthropic-ai/sandbox-runtime/package.json",
   },
+  // npm may nest or hoist these depending on the rest of the tree, so look
+  // them up the way Node would (nested first, then hoisted) and always stage
+  // them nested so the packaged runtime resolves the right versions.
   {
-    source: "node_modules/@anthropic-ai/sandbox-runtime/node_modules/commander",
+    source: [
+      "node_modules/@anthropic-ai/sandbox-runtime/node_modules/commander",
+      "node_modules/commander",
+    ],
     destination:
       "node_modules/@anthropic-ai/sandbox-runtime/node_modules/commander",
   },
   {
-    source: "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod",
+    source: [
+      "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod",
+      "node_modules/zod",
+    ],
     destination: "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod",
   },
   {
@@ -142,6 +151,22 @@ async function pruneNonRuntimeFiles(destinationRoot) {
   }
 }
 
+async function resolveEntrySource(repoRoot, source) {
+  const candidates = Array.isArray(source) ? source : [source];
+  for (const candidate of candidates) {
+    const absolute = path.join(repoRoot, candidate);
+    try {
+      await stat(absolute);
+      return absolute;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error(
+    `sandbox runtime dependency is missing; looked in: ${candidates.join(", ")}`,
+  );
+}
+
 async function copyEntry(source, destination) {
   await mkdir(path.dirname(destination), { recursive: true });
   await cp(source, destination, {
@@ -166,7 +191,7 @@ export async function stageSandboxRuntime({
   }
   for (const entry of PACKAGE_ENTRIES) {
     await copyEntry(
-      path.join(repoRoot, entry.source),
+      await resolveEntrySource(repoRoot, entry.source),
       path.join(destinationRoot, entry.destination),
     );
   }
