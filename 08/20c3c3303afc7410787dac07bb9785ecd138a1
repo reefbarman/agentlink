@@ -1,0 +1,60 @@
+.agents/skills/meridian-integration/SKILL.md
+  s_94756c8bda48ca::t_0324cb6d475b72 18
+apps/cli/src/tui/inkRendererFixture.test.tsx
+  s_94756c8bda48ca::t_0acb991506754c 84-92
+apps/desktop/src/setup.css
+  s_94756c8bda48ca::t_a6ed0eb23b4063 4
+package-lock.json
+  s_94756c8bda48ca::t_a73fbe5854e523 79,2610-2612,2627-2629,2644-2646,2661-2663,2678-2680,2695-2697,2712-2714,2729-2731,2749-2751,2769-2771,2789-2791,2809-2811,2829-2831,2849-2851,2869-2871,2889-2891,2906-2908,2923-2925,2940-2942,10426-10428,10432,10441,10444-10462,12200-12202
+package.json
+  s_94756c8bda48ca::t_4f05ad838a80b0 1286
+packages/core/src/codex/translation.ts
+  s_94756c8bda48ca::t_97b7b7b91e2394 215-224
+packages/core/src/turnKernel.test.ts
+  s_94756c8bda48ca::t_7bb51f5aea23bb 164-169
+src/agent/AgentPluginManagerHost.ts
+  s_94756c8bda48ca::t_c6ca5cf779facc 258-286
+src/agent/CheckpointManager.ts
+  s_94756c8bda48ca::t_15929595fe4351 333
+src/agent/McpClientHub.oauth.test.ts
+  s_94756c8bda48ca::t_91c9d3fc2b04ad 497-504,522-529,591-600,602-603,624-630,632-637,662-665,667-678,719-722,724-729
+src/agent/McpClientHub.test.ts
+  s_94756c8bda48ca::t_8f7b264260b5bc 409-417,453-459,753-758
+src/agent/agentPluginFileSystem.ts
+  s_94756c8bda48ca::t_73c5a0d1093440 25-28
+src/agent/condense.ts
+  s_94756c8bda48ca::t_76f90a7b788d84 1387-1390
+src/agent/providers/codex/CodexUsageClient.test.ts
+  s_94756c8bda48ca::t_026ad6a0c5e537 96-100,179-183,213-217
+src/agent/providers/index.ts
+  s_94756c8bda48ca::t_a19353133b4f68 288-308
+src/browser-gateway/webview/styles.css
+  s_94756c8bda48ca::t_2da44956117959 44-45
+src/storage/retrieval/LanceDbRetrievalRepository.ts
+  s_94756c8bda48ca::t_3981b6672d6be9 1196-1200
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.ts
+  s_94756c8bda48ca::t_f3e22492f146bf 265-274
+src/test/pluginPackageFileSystem.ts
+  s_94756c8bda48ca::t_ab95a0103e0c00 26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0820c3c3303afc7410787dac07bb9785ecd138a1",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_94756c8bda48ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1cc0fa12-1d1a-44a5-afa5-1332ebf3fa7d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
