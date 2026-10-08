@@ -1,0 +1,41 @@
+src/shared/ui/ReleaseUpdateIndicator.test.tsx
+  h_e08a86bb3a33a2 7,69-82
+  s_75a036a1211491::t_2d6fe2cee9740f 83
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 414-644
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 553-685
+  s_75a036a1211491::t_1a68fcf852e7d9 686-701
+src/shared/ui/ReleaseUpdateIndicator.tsx
+  h_e08a86bb3a33a2 75,91-103,105,129,131-132,136,141,143-159,161-163,165,169,175-177,183,204-206,209-211,214,217-221,228,230-231,235-237,239-240,242,246,250,256,259-266,268-279,282-284,289-310
+  s_9d66f8e02e87e1::t_ba6b595c103055 133-134,164,166,178,181-182,184,207-208,212-213,215-216,225-227,229,232-234,238,241,243-244,280-281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "70b53aa889d80ef9958f6d6dcd2af19930f8506e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_75a036a1211491": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc531787-1335-41ca-bbae-067af804beca",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_9d66f8e02e87e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e3c168f8-90b0-4c63-8554-0dcebb09cd39",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
