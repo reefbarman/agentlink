@@ -1237,7 +1237,7 @@
     "bmp-js": "^0.1.0",
     "diff": "^9.0.0",
     "dompurify": "^3.4.11",
-    "eventsource": "3.0.7",
+    "eventsource": "5.1.2",
     "marked": "^18.0.6",
     "mermaid": "^11.16.0",
     "multicast-dns": "^7.2.5",
