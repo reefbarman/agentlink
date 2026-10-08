@@ -1,0 +1,50 @@
+apps/cli/licenses/proxy-agent-negotiate-1.1.0-LICENSE
+  h_e08a86bb3a33a2 1-22
+apps/desktop/sign.mjs
+  h_e08a86bb3a33a2 8,22,30
+src/agent/CheckpointManager.ts
+  h_e08a86bb3a33a2 4,64-75,175-176,183-186,188-194,499-509
+  h_e08a86bb3a33a2 195-196
+apps/cli/package.json
+  h_e08a86bb3a33a2 38-39,42
+packages/node-host/package.json
+  h_e08a86bb3a33a2 42
+src/agent/CheckpointManager.test.ts
+  h_e08a86bb3a33a2 1-93
+package.json
+  h_e08a86bb3a33a2 1240,1250,1268
+apps/cli/esbuild.mjs
+  h_e08a86bb3a33a2 68-70,73-74,293-303
+  h_e08a86bb3a33a2 71-72,75
+src/agent/AgentPluginSseClientTransport.ts
+  h_e08a86bb3a33a2 15-19,151-152
+src/agent/AgentPluginInstaller.ts
+  h_e08a86bb3a33a2 7,32-53,265-266,299-300
+src/agent/AgentPluginInstaller.test.ts
+  h_e08a86bb3a33a2 90-116
+package-lock.json
+  s_64a38465da07eb::t_633d68a71a01fb 37,47,64,106-107,110,122-125,128-142,144-153,155-216,219-241,838-840,846-847,850-851,854,2433-2444,3745-3747,3750,4942,5162-5196,7687-7689,7692,7695,7707-7715,8564,8685,8803,8817,11190-11206,11374,11709-11710,11956-11958,11963-11964,13699,13937,13945-13967
+apps/cli/THIRD_PARTY_NOTICES.md
+  h_e08a86bb3a33a2 954,1280-1296,1411,1968,2300-2317,2564,2567,2569,3290-3319,3348-3364,3423-3451,3561-3589
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4617a6aa596a1a0c78922b04d71681bcd878918",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_64a38465da07eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c680dca6-b3cf-4326-a93e-9e314533201b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
