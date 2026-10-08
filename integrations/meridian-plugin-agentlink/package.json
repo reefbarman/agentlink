@@ -1,0 +1,21 @@
+{
+  "name": "@agentlink/meridian-plugin",
+  "version": "0.1.0",
+  "description": "Client-owned tool handoff for AgentLink through Meridian",
+  "type": "module",
+  "exports": "./index.js",
+  "files": [
+    "index.js",
+    "install.mjs",
+    "README.md",
+    "LICENSE",
+    "test"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

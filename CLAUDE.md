@@ -89,6 +89,11 @@ When full verification is skipped, explicitly state:
 
 ## Adding or Changing Tools
 
+For tool, prompt, or provider changes affecting Claude through Meridian, consult
+[meridian-integration](.agents/skills/meridian-integration/SKILL.md). The companion
+plugin consumes the current tool catalog directly; check its identity, session,
+handoff and explicit-deferral contracts rather than maintaining a second name list.
+
 When adding a new tool or changing tool parameters:
 
 1. Add or update its metadata in `src/shared/toolRegistry.ts`
