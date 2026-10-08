@@ -1,11 +1,7 @@
 :root {
   color-scheme: dark;
   font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "SF Pro Text",
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
     sans-serif;
   color: #f3f6f5;
   background: #121516;

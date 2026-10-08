@@ -15,7 +15,7 @@ The plugin loads the supplied catalog eagerly instead of copying tool names.
 Adding or renaming a tool normally needs no Meridian change. Check these seams:
 
 - The foreground/background system prompt must retain the leading `You are
-AgentLink,` identity used by the plugin. Update detection/tests if it changes.
+  AgentLink,` identity used by the plugin. Update detection/tests if it changes.
 - `meridianSessionAffinity` must keep sending the live conversation ID as
   `x-session-affinity`. Never replace it with a static header shared by chats.
 - The OpenAI translator must preserve each tool's name, schema, arguments and

@@ -494,16 +494,14 @@ describe("McpClientHub OAuth recovery", () => {
       name: "second",
       url: "https://second.example.test/mcp",
     };
-    mocks.createTransportConnect.mockImplementation(
-      async function (this: {
-        authProvider?: { authorizationAttempt?: { authMode: string } };
-      }) {
-        if (
-          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
-        )
-          throw new McpOAuthError("interactive_required", "sign-in needed");
-      },
-    );
+    mocks.createTransportConnect.mockImplementation(async function (this: {
+      authProvider?: { authorizationAttempt?: { authMode: string } };
+    }) {
+      if (
+        this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+      )
+        throw new McpOAuthError("interactive_required", "sign-in needed");
+    });
     const hub = new McpClientHub(new FakeMemento());
     try {
       await hub.connect([notionCfg, second]);
@@ -521,16 +519,14 @@ describe("McpClientHub OAuth recovery", () => {
   });
 
   it("starts interactive sign-in when the user reconnects a parked server", async () => {
-    mocks.createTransportConnect.mockImplementation(
-      async function (this: {
-        authProvider?: { authorizationAttempt?: { authMode: string } };
-      }) {
-        if (
-          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
-        )
-          throw new McpOAuthError("interactive_required", "sign-in needed");
-      },
-    );
+    mocks.createTransportConnect.mockImplementation(async function (this: {
+      authProvider?: { authorizationAttempt?: { authMode: string } };
+    }) {
+      if (
+        this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+      )
+        throw new McpOAuthError("interactive_required", "sign-in needed");
+    });
     const hub = new McpClientHub(new FakeMemento());
     try {
       await hub.connect([notionCfg]);
@@ -592,21 +588,19 @@ describe("McpClientHub OAuth recovery", () => {
 
   it("cancels targeted sign-in with its turn and leaves the server discoverable", async () => {
     const controller = new AbortController();
-    mocks.createTransportConnect.mockImplementation(
-      async function (this: {
-        authProvider?: { authorizationAttempt?: { authMode: string } };
-      }) {
-        if (
-          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
-        )
-          throw new McpOAuthError("interactive_required", "sign-in needed");
-        await new Promise<void>((resolve) => {
-          controller.signal.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
+    mocks.createTransportConnect.mockImplementation(async function (this: {
+      authProvider?: { authorizationAttempt?: { authMode: string } };
+    }) {
+      if (
+        this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+      )
+        throw new McpOAuthError("interactive_required", "sign-in needed");
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener("abort", () => resolve(), {
+          once: true,
         });
-      },
-    );
+      });
+    });
     const hub = new McpClientHub(new FakeMemento());
     try {
       await hub.connect([notionCfg]);
@@ -627,22 +621,20 @@ describe("McpClientHub OAuth recovery", () => {
   });
 
   it("defers interactive reauth prompt when startup refresh-token fallback needs manual auth", async () => {
-    mocks.createTransportConnect.mockImplementationOnce(
-      async function (this: {
-        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
-      }) {
-        if (!this.authProvider?.suppressRefreshTokenReauthPrompt) {
-          await mocks.showWarningMessage(
-            'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
-            "Reauthenticate now",
-          );
-        }
-        throw new McpOAuthError(
-          "authorization_error",
-          'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+    mocks.createTransportConnect.mockImplementationOnce(async function (this: {
+      authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+    }) {
+      if (!this.authProvider?.suppressRefreshTokenReauthPrompt) {
+        await mocks.showWarningMessage(
+          'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
+          "Reauthenticate now",
         );
-      },
-    );
+      }
+      throw new McpOAuthError(
+        "authorization_error",
+        'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+      );
+    });
 
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([notionCfg]);
@@ -667,27 +659,23 @@ describe("McpClientHub OAuth recovery", () => {
     });
     mocks.createTransportConnect
       .mockRejectedValueOnce(new UnauthorizedError())
-      .mockImplementationOnce(
-        async function (this: {
-          authProvider?: {
-            authorizationAttempt?: {
-              authMode: "interactive" | "noninteractive";
-            };
-            suppressRefreshTokenReauthPrompt?: boolean;
+      .mockImplementationOnce(async function (this: {
+        authProvider?: {
+          authorizationAttempt?: {
+            authMode: "interactive" | "noninteractive";
           };
-        }) {
-          expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
-            "noninteractive",
-          );
-          expect(this.authProvider?.suppressRefreshTokenReauthPrompt).toBe(
-            false,
-          );
-          throw new McpOAuthError(
-            "authorization_error",
-            'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
-          );
-        },
-      );
+          suppressRefreshTokenReauthPrompt?: boolean;
+        };
+      }) {
+        expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
+          "noninteractive",
+        );
+        expect(this.authProvider?.suppressRefreshTokenReauthPrompt).toBe(false);
+        throw new McpOAuthError(
+          "authorization_error",
+          'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+        );
+      });
 
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([notionCfg]);
@@ -728,19 +716,17 @@ describe("McpClientHub OAuth recovery", () => {
   });
 
   it("allows interactive auth for newly added MCP servers when requested", async () => {
-    mocks.createTransportConnect.mockImplementationOnce(
-      async function (this: {
-        authProvider?: {
-          authorizationAttempt?: {
-            authMode: "interactive" | "noninteractive";
-          };
+    mocks.createTransportConnect.mockImplementationOnce(async function (this: {
+      authProvider?: {
+        authorizationAttempt?: {
+          authMode: "interactive" | "noninteractive";
         };
-      }) {
-        expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
-          "interactive",
-        );
-      },
-    );
+      };
+    }) {
+      expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
+        "interactive",
+      );
+    });
 
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([notionCfg], { interactiveForNewServers: true });

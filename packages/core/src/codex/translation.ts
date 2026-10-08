@@ -212,20 +212,16 @@ export function translateCodexMessages(
                   type: "input_text",
                   text: `Media output of tool call ${callId}:`,
                 },
-                ...images.map(
-                  (image): UserInputContent => ({
-                    type: "input_image",
-                    image_url: `data:${image.source.media_type};base64,${image.source.data}`,
-                    detail: "auto",
-                  }),
-                ),
-                ...documents.map(
-                  (document): UserInputContent => ({
-                    type: "input_file",
-                    filename: document.title ?? "document.pdf",
-                    file_data: `data:${document.source.media_type};base64,${document.source.data}`,
-                  }),
-                ),
+                ...images.map((image): UserInputContent => ({
+                  type: "input_image",
+                  image_url: `data:${image.source.media_type};base64,${image.source.data}`,
+                  detail: "auto",
+                })),
+                ...documents.map((document): UserInputContent => ({
+                  type: "input_file",
+                  filename: document.title ?? "document.pdf",
+                  file_data: `data:${document.source.media_type};base64,${document.source.data}`,
+                })),
               ],
             });
           }

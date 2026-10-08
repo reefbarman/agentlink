@@ -93,10 +93,11 @@ function profilePayload() {
 
 describe("queryCodexUsage", () => {
   it("reads rate limits and token activity with AgentLink OAuth", async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
-      String(input).endsWith("/wham/usage")
-        ? response(usagePayload())
-        : response(profilePayload()),
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/wham/usage")
+          ? response(usagePayload())
+          : response(profilePayload()),
     );
     const manager = authManager();
 
@@ -175,10 +176,11 @@ describe("queryCodexUsage", () => {
   });
 
   it("keeps rate limits available when profile activity fails", async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
-      String(input).endsWith("/wham/usage")
-        ? response(usagePayload())
-        : response("profile unavailable", 500),
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/wham/usage")
+          ? response(usagePayload())
+          : response("profile unavailable", 500),
     );
 
     const result = await queryCodexUsage({ authManager: authManager(), fetch });
@@ -208,10 +210,11 @@ describe("queryCodexUsage", () => {
   });
 
   it("returns an unavailable result for malformed rate-limit payloads", async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
-      String(input).endsWith("/wham/usage")
-        ? response([])
-        : response(profilePayload()),
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/wham/usage")
+          ? response([])
+          : response(profilePayload()),
     );
 
     const result = await queryCodexUsage({ authManager: authManager(), fetch });

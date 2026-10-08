@@ -161,14 +161,12 @@ function toolTurn(calls: Array<{ id: string; name: string }>): ScriptedTurn {
         type: "content_blocks",
         blocks: [{ type: "text", text: "Checking tools" }],
       },
-      ...calls.map(
-        (call): CoreModelStreamEvent => ({
-          type: "tool_done",
-          toolCallId: call.id,
-          toolName: call.name,
-          input: { query: call.id },
-        }),
-      ),
+      ...calls.map((call): CoreModelStreamEvent => ({
+        type: "tool_done",
+        toolCallId: call.id,
+        toolName: call.name,
+        input: { query: call.id },
+      })),
       { type: "model_stop", reason: "tool_use", assistantMessage },
       { type: "done" },
     ],

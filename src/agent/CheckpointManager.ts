@@ -330,8 +330,7 @@ export class CheckpointManager {
         const file = rest.join("\t");
         if (!file) continue;
         if (status === "M") modified.push(file);
-        else if (status === "A")
-          deleted.push(file); // added since checkpoint → will be deleted on revert
+        else if (status === "A") deleted.push(file); // added since checkpoint → will be deleted on revert
         else if (status === "D") restored.push(file); // deleted since checkpoint → will be restored
       }
 

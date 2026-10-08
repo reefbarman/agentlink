@@ -1384,9 +1384,10 @@ export async function summarizeConversation(
     ...(sessionImageIndex
       ? [{ type: "text", text: sessionImageIndex } satisfies TextBlock]
       : []),
-    ...foldedEntries.map(
-      (entry): TextBlock => ({ type: "text", text: entry.section }),
-    ),
+    ...foldedEntries.map((entry): TextBlock => ({
+      type: "text",
+      text: entry.section,
+    })),
   ];
 
   const correctionsMatch = summaryText.match(

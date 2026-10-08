@@ -1193,13 +1193,11 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           metadataTable?.close();
         }
       },
-    ).catch(
-      (error): RetrievalLexicalReadiness => ({
-        status: "unavailable",
-        reason: "store_unavailable",
-        detail: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    ).catch((error): RetrievalLexicalReadiness => ({
+      status: "unavailable",
+      reason: "store_unavailable",
+      detail: error instanceof Error ? error.message : String(error),
+    }));
   }
 
   async health(): Promise<RetrievalHealthSnapshot> {

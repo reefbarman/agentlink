@@ -255,37 +255,35 @@ export class AgentPluginManagerHost {
     const snapshot = await this.getSnapshot(canonicalScope);
     const rows = await Promise.all(
       snapshot.entries.slice(0, 100).map((entry) =>
-        this.toManagerRow(entry).catch(
-          (error): AgentPluginManagerRow => ({
-            status: "invalid",
-            manifestName: entry.manifestName,
-            scope: entry.scope.kind,
-            ...(entry.scope.kind === "project"
-              ? { projectId: entry.scope.projectId }
-              : {}),
-            source: managerSourceSummary(entry),
-            skills: [],
-            mcpServers: [],
-            hooks: [],
-            diagnostics: [
-              {
-                code: "manager_package_unavailable",
-                severity: "error",
-                message: boundedMessage(errorMessage(error)),
-              },
-            ],
-            ...(entry.install
-              ? {
-                  installInstanceId: entry.install.installInstanceId,
-                  enabled: entry.install.enabled,
-                  currentDigest: entry.install.currentDigest,
-                  ...(entry.install.previousDigest
-                    ? { previousDigest: entry.install.previousDigest }
-                    : {}),
-                }
-              : {}),
-          }),
-        ),
+        this.toManagerRow(entry).catch((error): AgentPluginManagerRow => ({
+          status: "invalid",
+          manifestName: entry.manifestName,
+          scope: entry.scope.kind,
+          ...(entry.scope.kind === "project"
+            ? { projectId: entry.scope.projectId }
+            : {}),
+          source: managerSourceSummary(entry),
+          skills: [],
+          mcpServers: [],
+          hooks: [],
+          diagnostics: [
+            {
+              code: "manager_package_unavailable",
+              severity: "error",
+              message: boundedMessage(errorMessage(error)),
+            },
+          ],
+          ...(entry.install
+            ? {
+                installInstanceId: entry.install.installInstanceId,
+                enabled: entry.install.enabled,
+                currentDigest: entry.install.currentDigest,
+                ...(entry.install.previousDigest
+                  ? { previousDigest: entry.install.previousDigest }
+                  : {}),
+              }
+            : {}),
+        })),
       ),
     );
     const diagnostics = snapshot.declarationDiagnostics

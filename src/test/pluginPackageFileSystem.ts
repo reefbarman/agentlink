@@ -23,12 +23,10 @@ export function createTestPluginPackageFileSystem(): PluginPackageFileSystem {
     readFile: (filePath) => fs.readFile(filePath, "utf8"),
     async readdir(directoryPath) {
       const entries = await fs.readdir(directoryPath, { withFileTypes: true });
-      return entries.map(
-        (entry): PluginPackageDirectoryEntry => ({
-          name: entry.name,
-          kind: classifyStat(entry),
-        }),
-      );
+      return entries.map((entry): PluginPackageDirectoryEntry => ({
+        name: entry.name,
+        kind: classifyStat(entry),
+      }));
     },
     async lstat(filePath) {
       return { kind: classifyStat(await fs.lstat(filePath)) };

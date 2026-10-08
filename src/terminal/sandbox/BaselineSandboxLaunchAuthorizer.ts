@@ -262,10 +262,16 @@ async function resolveWorkspacePolicyIntegrityRoots(
   const instructionFiles = instructionResolutions.flatMap(({ resolution }) =>
     resolution.status === "accepted" ? [resolution.canonicalPath] : [],
   );
-  const warnings = instructionResolutions.flatMap(({ candidate, resolution }) =>
-    resolution.status === "ignored"
-      ? [describeIgnoredWorkspaceInstructionFile(candidate, resolution.reason)]
-      : [],
+  const warnings = instructionResolutions.flatMap(
+    ({ candidate, resolution }) =>
+      resolution.status === "ignored"
+        ? [
+            describeIgnoredWorkspaceInstructionFile(
+              candidate,
+              resolution.reason,
+            ),
+          ]
+        : [],
   );
   return {
     roots: uniqueRoots([...namespaceRoots.flat(), ...instructionFiles]),

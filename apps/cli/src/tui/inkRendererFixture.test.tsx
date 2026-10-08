@@ -81,14 +81,15 @@ describe("Ink renderer bakeoff fixture", () => {
     const fixture = createRendererBakeoffFixture({
       projection: {
         ...base.projection,
-        transcript: base.projection.transcript.map((message, index, messages) =>
-          index >= messages.length - 3
-            ? {
-                ...message,
-                text: "Streaming 🙂漢字 café and e\u0301 combining marks",
-                streaming: true,
-              }
-            : message,
+        transcript: base.projection.transcript.map(
+          (message, index, messages) =>
+            index >= messages.length - 3
+              ? {
+                  ...message,
+                  text: "Streaming 🙂漢字 café and e\u0301 combining marks",
+                  streaming: true,
+                }
+              : message,
         ),
       },
     });

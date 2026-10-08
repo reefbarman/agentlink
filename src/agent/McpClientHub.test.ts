@@ -406,15 +406,15 @@ describe("McpClientHub protocol correctness", () => {
   it("pauses a failed mcp-remote startup without scheduling a retry", async () => {
     vi.useFakeTimers();
     const hub = new McpClientHub(new FakeMemento());
-    mocks.connect.mockImplementation(
-      async function (this: { stderr: PassThrough }) {
-        this.stderr.write("upstream returned 503\nrefresh_token=split-");
-        this.stderr.write(
-          "credential\nhttps://auth.example.test/callback?code=private-code\n",
-        );
-        throw new Error("proxy startup failed");
-      },
-    );
+    mocks.connect.mockImplementation(async function (this: {
+      stderr: PassThrough;
+    }) {
+      this.stderr.write("upstream returned 503\nrefresh_token=split-");
+      this.stderr.write(
+        "credential\nhttps://auth.example.test/callback?code=private-code\n",
+      );
+      throw new Error("proxy startup failed");
+    });
 
     try {
       await hub.connect(
@@ -450,13 +450,13 @@ describe("McpClientHub protocol correctness", () => {
 
   it("omits oversized startup output rather than exposing partially captured credentials", async () => {
     const hub = new McpClientHub(new FakeMemento());
-    mocks.connect.mockImplementation(
-      async function (this: { stderr: PassThrough }) {
-        this.stderr.write("refresh_token=private-");
-        this.stderr.write("credential".repeat(4000));
-        throw new Error("Connection closed");
-      },
-    );
+    mocks.connect.mockImplementation(async function (this: {
+      stderr: PassThrough;
+    }) {
+      this.stderr.write("refresh_token=private-");
+      this.stderr.write("credential".repeat(4000));
+      throw new Error("Connection closed");
+    });
     try {
       await hub.connect(
         [
@@ -750,12 +750,12 @@ describe("McpClientHub protocol correctness", () => {
     vi.spyOn(hub as any, "resolveStdioEnvironment").mockReturnValue({
       GH_PAT: "resolved-plugin-credential",
     });
-    mocks.connect.mockImplementation(
-      async function (this: { stderr: PassThrough }) {
-        this.stderr.write("plugin failed: resolved-plugin-credential");
-        throw new Error("Connection closed");
-      },
-    );
+    mocks.connect.mockImplementation(async function (this: {
+      stderr: PassThrough;
+    }) {
+      this.stderr.write("plugin failed: resolved-plugin-credential");
+      throw new Error("Connection closed");
+    });
     try {
       await hub.connect([
         {

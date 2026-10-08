@@ -285,29 +285,27 @@ export class ProviderRegistry {
                   action: authAction,
                 } as const)
               : ({ status: "credentials_required" } as const);
-          return provider.listModels().map(
-            (model): CoreModelCatalogEntry => ({
-              id: model.id,
-              displayName: model.displayName,
-              providerId: model.provider,
-              providerDisplayName: model.providerDisplayName,
-              supportsToolUse:
-                model.supportsToolUse ?? model.capabilities.supportsToolUse,
-              supportsImages:
-                model.supportsImages ?? model.capabilities.supportsImages,
-              contextWindow: model.capabilities.contextWindow,
-              maxInputTokens: model.capabilities.maxInputTokens,
-              maxOutputTokens: model.capabilities.maxOutputTokens,
-              reasoningEfforts: model.capabilities.reasoningEfforts,
-              defaultReasoningEffort: model.capabilities.defaultReasoningEffort,
-              ...(model.capabilities.serviceTiers?.length
-                ? { serviceTiers: [...model.capabilities.serviceTiers] }
-                : {}),
-              authenticated,
-              readiness,
-              condenseThreshold: request.condenseThreshold?.(model.id),
-            }),
-          );
+          return provider.listModels().map((model): CoreModelCatalogEntry => ({
+            id: model.id,
+            displayName: model.displayName,
+            providerId: model.provider,
+            providerDisplayName: model.providerDisplayName,
+            supportsToolUse:
+              model.supportsToolUse ?? model.capabilities.supportsToolUse,
+            supportsImages:
+              model.supportsImages ?? model.capabilities.supportsImages,
+            contextWindow: model.capabilities.contextWindow,
+            maxInputTokens: model.capabilities.maxInputTokens,
+            maxOutputTokens: model.capabilities.maxOutputTokens,
+            reasoningEfforts: model.capabilities.reasoningEfforts,
+            defaultReasoningEffort: model.capabilities.defaultReasoningEffort,
+            ...(model.capabilities.serviceTiers?.length
+              ? { serviceTiers: [...model.capabilities.serviceTiers] }
+              : {}),
+            authenticated,
+            readiness,
+            condenseThreshold: request.condenseThreshold?.(model.id),
+          }));
         }),
       )
     ).flat();
