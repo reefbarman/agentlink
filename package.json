@@ -1254,7 +1254,7 @@
     "vega": "^6.2.0",
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.3",
-    "web-tree-sitter": "^0.26.10",
+    "web-tree-sitter": "^0.27.0",
     "yaml": "2.9.1",
     "yauzl": "3.4.0",
     "zod": "^4.6.5",

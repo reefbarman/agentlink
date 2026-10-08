@@ -5792,6 +5792,22 @@ describe("AgentSessionManager in-flight persistence", () => {
         undefined,
         false,
         store,
+        undefined,
+        undefined,
+        {
+          // Keep the real shadow-repo git work out of this fake-timer test;
+          // it would stall mid-init and race the workspace cleanup.
+          host: {
+            createCheckpointManager: vi.fn(() => ({
+              baseCommit: null,
+              initialize: vi.fn(async () => true),
+              createCheckpoint: vi.fn(async () => null),
+              previewRevert: vi.fn(async () => null),
+              revertToCheckpoint: vi.fn(async () => false),
+              getDiffBetween: vi.fn(async () => ""),
+            })),
+          },
+        },
       );
       const session = await mgr.createSession("code");
       (session as any).getAllMessages = vi.fn(() => [

@@ -14,5 +14,7 @@ export default defineConfig({
     // Let jsdom provide browser storage instead of Node's file-backed Web Storage.
     execArgv: ["--no-experimental-webstorage"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Absolute so workspaces that inherit this config (apps/desktop) resolve it.
+    setupFiles: [path.resolve(__dirname, "src/testing/vitestSetup.ts")],
   },
 });
