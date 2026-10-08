@@ -188,7 +188,7 @@ it("requires writable app and parent without elevation", async () => {
   ).rejects.toThrow(/writable/);
 });
 
-it("refuses Team ID signatures even when codesign reports an invalid seal", async () => {
+it("reports a locally signed Team ID, even when codesign reports an invalid seal", async () => {
   for (const run of [
     async () => "TeamIdentifier=TEAM123",
     async () => {
@@ -205,7 +205,10 @@ it("refuses Team ID signatures even when codesign reports an invalid seal", asyn
         writable: async () => undefined,
         run,
       }),
-    ).rejects.toThrow(/Team ID/);
+    ).resolves.toEqual({
+      bundle: "/Applications/AgentLink.app",
+      localTeamId: "TEAM123",
+    });
   }
 });
 
@@ -222,7 +225,7 @@ it.each(["code object is not signed at all", "invalid signature"])(
           throw Object.assign(new Error(stderr), { stderr });
         },
       }),
-    ).resolves.toBe("/Applications/AgentLink.app");
+    ).resolves.toEqual({ bundle: "/Applications/AgentLink.app" });
   },
 );
 
@@ -414,6 +417,23 @@ describe.skipIf(process.platform !== "darwin")("Desktop release host", () => {
       expect(f.options.quit).not.toHaveBeenCalled();
     },
   );
+
+  it("updates a locally signed build to the unsigned release after warning", async () => {
+    const f = await fixture();
+    const original = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) =>
+      file.endsWith("codesign") && args[1] === f.destination
+        ? "TeamIdentifier=TEAM123"
+        : original(file, args),
+    );
+    expect((await f.installer.install()).phase).toBe("ready_to_restart");
+    expect(f.options.confirmInstall).toHaveBeenCalledWith("1.1.0", {
+      localTeamId: "TEAM123",
+    });
+    f.options.confirmRestart = async () => true;
+    await f.installer.restart();
+    expect(f.options.quit).toHaveBeenCalledOnce();
+  });
 
   it("rejects a symlinked staged executable", async () => {
     const f = await fixture();

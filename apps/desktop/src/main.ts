@@ -561,14 +561,15 @@ async function prepareReleaseUpdateService(): Promise<void> {
       if (!releaseUpdateService) throw new Error("release_update_unavailable");
       return (await releaseUpdateService.check(true)).candidate ?? undefined;
     },
-    confirmInstall: async (version) =>
+    confirmInstall: async (version, { localTeamId }) =>
       (
         await dialog.showMessageBox({
           type: "warning",
           title: "Install Desktop update",
           message: `Download and prepare AgentLink Desktop ${version}?`,
-          detail:
-            "This installs an unsigned preview. The download checksum verifies integrity, not publisher authenticity. Keychain access may be requested again. Restart is a separate confirmation.",
+          detail: localTeamId
+            ? `This replaces your locally signed build (Team ID ${localTeamId}) with the unsigned release preview. macOS will ask for Keychain access again (choose Always Allow), and permissions granted to the local build may need to be granted again. Run npm run desktop:install to switch back to a local build. The download checksum verifies integrity, not publisher authenticity. Restart is a separate confirmation.`
+            : "This installs an unsigned preview. The download checksum verifies integrity, not publisher authenticity. Keychain access may be requested again. Restart is a separate confirmation.",
           buttons: ["Install update", "Cancel"],
           defaultId: 0,
           cancelId: 1,

@@ -40,7 +40,7 @@ Read the smallest relevant reference page directly with `read_skill_resource`:
 
 For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, read `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
 
-For update availability, self-update installation, restart/reload prompts, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, read `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Checks retrieve metadata only. Explicit install actions download and verify a release, then install it; restarting or reloading requires separate user consent. Browser remote views have no install or restart action, and source or locally signed standalone builds must be updated from source.
+For update availability, self-update installation, restart/reload prompts, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, read `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Checks retrieve metadata only. Explicit install actions download and verify a release, then install it; restarting or reloading requires separate user consent. Browser remote views have no install or restart action, source builds must be updated from source, and a locally signed Desktop build can switch to the unsigned release after a Keychain warning.
 
 ## Answering checklist
 

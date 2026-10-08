@@ -55,10 +55,10 @@ export function desktopBundlePath(executable: string): string {
   return executable.slice(0, -suffix.length);
 }
 
-async function requireUnsigned(
+async function readTeamIdentifier(
   bundle: string,
   run: DesktopUpdateCommand,
-): Promise<void> {
+): Promise<string | undefined> {
   // codesign exits unsuccessfully for the intentionally unsigned CI previews.
   let signature: string;
   try {
@@ -75,11 +75,28 @@ async function requireUnsigned(
     signature = stderr;
   }
   const team = signature.match(/^TeamIdentifier=(.+)$/m)?.[1].trim();
-  if (team && team !== "not set") {
+  return team && team !== "not set" ? team : undefined;
+}
+
+async function requireUnsigned(
+  bundle: string,
+  run: DesktopUpdateCommand,
+): Promise<void> {
+  if (await readTeamIdentifier(bundle, run)) {
     throw new Error(
-      "Locally Team ID-signed apps cannot self-update. Rebuild with npm run desktop:install to preserve signing and Keychain access.",
+      "The downloaded app has an unexpected Team ID signature. Release previews are unsigned.",
     );
   }
+}
+
+export interface DesktopUpdateTarget {
+  bundle: string;
+  /**
+   * Team ID of a locally signed build (npm run desktop:install). Updating
+   * replaces it with the unsigned release, so Keychain trust and other
+   * signature-bound grants must be re-approved.
+   */
+  localTeamId?: string;
 }
 
 export async function checkDesktopUpdatePreconditions(options: {
@@ -88,7 +105,7 @@ export async function checkDesktopUpdatePreconditions(options: {
   platform?: string;
   run?: DesktopUpdateCommand;
   writable?: (file: string) => Promise<void>;
-}): Promise<string> {
+}): Promise<DesktopUpdateTarget> {
   if (!options.packaged)
     throw new Error(
       "Source builds must be updated from source with npm run desktop:install.",
@@ -110,8 +127,11 @@ export async function checkDesktopUpdatePreconditions(options: {
       "The app and its parent folder must be writable. Update manually, no administrator password will be requested.",
     );
   }
-  await requireUnsigned(bundle, options.run ?? runDesktopUpdateCommand);
-  return bundle;
+  const localTeamId = await readTeamIdentifier(
+    bundle,
+    options.run ?? runDesktopUpdateCommand,
+  );
+  return localTeamId ? { bundle, localTeamId } : { bundle };
 }
 
 export async function verifyDesktopUpdateBundle(
@@ -189,7 +209,10 @@ export interface DesktopReleaseInstallOptions {
   userData: string;
   identity: ReleaseUpdateIdentity;
   getCandidate(): Promise<ReleaseUpdateCandidate | undefined>;
-  confirmInstall(version: string): Promise<boolean>;
+  confirmInstall(
+    version: string,
+    target: { localTeamId?: string },
+  ): Promise<boolean>;
   confirmRestart(version: string): Promise<boolean>;
   drainHelper(): Promise<void>;
   quit(): void;
@@ -409,9 +432,9 @@ export class DesktopReleaseInstaller {
     let stageCleanupSafe = true;
     let dmg: string | undefined;
     try {
-      let destination: string;
+      let target: DesktopUpdateTarget;
       try {
-        destination = await checkDesktopUpdatePreconditions({
+        target = await checkDesktopUpdatePreconditions({
           packaged: this.options.packaged,
           executable: this.options.executable,
           run: this.run,
@@ -423,6 +446,7 @@ export class DesktopReleaseInstaller {
         });
         return this.snapshot();
       }
+      const destination = target.bundle;
       const originalFingerprint = await this.fingerprint(destination);
       if (originalFingerprint.version !== this.options.identity.version)
         throw new Error(
@@ -431,7 +455,11 @@ export class DesktopReleaseInstaller {
       const candidate = await this.options.getCandidate();
       if (!candidate)
         throw new Error("No compatible Desktop update is available.");
-      if (!(await this.options.confirmInstall(candidate.version)))
+      if (
+        !(await this.options.confirmInstall(candidate.version, {
+          localTeamId: target.localTeamId,
+        }))
+      )
         return this.snapshot();
       this.report({ phase: "preparing", version: candidate.version });
       dmg = await (this.options.download ?? downloadReleaseUpdate)(
