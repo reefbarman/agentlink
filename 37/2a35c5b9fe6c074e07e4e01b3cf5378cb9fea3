@@ -1,0 +1,18 @@
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 1961,1963-1971
+src/agent/webview/components/StreamingText.tsx
+  h_e08a86bb3a33a2 78-81,182-184,186
+src/agent/webview/components/StreamingText.test.tsx
+  h_e08a86bb3a33a2 117-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "372a35c5b9fe6c074e07e4e01b3cf5378cb9fea3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
