@@ -1,0 +1,27 @@
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 15-16
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 7119-7123,7138,7359-7370
+  s_c325a36a83eeb3::t_e1de0b53ab1573 6535,7111-7112,7124-7125,7139-7140,7344,7371-7374
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1036fc2b487b41b992d566bda274663c060db77e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c325a36a83eeb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a118e3-b3fc-72f3-b4ca-2cd899b1f840",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

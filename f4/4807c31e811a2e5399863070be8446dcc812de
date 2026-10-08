@@ -1,0 +1,31 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/util/gitMetadataWriterClassifier.ts
+  h_e08a86bb3a33a2 6,37,235-270,633,715-755,854,908-909,952-953,972-973
+  h_e08a86bb3a33a2 756-757,916,971,974-975
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 1939-1940,1945,1956-1985,2021,2032-2034,2040,2901-2902,3068-3069
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 142-143
+src/util/gitMetadataWriterClassifier.test.ts
+  h_e08a86bb3a33a2 41-57,175-208,365-372,426-453
+  h_e08a86bb3a33a2 40,454-455
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 921-932,994-1055,1057-1097,1100-1167,1169-1221,7110-7284
+  h_e08a86bb3a33a2 919-920,1056,1098-1099,1168
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 89-90
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f44807c31e811a2e5399863070be8446dcc812de",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

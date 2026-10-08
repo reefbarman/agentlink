@@ -1,0 +1,43 @@
+src/terminal/vscodeTerminalConfiguration.test.ts
+  h_e08a86bb3a33a2 65,69,71-72,75-84,86-90
+  h_e08a86bb3a33a2 85
+src/terminal/vscodeTerminalConfiguration.ts
+  h_e08a86bb3a33a2 11,50-51,62-67,69
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 157-158
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/terminal/webview/App.test.tsx
+  h_e08a86bb3a33a2 116-219
+packages/protocol/src/terminalSurface.ts
+  h_e08a86bb3a33a2 334-340
+  h_e08a86bb3a33a2 333
+src/terminal/AgentTerminalViewProvider.ts
+  h_e08a86bb3a33a2 12,24,150-151
+  h_e08a86bb3a33a2 152-153
+src/terminal/webview/App.tsx
+  h_e08a86bb3a33a2 524-610,748-749,792,818,1049-1055
+src/terminal/webview/styles/terminal.css
+  h_e08a86bb3a33a2 653-705
+src/terminal/webview/terminalWebviewController.ts
+  h_e08a86bb3a33a2 120-123,370-371,377-396,574-576,741-742,1048,1079
+  h_e08a86bb3a33a2 368-369,372,397-398,577-578,739-740,743
+src/terminal/AgentTerminalViewProvider.test.ts
+  h_e08a86bb3a33a2 11,303-346
+  h_e08a86bb3a33a2 347-348
+src/terminal/webview/terminalWebviewController.test.ts
+  h_e08a86bb3a33a2 170-247
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60a0e82c81e332e307e0eb571850627247cf236d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

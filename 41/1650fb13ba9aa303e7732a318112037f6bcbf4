@@ -1,0 +1,55 @@
+integrations/meridian-plugin-agentlink/probe.mjs
+  s_c325a36a83eeb3::t_099248a38b7533 5-6,15-20,28,35,47-51,58-61,65-68,70-71,90-95,100-105,107,113-134,136-138,143,161-164,169-177,181-184,186-190,193-197,199-202,204,207-218,222-227,229-232,234-238,240-258,260-261
+  s_c325a36a83eeb3::t_f8bb04aaf40c32 7,24-27,29-34,36-38,108,139-142,144-160,203,219-221
+  s_c325a36a83eeb3::t_c15fa8c8946d2a 1-4,8-14,21-23,39-46,52-57,62-64,69,72-89,96-99,106,109-112,135,165-168,178-180,185,191-192,198,205-206,228,233,239,259,262
+  s_c325a36a83eeb3::t_5c28fc5cd77871 263-280
+.agents/skills/meridian-integration/references/local-setup.md
+  s_c325a36a83eeb3::t_0ab979b2e70445 1-6,8-37
+  s_c325a36a83eeb3::t_2de9ea8788d8a5 7
+integrations/meridian-plugin-agentlink/install.mjs
+  s_c325a36a83eeb3::t_775b75c1094651 1-21
+  s_c325a36a83eeb3::t_27cb02e2970df9 22-25
+integrations/meridian-plugin-agentlink/test/plugin.test.js
+  s_c325a36a83eeb3::t_775b75c1094651 1-56
+  s_c325a36a83eeb3::t_d852e98cf3f861 57-63
+integrations/meridian-plugin-agentlink/index.js
+  s_c325a36a83eeb3::t_775b75c1094651 1-31
+  s_c325a36a83eeb3::t_96ea882e265bc5 32
+.agents/skills/meridian-integration/SKILL.md
+  s_c325a36a83eeb3::t_0ab979b2e70445 10-12,18,32,41-45
+  s_c325a36a83eeb3::t_775b75c1094651 1-9,13-17,19-31,33-40
+CLAUDE.md
+  s_c325a36a83eeb3::t_775b75c1094651 92-96
+integrations/meridian-plugin-agentlink/README.md
+  s_c325a36a83eeb3::t_775b75c1094651 1-5,7-69,89-94
+  s_c325a36a83eeb3::t_0ab979b2e70445 6,70-88
+integrations/meridian-plugin-agentlink/package.json
+  s_c325a36a83eeb3::t_53045ef5a58e7b 11
+  s_c325a36a83eeb3::t_775b75c1094651 1-6,20-21
+  s_c325a36a83eeb3::t_0ab979b2e70445 7-10,12-19
+integrations/meridian-plugin-agentlink/test/install.test.js
+  s_c325a36a83eeb3::t_6292b2fac0b57e 1-28
+integrations/meridian-plugin-agentlink/LICENSE
+  s_c325a36a83eeb3::t_0747bd51ff7b9a 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "411650fb13ba9aa303e7732a318112037f6bcbf4",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c325a36a83eeb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a118e3-b3fc-72f3-b4ca-2cd899b1f840",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

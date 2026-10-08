@@ -1,0 +1,22 @@
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 7159-7187,7375-7377,7425-7426
+  h_e08a86bb3a33a2 7188-7189,7378-7381,7427-7435
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 15
+src/shared/ui/McpManagerPanel.test.tsx
+  h_e08a86bb3a33a2 175-209
+src/shared/ui/McpManagerPanel.tsx
+  h_e08a86bb3a33a2 1475-1487,1491,1517-1519,1521,1523-1527,1532
+  h_e08a86bb3a33a2 1522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d3786edee7d26a9c0ae7f572236c91a92c05aba8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

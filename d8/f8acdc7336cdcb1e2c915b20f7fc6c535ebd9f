@@ -1,0 +1,77 @@
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 4,424,1182,1946-1952,7502-7510,8068-8073,8092-8094,8096,8098-8102,13784-13785
+  h_e08a86bb3a33a2 8095,8097
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 11,87-104
+apps/desktop/src/desktopUpdateApply.test.ts
+  h_e08a86bb3a33a2 1-210
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 53-59,80-81,555-612,655-660,669-678,698-704,996-1003
+  h_e08a86bb3a33a2 661-662
+src/integrations/vscodeReleaseInstall.test.ts
+  h_e08a86bb3a33a2 1-159
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 133,1460-1461,2201-2211,2221,8268-8289
+src/agent/webview/types.ts
+  h_e08a86bb3a33a2 112-114
+  h_e08a86bb3a33a2 111
+apps/desktop/src/desktopUpdateApply.ts
+  h_e08a86bb3a33a2 1-86
+src/updates/releaseInstall.test.ts
+  h_e08a86bb3a33a2 1-215
+src/shared/ui/ReleaseUpdateIndicator.tsx
+  h_e08a86bb3a33a2 9-10,12-14,52-54,74-81,92,108,164-184,187,189-203
+  h_e08a86bb3a33a2 82
+apps/cli/src/cliReleaseInstall.test.ts
+  h_e08a86bb3a33a2 1-299
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 66,362-363,1134-1136,4139-4145
+apps/desktop/src/desktopReleaseInstall.test.ts
+  h_e08a86bb3a33a2 1-686
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_e08a86bb3a33a2 492-497
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 116,202-231,1420-1422,1442-1481,2821,2915,2920-2921,2924-2928,2933-2934,2939
+  h_e08a86bb3a33a2 2917-2919,2922-2923,2929-2932,2935-2938,2940
+src/integrations/vscodeReleaseUpdates.ts
+  h_e08a86bb3a33a2 6,48-50
+apps/desktop/src/desktopReleaseInstallIpc.ts
+  h_e08a86bb3a33a2 1-34
+apps/cli/src/cli.test.ts
+  h_e08a86bb3a33a2 105-169
+apps/cli/src/cliReleaseInstall.ts
+  h_e08a86bb3a33a2 1-289
+src/shared/ui/ReleaseUpdateIndicator.test.tsx
+  h_e08a86bb3a33a2 1-83
+src/updates/releaseInstall.ts
+  h_e08a86bb3a33a2 1-341
+src/integrations/vscodeReleaseUpdates.test.ts
+  h_e08a86bb3a33a2 53-55
+apps/desktop/src/setup.html
+  h_e08a86bb3a33a2 143-156,168-170
+apps/desktop/src/preload.ts
+  h_e08a86bb3a33a2 3,60-77
+apps/desktop/src/desktopReleaseInstall.ts
+  h_e08a86bb3a33a2 1-637
+src/integrations/vscodeReleaseInstall.ts
+  h_e08a86bb3a33a2 1-190
+apps/desktop/src/setup.ts
+  h_e08a86bb3a33a2 6,56-61,110-117,171-221,238
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 50,52,57,63
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 1,75-80
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 9902-9934
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
