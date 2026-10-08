@@ -33,6 +33,7 @@ function makeHarness(
     execute?: AgentToolRuntime["executeTool"];
     composable?: string[];
     context?: Partial<AgentToolExecutionContext>;
+    runtime?: Partial<AgentToolRuntime>;
   } = {},
 ) {
   const events: Array<Record<string, unknown>> = [];
@@ -50,6 +51,7 @@ function makeHarness(
     isParallelSafe: () => true,
     executeTool,
     getToolCallTracker: () => ({ registerAgentCall, completeAgentCall }),
+    ...options.runtime,
   };
   const context: AgentToolExecutionContext = {
     sessionId: "session-1",
@@ -180,6 +182,147 @@ describe("createComposeExecutionScope", () => {
       expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
     },
   );
+
+  describe("call_mcp_tool children", () => {
+    const mcpInput = { server: "linear", tool: "list_issues", input: {} };
+    const mcpHarness = (
+      options: {
+        readOnly?: boolean;
+        parallelSafe?: boolean;
+        execute?: AgentToolRuntime["executeTool"];
+      } = {},
+    ) =>
+      makeHarness({
+        available: ["call_mcp_tool", "compose"],
+        composable: ["call_mcp_tool"],
+        limit: 8,
+        execute: options.execute,
+        runtime: {
+          isMcpToolReadOnly: () => options.readOnly ?? true,
+          isParallelSafe: () => options.parallelSafe ?? true,
+        },
+      });
+
+    it.each([
+      [{ server: "linear", tool: "list_issues" }, true],
+      [{ server: "linear", tool: "list_issues", input: { q: 1 } }, true],
+      [{ server: "linear" }, false],
+      [{ server: "linear__x", tool: "list_issues" }, false],
+      [{ server: "linear", tool: "list_issues", input: [] }, false],
+    ] as const)("validates MCP target input %#", (input, valid) => {
+      expect(
+        validateComposableToolInput("call_mcp_tool", input) === undefined,
+      ).toBe(valid);
+    });
+
+    it.each([undefined, false])(
+      "rejects tools the runtime does not report read-only (%s) before reservation",
+      async (readOnly) => {
+        const harness = makeHarness({
+          available: ["call_mcp_tool", "compose"],
+          composable: ["call_mcp_tool"],
+          runtime:
+            readOnly === undefined ? {} : { isMcpToolReadOnly: () => readOnly },
+        });
+        await expect(
+          harness.scope.executeChild("call_mcp_tool", mcpInput),
+        ).rejects.toMatchObject({
+          kind: "tool_input_not_composable",
+          message: expect.stringContaining("linear__list_issues"),
+        });
+        expect(harness.executeTool).not.toHaveBeenCalled();
+        expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
+      },
+    );
+
+    it.each([
+      [
+        "structured content",
+        { content: [{ type: "text", text: "x" }], data: { n: 1 } },
+        { n: 1 },
+      ],
+      [
+        "a JSON text block",
+        { content: [{ type: "text", text: '{"items":[1,2]}' }] },
+        { items: [1, 2] },
+      ],
+      ["plain text", { content: [{ type: "text", text: "hello" }] }, "hello"],
+      [
+        "several text blocks",
+        {
+          content: [
+            { type: "text", text: "[1]" },
+            { type: "text", text: "note" },
+          ],
+        },
+        [[1], "note"],
+      ],
+    ] as const)(
+      "derives canonical data from %s",
+      async (_label, raw, expected) => {
+        const harness = mcpHarness({
+          execute: async () => raw as unknown as ToolResult,
+        });
+        await expect(
+          harness.scope.executeChild("call_mcp_tool", mcpInput),
+        ).resolves.toMatchObject({ data: expected });
+      },
+    );
+
+    it("treats a bare bridge error payload as a child failure", async () => {
+      const harness = mcpHarness({
+        execute: async () => ({
+          content: [
+            { type: "text", text: JSON.stringify({ error: "auth expired" }) },
+          ],
+        }),
+      });
+      await expect(
+        harness.scope.executeChild("call_mcp_tool", mcpInput),
+      ).rejects.toMatchObject({
+        kind: "child_handler_failed",
+        message: "auth expired",
+      });
+    });
+
+    it("rejects image output", async () => {
+      const harness = mcpHarness({
+        execute: async () => ({
+          content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+        }),
+      });
+      await expect(
+        harness.scope.executeChild("call_mcp_tool", mcpInput),
+      ).rejects.toMatchObject({ kind: "tool_output_not_composable" });
+    });
+
+    it.each([
+      [false, 1],
+      [true, 2],
+    ])(
+      "with parallelSafe=%s runs at most %i same-server children at once",
+      async (parallelSafe, expectedPeak) => {
+        let active = 0;
+        let peak = 0;
+        const harness = mcpHarness({
+          parallelSafe,
+          execute: async () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            active -= 1;
+            return canonicalResult({ ok: true });
+          },
+        });
+        await Promise.all([
+          harness.scope.executeChild("call_mcp_tool", mcpInput),
+          harness.scope.executeChild("call_mcp_tool", mcpInput),
+        ]);
+        expect(peak).toBe(expectedPeak);
+        expect(harness.executeTool).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
 
   it("admits regex-only search children", async () => {
     const harness = makeHarness({

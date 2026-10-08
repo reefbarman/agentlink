@@ -1248,31 +1248,6 @@ export function getAgentTools(
         ]
       : []),
   ].sort(([a], [b]) => a.localeCompare(b));
-  const composableChildNames = nativeToolEntries
-    .map(([name]) => name)
-    .filter((name) => COMPOSABLE_TOOLS.has(name));
-  const composableConstraints =
-    renderComposableToolConstraints(composableChildNames);
-  const nativeTools = nativeToolEntries.map(([name, zodSchema]) => ({
-    name,
-    description:
-      name === "execute_command" && usesReadOnlyCommand
-        ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. AgentLink disables interactive pagers; do not add routine `--no-pager`. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`. Plain commands such as `git status` and `git grep` need none of these flags."
-        : name === "compose"
-          ? `${TOOL_REGISTRY.compose.description} Current children and constraints: ${composableConstraints || "none"}.`
-          : name === "read_file"
-            ? `${TOOL_REGISTRY.read_file.description}${readFileVariant.descriptionSuffix}`
-            : (TOOL_REGISTRY[name]?.description ?? name),
-    input_schema:
-      name === "execute_command" && usesReadOnlyCommand
-        ? cachedJsonSchemaFor(
-            "execute_command:read-only",
-            schemas.readOnlyExecuteCommandSchema,
-          )
-        : name === "read_file"
-          ? cachedJsonSchemaFor(readFileVariant.cacheKey, zodSchema)
-          : cachedJsonSchemaFor(name, zodSchema),
-  }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
   // allowlist, and selected background profiles can opt into MCP or restricted
@@ -1299,10 +1274,39 @@ export function getAgentTools(
   // MCP client meta-tools follow the same gate as direct MCP tools.
   // Background agents are excluded from switch_mode and spawn tools to prevent
   // inadvertent foreground mode changes and nested spawning.
-  const metaTools =
-    canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets)
-      ? MCP_META_TOOLS
-      : [];
+  const advertisesMcpBridge =
+    canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets);
+  const metaTools = advertisesMcpBridge ? MCP_META_TOOLS : [];
+  const mcpBridgeTools = advertisesMcpBridge ? [CALL_MCP_TOOL] : [];
+
+  const composableChildNames = [
+    ...nativeToolEntries.map(([name]) => name),
+    ...metaTools.map((tool) => tool.name),
+    ...mcpBridgeTools.map((tool) => tool.name),
+  ].filter((name) => COMPOSABLE_TOOLS.has(name));
+  const composableConstraints =
+    renderComposableToolConstraints(composableChildNames);
+  const nativeTools = nativeToolEntries.map(([name, zodSchema]) => ({
+    name,
+    description:
+      name === "execute_command" && usesReadOnlyCommand
+        ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. AgentLink disables interactive pagers; do not add routine `--no-pager`. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`. Plain commands such as `git status` and `git grep` need none of these flags."
+        : name === "compose"
+          ? `${TOOL_REGISTRY.compose.description} Current children and constraints: ${composableConstraints || "none"}.`
+          : name === "read_file"
+            ? `${TOOL_REGISTRY.read_file.description}${readFileVariant.descriptionSuffix}`
+            : (TOOL_REGISTRY[name]?.description ?? name),
+    input_schema:
+      name === "execute_command" && usesReadOnlyCommand
+        ? cachedJsonSchemaFor(
+            "execute_command:read-only",
+            schemas.readOnlyExecuteCommandSchema,
+          )
+        : name === "read_file"
+          ? cachedJsonSchemaFor(readFileVariant.cacheKey, zodSchema)
+          : cachedJsonSchemaFor(name, zodSchema),
+  }));
+
   const hiddenAgentTools = [
     ...(hasDeferredRules
       ? [
@@ -1341,9 +1345,7 @@ export function getAgentTools(
     ...hiddenAgentTools,
     ...allowedMcpTools,
     ...metaTools,
-    ...(canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets)
-      ? [CALL_MCP_TOOL]
-      : []),
+    ...mcpBridgeTools,
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(!profileAllowlist || isBackground
       ? [getSetTaskStatusTool(backgroundExpectedResult, Boolean(isBackground))]
@@ -1788,6 +1790,9 @@ function discoverMcpTools(
         tool: parsed.bareToolName,
         name: tool.name,
         description: tool.description ?? "",
+        ...(mcpHub.isToolReadOnly?.(parsed.serverName, parsed.bareToolName)
+          ? { read_only: true }
+          : {}),
         input_schema: tool.input_schema,
       };
     })
@@ -2041,6 +2046,8 @@ export interface ToolDispatchContext {
   acquireCurrentMcpHub?: () => import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
+  /** Nested (Compose child) calls must not open approval UI; "deny" rejects instead. */
+  interactionPolicy?: AgentToolExecutionRequest["context"]["interactionPolicy"];
   onModeSwitch?: (
     sessionId: string,
     mode: string,
@@ -2669,6 +2676,24 @@ export function createAgentToolRuntime(
           operationName = readView.operation;
           operationInput = readView.input;
         }
+        // Compose admits MCP children before dispatch; re-check after hooks
+        // may have rewritten the target so only read-only tools ever run.
+        if (request.name === "call_mcp_tool" && request.context.parentCallId) {
+          const server =
+            typeof request.input.server === "string"
+              ? request.input.server.trim()
+              : "";
+          const tool =
+            typeof request.input.tool === "string"
+              ? request.input.tool.trim()
+              : "";
+          if (!this.isMcpToolReadOnly?.(server, tool)) {
+            return errorResult(
+              `MCP tool ${server}__${tool} is not marked read-only by its connected server, so compose cannot call it. Call call_mcp_tool directly instead.`,
+              { status: "rejected", tool: "call_mcp_tool" },
+            );
+          }
+        }
         if (
           request.context.availableToolNames &&
           !request.context.availableToolNames.has(providerToolName)
@@ -2797,6 +2822,7 @@ export function createAgentToolRuntime(
                   ...ctx,
                   sessionId: request.context.sessionId,
                   mode: request.context.mode,
+                  interactionPolicy: request.context.interactionPolicy,
                   availableToolNames: getRequestRecoveryToolNames(
                     request.context,
                   ),
@@ -2918,6 +2944,15 @@ export function createAgentToolRuntime(
     },
     getToolCallTracker() {
       return ctx.toolCallTracker;
+    },
+    isMcpToolReadOnly(serverName, toolName) {
+      const lease = ctx.acquireCurrentMcpHub?.();
+      try {
+        const hub = lease?.hub ?? ctx.mcpHub;
+        return hub?.isToolReadOnly?.(serverName, toolName) === true;
+      } finally {
+        lease?.release();
+      }
     },
     getConnectedMcpToolDefs() {
       return ctx.mcpHub ? getMcpToolDefs(ctx.mcpHub, ctx.mcpToolAccess) : [];
@@ -3523,6 +3558,17 @@ async function dispatchToolCallWithTrackedApprovals(
       serverConfig?.toolPolicy === "allow" ||
       serverConfig?.allowedTools?.includes(bareToolName) ||
       approvalManager.isMcpApproved(sessionId, toolName);
+
+    if (!isAutoApproved && ctx.interactionPolicy === "deny") {
+      return errorResult(
+        `MCP tool ${toolName} requires interactive approval. Call call_mcp_tool directly with server "${serverName}" and tool "${bareToolName}" to request approval; compose cannot ask for it.`,
+        {
+          status: "rejected",
+          tool: toolName,
+          reason: "interaction_denied",
+        },
+      );
+    }
 
     let promotionMeta:
       | import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta

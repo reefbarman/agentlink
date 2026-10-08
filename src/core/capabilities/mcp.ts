@@ -27,6 +27,8 @@ export interface McpToolSummary {
   tool: string;
   name: string;
   description: string;
+  /** Present when the server explicitly annotates the tool read-only. */
+  read_only?: boolean;
   input_schema?: unknown;
 }
 

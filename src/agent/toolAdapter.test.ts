@@ -21,7 +21,10 @@ import {
   COMPOSABLE_TOOLS,
   PARALLEL_SAFE_TOOLS,
   TOOL_CAPABILITIES,
+  UNCONDITIONALLY_COMPOSABLE_TOOLS,
 } from "../core/tools/toolCapabilities.js";
+import { createComposeExecutionScope } from "./compose/composeScope.js";
+import { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
@@ -1938,7 +1941,7 @@ describe("getAgentTools", () => {
       true,
     );
     const definitions = new Set(benchmarkTools.map((tool) => tool.name));
-    for (const name of COMPOSABLE_TOOLS) {
+    for (const name of UNCONDITIONALLY_COMPOSABLE_TOOLS) {
       expect(TOOL_CAPABILITIES[name]).toMatchObject({
         composable: true,
         canonicalResult: true,
@@ -1950,6 +1953,20 @@ describe("getAgentTools", () => {
       // read_file's context view; it is no longer advertised by name.
       expect(definitions.has(name)).toBe(name !== "get_context");
     }
+    // MCP calls are composable only after runtime read-only admission, so
+    // their direct results are not marked canonical.
+    expect(
+      [...COMPOSABLE_TOOLS].filter(
+        (name) => !UNCONDITIONALLY_COMPOSABLE_TOOLS.has(name),
+      ),
+    ).toEqual(["call_mcp_tool"]);
+    expect(TOOL_CAPABILITIES.call_mcp_tool).toMatchObject({
+      composable: true,
+      sideEffect: "external",
+      requiresApproval: "policy",
+    });
+    expect(TOOL_CAPABILITIES.call_mcp_tool.canonicalResult).toBeUndefined();
+    expect(definitions.has("call_mcp_tool")).toBe(true);
     expect(COMPOSABLE_TOOLS.has("compose")).toBe(false);
     expect(COMPOSABLE_TOOLS.has("read_file")).toBe(true);
     expect(COMPOSABLE_TOOLS.has("codebase_search")).toBe(false);
@@ -1963,6 +1980,7 @@ describe("getAgentTools", () => {
         .sort();
     };
     const ordinaryChildren = [
+      "call_mcp_tool",
       "get_call_hierarchy",
       "get_diagnostics",
       "get_hover",
@@ -1994,6 +2012,7 @@ describe("getAgentTools", () => {
       ),
     ).toEqual(ordinaryChildren);
     expect(childNames(benchmarkTools)).toEqual([
+      "call_mcp_tool",
       "get_call_hierarchy",
       "get_code_actions",
       "get_completions",
@@ -7261,6 +7280,31 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("marks server-annotated read-only tools in MCP discovery results", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        { name: "linear__list_issues", description: "List issues" },
+        { name: "linear__create_issue", description: "Create issue" },
+      ]),
+      isToolReadOnly: (_server: string, tool: string) => tool === "list_issues",
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { server: "linear" },
+      { ...mockCtx, mcpHub: mcpHub as any },
+    );
+
+    expect(
+      (result.data as { tools: Array<Record<string, unknown>> }).tools.map(
+        ({ tool, read_only }) => ({ tool, read_only }),
+      ),
+    ).toEqual([
+      { tool: "create_issue", read_only: undefined },
+      { tool: "list_issues", read_only: true },
+    ]);
+  });
+
   it("discovers MCP tools with filtering and optional schemas", async () => {
     const mcpHub = {
       getToolDefs: vi.fn().mockReturnValue([
@@ -8361,6 +8405,147 @@ describe("dispatchToolCall", () => {
       serverName: "linear",
       bareToolName: "list_issues",
       scopes: ["session", "project", "global"],
+    });
+  });
+
+  describe("call_mcp_tool as a compose child", () => {
+    const childInput = {
+      server: "linear",
+      tool: "list_issues",
+      input: { query: "bug" },
+    };
+
+    function setupComposeMcpChild(options: {
+      readOnly: boolean;
+      approved: boolean;
+    }) {
+      const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+      const record = vi.fn();
+      const callTool = vi.fn().mockResolvedValue({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ issues: [{ id: "ENG-1" }] }),
+          },
+        ],
+      });
+      const mcpHub = {
+        getToolDefs: vi.fn().mockReturnValue([
+          {
+            name: "linear__list_issues",
+            description: "List issues",
+            input_schema: { type: "object", properties: {} },
+          },
+        ]),
+        getServerConfig: vi
+          .fn()
+          .mockReturnValue(
+            options.approved ? { toolPolicy: "allow" } : undefined,
+          ),
+        isToolReadOnly: vi.fn().mockReturnValue(options.readOnly),
+        isToolParallelSafe: vi.fn().mockReturnValue(options.readOnly),
+        callTool,
+      };
+      // Production runtime and scope wiring: the scope's admission check and
+      // the adapter's approval gate must both see the same MCP generation.
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+        toolUsageTelemetry: { record } as any,
+      });
+      const scope = createComposeExecutionScope({
+        runtime,
+        parentContext: {
+          sessionId: "test-session",
+          mode: "code",
+          availableToolNames: new Set(["compose", "call_mcp_tool"]),
+          toolCallBudget: new ToolCallBudget(8),
+          toolCallId: "compose-call",
+        },
+      });
+      return { scope, runtime, callTool, onApprovalRequest, record };
+    }
+
+    it("re-checks read-only admission at dispatch for compose children", async () => {
+      const { runtime, callTool } = setupComposeMcpChild({
+        readOnly: false,
+        approved: true,
+      });
+
+      const result = await runtime.executeTool({
+        name: "call_mcp_tool",
+        input: childInput,
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          parentCallId: "compose-call",
+          interactionPolicy: "deny",
+        },
+      });
+
+      expect(result).toMatchObject({
+        isError: true,
+        data: { status: "rejected", tool: "call_mcp_tool" },
+      });
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it("runs approved read-only tools with canonical data and compose-child telemetry", async () => {
+      const { scope, callTool, onApprovalRequest, record } =
+        setupComposeMcpChild({ readOnly: true, approved: true });
+
+      const result = await scope.executeChild("call_mcp_tool", childInput);
+
+      expect(result.data).toEqual({ issues: [{ id: "ENG-1" }] });
+      expect(onApprovalRequest).not.toHaveBeenCalled();
+      expect(callTool).toHaveBeenCalledWith(
+        "linear__list_issues",
+        { query: "bug" },
+        expect.objectContaining({ authorizedByCaller: true }),
+      );
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "call_mcp_tool",
+          outcome: "ok",
+          invocation: expect.objectContaining({
+            route: "mcp_bridge",
+            nesting: "compose_child",
+          }),
+        }),
+      );
+    });
+
+    it("rejects an unapproved read-only tool without opening an approval prompt", async () => {
+      const { scope, callTool, onApprovalRequest } = setupComposeMcpChild({
+        readOnly: true,
+        approved: false,
+      });
+
+      await expect(
+        scope.executeChild("call_mcp_tool", childInput),
+      ).rejects.toMatchObject({
+        kind: "authorization",
+        code: "interaction_denied",
+        message: expect.stringContaining("Call call_mcp_tool directly"),
+      });
+      expect(onApprovalRequest).not.toHaveBeenCalled();
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it("rejects tools that are not annotated read-only before dispatch", async () => {
+      const { scope, callTool, onApprovalRequest, record } =
+        setupComposeMcpChild({ readOnly: false, approved: true });
+
+      await expect(
+        scope.executeChild("call_mcp_tool", childInput),
+      ).rejects.toMatchObject({ kind: "tool_input_not_composable" });
+      expect(callTool).not.toHaveBeenCalled();
+      expect(onApprovalRequest).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
     });
   });
 

@@ -4,6 +4,7 @@ import type {
 } from "../../core/tools/types.js";
 import {
   COMPOSABLE_TOOLS,
+  getComposabilityPolicy,
   validateComposableToolInput,
   validateComposableToolOutputContent,
 } from "../../core/tools/toolCapabilities.js";
@@ -100,6 +101,73 @@ function assertComposableOutputContent(
       `Tool '${toolName}' output is not composable: ${violation.message}`,
     );
   }
+}
+
+function mcpTarget(input: Record<string, unknown>): {
+  server: string;
+  tool: string;
+} {
+  return {
+    server: typeof input.server === "string" ? input.server.trim() : "",
+    tool: typeof input.tool === "string" ? input.tool.trim() : "",
+  };
+}
+
+function assertRuntimeAdmission(
+  toolName: string,
+  input: Record<string, unknown>,
+  runtime: AgentToolRuntime,
+): void {
+  if (getComposabilityPolicy(toolName)?.runtimeAdmission !== "mcp-read-only") {
+    return;
+  }
+  const { server, tool } = mcpTarget(input);
+  if (runtime.isMcpToolReadOnly?.(server, tool) !== true) {
+    throw new ComposeScopeError(
+      "tool_input_not_composable",
+      `Tool '${toolName}' input is not composable: MCP tool '${server}__${tool}' is not marked read-only by its connected server. Call call_mcp_tool directly instead.`,
+    );
+  }
+}
+
+function parseMcpText(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * MCP results carry canonical data only when the server returns structured
+ * content. Derive it from text blocks otherwise, and surface the bridge's
+ * bare `{ error }` payloads as child failures so settled batches keep them
+ * per child.
+ */
+function canonicalizeMcpChildResult(result: ToolResult): ToolResult {
+  if (result.isError || ("data" in result && result.data !== undefined)) {
+    return result;
+  }
+  const values = result.content.flatMap((item) =>
+    item.type === "text" ? [parseMcpText(item.text)] : [],
+  );
+  const data = values.length === 1 ? values[0] : values;
+  if (
+    data &&
+    typeof data === "object" &&
+    !Array.isArray(data) &&
+    Object.keys(data).length === 1 &&
+    typeof (data as Record<string, unknown>).error === "string"
+  ) {
+    const message = (data as { error: string }).error;
+    return {
+      ...result,
+      data,
+      isError: true,
+      error: { kind: "mcp_tool_error", message },
+    };
+  }
+  return { ...result, data };
 }
 
 function getResultStatus(result: ToolResult): {
@@ -258,6 +326,7 @@ export function createComposeExecutionScope(
   ): ComposeChildRoute => {
     const route = resolveChildRoute(toolName, parentContext, isComposable);
     assertComposableInput(toolName, input);
+    assertRuntimeAdmission(toolName, input, runtime);
     if (toolName === "read_file") {
       // Reject a view outside the skill grant before reserving budget; the
       // runtime still enforces profile authority and option validity.
@@ -290,6 +359,41 @@ export function createComposeExecutionScope(
         "budget_exhausted",
         `Tool call budget exhausted after ${reservation.snapshot.used} calls (limit ${reservation.snapshot.limit}); could not reserve ${count} compose child calls. Reduce, filter, paginate, or memoize inside the compose script.`,
       );
+    }
+  };
+
+  // Children whose target is not parallel-safe (an MCP server without a
+  // read-only or server-wide concurrency opt-in) run one at a time per lane.
+  const serialLanes = new Map<string, Promise<void>>();
+  const getSerialLane = (
+    toolName: string,
+    input: Record<string, unknown>,
+  ): string | undefined =>
+    toolName === "call_mcp_tool" && !runtime.isParallelSafe(toolName, input)
+      ? `mcp:${mcpTarget(input).server}`
+      : undefined;
+  const runInLane = async <T>(
+    lane: string | undefined,
+    signal: AbortSignal,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    if (!lane) return run();
+    const previous = serialLanes.get(lane) ?? Promise.resolve();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => held);
+    serialLanes.set(lane, tail);
+    try {
+      await previous;
+      if (signal.aborted) {
+        throw new ComposeScopeError("aborted", "Compose execution was aborted");
+      }
+      return await run();
+    } finally {
+      release();
+      if (serialLanes.get(lane) === tail) serialLanes.delete(lane);
     }
   };
 
@@ -361,28 +465,37 @@ export function createComposeExecutionScope(
           providerToolInput: _parentProviderToolInput,
           ...inheritedContext
         } = parentContext;
-        const result = await Promise.race([
-          runtime.executeTool({
-            name: toolName,
-            input,
-            context: {
-              ...inheritedContext,
-              ...(route === "deferred"
-                ? {
-                    providerToolName: "call_native_tool",
-                    providerToolInput: { name: toolName, input },
-                  }
-                : {}),
-              trackerCtx: trackerContext,
-              toolAbortSignal: childController.signal,
-              toolCallId: childCallId,
-              parentCallId: parentContext.toolCallId,
-              interactionPolicy: "deny",
-            },
-          }),
+        const rawResult = await Promise.race([
+          runInLane(
+            getSerialLane(toolName, input),
+            childController.signal,
+            () =>
+              runtime.executeTool({
+                name: toolName,
+                input,
+                context: {
+                  ...inheritedContext,
+                  ...(route === "deferred"
+                    ? {
+                        providerToolName: "call_native_tool",
+                        providerToolInput: { name: toolName, input },
+                      }
+                    : {}),
+                  trackerCtx: trackerContext,
+                  toolAbortSignal: childController.signal,
+                  toolCallId: childCallId,
+                  parentCallId: parentContext.toolCallId,
+                  interactionPolicy: "deny",
+                },
+              }),
+          ),
           forcePromise,
           abortPromise,
         ]);
+        const result =
+          toolName === "call_mcp_tool"
+            ? canonicalizeMcpChildResult(rawResult)
+            : rawResult;
         if (result.isError) throw childResultError(toolName, result);
         assertComposableOutputContent(toolName, result);
         if (!("data" in result)) {

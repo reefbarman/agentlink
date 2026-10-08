@@ -1,9 +1,9 @@
 import type { MessageParam, ToolDefinition } from "./providers/types.js";
 
 import type { AgentEvent } from "./types.js";
-import { COMPOSABLE_TOOLS } from "../core/tools/toolCapabilities.js";
 import type { ComposeEfficiencySnapshot } from "../telemetry/SessionOutcomeTelemetry.js";
 import type { ComposeRequestContextMetrics } from "../telemetry/ContextUsageTelemetry.js";
+import { UNCONDITIONALLY_COMPOSABLE_TOOLS } from "../core/tools/toolCapabilities.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
 export type ComposeEfficiencyStats = ComposeEfficiencySnapshot & {
@@ -93,7 +93,7 @@ export function applyComposeEfficiencyEvent(
       }
       stats.currentTurnSawSuccessfulCompose = true;
     }
-  } else if (COMPOSABLE_TOOLS.has(event.toolName)) {
+  } else if (UNCONDITIONALLY_COMPOSABLE_TOOLS.has(event.toolName)) {
     stats.directComposableCalls += 1;
     stats.currentTurnDirectComposableCalls += 1;
   }
@@ -165,7 +165,7 @@ export function measureComposeRequestOccupancy(
           ? block.content.length
           : JSON.stringify(block.content).length;
       if (name === "compose") composeChars += chars;
-      else if (COMPOSABLE_TOOLS.has(name)) directChars += chars;
+      else if (UNCONDITIONALLY_COMPOSABLE_TOOLS.has(name)) directChars += chars;
     }
   }
   const composeDefinition = tools?.find((tool) => tool.name === "compose");

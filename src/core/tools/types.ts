@@ -274,6 +274,11 @@ export interface AgentToolRuntime {
     laterInput: Record<string, unknown>,
   ): boolean;
   getToolCallTracker?(): AgentToolCallTracker | undefined;
+  /**
+   * Whether the current MCP generation explicitly annotates this connected
+   * tool read-only. Omitted means no MCP tool is admissible as a Compose child.
+   */
+  isMcpToolReadOnly?(serverName: string, toolName: string): boolean;
   getConnectedMcpToolDefs?(): CoreToolDefinition[];
   getMcpToolDisclosureMode?(
     serverName: string,

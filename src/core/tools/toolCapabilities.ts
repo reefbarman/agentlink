@@ -697,6 +697,11 @@ export interface ComposabilityPolicy {
   ) => ComposabilityPolicyViolation | undefined;
   readonly renderedConstraint: string;
   readonly canonicalResultEligible: boolean;
+  /**
+   * Host admission that static input validation cannot decide. The Compose
+   * scope must enforce it before reserving budget or dispatching the child.
+   */
+  readonly runtimeAdmission?: "mcp-read-only";
 }
 
 const ACCEPT_ANY_COMPOSABLE_INPUT: ComposabilityPolicy["validateInput"] = () =>
@@ -711,13 +716,37 @@ const REQUIRE_TEXT_COMPOSABLE_OUTPUT: ComposabilityPolicy["validateOutputContent
 function composabilityPolicy(
   renderedConstraint: string,
   validateInput: ComposabilityPolicy["validateInput"] = ACCEPT_ANY_COMPOSABLE_INPUT,
+  runtimeAdmission?: ComposabilityPolicy["runtimeAdmission"],
 ): ComposabilityPolicy {
   return Object.freeze({
     validateInput,
     validateOutputContent: REQUIRE_TEXT_COMPOSABLE_OUTPUT,
     renderedConstraint,
     canonicalResultEligible: true,
+    ...(runtimeAdmission ? { runtimeAdmission } : {}),
   });
+}
+
+function validateMcpCallInput(
+  input: Readonly<Record<string, unknown>>,
+): ComposabilityPolicyViolation | undefined {
+  const server = typeof input.server === "string" ? input.server.trim() : "";
+  const tool = typeof input.tool === "string" ? input.tool.trim() : "";
+  if (!server || !tool) {
+    return { message: "server and tool must be non-empty strings" };
+  }
+  if (server.includes("__")) {
+    return { message: "server must be a bare MCP server name without '__'" };
+  }
+  if (
+    input.input !== undefined &&
+    (typeof input.input !== "object" ||
+      input.input === null ||
+      Array.isArray(input.input))
+  ) {
+    return { message: "input must be an object" };
+  }
+  return undefined;
 }
 
 /** Canonical source for every native tool and variant that Compose may bridge. */
@@ -758,6 +787,11 @@ export const COMPOSABILITY_POLICIES = Object.freeze({
   get_call_hierarchy: composabilityPolicy("structured text output only"),
   get_type_hierarchy: composabilityPolicy("structured text output only"),
   get_inlay_hints: composabilityPolicy("structured text output only"),
+  call_mcp_tool: composabilityPolicy(
+    "read_only MCP tools needing no approval; text output only",
+    validateMcpCallInput,
+    "mcp-read-only",
+  ),
 } satisfies Readonly<Record<string, ComposabilityPolicy>>);
 
 export type ComposableToolName = keyof typeof COMPOSABILITY_POLICIES;
@@ -794,6 +828,17 @@ export const COMPOSABLE_TOOLS: ReadonlySet<string> = new Set(
     .map(([name]) => name),
 );
 
+/**
+ * Composable tools whose every call is admissible without host-side runtime
+ * checks. Runtime-gated tools such as call_mcp_tool are composable only for
+ * some targets, so direct calls to them are not compose opportunities.
+ */
+export const UNCONDITIONALLY_COMPOSABLE_TOOLS: ReadonlySet<string> = new Set(
+  [...COMPOSABLE_TOOLS].filter(
+    (name) => getComposabilityPolicy(name)?.runtimeAdmission === undefined,
+  ),
+);
+
 export function renderComposableToolConstraints(
   toolNames: Iterable<string> = COMPOSABLE_TOOLS,
 ): string {
@@ -811,10 +856,17 @@ export const TOOL_CAPABILITIES: Readonly<
   Object.fromEntries(
     toolCapabilities.map((entry) => {
       const composable = COMPOSABLE_TOOLS.has(entry.name);
+      // Runtime-gated children (MCP) get canonical data from the Compose
+      // scope; their direct results are not canonical on every path.
+      const canonicalResult = UNCONDITIONALLY_COMPOSABLE_TOOLS.has(entry.name);
       return [
         entry.name,
         composable
-          ? { ...entry, composable: true, canonicalResult: true }
+          ? {
+              ...entry,
+              composable: true,
+              ...(canonicalResult ? { canonicalResult: true } : {}),
+            }
           : entry,
       ];
     }),
