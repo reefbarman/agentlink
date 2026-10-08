@@ -1,0 +1,176 @@
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 198,200,203,1866-1869,3749-3750,3753-3754,3756-3766,5872-5891,5967,6026,10049-10062,10087,10137-10138,10205-10211,10213,10215,10220-10282,10437-10438,10445-10446
+  h_e08a86bb3a33a2 3752,3755,3767,10063-10064,10433-10436,10439
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 84,758-765,776
+apps/cli/src/types.ts
+  h_e08a86bb3a33a2 10
+src/browser-gateway/helper/bootstrapHelper.test.ts
+  h_e08a86bb3a33a2 22,231,283,333,391,437-494
+  h_e08a86bb3a33a2 495
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 40,2634
+apps/cli/src/config.test.ts
+  h_e08a86bb3a33a2 81-131
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 50-51,212,231-235,307,388,3131-3134,3137-3142,3144-3150,3177-3180,3182-3189,7580-7923,7927-7949,7952,7983,8032,8078,8084-8090
+  h_e08a86bb3a33a2 236-240,3135-3136,3143,3151,3181,3190,7924
+packages/workspace-host/src/promptProfile.ts
+  h_e08a86bb3a33a2 1-15
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 26-27,44
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 85,87-89,92
+  h_e08a86bb3a33a2 93
+packages/core/src/openAiCompatible/types.ts
+  h_e08a86bb3a33a2 8,33-34
+src/agent/AgentSessionManager.btw.test.ts
+  h_e08a86bb3a33a2 23,34
+src/agent/SessionStore.test.ts
+  h_e08a86bb3a33a2 548
+resources/builtin-skills/documentation/SKILL.md
+  h_e08a86bb3a33a2 43
+packages/core/package.json
+  h_e08a86bb3a33a2 42-53
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 5-6,53-101,103-302
+  s_059c8dea429e18::t_0963fc152a399d 4,7
+package.json
+  h_e08a86bb3a33a2 5,106-112,777-784,1082
+  h_e08a86bb3a33a2 105
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 27,53,64,6059-6061,6065,6067,6071-6080,6084-6085,6087-6091,6093-6096,6121-6127,6136,6145,6149-6152,6156-6160,6215,6221-6224,6234-6238,6260-6263,6270-6271,6281-6289,6292-6392,6394-6408
+  h_e08a86bb3a33a2 6062-6064,6066,6068-6070,6081-6083,6100-6101,6103-6118,6120,6128,6130-6135,6137-6142,6144,6146,6153-6155,6216-6220,6268-6269,6272,6290-6291,6393
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 59,1286-1287,1299,2012,2042-2053,2057-2071,2073-2074,2076-2079,2081-2086,2088-2089,2104,2198-2201,2203
+  h_e08a86bb3a33a2 2075,2080,2202
+resources/builtin-skills/documentation/references/providers.md
+  h_e08a86bb3a33a2 62,64-72
+  s_c325a36a83eeb3::t_775b75c1094651 153-181
+  s_c325a36a83eeb3::t_757b125a1bc782 182
+  h_e08a86bb3a33a2 63
+src/core/promptProfilePolicy.ts
+  h_e08a86bb3a33a2 1-5
+src/agent/providers/codex/CodexProvider.test.ts
+  h_e08a86bb3a33a2 3-4,7-8,1152-1155,1251-1254,1350-1354,1506-1629
+  h_e08a86bb3a33a2 1151,1250,1630
+packages/protocol/src/promptProfile.test.ts
+  h_e08a86bb3a33a2 28-30
+  h_e08a86bb3a33a2 31-32
+packages/core/src/modelRuntime.ts
+  h_e08a86bb3a33a2 511-514
+packages/core/src/promptProfilePolicy.test.ts
+  h_e08a86bb3a33a2 1-96
+src/agent/providers/openaiCompatible/config.test.ts
+  h_e08a86bb3a33a2 201,249,343-370
+  h_e08a86bb3a33a2 371-372
+packages/core/src/openAiCompatible/backend.test.ts
+  h_e08a86bb3a33a2 95-128
+packages/core/src/promptProfilePolicy.ts
+  h_e08a86bb3a33a2 1-65
+CHANGELOG.md
+  h_e08a86bb3a33a2 5,9
+packages/core/src/agentEngine.test.ts
+  h_e08a86bb3a33a2 180-211
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 62,483-486
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 220,2140,2147-2149
+  h_e08a86bb3a33a2 2139,2141-2146
+packages/protocol/src/promptProfile.ts
+  h_e08a86bb3a33a2 5,9-10,37-39
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 19
+src/agent/skillToolExposure.test.ts
+  h_e08a86bb3a33a2 83
+src/agent/promptProfileComposition.test.ts
+  h_e08a86bb3a33a2 1-151
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.ts
+  h_e08a86bb3a33a2 10,116-117
+  h_e08a86bb3a33a2 118-119
+apps/cli/src/config.ts
+  h_e08a86bb3a33a2 182-186,189
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.test.ts
+  h_e08a86bb3a33a2 137,143,155-156
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_e08a86bb3a33a2 57
+packages/core/src/openAiCompatible/config.ts
+  h_e08a86bb3a33a2 6-9,165,174,313-315,629-633,766,998-1004
+  h_e08a86bb3a33a2 1005-1007
+src/extension.ts
+  h_e08a86bb3a33a2 1761-1763
+packages/core/src/openAiCompatible/providerFactory.ts
+  h_e08a86bb3a33a2 43,101,143-145
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 246-248,1259-1263
+src/agent/AgentSession.ts
+  h_e08a86bb3a33a2 67,85,97-119,123-136,550-551,553-555,561-563,610-612,686-688,701-707,714-717,721,723,750-765
+  h_e08a86bb3a33a2 120-122,560,718
+packages/core/src/openAiCompatible/backend.ts
+  h_e08a86bb3a33a2 22,94-95
+  h_e08a86bb3a33a2 96-97
+src/agent/providers/codex/CodexProvider.ts
+  h_e08a86bb3a33a2 369-375
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 4721-4723
+src/browser-gateway/helper/bootstrapHelper.ts
+  h_e08a86bb3a33a2 12,79,82-89,196-204,333,360-377,379,393
+  h_e08a86bb3a33a2 80-81
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_e08a86bb3a33a2 57,65,200,773-778
+  h_e08a86bb3a33a2 798
+src/agent/AgentSession.test.ts
+  h_e08a86bb3a33a2 50,1690,1737
+src/agent/providers/types.ts
+  h_e08a86bb3a33a2 91-93
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 41,43,45,110-114
+  h_e08a86bb3a33a2 115
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 291,315,338
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_dd3f0908230ec7::t_7d0027be2a1ce1 13,28-30,47,62-64,81,90-92,103,112-114,125,140-142,159,174-176,193,202-204,215,224-226,237,252-254,271,286-288,305,314-316,327,336-338,349,364-366,383,398-400,417,426-428,439,448-450,461,476-478,495,510-512,529,538-540,551,560-562,573,588-590,607,622-624,641,650-652,663,672-674
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12,49,60,110
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10710b53d2b4f631e95e1199cc3430863cad438b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_059c8dea429e18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c79e8bb1-3b97-48d8-a66b-cbe0892c7fbd",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c325a36a83eeb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a118e3-b3fc-72f3-b4ca-2cd899b1f840",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_dd3f0908230ec7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff215603-f06f-4b68-80f8-4a3aa91128e8",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
