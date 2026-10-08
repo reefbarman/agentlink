@@ -1,0 +1,51 @@
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 896-897
+  s_adf5ad7189cb68::t_02b69584cc7965 898
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/tools/getRepoMap.ts
+  h_e08a86bb3a33a2 197-199,203-204,209-214,216-220,222,234,236-237,239,244-261,263-264,266-289,294-341,472,500-501,503-507
+  s_9112dc290f096a::t_3000afc5fb2ec8 205-208,215,499,502
+src/tools/getRepoMap.test.ts
+  h_e08a86bb3a33a2 146-187,384-450,452-473
+  s_9112dc290f096a::t_0edfbd6209afa3 451,474-475
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/package-contract.md
+  s_adf5ad7189cb68::t_de821038a91660 12
+resources/builtin-skills/documentation/references/release-notes.md
+  s_adf5ad7189cb68::t_8b688b3bbe1011 5
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_9112dc290f096a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8649b844-51ea-4467-971f-bf9f81c59bda",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_adf5ad7189cb68": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e56b90ff-d686-4196-9815-3b0d9610b638",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
