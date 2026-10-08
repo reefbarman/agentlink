@@ -1,0 +1,25 @@
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 172
+scripts/sandbox-runtime-helper.mjs
+  h_e08a86bb3a33a2 412-414,419,426
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 143
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+scripts/sandbox-runtime-helper.test.mjs
+  h_e08a86bb3a33a2 28,416-440,454-467,487-488,497-504,511,516-518,520-521
+  h_e08a86bb3a33a2 441-442,505-510,512-515,519
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9810afa85445851a42ac1e7c9be6615c89268038",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
