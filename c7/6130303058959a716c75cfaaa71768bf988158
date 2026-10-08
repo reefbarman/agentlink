@@ -1,0 +1,46 @@
+packages/node-host/package.json
+  h_e08a86bb3a33a2 37,40,44
+packages/core/package.json
+  h_e08a86bb3a33a2 376
+apps/desktop/package.json
+  h_e08a86bb3a33a2 20,23
+apps/cli/package.json
+  h_e08a86bb3a33a2 30
+package.json
+  h_e08a86bb3a33a2 5,1235,1259,1271
+apps/cli/THIRD_PARTY_NOTICES.md
+  s_ef0988054b4642::t_5c39802d8b1d84 5,8,863,938,984,1059,1093-1143,1424-1453,1593,1621-1661,1710,1719,1816,1871,2751,3195,3593,3640,3833,3850,3948,3993-4020,4133
+package-lock.json
+  s_d839591f970a52::t_4deacd90ba7a6d 3,9,32,55,63,95,143,146,227-229,236,242,2329-2331,2341-2352,2356-2358,2372-2374,2388-2390,2404-2406,2420-2422,2439-2441,2458-2460,2477-2479,2496-2498,2515-2517,2531-2533,2547-2549,4208-4210,4831-4833,7010-7012,13607-13609,13616-13618,13730,13748,13750,13753
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c76130303058959a716c75cfaaa71768bf988158",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d839591f970a52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "47270822-1c75-4f3b-a503-1a92fb9b9cb0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_ef0988054b4642": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "58e9860c-3b14-4a3a-87be-7897682889df",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
