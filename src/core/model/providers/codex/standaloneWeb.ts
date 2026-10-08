@@ -166,16 +166,29 @@ export async function executeCodexStandaloneWeb(
   ) {
     throw new CodexPageAccessError("provider_page_focus_unavailable");
   }
+  let visibleOutput = rawOutput;
+  let availableOutput = paginatedOutput.output;
+  if (request.operation === "fetch" && find) {
+    visibleOutput = paginatedOutput.output.slice(
+      findPageContentOffset(paginatedOutput.output, find) ?? 0,
+    );
+  } else if (
+    request.operation === "fetch" &&
+    prepared.startLine !== undefined
+  ) {
+    visibleOutput = rawOutput.slice(
+      findPageLineOffset(rawOutput, prepared.startLine) ?? 0,
+    );
+    availableOutput = paginatedOutput.output.slice(
+      findPageLineOffset(paginatedOutput.output, prepared.startLine) ?? 0,
+    );
+  }
   const visibleContent =
     request.operation === "search" && visibleRecords.length > 0
       ? { content: formatSearchRecords(visibleRecords) }
       : prepareVisibleContent({
-          visible:
-            request.operation === "fetch" && find
-              ? paginatedOutput.output.slice(
-                  findPageContentOffset(paginatedOutput.output, find) ?? 0,
-                )
-              : rawOutput,
+          visible: visibleOutput,
+          available: availableOutput,
           retained: paginatedOutput.output,
           maxCharacters: prepared.maxContentCharacters,
           retainOutput:
@@ -516,6 +529,7 @@ function formatSearchRecords(
 
 function prepareVisibleContent(params: {
   visible: string;
+  available: string;
   retained: string;
   maxCharacters: number;
   retainOutput?: (content: string) => string | null;
@@ -532,10 +546,11 @@ function prepareVisibleContent(params: {
   };
 } {
   const visible = params.visible.trim();
+  const available = params.available.trim();
   const retained = params.retained.trim();
   const inlineTruncated = visible.length > params.maxCharacters;
   const hasAdditionalPages =
-    retained !== visible || params.nextStartLine !== undefined;
+    available !== visible || params.nextStartLine !== undefined;
   if (!inlineTruncated && !hasAdditionalPages && !params.stalled)
     return { content: visible };
 
@@ -566,6 +581,17 @@ function prepareVisibleContent(params: {
         : {}),
     },
   };
+}
+
+function findPageLineOffset(
+  content: string,
+  startLine: number,
+): number | undefined {
+  for (const match of content.matchAll(/^L(\d+):/gm)) {
+    const line = Number(match[1]);
+    if (Number.isSafeInteger(line) && line >= startLine) return match.index;
+  }
+  return undefined;
 }
 
 function findPageContentOffset(

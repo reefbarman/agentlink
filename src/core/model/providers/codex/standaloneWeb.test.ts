@@ -374,6 +374,140 @@ describe("executeCodexStandaloneWeb", () => {
     expect(result.next_start_line).toBeUndefined();
   });
 
+  it.each(["saved", "unavailable", "disabled"] as const)(
+    "focuses explicit line previews before truncation with %s retention",
+    async (retention) => {
+      const initial = `Total lines: 233\nL0: ${"navigation ".repeat(100)}\nL229: earlier content L999: embedded marker\nL230: requested content\nwrapped target\nL231: next line`;
+      const fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              output:
+                fetch.mock.calls.length === 1
+                  ? initial
+                  : "Total lines: 233\nL232: final line",
+            }),
+            { status: 200 },
+          ),
+      );
+      const retainOutput =
+        retention === "disabled"
+          ? undefined
+          : vi.fn(() =>
+              retention === "saved" ? "/tmp/focused-output.txt" : null,
+            );
+      const result = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-focus",
+        model: "gpt-test",
+        operation: "fetch",
+        input: {
+          url: "https://example.com/docs",
+          start_line: 230,
+          max_length: 48,
+        },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch,
+        retainOutput,
+      });
+
+      expect(result.content).toMatch(
+        /^L230: requested content\nwrapped target/,
+      );
+      expect(result.content).not.toContain("navigation");
+      expect(result.content).not.toContain("embedded marker");
+      expect(result.content_truncated).toBe(true);
+      expect(result.output_warning).not.toContain("did not advance");
+      if (retention === "disabled") {
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } else {
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(retainOutput).toHaveBeenCalledWith(
+          `${initial}\n\nTotal lines: 233\nL232: final line`,
+        );
+      }
+      if (retention === "saved") {
+        expect(result.output_file).toBe("/tmp/focused-output.txt");
+        expect(result.next_start_line).toBeUndefined();
+      } else {
+        expect(result.output_file).toBeUndefined();
+        expect(result.next_start_line).toBe(232);
+      }
+    },
+  );
+
+  it.each([0, 230])(
+    "does not label an omitted prefix as truncation for start_line %s",
+    async (startLine) => {
+      const focused = `L${startLine}: requested content\nwrapped target\nL${startLine + 1}: final line`;
+      const output = `Provider header ${"metadata ".repeat(100)}\nTotal lines: ${startLine + 2}\n${startLine > 0 ? `L0: ${"navigation ".repeat(100)}\n` : ""}${focused}`;
+      const retainOutput = vi.fn(() => "/tmp/not-needed.txt");
+      const result = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-focus",
+        model: "gpt-test",
+        operation: "fetch",
+        input: {
+          url: "https://example.com/docs",
+          start_line: startLine,
+          max_length: 128,
+        },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch: (async () =>
+          new Response(JSON.stringify({ output }), {
+            status: 200,
+          })) as typeof globalThis.fetch,
+        retainOutput,
+      });
+
+      expect(result.content).toBe(focused);
+      expect(result.content_truncated).toBeUndefined();
+      expect(result.output_warning).toBeUndefined();
+      expect(result.output_file).toBeUndefined();
+      expect(result.next_start_line).toBeUndefined();
+      expect(retainOutput).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a focused preview and unique overlapping blocks when a later page stalls", async () => {
+    const initial =
+      "Total lines: 234\nL0: navigation\nL230: requested content\nL231: next line";
+    const overlap =
+      "Total lines: 234\nL229: earlier content\nL230: requested content\nL231: next line\nL232: new content\nwrapped addition";
+    const outputs = [initial, overlap, overlap];
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        }),
+    );
+    const retainOutput = vi.fn(() => "/tmp/focused-output.txt");
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-focus",
+      model: "gpt-test",
+      operation: "fetch",
+      input: {
+        url: "https://example.com/docs",
+        start_line: 230,
+        max_length: 200,
+      },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch,
+      retainOutput,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result.content).toMatch(/^L230: requested content/);
+    expect(result.content).not.toContain("navigation");
+    expect(result.content_truncated).toBe(true);
+    expect(result.output_warning).toContain("did not advance");
+    expect(result.next_start_line).toBeUndefined();
+    expect(retainOutput).toHaveBeenCalledWith(
+      `${initial}\n\nL232: new content\nwrapped addition`,
+    );
+  });
+
   it("continues line-addressed pages before retaining provider output", async () => {
     const requestBodies: Record<string, unknown>[] = [];
     const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");

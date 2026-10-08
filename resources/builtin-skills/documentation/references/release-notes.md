@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed Codex `web_fetch` continuation previews: explicit `start_line` reads now show the requested numbered content before inline truncation, rather than spending the preview budget on earlier navigation. Original retained content, valid overlapping pages, and truthful stalled-pagination warnings are preserved.
 - Multi-project terminal creation now asks for the project directory inside the AgentLink Terminal panel, with project names, full paths, keyboard navigation, and Cancel/Escape, instead of opening VS Code's top-of-window picker.
 
 ## 1.29.1
