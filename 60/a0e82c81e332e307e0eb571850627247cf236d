@@ -6,7 +6,7 @@ src/terminal/vscodeTerminalConfiguration.ts
 resources/builtin-skills/documentation/references/capabilities.md
   h_e08a86bb3a33a2 157-158
 CHANGELOG.md
-  h_e08a86bb3a33a2 5
+  h_e08a86bb3a33a2 5-6
 src/terminal/webview/App.test.tsx
   h_e08a86bb3a33a2 116-219
 packages/protocol/src/terminalSurface.ts
