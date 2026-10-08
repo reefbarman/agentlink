@@ -9,7 +9,7 @@ This bundled reference is generated from the extension's `package.json` during b
 | Field          | Value       |
 | -------------- | ----------- |
 | Name           | `AgentLink` |
-| Version        | `1.29.3`    |
+| Version        | `1.29.4`    |
 | Publisher      | `agentlink` |
 | License        | `MIT`       |
 | VS Code engine | `^1.109.0`  |

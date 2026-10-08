@@ -187,6 +187,8 @@ describe("executeCodexStandaloneWeb", () => {
     "Total lines: 1\nL0: Internal Error ()",
     '【turn0view0】 Source: open({"ref_id":"https://example.com"}); Total lines: 1\nL0: Internal Error ()',
     'Internal Error ()\n【turn0view0】 Source: open({"ref_id":"https://example.com"}); Total lines: 1',
+    'Internal Error ()\nciteturn0view0 [wordlim: 200] Source: open({"ref_id":"https://example.com/a.yaml","lineno":null}); Total lines: 1\nL0: Failed to fetch https://example.com/a.yaml: Cache miss',
+    'Internal Error ()\n\ue200cite\ue202turn0view0\ue201 [wordlim: 200] Source: open({"ref_id":"https://example.com/a.yaml","lineno":null}); Total lines: 1\nL0: Failed to fetch https://example.com/a.yaml: Cache miss',
   ])(
     "rejects provider page-access errors instead of completing with error text: %s",
     async (output) => {
@@ -254,6 +256,28 @@ describe("executeCodexStandaloneWeb", () => {
     expect(result.content).toBe(output);
     expect(result.activities[0]?.status).toBe("completed");
   });
+
+  it.each([
+    "Total lines: 1\nL0: Failed to fetch https://example.com/a.yaml: Cache miss",
+    "Total lines: 3\nL0: Internal Error ()\nL1: Failed to fetch https://example.com/a.yaml: Cache miss\nL2: This page explains how to recover from these errors.",
+  ])(
+    "does not reject pages without only provider error lines: %s",
+    async (output) => {
+      const result = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-1",
+        model: "gpt-test",
+        operation: "fetch",
+        input: { url: "https://example.com" },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch: (async () =>
+          new Response(JSON.stringify({ output }), {
+            status: 200,
+          })) as typeof globalThis.fetch,
+      });
+      expect(result.activities[0]?.status).toBe("completed");
+    },
+  );
 
   it("retains fetched content beyond the visible preview", async () => {
     const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");

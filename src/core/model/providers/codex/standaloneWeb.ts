@@ -103,22 +103,12 @@ export async function executeCodexStandaloneWeb(
     } catch {
       throw new Error("Codex standalone web returned invalid JSON.");
     }
-    if (request.operation === "fetch" && typeof payload.output === "string") {
-      const bodyLines = payload.output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(
-          (line) =>
-            line && !/^(?:【[^\n]*|Source:|Total lines:\s*\d+\s*$)/.test(line),
-        );
-      if (
-        bodyLines.length > 0 &&
-        bodyLines.every((line) =>
-          /^(?:L\d+:\s*)?Internal Error\s*\(\)\s*$/i.test(line),
-        )
-      ) {
-        throw new CodexPageAccessError();
-      }
+    if (
+      request.operation === "fetch" &&
+      typeof payload.output === "string" &&
+      isProviderPageAccessErrorOutput(payload.output)
+    ) {
+      throw new CodexPageAccessError();
     }
     return payload;
   };
@@ -606,6 +596,43 @@ function findPageContentOffset(
     }
   }
   return undefined;
+}
+
+const PROVIDER_INTERNAL_ERROR_LINE = /^(?:L\d+:\s*)?Internal Error\s*\(\)\s*$/i;
+// The provider may pair its error marker with a numbered fetch-failure line,
+// e.g. "L0: Failed to fetch https://example.com/a.yaml: Cache miss".
+const PROVIDER_FETCH_FAILURE_LINE =
+  /^(?:L\d+:\s*)?Failed to fetch\s+https?:\/\/\S+?:\s*\S[^\n]*$/i;
+
+function isProviderPageHeaderLine(line: string): boolean {
+  return (
+    line.startsWith("【") ||
+    line.startsWith("Source:") ||
+    /^Total lines:\s*\d+\s*$/i.test(line) ||
+    // Citation-prefixed open headers (private-use citation markers may be
+    // present or already stripped) still describe the provider request.
+    /\bSource:\s*open\(/.test(line)
+  );
+}
+
+/**
+ * A failed provider read consists only of provider headers, the
+ * `Internal Error ()` marker, and optional provider fetch-failure lines. An
+ * article that merely discusses these messages has other body content.
+ */
+function isProviderPageAccessErrorOutput(output: string): boolean {
+  const bodyLines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isProviderPageHeaderLine(line));
+  return (
+    bodyLines.some((line) => PROVIDER_INTERNAL_ERROR_LINE.test(line)) &&
+    bodyLines.every(
+      (line) =>
+        PROVIDER_INTERNAL_ERROR_LINE.test(line) ||
+        PROVIDER_FETCH_FAILURE_LINE.test(line),
+    )
+  );
 }
 
 async function collectFetchPages(params: {
