@@ -331,6 +331,14 @@ export interface TerminalSurfaceConfiguration {
 export type TerminalSurfaceEvent =
   | HostTerminalSurfaceLifecycleEvent
   | {
+      type: "terminal-view/select-workspace";
+      request: Extract<
+        TerminalSurfaceRequest,
+        { type: "host-terminal/create" }
+      >;
+      folders: readonly { name: string; cwd: string }[];
+    }
+  | {
       type: "terminal-view/bootstrap";
       protocolVersion: typeof TERMINAL_SURFACE_PROTOCOL_VERSION;
       rendererEpoch: string;

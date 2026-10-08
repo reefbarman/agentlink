@@ -521,6 +521,93 @@ function TerminalConfirmation({
   );
 }
 
+function WorkspaceSelection({
+  controller,
+  selection,
+}: {
+  controller: TerminalWebviewController;
+  selection: NonNullable<TerminalWebviewState["workspaceSelection"]>;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (document.hasFocus()) {
+      dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+  }, [selection.request.requestId]);
+
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      controller.cancelWorkspaceSelection();
+      return;
+    }
+    const buttons = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    );
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Tab" && buttons.length > 0) {
+      if (event.shiftKey && index <= 0) {
+        event.preventDefault();
+        buttons[buttons.length - 1].focus();
+      } else if (!event.shiftKey && index === buttons.length - 1) {
+        event.preventDefault();
+        buttons[0].focus();
+      }
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      buttons[(index + step + buttons.length) % buttons.length]?.focus();
+    }
+  };
+
+  return (
+    <div class="terminal-confirmation-backdrop" role="presentation">
+      <section
+        ref={dialogRef}
+        class="terminal-confirmation terminal-workspace-selection"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="terminal-workspace-title"
+        aria-describedby="terminal-workspace-description"
+        onKeyDown={(event) => handleKeyDown(event as unknown as KeyboardEvent)}
+      >
+        <strong id="terminal-workspace-title">New Terminal</strong>
+        <span id="terminal-workspace-description">
+          Choose a project directory to open the terminal in.
+        </span>
+        <div class="terminal-workspace-folders">
+          {selection.folders.map((folder) => (
+            <button
+              key={folder.cwd}
+              type="button"
+              class="terminal-workspace-folder"
+              aria-label={`${folder.name}: ${folder.cwd}`}
+              title={folder.cwd}
+              onClick={() => controller.selectWorkspace(folder.cwd)}
+            >
+              <span class="codicon codicon-folder" aria-hidden="true" />
+              <span class="terminal-workspace-folder-details">
+                <strong>{folder.name}</strong>
+                <span>{folder.cwd}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div class="terminal-confirmation-actions">
+          <button
+            type="button"
+            class="secondary"
+            onClick={() => controller.cancelWorkspaceSelection()}
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function FallbackState({
   controller,
   message,
@@ -658,8 +745,8 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
   }, [controller, providedController]);
 
   useEffect(() => {
-    if (!searchVisible) controller.focusActive();
-  }, [controller, searchVisible, state.focusRequest]);
+    if (!searchVisible && !state.workspaceSelection) controller.focusActive();
+  }, [controller, searchVisible, state.focusRequest, state.workspaceSelection]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -702,6 +789,7 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (state.workspaceSelection) return;
       if (event.key === "Escape" && state.tasksMenu.open) {
         event.preventDefault();
         controller.closeTasksMenu();
@@ -727,7 +815,7 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [controller, state.tasksMenu.open]);
+  }, [controller, state.tasksMenu.open, state.workspaceSelection]);
 
   const effectiveTerminalListWidth = clampTerminalListWidth(
     terminalListWidth,
@@ -958,7 +1046,13 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
               warning={state.replayWarnings[tab.id]}
             />
           ))}
-          {state.confirmation && (
+          {state.workspaceSelection && (
+            <WorkspaceSelection
+              controller={controller}
+              selection={state.workspaceSelection}
+            />
+          )}
+          {state.confirmation && !state.workspaceSelection && (
             <TerminalConfirmation
               controller={controller}
               confirmation={state.confirmation}

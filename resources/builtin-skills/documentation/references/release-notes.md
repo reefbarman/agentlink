@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Multi-project terminal creation now asks for the project directory inside the AgentLink Terminal panel, with project names, full paths, keyboard navigation, and Cancel/Escape, instead of opening VS Code's top-of-window picker.
+
 ## 1.29.1
 
 - Restyled the Desktop title-bar update check as a compact outlined button with a refresh icon and a single-line label, instead of squeezing the text into an icon-only control.

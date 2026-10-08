@@ -8,6 +8,7 @@ import type {
 } from "./vscodeTerminalProfileAdapter.js";
 import type {
   TerminalSurfaceConfiguration,
+  TerminalSurfaceEvent,
   TerminalSurfaceRequest,
 } from "@agentlink/protocol/terminal-surface";
 
@@ -46,7 +47,8 @@ function processEnvironment(): Record<string, string | undefined> {
 export async function resolveVscodeTerminalCreateRequest(
   request: Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>,
 ): Promise<
-  Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }> | undefined
+  | Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>
+  | Extract<TerminalSurfaceEvent, { type: "terminal-view/select-workspace" }>
 > {
   if (request.cwd) return request;
   const folders =
@@ -57,18 +59,14 @@ export async function resolveVscodeTerminalCreateRequest(
   if (folders.length === 1) {
     return { ...request, cwd: folders[0].uri.fsPath };
   }
-  const selected = await vscode.window.showQuickPick(
-    folders.map((folder) => ({
-      label: folder.name,
-      description: folder.uri.fsPath,
-      folder,
+  return {
+    type: "terminal-view/select-workspace",
+    request,
+    folders: folders.map((folder) => ({
+      name: folder.name,
+      cwd: folder.uri.fsPath,
     })),
-    {
-      placeHolder: "Select the workspace folder for the new terminal",
-      title: "New AgentLink Terminal",
-    },
-  );
-  return selected ? { ...request, cwd: selected.folder.uri.fsPath } : undefined;
+  };
 }
 
 export function readVscodeTerminalConfigurationSnapshot(

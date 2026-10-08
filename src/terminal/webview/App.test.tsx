@@ -113,6 +113,110 @@ describe("terminal App", () => {
     );
   });
 
+  it("shows project names and paths in the panel and opens the chosen directory", async () => {
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+    await act(async () => {
+      await test.terminalController.receive({
+        type: "terminal-view/bootstrap",
+        protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
+        rendererEpoch: "renderer-1",
+        state: { tabs: [] },
+        configuration: { scrollback: 1000 },
+        replay: [],
+      });
+      await test.terminalController.receive({
+        type: "terminal-view/select-workspace",
+        request: {
+          type: "host-terminal/create",
+          requestId: "terminal-create-1-request-id",
+        },
+        folders: [
+          { name: "Project A", cwd: "/workspace/a" },
+          { name: "Project B", cwd: "/workspace/b" },
+        ],
+      });
+    });
+    expect(screen.getByRole("dialog", { name: "New Terminal" })).toBeTruthy();
+    expect(screen.getByText("/workspace/a")).toBeTruthy();
+    expect(screen.getByText("/workspace/b")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Project B: /workspace/b" }),
+    );
+    expect(test.postMessage).toHaveBeenLastCalledWith({
+      type: "host-terminal/create",
+      requestId: "terminal-create-1-request-id",
+      cwd: "/workspace/b",
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it.each(["Escape", "Cancel"])(
+    "supports keyboard navigation and dismissing with %s",
+    async (dismiss) => {
+      const test = controller();
+      render(
+        <App
+          vscodeApi={{ postMessage: test.postMessage }}
+          controller={test.terminalController}
+        />,
+      );
+      await act(async () => {
+        await test.terminalController.receive({
+          type: "terminal-view/bootstrap",
+          protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
+          rendererEpoch: "renderer-1",
+          state: { tabs: [] },
+          configuration: { scrollback: 1000 },
+          replay: [],
+        });
+        await test.terminalController.receive({
+          type: "terminal-view/select-workspace",
+          request: {
+            type: "host-terminal/create",
+            requestId: "terminal-create-1-request-id",
+          },
+          folders: [
+            { name: "Project A", cwd: "/workspace/a" },
+            { name: "Project B", cwd: "/workspace/b" },
+          ],
+        });
+      });
+      const first = screen.getByRole("button", {
+        name: "Project A: /workspace/a",
+      });
+      const second = screen.getByRole("button", {
+        name: "Project B: /workspace/b",
+      });
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      first.focus();
+      fireEvent.keyDown(first, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(second);
+      fireEvent.keyDown(second, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(first);
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(cancel);
+      fireEvent.keyDown(cancel, { key: "Tab" });
+      expect(document.activeElement).toBe(first);
+      test.postMessage.mockClear();
+      if (dismiss === "Escape") fireEvent.keyDown(first, { key: "Escape" });
+      else fireEvent.click(cancel);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(test.postMessage).not.toHaveBeenCalled();
+      expect(
+        screen
+          .getAllByRole("button", { name: "New Terminal" })
+          .every((button) => !(button as HTMLButtonElement).disabled),
+      ).toBe(true);
+      expect(screen.queryByRole("alert")).toBeNull();
+    },
+  );
+
   it("renders fallback and forwards the explicit native-terminal action", async () => {
     const test = controller();
     render(

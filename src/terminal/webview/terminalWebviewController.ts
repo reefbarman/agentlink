@@ -117,6 +117,10 @@ export interface TerminalWebviewState {
   fallback?: HostTerminalFallbackState;
   error?: string;
   creating: boolean;
+  workspaceSelection?: Extract<
+    TerminalSurfaceEvent,
+    { type: "terminal-view/select-workspace" }
+  >;
   confirmation?: TerminalConfirmationView;
   blockStates: Readonly<Record<string, TerminalBlockStateView>>;
   rendererErrors: Readonly<Record<string, string>>;
@@ -361,9 +365,35 @@ export class TerminalWebviewController {
     this.requestCounter += 1;
     const requestId = `terminal-create-${this.requestCounter}-${this.createRequestId()}`;
     this.pendingCreateRequestId = requestId;
-    this.patchState({ creating: true, error: undefined });
+    this.patchState({
+      creating: true,
+      error: undefined,
+      workspaceSelection: undefined,
+    });
     this.post({ type: "host-terminal/create", requestId });
     return requestId;
+  }
+
+  selectWorkspace(cwd: string): void {
+    const selection = this.state.workspaceSelection;
+    if (
+      !selection ||
+      selection.request.requestId !== this.pendingCreateRequestId ||
+      !selection.folders.some((folder) => folder.cwd === cwd)
+    )
+      return;
+    this.patchState({ workspaceSelection: undefined });
+    this.post({ ...selection.request, cwd });
+  }
+
+  cancelWorkspaceSelection(): void {
+    if (!this.state.workspaceSelection) return;
+    this.pendingCreateRequestId = undefined;
+    this.patchState({
+      workspaceSelection: undefined,
+      creating: false,
+      focusRequest: this.state.focusRequest + 1,
+    });
   }
 
   selectTerminal(terminalId: string): void {
@@ -541,6 +571,11 @@ export class TerminalWebviewController {
           });
         }
         return;
+      case "terminal-view/select-workspace":
+        if (message.request.requestId === this.pendingCreateRequestId) {
+          this.patchState({ workspaceSelection: message });
+        }
+        return;
       case "terminal-view/confirmation":
         if (
           this.matchingEntry(message.terminalId, message.terminalInstanceId)
@@ -701,7 +736,11 @@ export class TerminalWebviewController {
           return;
         }
         this.pendingCreateRequestId = undefined;
-        this.patchState({ error: message.message, creating: false });
+        this.patchState({
+          error: message.message,
+          creating: false,
+          workspaceSelection: undefined,
+        });
         return;
     }
   }
@@ -1006,7 +1045,7 @@ export class TerminalWebviewController {
     terminalInstanceId: string,
     activate = true,
   ): void {
-    this.pendingCreateRequestId = undefined;
+    if (!this.state.workspaceSelection) this.pendingCreateRequestId = undefined;
     const existing = this.entries.get(tab.id);
     if (existing?.terminalInstanceId !== terminalInstanceId) {
       if (existing) this.disposeEntry(existing);
@@ -1037,7 +1076,7 @@ export class TerminalWebviewController {
           ? this.state.focusRequest + 1
           : this.state.focusRequest,
       fallback: undefined,
-      creating: false,
+      creating: this.state.workspaceSelection !== undefined,
       error: undefined,
     });
   }

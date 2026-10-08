@@ -167,6 +167,84 @@ function mountView(
 beforeEach(() => vi.restoreAllMocks());
 
 describe("TerminalWebviewController", () => {
+  it("continues a pending create with the selected workspace and original profile", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const requestId = test.controller.createTerminal();
+    const selection = {
+      type: "terminal-view/select-workspace" as const,
+      request: {
+        type: "host-terminal/create" as const,
+        requestId,
+        profileName: "zsh",
+      },
+      folders: [{ name: "Project", cwd: "/workspace/project" }],
+    };
+    await test.controller.receive(selection);
+    test.postMessage.mockClear();
+    test.controller.selectWorkspace("/not-offered");
+    expect(test.postMessage).not.toHaveBeenCalled();
+    expect(test.controller.getSnapshot().workspaceSelection).toEqual(selection);
+
+    test.controller.selectWorkspace("/workspace/project");
+    expect(test.postMessage).toHaveBeenCalledExactlyOnceWith({
+      ...selection.request,
+      cwd: "/workspace/project",
+    });
+    expect(test.controller.getSnapshot().workspaceSelection).toBeUndefined();
+    expect(test.controller.getSnapshot().creating).toBe(true);
+    test.controller.selectWorkspace("/workspace/project");
+    expect(test.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels selection without creating a terminal and ignores stale selection events", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap([], []));
+    const selection = {
+      type: "terminal-view/select-workspace" as const,
+      request: {
+        type: "host-terminal/create" as const,
+        requestId: "terminal-create-1-unique-1",
+      },
+      folders: [{ name: "Project", cwd: "/workspace/project" }],
+    };
+    await test.controller.receive(selection);
+    test.postMessage.mockClear();
+    test.controller.cancelWorkspaceSelection();
+    expect(test.postMessage).not.toHaveBeenCalled();
+    expect(test.controller.getSnapshot()).toMatchObject({ creating: false });
+    expect(test.controller.getSnapshot().error).toBeUndefined();
+    expect(test.controller.getSnapshot().workspaceSelection).toBeUndefined();
+    await test.controller.receive(selection);
+    expect(test.controller.getSnapshot().workspaceSelection).toBeUndefined();
+    test.controller.createTerminal();
+    await test.controller.receive(selection);
+    expect(test.controller.getSnapshot().workspaceSelection).toBeUndefined();
+  });
+
+  it("keeps workspace selection pending when an agent opens another terminal", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const requestId = test.controller.createTerminal();
+    await test.controller.receive({
+      type: "terminal-view/select-workspace",
+      request: { type: "host-terminal/create", requestId },
+      folders: [{ name: "Project", cwd: "/workspace/project" }],
+    });
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminal: tab("agent-terminal"),
+      terminalInstanceId: "agent-instance",
+    });
+    expect(test.controller.getSnapshot().creating).toBe(true);
+    test.controller.selectWorkspace("/workspace/project");
+    expect(test.postMessage).toHaveBeenLastCalledWith({
+      type: "host-terminal/create",
+      requestId,
+      cwd: "/workspace/project",
+    });
+  });
+
   it("announces readiness and uses unique IDs for explicit requests", () => {
     const test = harness();
     const listeners = new Map<string, () => void>();

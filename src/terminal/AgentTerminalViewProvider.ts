@@ -9,6 +9,7 @@ import type { HostTerminalDisposable } from "./Phase1HostTerminalCoordinator.js"
 import {
   isTerminalSurfaceRequest,
   type TerminalSurfaceRequest,
+  type TerminalSurfaceEvent,
 } from "@agentlink/protocol/terminal-surface";
 import { randomUUID } from "node:crypto";
 
@@ -20,6 +21,7 @@ export interface AgentTerminalViewProviderOptions {
     request: Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>,
   ): PromiseLike<
     | Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>
+    | Extract<TerminalSurfaceEvent, { type: "terminal-view/select-workspace" }>
     | undefined
   >;
 }
@@ -143,6 +145,10 @@ export class AgentTerminalViewProvider
           requestId: request.requestId,
           message: "Terminal creation was cancelled.",
         });
+        return;
+      }
+      if (resolved.type === "terminal-view/select-workspace") {
+        await connection.postMessage(resolved);
         return;
       }
       await this.options.controller.handleRequest(connection, resolved);

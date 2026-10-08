@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentTerminalViewProvider } from "./AgentTerminalViewProvider.js";
 import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "@agentlink/protocol/terminal-surface";
+import { resolveVscodeTerminalCreateRequest } from "./vscodeTerminalConfiguration.js";
 
 function harness(
   options: {
@@ -297,6 +298,52 @@ describe("AgentTerminalViewProvider", () => {
         },
       );
     });
+  });
+
+  it("routes multi-root selection into the panel and dispatches the selected cwd through production resolution", async () => {
+    const originalFolders = vscode.workspace.workspaceFolders;
+    Object.defineProperty(vscode.workspace, "workspaceFolders", {
+      configurable: true,
+      value: [
+        { name: "Project A", uri: { scheme: "file", fsPath: "/workspace/a" } },
+        { name: "Project B", uri: { scheme: "file", fsPath: "/workspace/b" } },
+      ],
+    });
+    const test = harness({
+      resolveCreateRequest: resolveVscodeTerminalCreateRequest,
+    });
+    try {
+      const request = {
+        type: "host-terminal/create" as const,
+        requestId: "request-1",
+        profileName: "zsh",
+      };
+      test.send(request);
+      await vi.waitFor(() => {
+        expect(test.connection.postMessage).toHaveBeenCalledWith({
+          type: "terminal-view/select-workspace",
+          request,
+          folders: [
+            { name: "Project A", cwd: "/workspace/a" },
+            { name: "Project B", cwd: "/workspace/b" },
+          ],
+        });
+      });
+      expect(test.controller.handleRequest).not.toHaveBeenCalled();
+      test.send({ ...request, cwd: "/workspace/b" });
+      await vi.waitFor(() => {
+        expect(test.controller.handleRequest).toHaveBeenCalledWith(
+          test.connection,
+          { ...request, cwd: "/workspace/b" },
+        );
+      });
+    } finally {
+      test.provider.dispose();
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        configurable: true,
+        value: originalFolders,
+      });
+    }
   });
 
   it("reports cancelled create resolution without dispatching to the controller", async () => {

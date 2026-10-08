@@ -650,6 +650,59 @@ input:focus-visible {
   box-shadow: 0 4px 16px var(--vscode-widget-shadow);
 }
 
+.terminal-workspace-selection {
+  min-height: 0;
+  max-height: 100%;
+}
+
+.terminal-workspace-folders {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.terminal-workspace-folder {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 3px;
+  padding: 8px 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-workspace-folder:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.terminal-workspace-folder .codicon {
+  color: #4ec9b0;
+}
+
+.terminal-workspace-folder-details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.terminal-workspace-folder-details > span {
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+.terminal-workspace-folder-details > strong {
+  overflow-wrap: anywhere;
+}
+
 .terminal-confirmation-actions {
   display: flex;
   justify-content: flex-end;
