@@ -1,0 +1,24 @@
+vitest.config.ts
+  h_e08a86bb3a33a2 17-18
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 5795-5810
+src/testing/vitestSetup.ts
+  h_e08a86bb3a33a2 1-23
+.github/dependabot.yml
+  h_e08a86bb3a33a2 29-32
+package-lock.json
+  h_e08a86bb3a33a2 54,13409-13411
+package.json
+  h_e08a86bb3a33a2 1257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
