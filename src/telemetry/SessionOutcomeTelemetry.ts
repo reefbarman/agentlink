@@ -63,6 +63,11 @@ export interface HarnessEfficiencySnapshot {
   cacheBreakdownInputTokens: number;
   cacheBreakdownReadTokens: number;
   cacheBreakdownCreationTokens: number;
+  /** Completed agent API turns by final provider transport, when reported. */
+  websocketApiTurns: number;
+  httpApiTurns: number;
+  /** Completed agent API turns where WebSocket fell back to HTTP. */
+  transportFallbackApiTurns: number;
   staticFloorSamples: number;
   staticFloorTokenSends: number;
   contextLedgerSamples: number;

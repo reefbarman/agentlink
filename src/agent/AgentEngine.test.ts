@@ -7688,6 +7688,9 @@ describe("AgentEngine", () => {
         type: "warning",
         message: "Using HTTP instead.",
       });
+      expect(events.find((event) => event.type === "api_request")).toEqual(
+        expect.objectContaining({ transportFallback: true }),
+      );
       expect(session.getLastAssistantText()).toBe("Response after fallback");
     });
 

@@ -1656,6 +1656,9 @@ export class AgentEngine {
         let storeResponseState = false;
         let transportMonitor: ProviderStreamActivityMonitor | undefined;
         let requestTransport: "http" | "websocket" | undefined;
+        // Sticky across retries: records that any attempt for this request
+        // abandoned WebSocket for HTTP.
+        let transportFallback = false;
         const pendingRequestAttributionEvents: Array<
           Extract<AgentEvent, { type: "request_context_attribution" }>
         > = [];
@@ -2036,6 +2039,7 @@ export class AgentEngine {
 
               switch (event.type) {
                 case "transport_fallback":
+                  transportFallback = true;
                   yield { type: "warning", message: event.message };
                   break;
                 case "model_fallback":
@@ -2530,6 +2534,7 @@ export class AgentEngine {
           durationMs,
           timeToFirstToken,
           ...(requestTransport ? { transport: requestTransport } : {}),
+          ...(transportFallback ? { transportFallback: true } : {}),
           providerQueueWaitMs,
           usedPreviousResponseId,
           previousResponseIdFallback,

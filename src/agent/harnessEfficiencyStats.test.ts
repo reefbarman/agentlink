@@ -189,6 +189,21 @@ describe("harnessEfficiencyStats", () => {
     expect(snapshotHarnessEfficiencyStats(stats)).not.toBe(stats);
   });
 
+  it("counts completed API turns by provider transport and fallback", () => {
+    const stats = createHarnessEfficiencyStats();
+    applyHarnessEfficiencyEvent(stats, apiRequest({ transport: "websocket" }));
+    applyHarnessEfficiencyEvent(
+      stats,
+      apiRequest({ transport: "http", transportFallback: true }),
+    );
+    applyHarnessEfficiencyEvent(stats, apiRequest());
+
+    expect(stats.completedApiTurns).toBe(3);
+    expect(stats.websocketApiTurns).toBe(1);
+    expect(stats.httpApiTurns).toBe(1);
+    expect(stats.transportFallbackApiTurns).toBe(1);
+  });
+
   it("counts every completed tool result including final status", () => {
     const stats = createHarnessEfficiencyStats();
     for (const toolName of ["read_file", "set_task_status"]) {

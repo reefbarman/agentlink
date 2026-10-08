@@ -747,6 +747,36 @@ test("keeps cache share unavailable when no input partition is reported", () => 
   assert.equal(report.cacheEfficiency.cacheBreakdownCoverage, 0);
 });
 
+test("aggregates provider transport and fallback API turns", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  writeEvents(inputPath, [
+    event({
+      type: "turn_completed",
+      sessionId: "s1",
+      background: false,
+      turnDurationMs: 1,
+      efficiency: efficiency({
+        websocketApiTurns: 3,
+        httpApiTurns: 1,
+        transportFallbackApiTurns: 1,
+      }),
+    }),
+    event({
+      type: "turn_completed",
+      sessionId: "legacy",
+      background: false,
+      turnDurationMs: 1,
+      efficiency: efficiency(),
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.cacheEfficiency.websocketApiTurns, 3);
+  assert.equal(report.cacheEfficiency.httpApiTurns, 1);
+  assert.equal(report.cacheEfficiency.transportFallbackApiTurns, 1);
+});
+
 test("does not count array-shaped efficiency payloads as snapshots", () => {
   const directory = makeTempDirectory();
   const inputPath = path.join(directory, "events.jsonl");

@@ -18,6 +18,9 @@ export function createHarnessEfficiencyStats(): HarnessEfficiencyStats {
     cacheBreakdownInputTokens: 0,
     cacheBreakdownReadTokens: 0,
     cacheBreakdownCreationTokens: 0,
+    websocketApiTurns: 0,
+    httpApiTurns: 0,
+    transportFallbackApiTurns: 0,
     staticFloorSamples: 0,
     staticFloorTokenSends: 0,
     contextLedgerSamples: 0,
@@ -67,6 +70,9 @@ export function applyHarnessEfficiencyEvent(
 
   if (event.type === "api_request") {
     applyCompletedUsage(stats, event);
+    if (event.transport === "websocket") stats.websocketApiTurns += 1;
+    else if (event.transport === "http") stats.httpApiTurns += 1;
+    if (event.transportFallback === true) stats.transportFallbackApiTurns += 1;
     return;
   }
 

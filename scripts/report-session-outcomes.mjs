@@ -514,6 +514,9 @@ function createEfficiencyAggregate() {
     cacheBreakdownInputTokens: 0,
     cacheBreakdownReadTokens: 0,
     cacheBreakdownCreationTokens: 0,
+    websocketApiTurns: 0,
+    httpApiTurns: 0,
+    transportFallbackApiTurns: 0,
     staticFloorSamples: 0,
     staticFloorTokenSends: 0,
     contextLedgerSamples: 0,
@@ -540,6 +543,9 @@ const EFFICIENCY_FIELDS = [
   "cacheBreakdownInputTokens",
   "cacheBreakdownReadTokens",
   "cacheBreakdownCreationTokens",
+  "websocketApiTurns",
+  "httpApiTurns",
+  "transportFallbackApiTurns",
   "staticFloorSamples",
   "staticFloorTokenSends",
   "contextLedgerSamples",
@@ -1400,6 +1406,23 @@ function printSummary(report, inputPath, top) {
           "ordinary / condense attempts",
           `${cache.ordinaryAgentProviderAttempts} / ${cache.condenseProviderAttempts}`,
         ],
+      ],
+    );
+  }
+
+  if (
+    cache.websocketApiTurns > 0 ||
+    cache.httpApiTurns > 0 ||
+    cache.transportFallbackApiTurns > 0
+  ) {
+    console.log("");
+    console.log("Provider transport (completed API turns reporting transport)");
+    printTable(
+      ["metric", "value"],
+      [
+        ["websocket turns", cache.websocketApiTurns],
+        ["http turns", cache.httpApiTurns],
+        ["websocket -> http fallbacks", cache.transportFallbackApiTurns],
       ],
     );
   }
