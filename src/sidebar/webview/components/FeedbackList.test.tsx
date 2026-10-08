@@ -93,6 +93,32 @@ describe("FeedbackList", () => {
     expect(screen.queryByText("Unrelated feedback")).toBeNull();
   });
 
+  it("labels preview entries without loading the full report", () => {
+    render(
+      <FeedbackList
+        entries={[
+          feedbackEntry({
+            id: "preview-id",
+            content_status: "preview",
+            content_capture: {
+              version: 1,
+              storage: "overflow",
+              bytes: 9000,
+              sha256: "a".repeat(64),
+              truncated_fields: ["feedback", "suggested_change"],
+            },
+          }),
+          feedbackEntry({ id: "complete-id", content_status: "complete" }),
+        ]}
+        postCommand={vi.fn() as PostCommand}
+      />,
+    );
+    const notices = screen.getAllByText(/Preview only/);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.textContent).toContain("feedback, suggested_change");
+    expect(notices[0]?.textContent).toContain("preview-id");
+  });
+
   it("does not fabricate categories or context for historical reports", () => {
     render(
       <FeedbackList

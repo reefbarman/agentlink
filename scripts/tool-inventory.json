@@ -297,7 +297,14 @@
     },
     {
       "name": "get_feedback",
-      "parameters": ["priorities", "tool_name", "triaged"],
+      "parameters": [
+        "id",
+        "limit",
+        "offset",
+        "priorities",
+        "tool_name",
+        "triaged"
+      ],
       "cluster": "dev",
       "sideEffect": "read",
       "devOnly": true,
@@ -858,5 +865,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "65e7a6cab200b754fff0a4cd0480605e6cf85e28609a453d413e1914322d5d44"
+  "revision": "37bf47ce861f2de159b468f8476394971967e2982f42ba27d2e0234a62e4ae00"
 }

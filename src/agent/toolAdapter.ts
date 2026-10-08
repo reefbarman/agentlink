@@ -5655,12 +5655,23 @@ async function dispatchToolCallWithTrackedApprovals(
         }
         priorities = params.priorities;
       }
+      for (const key of ["offset", "limit"] as const) {
+        if (params[key] !== undefined && typeof params[key] !== "number") {
+          return errorResult(`get_feedback ${key} must be an integer`);
+        }
+      }
+      if (params.id !== undefined && typeof params.id !== "string") {
+        return errorResult("get_feedback id must be a string");
+      }
       return handleGetFeedback({
         tool_name:
           params.tool_name !== undefined ? String(params.tool_name) : undefined,
         triaged:
           typeof params.triaged === "boolean" ? params.triaged : undefined,
         priorities,
+        id: params.id as string | undefined,
+        offset: params.offset as number | undefined,
+        limit: params.limit as number | undefined,
       });
     }
 

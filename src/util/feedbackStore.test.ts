@@ -2,15 +2,22 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  FeedbackLookupError,
+  FeedbackRecordError,
+  MAX_FEEDBACK_RECORD_BYTES,
   appendFeedback,
   deleteFeedback,
   readFeedback,
+  readFeedbackContent,
   triageFeedback,
 } from "./feedbackStore.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FeedbackEntry } from "./feedbackStore.js";
+import { buildSync } from "esbuild";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 
 let tmpHome: string;
 let feedbackPath: string;
@@ -426,6 +433,407 @@ describe("feedbackStore", () => {
     expect(() => deleteFeedback({ ids: [] })).toThrow(/non-empty array/);
     expect(() => deleteFeedback({ ids: [" "] })).toThrow(/non-empty strings/);
     expect(() => deleteFeedback({ indices: [] })).toThrow(/non-empty array/);
+  });
+
+  describe("complete content preservation", () => {
+    const longReport = () =>
+      makeEntry({
+        feedback:
+          'Long report 🌊 with "quotes"\nand newlines. '.repeat(120) +
+          "TAIL-CONSTRAINT Supersedes: id-one; id-two",
+        suspected_cause: "Hypothesis ".repeat(200) + "CAUSE-TAIL",
+        suggested_change: "Proposal ".repeat(200) + "CHANGE-TAIL",
+        observed_impact: "Impact ".repeat(150) + "IMPACT-TAIL",
+        workaround: "Workaround",
+        tool_params: JSON.stringify({ path: "x".repeat(900) }) + "PARAMS-TAIL",
+        tool_result_summary: "🌊".repeat(700) + "RESULT-TAIL",
+        category: "bug",
+        session_id: "session-x",
+        workspace: "project-x",
+      });
+
+    function contentDirectory() {
+      return path.join(tmpHome, ".agentlink", "agentlink-feedback-content");
+    }
+
+    function overflowPath(id: string) {
+      return path.join(
+        contentDirectory(),
+        `${createHash("sha256").update(id).digest("hex")}.json`,
+      );
+    }
+
+    it("keeps a bounded preview and returns the exact full record", () => {
+      const submitted = longReport();
+      const appended = appendFeedback(submitted);
+      const [line] = fs.readFileSync(feedbackPath, "utf-8").split("\n");
+
+      expect(Buffer.byteLength(`${line}\n`, "utf-8")).toBeLessThanOrEqual(4000);
+      expect(appended.content_status).toBe("preview");
+      expect(appended.content_capture).toMatchObject({
+        version: 1,
+        storage: "overflow",
+        truncated_fields: expect.arrayContaining([
+          "feedback",
+          "suspected_cause",
+          "suggested_change",
+        ]),
+      });
+      expect(fs.statSync(overflowPath(appended.id)).mode & 0o777).toBe(0o600);
+
+      const full = readFeedbackContent(appended.id);
+      expect(full.content_status).toBe("complete");
+      expect(full.content).toEqual({ ...submitted, id: appended.id });
+      expect(full.content.feedback).toContain(
+        "TAIL-CONSTRAINT Supersedes: id-one; id-two",
+      );
+      expect(full.sha256).toBe(appended.content_capture?.sha256);
+      expect(readFeedback()[0]).toMatchObject({
+        id: appended.id,
+        content_status: "preview",
+      });
+    });
+
+    it("stores small reports inline without an overflow file", () => {
+      const submitted = makeEntry({ observed_impact: "small" });
+      const appended = appendFeedback(submitted);
+
+      expect(appended.content_status).toBe("complete");
+      expect(appended.content_capture).toMatchObject({
+        storage: "inline",
+        truncated_fields: [],
+      });
+      expect(fs.existsSync(contentDirectory())).toBe(false);
+      expect(readFeedbackContent(appended.id).content).toEqual({
+        ...submitted,
+        id: appended.id,
+      });
+    });
+
+    it("overflows a single field above its preview cap even when the line is small", () => {
+      const appended = appendFeedback(
+        makeEntry({ workaround: "w".repeat(600) }),
+      );
+      expect(appended.content_capture?.truncated_fields).toEqual([
+        "workaround",
+      ]);
+      expect(readFeedbackContent(appended.id).content.workaround).toBe(
+        "w".repeat(600),
+      );
+    });
+
+    it("rejects records above the ceiling before writing anything", () => {
+      let caught: unknown;
+      try {
+        appendFeedback(
+          makeEntry({
+            tool_result_summary: "r".repeat(MAX_FEEDBACK_RECORD_BYTES),
+          }),
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(FeedbackRecordError);
+      expect((caught as FeedbackRecordError).code).toBe("feedback_too_large");
+      expect((caught as FeedbackRecordError).details).toMatchObject({
+        max_bytes: MAX_FEEDBACK_RECORD_BYTES,
+        field_bytes: { tool_result_summary: MAX_FEEDBACK_RECORD_BYTES },
+      });
+      expect(fs.existsSync(feedbackPath)).toBe(false);
+      expect(fs.existsSync(contentDirectory())).toBe(false);
+    });
+
+    it("rejects oversized identity metadata instead of looping or altering it", () => {
+      expect(() =>
+        appendFeedback(makeEntry({ tool_name: "t".repeat(5000) })),
+      ).toThrow(
+        expect.objectContaining({ code: "feedback_metadata_too_large" }),
+      );
+      expect(fs.existsSync(feedbackPath)).toBe(false);
+    });
+
+    it("keeps every new line valid for the old parser with unchanged indices", () => {
+      fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+      fs.writeFileSync(
+        feedbackPath,
+        `${JSON.stringify(makeEntry({ feedback: "legacy" }))}\n`,
+        "utf-8",
+      );
+      appendFeedback(longReport());
+      appendFeedback(makeEntry({ feedback: "🌊".repeat(5000) }));
+      appendFeedback(makeEntry());
+
+      // Mirrors the pre-capture reader's validity predicate and index derivation.
+      const oldIndices = fs
+        .readFileSync(feedbackPath, "utf-8")
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line))
+        .filter(
+          (entry) =>
+            typeof entry.timestamp === "string" &&
+            typeof entry.tool_name === "string" &&
+            typeof entry.feedback === "string" &&
+            typeof entry.extension_version === "string",
+        )
+        .map((_entry, index) => index);
+      expect(oldIndices).toEqual(
+        readFeedback().map((entry) => entry.global_index),
+      );
+      expect(readFeedback().map((entry) => entry.content_status)).toEqual([
+        "legacy_unverified",
+        "preview",
+        "preview",
+        "complete",
+      ]);
+    });
+
+    it("labels legacy, unsupported and malformed capture without claiming completeness", () => {
+      fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+      const base = makeEntry({ feedback: "retained" });
+      const lines = [
+        { ...base, id: "legacy-entry" },
+        {
+          ...base,
+          id: "future-entry",
+          content_capture: { version: 2, storage: "elsewhere" },
+        },
+        {
+          ...base,
+          id: "broken-entry",
+          content_capture: { version: 1, storage: "overflow" },
+        },
+      ];
+      fs.writeFileSync(
+        feedbackPath,
+        lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+        "utf-8",
+      );
+
+      expect(readFeedbackContent("legacy-entry")).toMatchObject({
+        content_status: "legacy_unverified",
+        content: { feedback: "retained" },
+      });
+      expect(readFeedbackContent("future-entry").content_status).toBe(
+        "unsupported_capture",
+      );
+      expect(() => readFeedbackContent("broken-entry")).toThrow(
+        expect.objectContaining({ code: "invalid_capture" }),
+      );
+    });
+
+    it("keeps unknown retained fields for legacy and newer-capture records", () => {
+      fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+      const base = makeEntry({ feedback: "retained" });
+      const lines = [
+        { ...base, id: "legacy-extra", future_field: { nested: 1 } },
+        {
+          ...base,
+          id: "future-extra",
+          content_capture: { version: 2 },
+          future_field: "FUTURE-VALUE",
+        },
+      ];
+      fs.writeFileSync(
+        feedbackPath,
+        lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+        "utf-8",
+      );
+
+      const legacy = readFeedbackContent("legacy-extra");
+      expect(legacy.content).toMatchObject({ future_field: { nested: 1 } });
+      expect(legacy.content).not.toHaveProperty("global_index");
+      const future = readFeedbackContent("future-extra");
+      expect(future.content).toMatchObject({ future_field: "FUTURE-VALUE" });
+      expect(future.content).not.toHaveProperty("content_capture");
+      expect(future.content).not.toHaveProperty("triaged");
+    });
+
+    it("does not label a tampered inline line complete in list projections", () => {
+      const appended = appendFeedback(makeEntry({ feedback: "original" }));
+      const raw = fs.readFileSync(feedbackPath, "utf-8");
+      fs.writeFileSync(feedbackPath, raw.replace("original", "tampered"));
+
+      expect(readFeedback()[0]).toMatchObject({
+        id: appended.id,
+        content_status: "invalid_capture",
+      });
+      expect(() => readFeedbackContent(appended.id)).toThrow(
+        expect.objectContaining({ code: "invalid_capture" }),
+      );
+    });
+
+    it("refuses a symlinked content directory for writes and reads", () => {
+      const appended = appendFeedback(longReport());
+      const elsewhere = path.join(tmpHome, "elsewhere-content");
+      fs.renameSync(contentDirectory(), elsewhere);
+      fs.symlinkSync(elsewhere, contentDirectory());
+
+      expect(() => readFeedbackContent(appended.id)).toThrow(
+        expect.objectContaining({ code: "content_unavailable" }),
+      );
+      const before = fs.readFileSync(feedbackPath, "utf-8");
+      expect(() => appendFeedback(longReport())).toThrow(
+        expect.objectContaining({ code: "feedback_storage_failed" }),
+      );
+      expect(fs.readFileSync(feedbackPath, "utf-8")).toBe(before);
+    });
+
+    it("rejects an overflow file that grew beyond its recorded size", () => {
+      const appended = appendFeedback(longReport());
+      const target = overflowPath(appended.id);
+      fs.chmodSync(target, 0o600);
+      fs.appendFileSync(target, " ".repeat(64), "utf-8");
+      expect(() => readFeedbackContent(appended.id)).toThrow(
+        expect.objectContaining({ code: "content_unavailable" }),
+      );
+    });
+
+    it.each(["missing", "corrupted", "symlink"] as const)(
+      "reports %s overflow content as unavailable, never as complete",
+      (fault) => {
+        const appended = appendFeedback(longReport());
+        const target = overflowPath(appended.id);
+        if (fault === "missing") fs.rmSync(target);
+        if (fault === "corrupted") {
+          const raw = fs.readFileSync(target, "utf-8");
+          fs.chmodSync(target, 0o600);
+          fs.writeFileSync(target, raw.replace("TAIL", "FAKE"), "utf-8");
+        }
+        if (fault === "symlink") {
+          const elsewhere = path.join(tmpHome, "elsewhere.json");
+          fs.copyFileSync(target, elsewhere);
+          fs.rmSync(target);
+          fs.symlinkSync(elsewhere, target);
+        }
+        let caught: unknown;
+        try {
+          readFeedbackContent(appended.id);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(FeedbackLookupError);
+        expect(caught).toMatchObject({
+          code: "content_unavailable",
+          record: { id: appended.id, content_status: "preview" },
+        });
+      },
+    );
+
+    it("rejects unknown, hidden and duplicate IDs explicitly", () => {
+      const hidden = appendFeedback(makeEntry());
+      deleteFeedback({ ids: [hidden.id] });
+      expect(() => readFeedbackContent(hidden.id)).toThrow(
+        expect.objectContaining({ code: "not_found" }),
+      );
+      expect(() => readFeedbackContent("missing")).toThrow(
+        expect.objectContaining({ code: "not_found" }),
+      );
+      const line = JSON.stringify({ ...makeEntry(), id: "duplicate-id" });
+      fs.appendFileSync(feedbackPath, `${line}\n${line}\n`, "utf-8");
+      expect(() => readFeedbackContent("duplicate-id")).toThrow(
+        expect.objectContaining({ code: "ambiguous_record" }),
+      );
+    });
+
+    it("does not publish an index entry when overflow storage fails", () => {
+      fs.mkdirSync(path.dirname(contentDirectory()), { recursive: true });
+      fs.writeFileSync(contentDirectory(), "not a directory", "utf-8");
+      expect(() => appendFeedback(longReport())).toThrow(
+        expect.objectContaining({ code: "feedback_storage_failed" }),
+      );
+      expect(fs.existsSync(feedbackPath)).toBe(false);
+    });
+
+    it("reports an unknown recording state with the ID when the append fails", () => {
+      fs.mkdirSync(feedbackPath, { recursive: true });
+      let caught: unknown;
+      try {
+        appendFeedback(makeEntry());
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({
+        code: "feedback_recording_unknown",
+        details: { id: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+      });
+    });
+
+    it("preserves full content and stable indices across triage and deletion", () => {
+      const first = appendFeedback(longReport());
+      const second = appendFeedback(longReport());
+      triageFeedback({ ids: [first.id], triaged: true, priority: "P2" });
+      const triaged = readFeedbackContent(first.id);
+      expect(triaged.record.priority).toBe("P2");
+      expect(triaged.sha256).toBe(first.content_capture?.sha256);
+      deleteFeedback({ ids: [first.id] });
+      expect(fs.existsSync(overflowPath(first.id))).toBe(true);
+      expect(readFeedback()).toEqual([
+        expect.objectContaining({ id: second.id, global_index: 1 }),
+      ]);
+    });
+
+    it("keeps independent complete records from concurrent writer processes", async () => {
+      const bundle = path.join(tmpHome, "feedbackStore.cjs");
+      buildSync({
+        entryPoints: [path.join(__dirname, "feedbackStore.ts")],
+        bundle: true,
+        platform: "node",
+        format: "cjs",
+        outfile: bundle,
+        logLevel: "silent",
+      });
+      const writers = 4;
+      const perWriter = 5;
+      const script = `
+        const store = require(${JSON.stringify(bundle)});
+        const writer = process.argv[1];
+        for (let i = 0; i < ${perWriter}; i++) {
+          store.appendFeedback({
+            timestamp: new Date().toISOString(),
+            tool_name: "parallel",
+            feedback: "writer " + writer + " report " + i + " ".repeat(3000) + "END",
+            suggested_change: "x".repeat(900) + writer,
+            extension_version: "0.0.1",
+          });
+        }`;
+      await Promise.all(
+        Array.from(
+          { length: writers },
+          (_, writer) =>
+            new Promise<void>((resolve, reject) => {
+              const child = spawn(
+                process.execPath,
+                ["-e", script, String(writer)],
+                {
+                  env: { ...process.env, HOME: tmpHome, USERPROFILE: tmpHome },
+                  stdio: ["ignore", "ignore", "pipe"],
+                },
+              );
+              let stderr = "";
+              child.stderr.on("data", (chunk) => (stderr += chunk));
+              child.on("error", reject);
+              child.on("exit", (code) =>
+                code === 0 ? resolve() : reject(new Error(stderr)),
+              );
+            }),
+        ),
+      );
+
+      const entries = readFeedback();
+      expect(entries).toHaveLength(writers * perWriter);
+      expect(new Set(entries.map((entry) => entry.id)).size).toBe(
+        writers * perWriter,
+      );
+      expect(entries.map((entry) => entry.global_index)).toEqual(
+        entries.map((_entry, index) => index),
+      );
+      for (const entry of entries) {
+        const full = readFeedbackContent(entry.id);
+        expect(full.content.feedback).toMatch(/END$/);
+        expect(full.content.suggested_change).toHaveLength(901);
+      }
+    });
   });
 
   it("skips malformed primary and tombstone lines", () => {

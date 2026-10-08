@@ -24,6 +24,7 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
    - Record counts by current priority and category and identify untriaged records. Older entries may omit `category`; evaluate their contents without inventing stored metadata.
    - Read `observed_impact`, reproduction inputs/results, workaround, recurrence, `suspected_cause`, `suggested_change`, and `improvement_signal` separately. Missing optional context is not zero impact, and a bug report is valuable without a proposed solution.
    - Use stable `id` values for every subsequent triage or deletion; never use filtered-list positions as indices.
+   - Entries with `content_status: "preview"` are shortened. Before judging, consolidating or hiding one, read the complete report with `get_feedback` using only its `id` (follow `next_request` for paged results). Treat `legacy_unverified` entries as possibly incomplete.
 
 2. **Coarse-prune and cluster before deep investigation**
    - Make a fast first pass over the whole queue before reading implementation details entry by entry.

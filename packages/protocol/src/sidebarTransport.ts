@@ -94,6 +94,19 @@ export interface FeedbackEntry {
   triaged: boolean;
   priority?: FeedbackPriority;
   triaged_at?: string;
+  content_capture?: {
+    version: number;
+    storage: "inline" | "overflow";
+    bytes: number;
+    sha256: string;
+    truncated_fields: string[];
+  };
+  content_status?:
+    | "complete"
+    | "preview"
+    | "legacy_unverified"
+    | "unsupported_capture"
+    | "invalid_capture";
 }
 
 export type ExtensionMessage =

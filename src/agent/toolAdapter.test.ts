@@ -1724,6 +1724,10 @@ describe("getAgentTools", () => {
       expect(getFeedback?.description).toContain("stable ID");
       expect(getFeedback?.input_schema.properties).toHaveProperty("triaged");
       expect(getFeedback?.input_schema.properties).toHaveProperty("priorities");
+      for (const property of ["id", "offset", "limit"]) {
+        expect(getFeedback?.input_schema.properties).toHaveProperty(property);
+      }
+      expect(feedbackSchema?.description).toContain("128 KiB");
       expect(triageFeedback?.description).toContain("P0-P3 priority");
       expect(triageFeedback?.input_schema.required).toEqual(
         expect.arrayContaining(["ids", "triaged"]),
@@ -3769,6 +3773,22 @@ describe("dispatchToolCall", () => {
       tool_name: "execute_command",
       triaged: true,
       priorities: ["P0", "P2"],
+    });
+  });
+
+  it("forwards complete feedback retrieval requests", async () => {
+    feedbackToolMocks.handleGetFeedback.mockClear();
+
+    await dispatchToolCall(
+      "get_feedback",
+      { id: "feedback-id", offset: 4000, limit: 2000 },
+      mockCtx,
+    );
+
+    expect(feedbackToolMocks.handleGetFeedback).toHaveBeenCalledWith({
+      id: "feedback-id",
+      offset: 4000,
+      limit: 2000,
     });
   });
 

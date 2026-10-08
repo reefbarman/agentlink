@@ -6,11 +6,17 @@ import { handleTriageFeedback } from "./triageFeedback.js";
 
 const mocks = vi.hoisted(() => ({
   readFeedback: vi.fn(),
+  readFeedbackContent: vi.fn(),
   deleteFeedback: vi.fn(),
   triageFeedback: vi.fn(),
 }));
 
-vi.mock("../util/feedbackStore.js", () => mocks);
+vi.mock("../util/feedbackStore.js", async (importOriginal) => ({
+  ...mocks,
+  FeedbackLookupError: (
+    await importOriginal<typeof import("../util/feedbackStore.js")>()
+  ).FeedbackLookupError,
+}));
 
 function payload(result: Awaited<ReturnType<typeof handleGetFeedback>>) {
   const text = result.content.find((item) => item.type === "text")?.text;
@@ -53,6 +59,31 @@ describe("feedback tools", () => {
       entries: [
         expect.objectContaining({ id: "feedback-id", global_index: 7 }),
       ],
+    });
+  });
+
+  it("labels unavailable full content as a partial preview", async () => {
+    const { FeedbackLookupError } = await import("../util/feedbackStore.js");
+    const preview = {
+      id: "preview-id",
+      global_index: 2,
+      feedback: "clipped…(truncated)",
+      content_status: "preview",
+    };
+    mocks.readFeedbackContent.mockImplementation(() => {
+      throw new FeedbackLookupError(
+        "content_unavailable",
+        "Full feedback content is unavailable",
+        preview as never,
+      );
+    });
+
+    expect(payload(await handleGetFeedback({ id: "preview-id" }))).toEqual({
+      status: "error",
+      code: "content_unavailable",
+      error: "Full feedback content is unavailable",
+      partial: true,
+      partial_preview: preview,
     });
   });
 

@@ -505,6 +505,14 @@ h3 {
   margin-bottom: 4px;
   word-break: break-word;
 }
+.feedback-preview-notice {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  border-left: 2px solid var(--vscode-editorWarning-foreground);
+  padding-left: 6px;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
 .feedback-details {
   font-size: 11px;
   color: var(--vscode-descriptionForeground);

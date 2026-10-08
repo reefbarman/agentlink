@@ -321,7 +321,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Read tool feedback",
     devOnly: true,
     description:
-      "Read active AgentLink bug reports, improvement opportunities, and feature requests. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion. Entries include category, suspected_cause, suggested_change, observed_impact, workaround, observed_recurrence, and improvement_signal when recorded; older records may omit them. Validate observed evidence separately from diagnoses and proposals; reporter claims are not established causes, assigned priority, or measured product-wide benefit.",
+      'Read active AgentLink bug reports, improvement opportunities, and feature requests. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion. Entries include category, suspected_cause, suggested_change, observed_impact, workaround, observed_recurrence, and improvement_signal when recorded; older records may omit them. List entries can be previews: content_status "preview" means fields were shortened or omitted, and "legacy_unverified" means completeness is unknown. Pass id alone to read one complete report, paging with offset/limit when instructed. Validate observed evidence separately from diagnoses and proposals; reporter claims are not established causes, assigned priority, or measured product-wide benefit.',
   },
   triage_feedback: {
     label: "Triage feedback entries",

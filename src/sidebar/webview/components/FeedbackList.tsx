@@ -167,6 +167,20 @@ export function FeedbackList({ entries, postCommand }: Props) {
         </span>
       </div>
       <div class="feedback-text">{entry.feedback}</div>
+      {entry.content_status === "preview" && (
+        <div class="feedback-preview-notice">
+          Preview only: shortened or omitted{" "}
+          {entry.content_capture?.truncated_fields.join(", ") ?? "fields"}. The
+          full report is preserved; read it with get_feedback id{" "}
+          <code>{entry.id}</code>.
+        </div>
+      )}
+      {(entry.content_status === "unsupported_capture" ||
+        entry.content_status === "invalid_capture") && (
+        <div class="feedback-preview-notice">
+          Completeness of this report could not be verified.
+        </div>
+      )}
       {CONTEXT_FIELDS.map(([field, label]) =>
         entry[field] ? (
           <details key={field} class="feedback-details">

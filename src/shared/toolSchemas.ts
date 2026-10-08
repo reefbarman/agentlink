@@ -72,7 +72,7 @@ export const sendFeedbackSchema = {
     .trim()
     .min(1, "feedback must not be empty")
     .describe(
-      "Concrete, actionable AgentLink bug, improvement opportunity, or feature request grounded in actual use. Preserve reproduction evidence for bugs. Successful tasks can reveal improvements too; do not submit routine success, praise, generic wishlists, or third-party MCP-server defects.",
+      "Concrete, actionable AgentLink bug, improvement opportunity, or feature request grounded in actual use. Preserve reproduction evidence for bugs. Successful tasks can reveal improvements too; do not submit routine success, praise, generic wishlists, or third-party MCP-server defects. The complete report (all fields) is preserved up to 128 KiB of UTF-8; larger reports are rejected unrecorded with per-field sizes.",
     ),
   category: z
     .enum(["bug", "improvement", "feature_request"])
@@ -151,6 +151,30 @@ export const getFeedbackSchema = {
     .optional()
     .describe(
       "Filter to one or more priorities. Untriaged feedback has no priority and is excluded when this filter is present.",
+    ),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Stable ID of one active report to read in full. Cannot be combined with tool_name, triaged or priorities. Small reports return a parsed entry; larger ones return pages of record_json.",
+    ),
+  offset: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "Requires id. UTF-16 character offset into record_json; use next_offset from the previous page.",
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(8000)
+    .optional()
+    .describe(
+      "Requires id. Maximum UTF-16 characters per page (default 4000, max 8000); pages may be shorter to stay within the response bound.",
     ),
 };
 

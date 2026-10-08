@@ -19,9 +19,17 @@ vi.mock("vscode", () => ({
   },
 }));
 
-vi.mock("../util/feedbackStore.js", () => ({
+vi.mock("../util/feedbackStore.js", async (importOriginal) => ({
+  FeedbackRecordError: (
+    await importOriginal<typeof import("../util/feedbackStore.js")>()
+  ).FeedbackRecordError,
   appendFeedback: mocks.appendFeedback,
 }));
+
+function payload(result: Awaited<ReturnType<typeof handleSendFeedback>>) {
+  const item = result.content[0];
+  return JSON.parse(item?.type === "text" ? item.text : "{}");
+}
 
 describe("handleSendFeedback", () => {
   beforeEach(() => {
@@ -29,6 +37,84 @@ describe("handleSendFeedback", () => {
     mocks.appendFeedback.mockReturnValue({
       id: "feedback-id",
       global_index: 7,
+      content_capture: {
+        version: 1,
+        storage: "inline",
+        bytes: 120,
+        sha256: "a".repeat(64),
+        truncated_fields: [],
+      },
+    });
+  });
+
+  it("maps size, storage and unknown-state failures without claiming success", async () => {
+    const { FeedbackRecordError } = await import("../util/feedbackStore.js");
+    const input = {
+      tool_name: "read_file",
+      feedback: "Unexpected result",
+      observed_impact: "Extra read",
+    };
+    mocks.appendFeedback.mockImplementationOnce(() => {
+      throw new FeedbackRecordError("feedback_too_large", "too large", {
+        actual_bytes: 200_000,
+        max_bytes: 131_072,
+        field_bytes: { tool_params: 199_000 },
+      });
+    });
+    expect(payload(await handleSendFeedback(input, "s"))).toMatchObject({
+      status: "rejected",
+      code: "feedback_too_large",
+      recorded: false,
+      field_bytes: { tool_params: 199_000 },
+    });
+    mocks.appendFeedback.mockImplementationOnce(() => {
+      throw new FeedbackRecordError("feedback_storage_failed", "no disk");
+    });
+    expect(payload(await handleSendFeedback(input, "s"))).toMatchObject({
+      status: "error",
+      recorded: false,
+    });
+    mocks.appendFeedback.mockImplementationOnce(() => {
+      throw new FeedbackRecordError("feedback_recording_unknown", "unknown", {
+        id: "maybe-id",
+      });
+    });
+    const unknown = payload(await handleSendFeedback(input, "s"));
+    expect(unknown).toMatchObject({
+      status: "unknown",
+      recording_state: "unknown",
+      id: "maybe-id",
+    });
+    expect(unknown.guidance).toContain("Do not resubmit automatically");
+    expect(unknown.guidance).toContain("coordinator or user");
+  });
+
+  it("reports shortened preview fields in the acknowledgement", async () => {
+    mocks.appendFeedback.mockReturnValueOnce({
+      id: "long-id",
+      global_index: 3,
+      content_capture: {
+        version: 1,
+        storage: "overflow",
+        bytes: 9000,
+        sha256: "b".repeat(64),
+        truncated_fields: ["feedback", "tool_params"],
+      },
+    });
+    expect(
+      payload(
+        await handleSendFeedback(
+          { tool_name: "agentlink", feedback: "long", observed_impact: "x" },
+          "s",
+        ),
+      ),
+    ).toMatchObject({
+      status: "recorded",
+      content_preserved: true,
+      content_bytes: 9000,
+      preview_truncated: true,
+      truncated_fields: ["feedback", "tool_params"],
+      full_record: { tool: "get_feedback", input: { id: "long-id" } },
     });
   });
 
@@ -181,14 +267,14 @@ describe("handleSendFeedback", () => {
         extension_version: "1.2.3",
       }),
     );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: JSON.stringify({
-        status: "recorded",
-        id: "feedback-id",
-        global_index: 7,
-        tool_name: "read_file",
-      }),
+    expect(payload(result)).toMatchObject({
+      status: "recorded",
+      id: "feedback-id",
+      global_index: 7,
+      tool_name: "read_file",
+      content_preserved: true,
+      preview_truncated: false,
+      truncated_fields: [],
     });
   });
 
@@ -208,14 +294,11 @@ describe("handleSendFeedback", () => {
         workspace: undefined,
       }),
     );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: JSON.stringify({
-        status: "recorded",
-        id: "feedback-id",
-        global_index: 7,
-        tool_name: "search_files",
-      }),
+    expect(payload(result)).toMatchObject({
+      status: "recorded",
+      id: "feedback-id",
+      global_index: 7,
+      tool_name: "search_files",
     });
   });
 });

@@ -3,8 +3,44 @@ import * as vscode from "vscode";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import {
   appendFeedback,
+  FeedbackRecordError,
   type FeedbackCategory,
 } from "../util/feedbackStore.js";
+
+function textResult(value: unknown): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+function recordErrorResult(error: FeedbackRecordError): ToolResult {
+  switch (error.code) {
+    case "feedback_too_large":
+    case "feedback_metadata_too_large":
+      return textResult({
+        status: "rejected",
+        code: error.code,
+        recorded: false,
+        error: error.message,
+        ...error.details,
+      });
+    case "feedback_storage_failed":
+      return textResult({
+        status: "error",
+        code: error.code,
+        recorded: false,
+        error: error.message,
+      });
+    case "feedback_recording_unknown":
+      return textResult({
+        status: "unknown",
+        code: error.code,
+        recording_state: "unknown",
+        id: error.details.id,
+        error: error.message,
+        guidance:
+          "Do not resubmit automatically. If get_feedback is available in this session, look up this id first. Otherwise give the id and this uncertainty to your coordinator or user.",
+      });
+  }
+}
 
 export async function handleSendFeedback(
   params: {
@@ -96,20 +132,25 @@ export async function handleSendFeedback(
       tool_result_summary: params.tool_result_summary,
     });
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            status: "recorded",
-            id: recorded.id,
-            global_index: recorded.global_index,
-            tool_name: params.tool_name,
-          }),
-        },
-      ],
-    };
+    const capture = recorded.content_capture;
+    return textResult({
+      status: "recorded",
+      id: recorded.id,
+      global_index: recorded.global_index,
+      tool_name: params.tool_name,
+      content_preserved: true,
+      content_bytes: capture?.bytes,
+      content_sha256: capture?.sha256,
+      preview_truncated: (capture?.truncated_fields.length ?? 0) > 0,
+      truncated_fields: capture?.truncated_fields ?? [],
+      full_record: {
+        tool: "get_feedback",
+        input: { id: recorded.id },
+        note: "If get_feedback is available in this session, this request returns the complete report. Otherwise give the id to your coordinator or user; do not resubmit.",
+      },
+    });
   } catch (err) {
+    if (err instanceof FeedbackRecordError) return recordErrorResult(err);
     return {
       content: [
         {

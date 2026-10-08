@@ -2270,7 +2270,7 @@ Report bugs and suggest fixes, improvements, or new capabilities naturally durin
 
 New reports require `observed_impact`: describe an observed task consequence or unmet need, not hypothetical impact. Optional text fields are trimmed and omitted when blank; invalid categories are rejected. Do not invent priority, engineering effort, time/token savings, or frequency across users. For example, "Missing recovery guidance caused three failed retries and required user intervention" and "Task succeeded after manually comparing two session histories" are useful evidence; "high impact" is not. Keep observations, suspected causes, and proposed changes separate.
 
-The response identifies the recorded entry by stable `id` and immutable `global_index`. Optional context/proposal text uses the existing 500-character truncation limit; the complete stored record remains bounded to 4,000 UTF-8 bytes. Hypothesis and proposal text is shortened or omitted before existing bug evidence is shortened to fit the byte limit.
+The response identifies the recorded entry by stable `id` and immutable `global_index`, and confirms `content_preserved: true` with `content_bytes`, `content_sha256`, `preview_truncated`, `truncated_fields`, and a `full_record` `get_feedback` request (usable when that tool is available; otherwise hand the ID to the coordinator or user). Every field of a report up to 128 KiB of UTF-8 is preserved. The shared queue line stays bounded to 4,000 UTF-8 bytes as a preview: feedback is capped at 2,000 characters and other text at 500, and hypothesis/proposal text gives way before bug evidence. When the preview shortens or omits anything, the complete record is first written to an immutable per-report file under `~/.agentlink/agentlink-feedback-content/`, then the preview line is appended. Larger reports are rejected unrecorded (`feedback_too_large`) with per-field byte sizes. A `status: "unknown"` result means the write could not be confirmed: look the ID up before resubmitting, never resubmit automatically. Text already discarded by older versions cannot be recovered.
 
 #### `get_feedback`
 
@@ -2283,8 +2283,13 @@ Validate reported consequences, workarounds and recurrence against current evide
 | `tool_name`  | string?  | Filter to one exact AgentLink tool name                                |
 | `triaged`    | boolean? | Filter to accepted-for-fixing (`true`) or untriaged (`false`) feedback |
 | `priorities` | P0-P3[]? | Filter by priority; untriaged feedback has no priority                 |
+| `id`         | string?  | Read one complete active report; cannot be combined with filters       |
+| `offset`     | integer? | Requires `id`; UTF-16 offset into `record_json` (use `next_offset`)    |
+| `limit`      | integer? | Requires `id`; page size, default 4,000, maximum 8,000 characters      |
 
-The response is `{ status, count, entries }`. Filters intersect and never renumber `global_index`.
+A list response is `{ status, count, entries }`. Filters intersect and never renumber `global_index`. Each entry has `content_status`: `complete`, `preview` (fields were shortened or omitted; a `full_record` request is included), `legacy_unverified` (recorded before content capture, completeness unknown), `unsupported_capture`, or `invalid_capture`.
+
+With `id`, a small report returns `mode: "entry"` with the complete parsed `entry`, `content_bytes` and `content_sha256`. Larger reports, or requests with `offset`/`limit`, return `mode: "page"` slices of the canonical `record_json` with `next_offset`, `final_page` and an exact `next_request`; concatenating pages reproduces the record and its SHA-256. Responses stay under 16 KiB, pages never split surrogate pairs, and triage metadata sits outside the paged body. Unknown, hidden and duplicate IDs return explicit errors. When stored full content is missing or fails verification, the result is an error with `partial: true` and the retained `partial_preview`, never a substitute for the full report.
 
 #### `triage_feedback`
 
