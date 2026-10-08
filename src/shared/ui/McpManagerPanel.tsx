@@ -1472,10 +1472,23 @@ export function McpManagerPanel({
                     ? "disabled"
                     : (info?.status ?? "not_connected");
                 const expanded = expandedServers.has(name);
+                const detail = statusDetail(
+                  info,
+                  Boolean(entry?.config.disabled),
+                );
+                const summary = [
+                  statusLabel(effectiveStatus),
+                  detail,
+                  entry ? (entry.config.type ?? "stdio") : "runtime only",
+                  entry?.inherited && "inherited",
+                  entry?.hasSecrets && "secrets",
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
                 return (
                   <li
                     key={name}
-                    class={`mcp-status-item mcp-status-${effectiveStatus} mcp-manager-server-row`}
+                    class={`mcp-status-item mcp-status-${effectiveStatus} mcp-manager-server-row mcp-manager-server-row-compact`}
                   >
                     <div class="mcp-status-row">
                       <button
@@ -1501,15 +1514,22 @@ export function McpManagerPanel({
                       </button>
                       <i
                         class={`codicon ${statusIcon(effectiveStatus)}`}
-                        aria-hidden="true"
+                        role="img"
+                        aria-label={summary}
+                        title={summary}
                       />
-                      <div class="mcp-manager-server-identity">
-                        <span class="mcp-status-name">{name}</span>
+                      <div class="mcp-manager-server-identity" title={summary}>
+                        <span
+                          class="mcp-status-name"
+                          title={`${name} · ${summary}`}
+                        >
+                          {name}
+                        </span>
                         <span
                           class="mcp-status-detail"
                           title={info?.error ?? undefined}
                         >
-                          {statusDetail(info, Boolean(entry?.config.disabled))}
+                          {detail}
                         </span>
                       </div>
                       <span class="mcp-manager-server-badges">

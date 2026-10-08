@@ -172,6 +172,41 @@ describe("McpManagerPanel", () => {
     expect(screen.getAllByText("1", { selector: "strong" })).toHaveLength(3);
   });
 
+  it("keeps hidden row details available on status icons and server-name tooltips", () => {
+    const state = snapshot();
+    render(
+      <McpManagerPanel
+        snapshot={snapshot({
+          entries: state.entries.map((entry) => ({
+            ...entry,
+            inherited: true,
+            hasSecrets: true,
+          })),
+          statusInfos: [
+            {
+              name: "configured-only",
+              status: "connected",
+              toolCount: 2,
+              resourceCount: 1,
+              promptCount: 1,
+              tools: [{ name: "search", description: "Search things" }],
+            },
+          ],
+        })}
+      />,
+    );
+
+    const summary =
+      "connected · 2 tools · 1 resource · 1 prompt · stdio · inherited · secrets";
+    const statusIcon = screen.getByRole("img", { name: summary });
+    expect(statusIcon.getAttribute("title")).toBe(summary);
+    const name = screen.getByText("configured-only");
+    expect(name.getAttribute("title")).toBe(`configured-only · ${summary}`);
+    expect(
+      name.closest("li")?.classList.contains("mcp-manager-server-row-compact"),
+    ).toBe(true);
+  });
+
   it("reveals full wrapped MCP errors from an accessible server details control", () => {
     const error =
       "Connection failed: this deliberately long error contains a path /workspace/packages/service/index.js and more context.\nUnderlying cause: connection refused.";

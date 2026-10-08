@@ -7156,6 +7156,37 @@ body.chat-activity-shelf-resizing * {
   height: 26px;
 }
 
+.mcp-manager-server-row-compact .mcp-status-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.mcp-manager-server-row-compact .mcp-manager-server-identity {
+  flex: 1 1 80px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mcp-manager-server-row-compact .mcp-status-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-manager-server-row-compact .mcp-manager-server-badges {
+  flex-shrink: 0;
+}
+
+.mcp-manager-server-row-compact .mcp-status-actions {
+  max-width: 100%;
+}
+
+.mcp-manager-server-row-compact .mcp-status-actions .icon-button {
+  flex-shrink: 0;
+}
+
 .mcp-manager-panel-redesign .mcp-tool-list {
   padding: 1px 8px 5px 34px;
 }
@@ -7341,6 +7372,13 @@ body.chat-activity-shelf-resizing * {
   color: var(--vscode-errorForeground) !important;
 }
 
+@container mcp-manager (max-width: 640px) {
+  .mcp-manager-server-row-compact .mcp-status-detail,
+  .mcp-manager-server-row-compact .mcp-manager-server-badges code:first-child {
+    display: none;
+  }
+}
+
 @container mcp-manager (max-width: 520px) {
   .mcp-manager-summary-card {
     flex: 1 1 calc(50% - 4px);
@@ -7380,6 +7418,17 @@ body.chat-activity-shelf-resizing * {
 
   .mcp-manager-panel-redesign .mcp-status-actions {
     width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+
+  .mcp-manager-server-row-compact .mcp-manager-server-badges {
+    display: none;
+  }
+
+  .mcp-manager-panel-redesign
+    .mcp-manager-server-row-compact
+    .mcp-status-actions {
     margin-left: auto;
     justify-content: flex-end;
   }
