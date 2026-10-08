@@ -1,0 +1,48 @@
+resources/builtin-skills/documentation/SKILL.md
+  h_e08a86bb3a33a2 43
+apps/desktop/src/desktopReleaseInstall.ts
+  h_e08a86bb3a33a2 58,61,78-85,87,92-99,108,130,132,134,213-214,435,437,449,459-461
+  s_047c55a46d92f0::t_70f3e46b9495ee 100-101,131,133,212,215,458,462
+CHANGELOG.md
+  h_e08a86bb3a33a2 10
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 564,570-572
+apps/desktop/src/desktopReleaseInstall.test.ts
+  h_e08a86bb3a33a2 191,208-211,228,421-436
+  s_047c55a46d92f0::t_35cea8489a6061 437
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 88
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_047c55a46d92f0::t_d0a339b6697a2b 13,30,47,64,81,92,103,114,125,142,159,176,193,204,215,226,237,254,271,288,305,316,327,338,349,366,383,400,417,428,439,450,461,478,495,512,529,540,551,562,573,590,607,624,641,652,663,674
+resources/builtin-skills/documentation/references/release-notes.md
+  s_94c9ca840d5601::t_32fcce8ded542a 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98d82dbda283af1945c7c43b6edb4c2ed437bea8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_047c55a46d92f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "527a24b1-ae81-449b-aef5-ddd8b9f7d309",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_94c9ca840d5601": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f78568f3-1756-4a1c-b537-b1df37cb9f55",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
