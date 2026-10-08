@@ -1,0 +1,48 @@
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 38-41,587-589,3851-3855,3861-3864
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 175
+  s_36949cdcaeebe3::t_8a6e79b393dfa2 176
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 5,5239-5326,5373-5374,5377-5381
+  h_e08a86bb3a33a2 5372
+src/agent/FleetWorkflows.ts
+  h_e08a86bb3a33a2 5-8,511
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 129-130
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/shared/fleetResultSchema.ts
+  h_e08a86bb3a33a2 1-96
+src/shared/fleetResultSchema.test.ts
+  h_e08a86bb3a33a2 1-114
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_36949cdcaeebe3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5c0548a9-f215-42b0-9580-07869bdf2ebe",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
