@@ -1,0 +1,14 @@
+.github/dependabot.yml
+  h_e08a86bb3a33a2 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee3314dabf8744b0bc768a02771c01f062f5e08a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
