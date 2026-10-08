@@ -34,14 +34,14 @@
   },
   "dependencies": {
     "@types/proxy-from-env": "1.0.4",
-    "@types/ws": "8.18.1",
+    "@types/ws": "8.18.2",
     "@agentlink/core": "0.6.1",
     "@agentlink/protocol": "0.6.1",
-    "@napi-rs/keyring": "2.0.0",
+    "@napi-rs/keyring": "2.1.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "https-proxy-agent": "7.0.6",
     "proxy-from-env": "2.1.0",
-    "ws": "8.21.3"
+    "ws": "8.22.0"
   },
   "engines": {
     "node": ">=22.19.0"
