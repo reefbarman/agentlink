@@ -1958,9 +1958,17 @@ body.chat-activity-shelf-resizing * {
   padding: 0;
 }
 
-.markdown-body pre.copyable-code-block {
+.markdown-body .copyable-code-block {
   position: relative;
-  padding-bottom: 36px;
+  min-width: 0;
+  margin: 6px 0;
+  padding-bottom: 28px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background);
+}
+
+.markdown-body .copyable-code-block > pre {
+  margin: 0;
 }
 
 .code-block-copy-button {

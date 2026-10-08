@@ -74,11 +74,11 @@ function createMarked(citations: readonly CoreWebCitation[]) {
         return escapeHtml(text);
       },
       code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
-        const preClass = hasClosingCodeFence(raw)
-          ? ' class="copyable-code-block"'
-          : "";
         const langClass = lang ? ` class="language-${lang}"` : "";
-        return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
+        const pre = `<pre><code${langClass}>${escapeHtml(text)}</code></pre>`;
+        return hasClosingCodeFence(raw)
+          ? `<div class="copyable-code-block">${pre}</div>`
+          : pre;
       },
       checkbox({ checked }: { checked: boolean }) {
         return renderMarkdownTaskCheckbox(checked);
@@ -179,11 +179,11 @@ function addCodeBlockCopyButtons(container: HTMLElement) {
   };
 
   container
-    .querySelectorAll<HTMLElement>("pre.copyable-code-block")
-    .forEach((pre) => {
-      const code = pre.querySelector(":scope > code");
+    .querySelectorAll<HTMLElement>(".copyable-code-block")
+    .forEach((block) => {
+      const code = block.querySelector(":scope > pre > code");
       if (!code) return;
-      addCopyButton(pre, code.textContent ?? "");
+      addCopyButton(block, code.textContent ?? "");
     });
 
   container

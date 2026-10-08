@@ -114,6 +114,44 @@ describe("StreamingText provider citations", () => {
   });
 });
 
+describe("StreamingText block copy controls", () => {
+  it.each(["ts", "markdown", "text"])(
+    "keeps the %s copy control outside the scrolling code content",
+    async (language) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      const source =
+        `${"long line ".repeat(100)}\n${"another line\n".repeat(100)}`.trimEnd();
+      const { container } = render(
+        <StreamingText
+          text={`\`\`\`${language}\n${source}\n\`\`\``}
+          streaming={false}
+        />,
+      );
+      const pre = container.querySelector("pre")!;
+      const button = screen.getByRole("button", { name: "Copy code block" });
+
+      expect(button.parentElement?.className).toBe("copyable-code-block");
+      expect(pre.parentElement).toBe(button.parentElement);
+      expect(pre.contains(button)).toBe(false);
+      expect(pre.textContent).toBe(source);
+
+      pre.scrollLeft = 300;
+      pre.scrollTop = 200;
+      fireEvent.scroll(pre);
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(source);
+        expect(button.getAttribute("aria-label")).toBe("Copied code block");
+      });
+    },
+  );
+});
+
 describe("StreamingText lazy special-block renderers", () => {
   it("renders ordinary Markdown without invoking a heavy renderer", () => {
     render(<StreamingText text="Hello **world**." streaming={false} />);
