@@ -45,7 +45,11 @@ import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import { FindReplacePreviewPanel } from "../../findReplace/FindReplacePreviewPanel.js";
 import type { WriteApprovalResponse } from "../../approvals/ApprovalPanelProvider.js";
-import { applyWorkspaceEditAndSave } from "./workspaceEditOrchestration.js";
+import {
+  applyWorkspaceEditAndSave,
+  applyWorkspaceEditAndSaveWithoutFormatting,
+} from "./workspaceEditOrchestration.js";
+import type { CommitAndVerifyEditResult } from "../../integrations/editDurability.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
 import { getConfiguredMasterBypass } from "./agentLinkConfig.js";
 import { canonicalizePath, getRelativePath } from "../../util/paths.js";
@@ -783,6 +787,98 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
   };
 }
 
+/**
+ * Build the public find_and_replace result for a save_without_formatting
+ * commit. Full success requires durable evidence with a final-content hash for
+ * every changed file; anything less is an error naming the affected files.
+ */
+function buildExactSaveReplacementResult(params: {
+  commits: readonly CommitAndVerifyEditResult[];
+  changes: readonly number[];
+  success: Record<string, unknown>;
+}): ToolResult {
+  const files: Array<Record<string, unknown>> = [];
+  const savedFiles: string[] = [];
+  const failedFiles: string[] = [];
+
+  params.commits.forEach((commit, index) => {
+    const {
+      status,
+      path: filePath,
+      finalContent: _finalContent,
+      decision: _decision,
+      writeApprovalResponse: _writeApprovalResponse,
+      ...details
+    } = commit;
+    const changes = params.changes[index] ?? 0;
+    const finalHash =
+      commit.durability?.status === "durable"
+        ? commit.durability.final_content_hash
+        : undefined;
+    if (status === "accepted" && finalHash) {
+      savedFiles.push(filePath);
+      files.push({
+        path: filePath,
+        changes,
+        durability: commit.durability,
+        post_edit_content_hash: finalHash,
+      });
+      return;
+    }
+    failedFiles.push(filePath);
+    files.push({
+      path: filePath,
+      changes,
+      status: "error",
+      ...details,
+      ...(status === "accepted"
+        ? {
+            error: "Save did not provide durable evidence",
+            reason: "missing_durability_evidence",
+          }
+        : {}),
+    });
+  });
+
+  if (failedFiles.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            { ...params.success, save_without_formatting: true, files },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  const {
+    status: _status,
+    files: _files,
+    files_changed: _filesChanged,
+    ...context
+  } = params.success;
+  return errorResult(
+    `Failed to save ${failedFiles.length} of ${params.commits.length} replacement file${params.commits.length !== 1 ? "s" : ""} without formatting`,
+    {
+      ...context,
+      status: savedFiles.length > 0 ? "partial" : "error",
+      reason: "save_without_formatting_failed",
+      save_without_formatting: true,
+      saved_files: savedFiles,
+      failed_files: failedFiles,
+      files,
+      next_steps: [
+        "Replacements in saved_files were saved and verified; do not repeat them.",
+        "For each failed file, follow its next_steps and re-read it before retrying.",
+      ],
+    },
+  );
+}
+
 export function createVscodeMultiFileEditReviewProvider(
   approvalManager: ApprovalManager,
   extensionUri: vscode.Uri,
@@ -868,6 +964,33 @@ export function createVscodeMultiFileEditReviewProvider(
                   ))
                 ) {
                   return undefined;
+                }
+                if (params.saveWithoutFormatting) {
+                  return applyWorkspaceEditAndSaveWithoutFormatting({
+                    edit: candidateEdit,
+                    targets: params.files.map((file) => ({
+                      absolutePath: file.absolutePath,
+                      relativePath: file.relativePath,
+                    })),
+                    applyFailure: errorResult("Failed to apply replacements", {
+                      no_changes_applied: true,
+                    }),
+                    buildResult: (commits) =>
+                      buildExactSaveReplacementResult({
+                        commits,
+                        changes: params.files.map(
+                          (file) => file.replacements.length,
+                        ),
+                        success: {
+                          status: "applied",
+                          find: params.find,
+                          replace: params.replace,
+                          files_changed: filesPreview.length,
+                          total_replacements: params.totalMatches,
+                          authorization: authorization.authorization,
+                        },
+                      }),
+                  });
                 }
                 return applyWorkspaceEditAndSave({
                   edit: candidateEdit,
@@ -1039,127 +1162,175 @@ export function createVscodeMultiFileEditReviewProvider(
           previewPanel = undefined;
         }
 
-        const edit = new vscode.WorkspaceEdit();
-        let appliedCount = 0;
-        const appliedFiles: Array<{ path: string; changes: number }> = [];
+        // Exact saves verify each file through the shared single-file commit
+        // path, which requires the per-file edit locks. Hold them across the
+        // stale-match check too, so the verified baseline is the one edited.
+        const buildAndApply = async (): Promise<ToolResult> => {
+          const edit = new vscode.WorkspaceEdit();
+          let appliedCount = 0;
+          const appliedFiles: Array<{ path: string; changes: number }> = [];
+          const appliedTargets: Array<{
+            absolutePath: string;
+            relativePath: string;
+          }> = [];
 
-        for (const file of params.files) {
-          const uri = vscode.Uri.file(file.absolutePath);
-          const doc = await vscode.workspace.openTextDocument(uri);
-          const baselineContent = doc.getText();
-          const matchesById = new Map(
-            file.matches.map((match) => [match.id, match.matchText]),
-          );
-          let fileChanges = 0;
-          for (const replacement of file.replacements) {
-            if (!acceptedIds || acceptedIds.has(replacement.matchId)) {
-              const expectedMatch = matchesById.get(replacement.matchId);
-              if (
-                expectedMatch === undefined ||
-                baselineContent.slice(
-                  replacement.startOffset,
-                  replacement.endOffset,
-                ) !== expectedMatch
-              ) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: JSON.stringify({
-                        status: "stale_proposal",
-                        no_changes_applied: true,
-                        path: file.relativePath,
-                        match_id: replacement.matchId,
-                        message:
-                          "File content changed after the replacement preview; review a fresh proposal before retrying.",
-                      }),
-                    },
-                  ],
-                };
+          for (const file of params.files) {
+            const uri = vscode.Uri.file(file.absolutePath);
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const baselineContent = doc.getText();
+            const matchesById = new Map(
+              file.matches.map((match) => [match.id, match.matchText]),
+            );
+            let fileChanges = 0;
+            for (const replacement of file.replacements) {
+              if (!acceptedIds || acceptedIds.has(replacement.matchId)) {
+                const expectedMatch = matchesById.get(replacement.matchId);
+                if (
+                  expectedMatch === undefined ||
+                  baselineContent.slice(
+                    replacement.startOffset,
+                    replacement.endOffset,
+                  ) !== expectedMatch
+                ) {
+                  return {
+                    content: [
+                      {
+                        type: "text",
+                        text: JSON.stringify({
+                          status: "stale_proposal",
+                          no_changes_applied: true,
+                          path: file.relativePath,
+                          match_id: replacement.matchId,
+                          message:
+                            "File content changed after the replacement preview; review a fresh proposal before retrying.",
+                        }),
+                      },
+                    ],
+                  };
+                }
+                edit.replace(
+                  uri,
+                  new vscode.Range(
+                    doc.positionAt(replacement.startOffset),
+                    doc.positionAt(replacement.endOffset),
+                  ),
+                  replacement.newText,
+                );
+                fileChanges++;
               }
-              edit.replace(
-                uri,
-                new vscode.Range(
-                  doc.positionAt(replacement.startOffset),
-                  doc.positionAt(replacement.endOffset),
-                ),
-                replacement.newText,
-              );
-              fileChanges++;
+            }
+            if (fileChanges > 0) {
+              appliedCount += fileChanges;
+              appliedFiles.push({
+                path: file.relativePath,
+                changes: fileChanges,
+              });
+              appliedTargets.push({
+                absolutePath: file.absolutePath,
+                relativePath: file.relativePath,
+              });
             }
           }
-          if (fileChanges > 0) {
-            appliedCount += fileChanges;
-            appliedFiles.push({
-              path: file.relativePath,
-              changes: fileChanges,
-            });
-          }
-        }
 
-        if (appliedCount === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  status: "no_changes",
-                  find: params.find,
-                  replace: params.replace,
-                  message: "All matches were excluded by user",
-                }),
-              },
-            ],
-          };
-        }
-
-        return await applyWorkspaceEditAndSave({
-          edit,
-          affectedPaths: params.files.map((file) => file.absolutePath),
-          applyFailure: {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({ error: "Failed to apply replacements" }),
-              },
-            ],
-          },
-          saveFailure: {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: "Failed to save replacement changes",
-                }),
-              },
-            ],
-          },
-          buildSuccess: () => {
-            const result: Record<string, unknown> = {
-              status: "applied",
-              find: params.find,
-              replace: params.replace,
-              files_changed: appliedFiles.length,
-              total_replacements: appliedCount,
-              files: appliedFiles,
-            };
-            if (acceptedIds && appliedCount < params.totalMatches) {
-              result.excluded = params.totalMatches - appliedCount;
-            }
-            if (followUp) {
-              result.follow_up = followUp;
-            }
-
+          if (appliedCount === 0) {
             return {
               content: [
                 {
-                  type: "text" as const,
-                  text: JSON.stringify(result, null, 2),
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "no_changes",
+                    find: params.find,
+                    replace: params.replace,
+                    message: "All matches were excluded by user",
+                  }),
                 },
               ],
             };
-          },
-        });
+          }
+
+          if (params.saveWithoutFormatting) {
+            return await applyWorkspaceEditAndSaveWithoutFormatting({
+              edit,
+              targets: appliedTargets,
+              applyFailure: errorResult("Failed to apply replacements", {
+                no_changes_applied: true,
+              }),
+              buildResult: (commits) =>
+                buildExactSaveReplacementResult({
+                  commits,
+                  changes: appliedFiles.map((file) => file.changes),
+                  success: {
+                    status: "applied",
+                    find: params.find,
+                    replace: params.replace,
+                    files_changed: appliedFiles.length,
+                    total_replacements: appliedCount,
+                    ...(acceptedIds && appliedCount < params.totalMatches
+                      ? { excluded: params.totalMatches - appliedCount }
+                      : {}),
+                    ...(followUp ? { follow_up: followUp } : {}),
+                  },
+                }),
+            });
+          }
+
+          return await applyWorkspaceEditAndSave({
+            edit,
+            affectedPaths: params.files.map((file) => file.absolutePath),
+            applyFailure: {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    error: "Failed to apply replacements",
+                  }),
+                },
+              ],
+            },
+            saveFailure: {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    error: "Failed to save replacement changes",
+                  }),
+                },
+              ],
+            },
+            buildSuccess: () => {
+              const result: Record<string, unknown> = {
+                status: "applied",
+                find: params.find,
+                replace: params.replace,
+                files_changed: appliedFiles.length,
+                total_replacements: appliedCount,
+                files: appliedFiles,
+              };
+              if (acceptedIds && appliedCount < params.totalMatches) {
+                result.excluded = params.totalMatches - appliedCount;
+              }
+              if (followUp) {
+                result.follow_up = followUp;
+              }
+
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: JSON.stringify(result, null, 2),
+                  },
+                ],
+              };
+            },
+          });
+        };
+
+        return params.saveWithoutFormatting
+          ? await withFileLocks(
+              params.files.map((file) => file.absolutePath),
+              buildAndApply,
+            )
+          : await buildAndApply();
       } finally {
         previewPanel?.close();
       }

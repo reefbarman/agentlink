@@ -1443,16 +1443,19 @@ On success, the result reports the old and new names, every modified file, and t
 
 Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting.
 
-| Parameter          | Type     | Description                                                                                                   |
-| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `find`             | string   | Text to find. Treated as a literal string unless `regex=true`.                                                |
-| `replace`          | string   | Replacement text                                                                                              |
-| `path`             | string?  | Single file path to search in. Mutually exclusive with `glob`.                                                |
-| `glob`             | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.                             |
-| `regex`            | boolean? | Treat `find` as a regular expression. Supports capture groups (`$1`, `$2`) in `replace`. Default: false.      |
-| `max_replacements` | number?  | Maximum allowed matches. If exceeded, no edits are applied and the tool returns `status: "too_many_matches"`. |
+| Parameter                 | Type     | Description                                                                                                                      |
+| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `find`                    | string   | Text to find. Treated as a literal string unless `regex=true`.                                                                   |
+| `replace`                 | string   | Replacement text                                                                                                                 |
+| `path`                    | string?  | Single file path to search in. Mutually exclusive with `glob`.                                                                   |
+| `glob`                    | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.                                                |
+| `regex`                   | boolean? | Treat `find` as a regular expression. Supports capture groups (`$1`, `$2`) in `replace`. Default: false.                         |
+| `max_replacements`        | number?  | Maximum allowed matches. If exceeded, no edits are applied and the tool returns `status: "too_many_matches"`.                    |
+| `save_without_formatting` | boolean? | Save each changed file without format-on-save or other save participants, then verify the saved content exactly. Default: false. |
 
 For single-file edits, prefer `apply_diff` — it provides better diff review and format-on-save.
+
+With `save_without_formatting: true`, each changed file is saved and verified like `apply_diff`/`write_file` exact saves, and the success result reports per-file `durability` and `post_edit_content_hash`. If any file fails to save or its saved content differs, the result is an error with `status: "partial"` (some files saved) or `"error"` (none saved), plus `saved_files` and `failed_files`. Saving uses VS Code's save-without-formatting command, which needs an editor, so each changed file opens in a background tab.
 
 With Approve for Me active, an exact, fully enumerable replacement proposal that affects at least one outside-workspace file may receive one-shot Guardian review. The authorization atomically binds the complete canonical affected-file set and each file's full baseline and proposed content, and is consumed for that same complete proposal under all target locks before AgentLink submits one editor workspace edit. Canonicalization or sensitive-path rejection, dirty documents, incomplete or over-limit evidence, and proposal drift fall back to the human preview. Guardian never persists a rule. Editor authorization and application cover the proposal as a unit, but disk saves are not transactional: affected documents are saved afterward and any save failure is reported.
 

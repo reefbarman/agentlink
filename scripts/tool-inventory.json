@@ -139,7 +139,8 @@
         "max_replacements",
         "path",
         "regex",
-        "replace"
+        "replace",
+        "save_without_formatting"
       ],
       "cluster": "edit",
       "sideEffect": "write",
@@ -865,5 +866,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "37bf47ce861f2de159b468f8476394971967e2982f42ba27d2e0234a62e4ae00"
+  "revision": "228440039bf425fc8f6fabf1768bd9c1cb09b7ac04f877a661266ee79e04fd91"
 }

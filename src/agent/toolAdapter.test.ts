@@ -33,7 +33,11 @@ import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
+import {
+  getWorkspaceRoots,
+  resolveAndValidatePath,
+  withWorkspaceRoots,
+} from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { loadSkill } from "../tools/loadSkill.js";
 import { handleReadSkillResource } from "../tools/readSkillResource.js";
@@ -6170,6 +6174,60 @@ describe("dispatchToolCall", () => {
         prepareOneShotAuthorization: undefined,
       },
     );
+  });
+
+  it("forwards find_and_replace save_without_formatting from dispatch to the multi-file review provider", async () => {
+    const { handleFindAndReplace } = await import("../tools/findAndReplace.js");
+    const actual = await vi.importActual<
+      typeof import("../tools/findAndReplace.js")
+    >("../tools/findAndReplace.js");
+    vi.mocked(handleFindAndReplace).mockImplementationOnce(
+      actual.handleFindAndReplace,
+    );
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-far-dispatch-")),
+    );
+    const filePath = path.join(tempDir, "example.ts");
+    fs.writeFileSync(filePath, "old value", "utf-8");
+    const openDocument = vi
+      .spyOn(vscode.workspace, "openTextDocument")
+      .mockResolvedValueOnce({
+        uri: { fsPath: filePath },
+        getText: () => "old value",
+        lineCount: 1,
+        positionAt: (offset: number) => ({ line: 0, character: offset }),
+        lineAt: () => ({ text: "old value" }),
+      } as never);
+    const reviewAndApply = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "reviewed" }],
+    }));
+
+    try {
+      const result = await withWorkspaceRoots([tempDir], () =>
+        dispatchToolCall(
+          "find_and_replace",
+          {
+            path: filePath,
+            find: "old",
+            replace: "new",
+            save_without_formatting: true,
+          },
+          { ...mockCtx, multiFileEditReviewProvider: { reviewAndApply } },
+        ),
+      );
+
+      expect(result.content[0]).toMatchObject({ text: "reviewed" });
+      expect(reviewAndApply).toHaveBeenCalledOnce();
+      expect(reviewAndApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saveWithoutFormatting: true,
+          files: [expect.objectContaining({ absolutePath: filePath })],
+        }),
+      );
+    } finally {
+      openDocument.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("dispatches rename_symbol with the rename provider", async () => {

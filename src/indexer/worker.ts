@@ -1164,7 +1164,7 @@ async function processFileBatch(
   }
   chunksCreated = allChunks.length;
 
-  if (aborted || allChunks.length === 0) {
+  if (aborted) {
     return {
       filesIndexed,
       chunksCreated: 0,
@@ -1175,14 +1175,20 @@ async function processFileBatch(
     };
   }
 
-  // 2. Embed all chunks from this batch
-  const embeddings = await batchEmbed(
-    allChunks.map((c) => c.chunk.embeddingContent ?? c.chunk.content),
-    config.embeddingBearerToken,
-    config.workspaceRoot,
-    errors,
-    (done, total) => config.onActivity?.(`embedded ${done}/${total} chunks`),
-  );
+  // 2. Embed all chunks from this batch. Files too small to produce a chunk
+  // are still published below so their source and structural graph entry
+  // (imports, exports, symbols) stay visible.
+  const embeddings =
+    allChunks.length > 0
+      ? await batchEmbed(
+          allChunks.map((c) => c.chunk.embeddingContent ?? c.chunk.content),
+          config.embeddingBearerToken,
+          config.workspaceRoot,
+          errors,
+          (done, total) =>
+            config.onActivity?.(`embedded ${done}/${total} chunks`),
+        )
+      : [];
 
   if (aborted) {
     return {
@@ -1197,15 +1203,16 @@ async function processFileBatch(
 
   // 3. Keep every chunk in the revision. Missing embeddings degrade those chunks
   // to lexical-only retrieval instead of suppressing the source publication.
+  // Every read file gets a publication, with no chunks when it produced none.
   const publicationChunks = new Map<
     number,
     Array<{ chunk: Chunk; embedding: number[] | null }>
-  >();
+  >(files.map((_, fileIdx) => [fileIdx, []]));
   for (let i = 0; i < allChunks.length; i++) {
     const { chunk, fileIdx } = allChunks[i];
-    const ownedChunks = publicationChunks.get(fileIdx) ?? [];
-    ownedChunks.push({ chunk, embedding: embeddings[i] ?? null });
-    publicationChunks.set(fileIdx, ownedChunks);
+    publicationChunks
+      .get(fileIdx)
+      ?.push({ chunk, embedding: embeddings[i] ?? null });
   }
 
   const publications = [];

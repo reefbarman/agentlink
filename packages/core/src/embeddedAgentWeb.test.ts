@@ -9,7 +9,10 @@ import {
   type AgentEngine,
   type AgentSessionHydration,
 } from "./agentEngine.js";
-import { createEmbeddedAgentWebHandler } from "./embeddedAgentWeb.js";
+import {
+  createEmbeddedAgentWebHandler,
+  parseEmbeddedAgentRequest,
+} from "./embeddedAgentWeb.js";
 import type { AgentTurnEvent, AgentTurnResult } from "./turnContracts.js";
 
 const principal = { tenantId: "tenant-a", subjectId: "subject-a" };
@@ -475,6 +478,100 @@ describe("embedded agent Web handler", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  it("lets text-only hosts disable attachments with maxAttachments: 0", async () => {
+    const agent = engine();
+    const handler = createEmbeddedAgentWebHandler({
+      engine: agent,
+      authenticate: () => principal,
+      maxAttachments: 0,
+    });
+    const attachment = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AQIDBA==" },
+    };
+
+    await frames(
+      await handler(
+        request({
+          schemaVersion: 1,
+          type: "turn",
+          sessionId: "session-1",
+          text: "Hello",
+        }),
+      ),
+    );
+    await frames(
+      await handler(
+        request({
+          schemaVersion: 1,
+          type: "turn",
+          sessionId: "session-1",
+          text: "Hello again",
+          attachments: [],
+        }),
+      ),
+    );
+    expect(agent.sessions.runTurn).toHaveBeenCalledTimes(2);
+
+    const rejected = await handler(
+      request({
+        schemaVersion: 1,
+        type: "turn",
+        sessionId: "session-1",
+        text: "Hello",
+        attachments: [attachment],
+      }),
+    );
+    expect(rejected.status).toBe(400);
+    expect(agent.sessions.runTurn).toHaveBeenCalledTimes(2);
+
+    const turn = {
+      schemaVersion: 1,
+      type: "turn",
+      sessionId: "session-1",
+      text: "Hello",
+    };
+    expect(parseEmbeddedAgentRequest(turn, { maxAttachments: 0 })).toEqual(
+      turn,
+    );
+    expect(() =>
+      parseEmbeddedAgentRequest(
+        { ...turn, attachments: [attachment] },
+        { maxAttachments: 0 },
+      ),
+    ).toThrow("attachments are disabled");
+  });
+
+  it.each([-1, 1.5, Number.NaN])(
+    "rejects invalid maxAttachments %s in both factories",
+    (maxAttachments) => {
+      expect(() =>
+        createEmbeddedAgentWebHandler({
+          engine: engine(),
+          authenticate: () => principal,
+          maxAttachments,
+        }),
+      ).toThrow("maxAttachments must be a non-negative integer");
+      expect(() =>
+        parseEmbeddedAgentRequest(
+          { schemaVersion: 1, type: "turn", sessionId: "s", text: "t" },
+          { maxAttachments },
+        ),
+      ).toThrow("maxAttachments must be a non-negative integer");
+    },
+  );
+
+  it("keeps attachment byte limits positive", () => {
+    expect(() =>
+      createEmbeddedAgentWebHandler({
+        engine: engine(),
+        authenticate: () => principal,
+        maxAttachments: 0,
+        maxAttachmentBytes: 0,
+      }),
+    ).toThrow("maxAttachmentBytes must be a positive integer");
   });
 
   it("does not start a turn after cancellation during host preprocessing", async () => {

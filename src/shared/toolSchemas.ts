@@ -1090,6 +1090,12 @@ export const findAndReplaceSchema = {
     .describe(
       "Maximum allowed matches to replace. Must be a positive integer. If total matches exceed this value, no edits are applied and the tool returns a guardrail error payload.",
     ),
+  save_without_formatting: z
+    .boolean()
+    .optional()
+    .describe(
+      "Save each changed file without format-on-save or other ordinary save participants, then verify exact disk preservation per file.",
+    ),
 };
 
 export const renameSymbolSchema = {

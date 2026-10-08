@@ -794,6 +794,105 @@ describe("indexer worker fixture", () => {
     TEST_TIMEOUT_MS,
   );
 
+  it.each([
+    ["only tiny files", false],
+    ["tiny and normal files", true],
+  ] as const)(
+    "publishes files below the chunk threshold for a batch with %s",
+    async (_, includeNormalFile) => {
+      const fixture = await createFixture();
+      const workspace = createWorkspace();
+      // Both sources are shorter than every chunker's minimum chunk size.
+      const barrel = writeSource(
+        workspace.root,
+        "src/index.ts",
+        'export * from "./x";',
+      );
+      const target = writeSource(
+        workspace.root,
+        "src/x.ts",
+        "export const x = 1;",
+      );
+      const files = [barrel, target];
+      if (includeNormalFile) {
+        files.push(writeSource(workspace.root, "query.sql", sourceContent(1)));
+      }
+
+      const stats = await fixture.complete(startMessage(workspace, { files }));
+
+      expect(stats).toMatchObject({
+        filesIndexed: files.length,
+        totalFilesInIndex: files.length,
+        errors: [],
+      });
+      if (includeNormalFile) {
+        expect(stats.chunksCreated).toBeGreaterThan(0);
+      } else {
+        expect(stats.chunksCreated).toBe(0);
+      }
+      expectEmptyJournal(workspace);
+      const vector = requireCache(workspace);
+      const structural = loadStructuralCache(
+        getStructuralCachePath(workspace.cachePath),
+        workspace.root,
+      );
+      const scopeId = getCodeWorkspaceScopeId(workspace.root);
+      for (const relPath of ["src/index.ts", "src/x.ts"]) {
+        expect(vector.files[relPath]).toMatchObject({
+          recordIds: [],
+          visibility: "current",
+        });
+        expect(structural.files[relPath]).toMatchObject({
+          language: "typescript",
+          generation: vector.files[relPath]?.generation,
+          status: "current",
+          sourceId: getCodeSourceId(scopeId, relPath),
+        });
+      }
+      expect(structural.files["src/index.ts"]?.imports).toEqual([
+        expect.objectContaining({
+          specifier: "./x",
+          kind: "reexport",
+          resolvedRelPath: "src/x.ts",
+        }),
+      ]);
+      if (includeNormalFile) {
+        expect(vector.files["query.sql"]?.recordIds.length).toBeGreaterThan(0);
+      }
+      await withRepository(workspace.retrievalStoreRoot, async (repository) => {
+        expect(
+          await repository.inspectSource(
+            getCodeSourceId(scopeId, "src/index.ts"),
+          ),
+        ).toMatchObject({
+          source: { path: "src/index.ts", content: 'export * from "./x";' },
+        });
+      });
+
+      // Chunkless cache entries count as current, so reruns are no-ops.
+      const rerun = await fixture.complete(
+        startMessage(workspace, { files, force: false }),
+      );
+      expect(rerun).toMatchObject({
+        filesIndexed: 0,
+        recordsUpserted: 0,
+        recordsDeleted: 0,
+        totalFilesInIndex: files.length,
+        errors: [],
+      });
+      const incremental = await fixture.complete(
+        incrementalMessage(workspace, { added: [barrel, target] }),
+      );
+      expect(incremental).toMatchObject({
+        filesIndexed: 0,
+        recordsUpserted: 0,
+        errors: [],
+      });
+      expectEmptyJournal(workspace);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     "publishes changed files and deletes removed sources incrementally",
     async () => {

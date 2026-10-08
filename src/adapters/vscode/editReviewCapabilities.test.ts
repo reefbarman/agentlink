@@ -12,6 +12,10 @@ import {
 } from "./editReviewCapabilities.js";
 
 import { DiffViewProvider } from "../../integrations/DiffViewProvider.js";
+import type { CommitAndVerifyEditResult } from "../../integrations/editDurability.js";
+import type { MultiFileEditFile } from "../../core/capabilities/editReview.js";
+import { withFileLock } from "../../util/fileLock.js";
+import { applyWorkspaceEditAndSaveWithoutFormatting } from "./workspaceEditOrchestration.js";
 
 const openTextDocument = vi.hoisted(() => vi.fn());
 const showTextDocument = vi.hoisted(() => vi.fn());
@@ -162,6 +166,17 @@ vi.mock("../../util/paths.js", () => ({
   ),
   resolveAndValidatePath,
 }));
+
+vi.mock("./workspaceEditOrchestration.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./workspaceEditOrchestration.js")>();
+  return {
+    ...actual,
+    applyWorkspaceEditAndSaveWithoutFormatting: vi.fn(
+      actual.applyWorkspaceEditAndSaveWithoutFormatting,
+    ),
+  };
+});
 
 vi.mock("../../findReplace/FindReplacePreviewPanel.js", () => ({
   FindReplacePreviewPanel: vi.fn(function FindReplacePreviewPanel() {
@@ -969,6 +984,8 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     );
     expect(applyEdit).toHaveBeenCalledWith(workspaceEditInstances[0]);
     expect(doc.save).toHaveBeenCalled();
+    expect(applyWorkspaceEditAndSaveWithoutFormatting).not.toHaveBeenCalled();
+    expect(JSON.parse(text)).not.toHaveProperty("save_without_formatting");
   });
 
   it("consumes an exact atomic Guardian proposal for an outside replacement", async () => {
@@ -1240,6 +1257,437 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
       expect.anything(),
       "new",
     );
+  });
+
+  describe("save_without_formatting", () => {
+    const exactSave = vi.mocked(applyWorkspaceEditAndSaveWithoutFormatting);
+
+    function textDocument(filePath: string, text: string) {
+      return {
+        uri: { scheme: "file", fsPath: filePath },
+        getText: vi.fn(() => text),
+        positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+        offsetAt: vi.fn(
+          (position: { character: number }) => position.character,
+        ),
+        isDirty: false,
+        save: vi.fn(async () => true),
+      };
+    }
+
+    function replacementFile(
+      absolutePath: string,
+      relativePath: string,
+      matches: Array<[id: string, start: number]>,
+    ): MultiFileEditFile {
+      return {
+        absolutePath,
+        relativePath,
+        replacements: matches.map(([matchId, start]) => ({
+          startOffset: start,
+          endOffset: start + 3,
+          newText: "new",
+          matchId,
+        })),
+        matches: matches.map(([id, start]) => ({
+          id,
+          line: 1,
+          columnStart: start,
+          columnEnd: start + 3,
+          matchText: "old",
+          replaceText: "new",
+          contextBefore: [],
+          matchLine: { lineNumber: 1, text: "" },
+          contextAfter: [],
+        })),
+      };
+    }
+
+    function durableCommit(
+      relativePath: string,
+      hash: string,
+    ): CommitAndVerifyEditResult {
+      return {
+        status: "accepted",
+        path: relativePath,
+        durability: {
+          status: "durable",
+          outcome: "exact",
+          policy: "preserve_exact",
+          baseline_exists: true,
+          final_exists: true,
+          disk_changed: true,
+          baseline_content_hash: "baseline",
+          approved_content_hash: hash,
+          expected_disk_content_hash: hash,
+          editor_content_hash: hash,
+          final_content_hash: hash,
+          requires_reread: false,
+        },
+        finalContent: "FINAL CONTENT MUST NOT LEAK",
+      };
+    }
+
+    type ExactSaveParams = Parameters<
+      typeof applyWorkspaceEditAndSaveWithoutFormatting<unknown, unknown>
+    >[0];
+
+    function resolveExactSave(
+      commits: CommitAndVerifyEditResult[],
+      during?: (params: ExactSaveParams) => Promise<void>,
+    ) {
+      exactSave.mockImplementationOnce((async (params: ExactSaveParams) => {
+        await during?.(params);
+        return params.buildResult(commits);
+      }) as never);
+    }
+
+    function payload(result: { content: unknown[] }) {
+      return JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      ) as Record<string, any>;
+    }
+
+    function enableMasterBypass() {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? true : fallback,
+        ),
+      });
+    }
+
+    it("saves auto-approved replacements without formatting under file locks and reports per-file durability", async () => {
+      const filePath = "/workspace/src/example.ts";
+      const doc = textDocument(filePath, "xoldy");
+      openTextDocument.mockResolvedValue(doc);
+      enableMasterBypass();
+      const events: string[] = [];
+      let competingEdit: Promise<unknown> | undefined;
+      resolveExactSave(
+        [durableCommit("src/example.ts", "final-hash")],
+        async () => {
+          competingEdit = withFileLock(filePath, async () => {
+            events.push("competing edit");
+          });
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          events.push("exact save");
+        },
+      );
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 1,
+        saveWithoutFormatting: true,
+        files: [replacementFile(filePath, "src/example.ts", [["0:0", 1]])],
+      });
+      await competingEdit;
+
+      expect(events).toEqual(["exact save", "competing edit"]);
+      expect(exactSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          edit: workspaceEditInstances[0],
+          targets: [{ absolutePath: filePath, relativePath: "src/example.ts" }],
+        }),
+      );
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+      expect(payload(result)).toEqual({
+        status: "applied",
+        find: "old",
+        replace: "new",
+        files_changed: 1,
+        total_replacements: 1,
+        save_without_formatting: true,
+        files: [
+          {
+            path: "src/example.ts",
+            changes: 1,
+            durability: expect.objectContaining({
+              status: "durable",
+              outcome: "exact",
+              policy: "preserve_exact",
+              final_content_hash: "final-hash",
+            }),
+            post_edit_content_hash: "final-hash",
+          },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain("FINAL CONTENT");
+    });
+
+    it("exact-saves only files with accepted preview matches", async () => {
+      const first = "/workspace/src/first.ts";
+      const second = "/workspace/src/second.ts";
+      const docs = new Map([
+        [first, textDocument(first, "xoldxxxxold")],
+        [second, textDocument(second, "old")],
+      ]);
+      openTextDocument.mockImplementation(async (uri: { fsPath: string }) =>
+        docs.get(uri.fsPath),
+      );
+      acceptedMatchIds.clear();
+      acceptedMatchIds.add("0:0");
+      const onApprovalRequest = vi.fn(async () => ({
+        decision: "accept",
+        followUp: "keep going",
+      }));
+      resolveExactSave([durableCommit("src/first.ts", "first-hash")]);
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 3,
+        onApprovalRequest: onApprovalRequest as never,
+        saveWithoutFormatting: true,
+        files: [
+          replacementFile(first, "src/first.ts", [
+            ["0:0", 1],
+            ["0:1", 8],
+          ]),
+          replacementFile(second, "src/second.ts", [["1:0", 0]]),
+        ],
+      });
+
+      expect(onApprovalRequest).toHaveBeenCalled();
+      expect(workspaceEditInstances[0]?.replace).toHaveBeenCalledTimes(1);
+      expect(exactSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targets: [{ absolutePath: first, relativePath: "src/first.ts" }],
+        }),
+      );
+      expect(payload(result)).toMatchObject({
+        status: "applied",
+        files_changed: 1,
+        total_replacements: 1,
+        excluded: 2,
+        follow_up: "keep going",
+        save_without_formatting: true,
+        files: [
+          {
+            path: "src/first.ts",
+            changes: 1,
+            post_edit_content_hash: "first-hash",
+          },
+        ],
+      });
+    });
+
+    it("keeps the stale-proposal guard before any exact save", async () => {
+      const filePath = "/workspace/src/example.ts";
+      openTextDocument.mockResolvedValue(textDocument(filePath, "xnewy"));
+      enableMasterBypass();
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 1,
+        saveWithoutFormatting: true,
+        files: [replacementFile(filePath, "src/example.ts", [["0:0", 1]])],
+      });
+
+      expect(payload(result)).toMatchObject({
+        status: "stale_proposal",
+        no_changes_applied: true,
+      });
+      expect(exactSave).not.toHaveBeenCalled();
+      expect(applyEdit).not.toHaveBeenCalled();
+    });
+
+    it("exact-saves a consumed one-shot Guardian proposal", async () => {
+      const filePath = "/outside/project/example.ts";
+      const doc = textDocument(filePath, "xoldy");
+      openTextDocument.mockResolvedValue(doc);
+      const consume = vi.fn(() => true);
+      const prepareOneShotAuthorization = vi.fn(async () => ({
+        authorization: {
+          allowed: true as const,
+          basis: "guardian" as const,
+          reason: "Reviewed complete affected set",
+        },
+        consume,
+      }));
+      const onApprovalRequest = vi.fn(async () => "accept");
+      resolveExactSave([durableCommit(filePath, "guardian-hash")]);
+      const provider = createVscodeMultiFileEditReviewProvider(
+        {
+          isAgentWriteApproved: vi.fn(() => true),
+          isFileWriteApproved: vi.fn(() => false),
+        } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 1,
+        onApprovalRequest,
+        prepareOneShotAuthorization,
+        saveWithoutFormatting: true,
+        files: [replacementFile(filePath, filePath, [["0:0", 1]])],
+      });
+
+      expect(consume).toHaveBeenCalledOnce();
+      expect(onApprovalRequest).not.toHaveBeenCalled();
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(exactSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targets: [{ absolutePath: filePath, relativePath: filePath }],
+        }),
+      );
+      expect(payload(result)).toMatchObject({
+        status: "applied",
+        authorization: { allowed: true, basis: "guardian" },
+        save_without_formatting: true,
+        files: [
+          {
+            path: filePath,
+            changes: 1,
+            durability: { status: "durable", outcome: "exact" },
+            post_edit_content_hash: "guardian-hash",
+          },
+        ],
+      });
+    });
+
+    it("reports partial failure naming files that were not saved and verified", async () => {
+      const paths = [
+        "/workspace/src/saved.ts",
+        "/workspace/src/failed.ts",
+        "/workspace/src/unverified.ts",
+      ];
+      openTextDocument.mockImplementation(async (uri: { fsPath: string }) =>
+        textDocument(uri.fsPath, "old"),
+      );
+      enableMasterBypass();
+      resolveExactSave([
+        durableCommit("src/saved.ts", "saved-hash"),
+        {
+          status: "error",
+          path: "src/failed.ts",
+          error: "File could not be saved without formatting",
+          reason: "preserving_save_failed",
+          save_failure: {
+            document_dirty: true,
+            disk_state: "unchanged",
+            concurrent_change: false,
+            review_state: "dirty_document_preserved",
+            dirty_document_state: "matches_save_attempt",
+            vscode_error_detail: "unavailable",
+            retryable: true,
+            retry_target: "editor_save",
+          },
+          next_steps: ["Inspect the dirty editor."],
+          finalContent: "FINAL CONTENT MUST NOT LEAK",
+        },
+        { status: "accepted", path: "src/unverified.ts" },
+      ]);
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 3,
+        saveWithoutFormatting: true,
+        files: paths.map((filePath, index) =>
+          replacementFile(filePath, filePath.replace("/workspace/", ""), [
+            [`${index}:0`, 0],
+          ]),
+        ),
+      });
+
+      expect(result.isError).toBe(true);
+      expect(payload(result)).toMatchObject({
+        error: "Failed to save 2 of 3 replacement files without formatting",
+        status: "partial",
+        reason: "save_without_formatting_failed",
+        save_without_formatting: true,
+        find: "old",
+        replace: "new",
+        total_replacements: 3,
+        saved_files: ["src/saved.ts"],
+        failed_files: ["src/failed.ts", "src/unverified.ts"],
+        files: [
+          { path: "src/saved.ts", post_edit_content_hash: "saved-hash" },
+          {
+            path: "src/failed.ts",
+            status: "error",
+            reason: "preserving_save_failed",
+            save_failure: { retry_target: "editor_save" },
+            next_steps: ["Inspect the dirty editor."],
+          },
+          {
+            path: "src/unverified.ts",
+            status: "error",
+            reason: "missing_durability_evidence",
+          },
+        ],
+      });
+      expect(payload(result)).not.toHaveProperty("files_changed");
+      expect(JSON.stringify(result)).not.toContain("FINAL CONTENT");
+    });
+
+    it("reports an error status when no file could be saved", async () => {
+      const filePath = "/workspace/src/example.ts";
+      openTextDocument.mockResolvedValue(textDocument(filePath, "xoldy"));
+      enableMasterBypass();
+      resolveExactSave([
+        {
+          status: "error",
+          path: "src/example.ts",
+          error: "Save changed a file that requires exact preservation",
+          reason: "exact_preservation_failed",
+        },
+      ]);
+      const provider = createVscodeMultiFileEditReviewProvider(
+        { isAgentWriteApproved: vi.fn(() => false) } as never,
+        {} as never,
+      );
+
+      const result = await provider.reviewAndApply({
+        find: "old",
+        replace: "new",
+        isRegex: false,
+        sessionId: "session-1",
+        totalMatches: 1,
+        saveWithoutFormatting: true,
+        files: [replacementFile(filePath, "src/example.ts", [["0:0", 1]])],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(payload(result)).toMatchObject({
+        error: "Failed to save 1 of 1 replacement file without formatting",
+        status: "error",
+        saved_files: [],
+        failed_files: ["src/example.ts"],
+      });
+    });
   });
 });
 

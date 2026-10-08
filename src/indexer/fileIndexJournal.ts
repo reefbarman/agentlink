@@ -161,10 +161,10 @@ function validateIntent(value: unknown): FileIndexJournalIntent {
     }
   } else {
     requireNonEmptyString(value.targetHash, "target hash");
-    if (intendedBatches.length === 0 || intendedRecordIds.length === 0) {
-      throw new Error(
-        "Replacement journal operations require intended record IDs",
-      );
+    // A replacement may own no retrieval records: files below the chunk
+    // threshold still publish their source and structural relations.
+    if (intendedBatches.some((batch) => batch.recordIds.length === 0)) {
+      throw new Error("Replacement journal record batches cannot be empty");
     }
   }
 

@@ -394,8 +394,19 @@ describe("fileIndexJournal", () => {
     expect(() =>
       validateFileIndexJournal({
         version: FILE_INDEX_JOURNAL_VERSION,
-        operations: [replacement({ intendedBatches: [] })],
+        operations: [
+          replacement({ intendedBatches: [{ batch: 0, recordIds: [] }] }),
+        ],
       }),
-    ).toThrow("Replacement journal operations require intended record IDs");
+    ).toThrow("Replacement journal record batches cannot be empty");
+  });
+
+  it("accepts a chunkless replacement that owns no retrieval records", () => {
+    expect(
+      validateFileIndexJournal({
+        version: FILE_INDEX_JOURNAL_VERSION,
+        operations: [replacement({ intendedBatches: [] })],
+      }).operations[0],
+    ).toMatchObject({ kind: "replace", intendedBatches: [] });
   });
 });

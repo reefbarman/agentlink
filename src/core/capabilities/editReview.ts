@@ -186,6 +186,12 @@ export interface MultiFileEditReviewParams {
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
   prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
+  /**
+   * Save each changed file without format-on-save or other ordinary save
+   * participants and verify exact disk preservation per file. Defaults to the
+   * ordinary editor save.
+   */
+  saveWithoutFormatting?: boolean;
 }
 
 export interface MultiFileEditReviewProvider {

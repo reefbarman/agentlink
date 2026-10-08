@@ -41,7 +41,14 @@ export function prepareCodeFilePublication(
   if (languages.size > 1) {
     throw new Error("Code file publication cannot mix chunk languages");
   }
-  const [language] = languages;
+  // Files below the chunkers' minimum size still publish their source and
+  // structural relations with no chunks; their language then comes from the
+  // structural entry, which uses the same path-based inference as chunks.
+  const [chunkLanguage] = languages;
+  const language =
+    options.chunks.length === 0
+      ? options.structuralEntry.language
+      : chunkLanguage;
   const sourceMetadata = {
     path: sourcePath,
     sourceRevision: options.contentHash,

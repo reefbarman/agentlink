@@ -319,6 +319,10 @@ describe("handleFindAndReplace", () => {
     );
 
     expect(toolJson(result)).toEqual({ status: "applied" });
+    expect(
+      vi.mocked(provider.reviewAndApply).mock.calls[0]?.[0]
+        .saveWithoutFormatting,
+    ).toBeUndefined();
     expect(provider.reviewAndApply).toHaveBeenCalledWith(
       expect.objectContaining({
         find: "old",
@@ -350,6 +354,41 @@ describe("handleFindAndReplace", () => {
             ],
           }),
         ],
+      }),
+    );
+  });
+
+  it("forwards save_without_formatting to the multi-file edit-review boundary", async () => {
+    const filePath = path.join(workspaceDir, "src", "exact.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "keep old", "utf-8");
+    mockWorkspace.openTextDocument.mockResolvedValue(
+      createDocument(filePath, "keep old"),
+    );
+    const provider: MultiFileEditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({ content: [] })),
+    };
+
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+    await handleFindAndReplace(
+      {
+        path: "src/exact.ts",
+        find: "old",
+        replace: "new",
+        save_without_formatting: true,
+      },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      { multiFileEditReviewProvider: provider },
+    );
+
+    expect(provider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        saveWithoutFormatting: true,
+        files: [expect.objectContaining({ absolutePath: filePath })],
       }),
     );
   });

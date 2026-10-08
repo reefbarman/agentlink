@@ -152,7 +152,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   find_and_replace: {
     label: "Bulk find-and-replace across files",
     description:
-      "Bulk find-and-replace across one or more files. Shows a preview before applying and supports literal strings or regex with capture groups.",
+      "Bulk find-and-replace across one or more files. Shows a preview before applying and supports literal strings or regex with capture groups. Set save_without_formatting=true to require exact per-file preservation without ordinary save participants.",
   },
 
   // --- Diagnostics & language server ---

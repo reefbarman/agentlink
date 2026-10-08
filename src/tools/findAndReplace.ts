@@ -65,6 +65,7 @@ export async function handleFindAndReplace(
     glob?: string;
     regex?: boolean;
     max_replacements?: number;
+    save_without_formatting?: boolean;
   },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -318,6 +319,7 @@ export async function handleFindAndReplace(
       approvalPanel,
       onApprovalRequest,
       prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
+      saveWithoutFormatting: params.save_without_formatting,
     });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {

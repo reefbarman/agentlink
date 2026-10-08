@@ -577,6 +577,48 @@ function describeMcpTransportFailure(
   );
 }
 
+/**
+ * Streamable HTTP transport errors carry the HTTP status as a positive
+ * numeric `code`; JSON-RPC errors (McpError) use negative codes.
+ */
+function isHttpNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    !(error instanceof McpError) &&
+    "code" in error &&
+    error.code === 404
+  );
+}
+
+/** A 404 is a session expiry only when the request carried a session ID. */
+function isExpiredStreamableHttpSession(
+  error: unknown,
+  sessionId: string | undefined,
+): boolean {
+  return Boolean(sessionId) && isHttpNotFound(error);
+}
+
+function expiredSessionResult(server: string, tool: string): ToolResult {
+  const detail = {
+    error: "mcp_session_expired",
+    server,
+    tool,
+    completionState: "unknown",
+    retrySafe: false,
+    guidance:
+      "The MCP server no longer recognises this session, usually because it restarted. AgentLink is reconnecting with a new session; do not repeat a potentially mutating call until server-provided status confirms it did not run.",
+  };
+  return {
+    data: detail,
+    content: [{ type: "text", text: JSON.stringify(detail) }],
+    isError: true,
+    error: {
+      kind: "mcp_session_expired",
+      message: `MCP server '${server}' ended the session while calling '${tool}'. Reconnecting.`,
+    },
+  };
+}
+
 function describeOutputSchemaError(
   error: unknown,
   toolName: string,
@@ -1380,6 +1422,19 @@ export class McpClientHub {
         );
       };
 
+      // A Streamable HTTP server answers 404 to a request carrying a session
+      // ID it no longer knows (for example after a restart). The SDK reports
+      // the error but keeps the stale session, so every later request fails
+      // the same way. Per the MCP transport spec, start a fresh session.
+      if (cfg.type === "streamable-http" || cfg.type === "http") {
+        transport.onerror = (error) => {
+          const { sessionId } = transport as Transport;
+          if (isExpiredStreamableHttpSession(error, sessionId)) {
+            this.recoverExpiredHttpSession(cfg, entry, signal);
+          }
+        };
+      }
+
       // Register elicitation handler
       entry.client.setRequestHandler(ElicitRequestSchema, async (req) => {
         const params = (req as { params: unknown }).params as {
@@ -2016,6 +2071,58 @@ export class McpClientHub {
         this.log(`[mcp:${cfg.name}] late sign-in reconnect failed: ${err}`),
       )
       .finally(() => this.onStatusChange?.(this.getServerInfos()));
+  }
+
+  /**
+   * Replace a connection whose Streamable HTTP session the server rejected.
+   * The failed request is never replayed; callers receive an error and can
+   * retry once the new session is connected.
+   */
+  private recoverExpiredHttpSession(
+    cfg: McpServerConfig,
+    entry: ConnectedServer,
+    signal: AbortSignal,
+  ): void {
+    if (
+      signal.aborted ||
+      this.servers.get(cfg.name) !== entry ||
+      entry.status !== "connected"
+    ) {
+      return;
+    }
+    // Mark the session unusable now so concurrent failures coalesce and new
+    // calls are not sent with the expired session ID.
+    entry.status = "disconnected";
+    entry.error =
+      "The server ended the MCP session. Reconnecting with a new session.";
+    this.log(
+      `[mcp:${cfg.name}] server rejected the MCP session (HTTP 404); reconnecting with a new session`,
+    );
+    this.onStatusChange?.(this.getServerInfos());
+    // Defer teardown so the failing request settles with its own HTTP error
+    // rather than the connection-closed error raised by closing the client.
+    setTimeout(() => {
+      if (this.servers.get(cfg.name) !== entry || signal.aborted) return;
+      if (entry.retryTimer) clearTimeout(entry.retryTimer);
+      for (const state of Object.values(entry.catalogRefresh)) {
+        if (state.scheduled) clearTimeout(state.scheduled);
+        state.scheduled = undefined;
+        state.dirty = false;
+      }
+      void entry.client.close().catch(() => {
+        // best effort; the replacement connection uses a new transport
+      });
+      this.connectServer(cfg, {
+        retryCount: 1,
+        authMode: "noninteractive",
+        trigger: "runtime-reconnect",
+        retryAfterConnected: true,
+      }).catch((error: unknown) => {
+        this.log(
+          `[mcp:${cfg.name}] session recovery reconnect failed: ${this.describeError(error)}`,
+        );
+      });
+    }, 0);
   }
 
   private scheduleReconnect(
@@ -2816,6 +2923,9 @@ export class McpClientHub {
           toolName,
           `MCP tool '${toolName}' was cancelled.`,
         );
+      }
+      if (isHttpNotFound(err) && server.status !== "connected") {
+        return expiredSessionResult(serverName, toolName);
       }
       const transportFailure = describeMcpTransportFailure(
         err,

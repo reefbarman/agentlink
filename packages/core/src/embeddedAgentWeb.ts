@@ -136,7 +136,7 @@ export function createEmbeddedAgentWebHandler<
     options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
     "maxMessageLength",
   );
-  const maxAttachments = positiveInteger(
+  const maxAttachments = nonNegativeInteger(
     options.maxAttachments ?? 4,
     "maxAttachments",
   );
@@ -644,7 +644,7 @@ export function parseEmbeddedAgentRequest(
     options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
     "maxMessageLength",
   );
-  const maxAttachments = positiveInteger(
+  const maxAttachments = nonNegativeInteger(
     options.maxAttachments ?? 4,
     "maxAttachments",
   );
@@ -939,7 +939,9 @@ function attachments(
 ): readonly AgentTurnAttachment[] {
   if (!Array.isArray(value) || value.length > maxAttachments) {
     throw invalidRequest(
-      `attachments must contain at most ${maxAttachments} items`,
+      maxAttachments === 0
+        ? "attachments are disabled"
+        : `attachments must contain at most ${maxAttachments} items`,
     );
   }
   let totalBytes = 0;
@@ -1028,6 +1030,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function positiveInteger(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+/** Zero is allowed so text-only hosts can disable attachments explicitly. */
+function nonNegativeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer`);
   }
   return value;
 }

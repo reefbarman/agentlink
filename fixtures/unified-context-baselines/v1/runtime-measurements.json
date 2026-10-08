@@ -679,44 +679,44 @@
     {
       "mode": "code",
       "toolCount": 63,
-      "chars": 100463,
-      "estimatedTokens": 25116,
-      "sha256": "c02a26ed2909a2d9c0a213daae963705a51da1e8dfa2793ef497eaebd57fc177"
+      "chars": 100723,
+      "estimatedTokens": 25181,
+      "sha256": "2b7d99e286f37871dcd9586746363ed54ea31e0e4ee5cfb23f6bda7a93549403"
     },
     {
       "mode": "architect",
       "toolCount": 58,
-      "chars": 94506,
-      "estimatedTokens": 23627,
-      "sha256": "57ef45198dd81e89a560a69b6b64b57c6d4e01135466f590ad80af9af42e503f"
+      "chars": 94468,
+      "estimatedTokens": 23617,
+      "sha256": "e8ae70c13e7842ed46d54095bb3550dca372205786d22cb8951775051fd6fe6d"
     },
     {
       "mode": "orchestrate",
       "toolCount": 52,
-      "chars": 67598,
-      "estimatedTokens": 16900,
-      "sha256": "39ce8fa486bcb22eabff92b88b4a3f17ff341d0afe66c960f3788ff6ce356e22"
+      "chars": 67579,
+      "estimatedTokens": 16895,
+      "sha256": "15b070dccf637e270ace2901acfc7f0b11e021c35a35b4f760b3f12b859df701"
     },
     {
       "mode": "ask",
       "toolCount": 37,
-      "chars": 59349,
-      "estimatedTokens": 14838,
-      "sha256": "ea284592dbddeea5efd29ca9dbe96050125049b140c5f5e3258117afaf94b833"
+      "chars": 59330,
+      "estimatedTokens": 14833,
+      "sha256": "cb9f6d8bd6fb347765491fa4db6553f77d5de79232baca3398b614fb12a4e0b5"
     },
     {
       "mode": "debug",
       "toolCount": 55,
-      "chars": 83006,
-      "estimatedTokens": 20752,
-      "sha256": "680a91e530965d65161b934b8e8c7cd6da6279275b5936606b030fa6819df10c"
+      "chars": 82987,
+      "estimatedTokens": 20747,
+      "sha256": "e47f409ca3081305d342b3a067f7dc59b407ed53a93367c5a54136aa12f9029d"
     },
     {
       "mode": "review",
       "toolCount": 49,
-      "chars": 79512,
-      "estimatedTokens": 19878,
-      "sha256": "9dfc2fcb82100ae18596ca1eb6351091ff810523a0dc797497082dc3b071909c"
+      "chars": 79493,
+      "estimatedTokens": 19874,
+      "sha256": "34a45af9d7c6d4d76fead915cec24d52eb02d72318f6c2ad7a3dcfd9d73239c1"
     }
   ],
   "projectedToolsByMode": [
@@ -724,9 +724,9 @@
       "mode": "code",
       "toolCount": 30,
       "deferredToolCount": 33,
-      "chars": 63886,
-      "estimatedTokens": 15972,
-      "sha256": "2edcf9fe1bc7cf844d9002c9392b87860db4a2b649ecbae20bda89d933a9b4d2"
+      "chars": 64184,
+      "estimatedTokens": 16046,
+      "sha256": "a394887e28a976fbf68c7da3a1d47ee1ce9827f980902d7425a8c501e78209c2"
     },
     {
       "mode": "architect",

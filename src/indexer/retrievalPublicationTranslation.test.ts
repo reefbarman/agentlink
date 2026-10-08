@@ -153,6 +153,39 @@ describe("retrieval publication translation", () => {
     ).toEqual([0, 1, 2]);
   });
 
+  it("publishes a chunkless file with its source, relations, and structural language", () => {
+    const publication = prepareCodeFilePublication({
+      publicationId: "publication-tiny",
+      generation: "generation-tiny",
+      workspaceRoot,
+      sourcePath,
+      contentHash: "content-hash",
+      observedAt: "2026-07-25T01:00:00.000Z",
+      sourceContent: 'export * from "./helper.js";',
+      structuralEntry: structuralEntry(),
+      chunks: [],
+    });
+
+    expect(publication).toMatchObject({
+      source: {
+        path: sourcePath,
+        content: 'export * from "./helper.js";',
+        metadata: { language: "typescript" },
+      },
+      chunks: [],
+      expectedChunkIds: [],
+    });
+    expect(publication.relations.map((relation) => relation.kind)).toEqual([
+      "imports",
+      "exports",
+      "declares",
+    ]);
+    expect(publication.expectedRelationIds).toEqual(
+      publication.relations.map((relation) => relation.id),
+    );
+    expect(() => validateCodeFilePublication(publication)).not.toThrow();
+  });
+
   it("keeps identical relative paths isolated across workspace roots", () => {
     const first = prepare("/workspace-one").publication;
     const second = prepare("/workspace-two").publication;
