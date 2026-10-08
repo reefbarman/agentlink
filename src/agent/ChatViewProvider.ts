@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ReleaseUpdateService } from "../updates/ReleaseUpdateService.js";
 import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
+import type { ReleaseInstallState } from "../updates/releaseInstall.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -420,6 +421,7 @@ export const HOST_HEARTBEAT_INTERVAL_MS = 2_000;
  * Mirrored in src/agent/webview/types.ts for the browser side.
  */
 export type ExtensionToWebview =
+  | { type: "releaseInstallState"; state: ReleaseInstallState }
   | {
       type: "releaseUpdateState";
       state: ReleaseUpdateState | null;
@@ -1177,6 +1179,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     | (() => WorkspaceHistoryLocationDiagnostic)
     | undefined;
   private releaseUpdateService: ReleaseUpdateService | undefined;
+  private releaseInstallState: ReleaseInstallState = { phase: "idle" };
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
   private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
@@ -1938,6 +1941,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   async checkReleaseUpdates(): Promise<ReleaseUpdateState | null> {
     return this.releaseUpdateService ? this.releaseUpdateService.check() : null;
+  }
+
+  sendReleaseInstallState(state: ReleaseInstallState): void {
+    this.releaseInstallState = state;
+    const message: ExtensionToWebview = { type: "releaseInstallState", state };
+    this.sendOrQueueWebviewMessage(message);
+    this.postMessageToEditorPanes(message);
   }
 
   sendReleaseUpdateState(showDetails = false): void {
@@ -7489,7 +7499,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (
       typeof message.command === "string" &&
-      message.command.startsWith("releaseUpdate")
+      [
+        "releaseUpdateGet",
+        "releaseUpdateCheck",
+        "releaseUpdateDismiss",
+        "releaseUpdateAutomatic",
+        "releaseUpdateOpenLink",
+        "releaseUpdateInstall",
+        "releaseUpdateRestart",
+      ].includes(message.command)
     ) {
       await this.handleWebviewMessage(message, { connection });
       return;
@@ -8047,6 +8065,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sourceSessionId = explicitSourceSessionId ?? sourceSession?.id;
 
     switch (msg.command) {
+      case "releaseUpdateInstall":
+        await vscode.commands.executeCommand("agentlink.installUpdate");
+        break;
+      case "releaseUpdateRestart":
+        await vscode.commands.executeCommand("agentlink.restartForUpdate");
+        break;
       case "releaseUpdateGet":
       case "releaseUpdateCheck":
       case "releaseUpdateDismiss":
@@ -8065,8 +8089,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           state: this.getReleaseUpdateState(),
           showDetails: msg.command === "releaseUpdateCheck",
         };
-        if (context?.connection) context.connection.postMessage(message);
-        else this.sendReleaseUpdateState(msg.command === "releaseUpdateCheck");
+        const installMessage: ExtensionToWebview = {
+          type: "releaseInstallState",
+          state: this.releaseInstallState,
+        };
+        if (context?.connection) {
+          context.connection.postMessage(message);
+          context.connection.postMessage(installMessage);
+        } else {
+          this.sendReleaseUpdateState(msg.command === "releaseUpdateCheck");
+          this.sendReleaseInstallState(this.releaseInstallState);
+        }
         break;
       }
       case "releaseUpdateOpenLink": {
@@ -13748,7 +13781,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       msg.type === "agentSessionList" ||
       msg.type === "agentSessionUpdate" ||
       msg.type === "agentBgSessionsUpdate" ||
-      msg.type === "releaseUpdateState"
+      msg.type === "releaseUpdateState" ||
+      msg.type === "releaseInstallState"
     ) {
       host.postMessage(msg);
     }

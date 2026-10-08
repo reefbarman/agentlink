@@ -130,6 +130,7 @@ import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
 import { ReleaseUpdateIndicator } from "../../shared/ui/ReleaseUpdateIndicator";
 import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
+import type { ReleaseInstallState } from "../../updates/releaseInstall";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { memoryMutationError } from "../../shared/memoryMutationError";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
@@ -1456,6 +1457,8 @@ export function BrowserGatewayApp({
     useState(false);
   const [desktopProductUpdate, setDesktopProductUpdate] =
     useState<ReleaseUpdateState | null>(null);
+  const [desktopInstallState, setDesktopInstallState] =
+    useState<ReleaseInstallState>({ phase: "idle" });
   const [desktopProductUpdateDetailsOpen, setDesktopProductUpdateDetailsOpen] =
     useState(false);
   const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
@@ -2195,6 +2198,17 @@ export function BrowserGatewayApp({
     const unsubscribe = desktopBridge.onReleaseUpdateState?.((state) => {
       if (!disposed) setDesktopProductUpdate(state);
     });
+    const unsubscribeInstall = desktopBridge.onReleaseInstallState?.(
+      (state) => {
+        if (!disposed) setDesktopInstallState(state);
+      },
+    );
+    void desktopBridge
+      .getReleaseInstallState?.()
+      .then((state) => {
+        if (!disposed) setDesktopInstallState(state);
+      })
+      .catch(() => undefined);
     void desktopBridge
       .getReleaseUpdateState()
       .then((state) => {
@@ -2204,6 +2218,7 @@ export function BrowserGatewayApp({
     return () => {
       disposed = true;
       unsubscribe?.();
+      unsubscribeInstall?.();
     };
   }, [askAgentOnly]);
 
@@ -8250,6 +8265,28 @@ export function BrowserGatewayApp({
               <ReleaseUpdateIndicator
                 state={desktopProductUpdate}
                 label="Desktop update"
+                installState={desktopInstallState}
+                onInstall={
+                  !desktopProductUpdate?.identity.development &&
+                  desktopShell.installReleaseUpdate
+                    ? () => {
+                        void desktopShell
+                          .installReleaseUpdate?.()
+                          .then(setDesktopInstallState)
+                          .catch(() => undefined);
+                      }
+                    : undefined
+                }
+                onRestart={
+                  desktopShell.restartForReleaseUpdate
+                    ? () => {
+                        void desktopShell
+                          .restartForReleaseUpdate?.()
+                          .then(setDesktopInstallState)
+                          .catch(() => undefined);
+                      }
+                    : undefined
+                }
                 showDetails={desktopProductUpdateDetailsOpen}
                 onClose={() => setDesktopProductUpdateDetailsOpen(false)}
                 onCheck={() => {

@@ -140,6 +140,20 @@
             </button>
           </div>
         </div>
+        <div class="account-actions">
+          <button id="install-update" class="primary" type="button" hidden>
+            Install update
+          </button>
+          <button id="restart-update" class="primary" type="button" hidden>
+            Restart to update
+          </button>
+        </div>
+        <p
+          id="install-update-note"
+          class="field-note"
+          role="status"
+          aria-live="polite"
+        ></p>
         <label class="account toggle-row" for="automatic-updates">
           <span class="account-identity">
             <strong>Automatic update checks</strong>
@@ -151,8 +165,9 @@
           <input id="automatic-updates" type="checkbox" role="switch" />
         </label>
         <p id="update-warning" class="field-note">
-          Desktop preview releases are unsigned. Follow the installation guide
-          and verify checksums before installing.
+          Desktop preview releases are unsigned. Install update verifies the
+          download checksum, then asks separately before restarting. Checksums
+          prove download integrity, not publisher authenticity.
         </p>
       </section>
 

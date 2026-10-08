@@ -109,6 +109,10 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | {
+      type: "releaseInstallState";
+      state: import("../../updates/releaseInstall.js").ReleaseInstallState;
+    }
+  | {
       type: "releaseUpdateState";
       state:
         | import("../../updates/releaseUpdateTypes.js").ReleaseUpdateState

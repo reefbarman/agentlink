@@ -6,7 +6,12 @@ import {
   type ReleaseUpdateState,
 } from "../../updates/releaseUpdateTypes.js";
 
+import type { ReleaseInstallState } from "../../updates/releaseInstall.js";
+
 export interface ReleaseUpdateIndicatorProps {
+  onInstall?: () => void;
+  onRestart?: () => void;
+  installState?: ReleaseInstallState | null;
   state: ReleaseUpdateState | null;
   onCheck: () => void;
   onDismiss: () => void;
@@ -44,6 +49,9 @@ export function ReleaseUpdateIndicator({
   showDetails = false,
   onClose,
   onAutomaticChecksChange,
+  onInstall,
+  onRestart,
+  installState,
 }: ReleaseUpdateIndicatorProps) {
   const [open, setOpen] = useState(showDetails);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -63,7 +71,15 @@ export function ReleaseUpdateIndicator({
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
   }, [open, onClose]);
-  if (!state || (!hasVisibleReleaseUpdate(state) && !open)) return null;
+  const pendingRestart = installState?.phase === "ready_to_restart";
+  const installing = Boolean(
+    installState &&
+    ["preparing", "downloading", "verifying", "installing"].includes(
+      installState.phase,
+    ),
+  );
+  if (!state || (!hasVisibleReleaseUpdate(state) && !pendingRestart && !open))
+    return null;
   const candidate = state.candidate;
   const prefix =
     state.identity.product === "vscode" ? "v" : `${state.identity.product}-v`;
@@ -73,7 +89,7 @@ export function ReleaseUpdateIndicator({
       : `${RELEASE_REPOSITORY_URL}/releases`;
   return (
     <span style={{ display: "inline-flex", alignItems: "center" }}>
-      {hasVisibleReleaseUpdate(state) && (
+      {(hasVisibleReleaseUpdate(state) || pendingRestart) && (
         <button
           ref={trigger}
           type="button"
@@ -89,7 +105,7 @@ export function ReleaseUpdateIndicator({
           }}
         >
           <i class="codicon codicon-arrow-circle-up" aria-hidden="true" />
-          {label}
+          {pendingRestart ? "Restart to update" : label}
         </button>
       )}
       {open && (
@@ -145,11 +161,46 @@ export function ReleaseUpdateIndicator({
             </p>
           )}
           {state.identity.product !== "vscode" && (
-            <p>
-              This preview is unsigned and not notarised. Updating is manual.
+            <p>This preview is unsigned and not notarised.</p>
+          )}
+          {installState && installState.phase !== "idle" && (
+            <p role="status">
+              {installState.message ??
+                (
+                  {
+                    preparing: "Preparing update…",
+                    downloading: "Downloading update…",
+                    verifying: "Verifying checksum…",
+                    installing: "Installing update…",
+                    ready_to_restart:
+                      "Update is ready. Restart when convenient.",
+                    installed: "Update installed.",
+                    failed: "Update failed. Nothing was restarted.",
+                    blocked: "Self-update is unavailable for this build.",
+                  } as Record<string, string>
+                )[installState.phase]}
+              {installState.phase === "downloading" && installState.total
+                ? ` ${Math.round(((installState.received ?? 0) / installState.total) * 100)}%`
+                : ""}
             </p>
           )}
+          {!onInstall && <p>Install this update from the host.</p>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+            {onInstall &&
+              candidate &&
+              !pendingRestart &&
+              !state.identity.development && (
+                <button type="button" disabled={installing} onClick={onInstall}>
+                  Install update
+                </button>
+              )}
+            {pendingRestart && onRestart && (
+              <button type="button" onClick={onRestart}>
+                {state.identity.product === "vscode"
+                  ? "Reload to finish"
+                  : "Restart to update"}
+              </button>
+            )}
             <button type="button" onClick={() => onOpenLink(releaseUrl)}>
               Release notes
             </button>

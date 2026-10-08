@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import { ReleaseUpdateService } from "../updates/ReleaseUpdateService.js";
 import path from "node:path";
+import { registerVscodeReleaseInstall } from "./vscodeReleaseInstall.js";
 
 export function registerVscodeReleaseUpdates(
   context: vscode.ExtensionContext,
@@ -44,6 +45,9 @@ export function registerVscodeReleaseUpdates(
   context.subscriptions.push(
     service,
     { dispose: unsubscribe },
+    ...registerVscodeReleaseInstall(context, service, (state) =>
+      provider.sendReleaseInstallState(state),
+    ),
     vscode.commands.registerCommand("agentlink.checkForUpdates", async () => {
       await vscode.commands.executeCommand("agentLink.chatView.focus");
       provider.sendReleaseUpdateState(true);

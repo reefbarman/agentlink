@@ -1,3 +1,4 @@
+import type { ReleaseInstallState } from "../updates/releaseInstall.js";
 import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
 
 export const AGENTLINK_DESKTOP_OWNER_ID = "agentlink-desktop";
@@ -71,6 +72,12 @@ export interface DesktopBridge {
   ): () => void;
   checkForReleaseUpdate?(): Promise<ReleaseUpdateState>;
   dismissReleaseUpdate?(): Promise<ReleaseUpdateState>;
+  getReleaseInstallState?(): Promise<ReleaseInstallState>;
+  onReleaseInstallState?(
+    listener: (state: ReleaseInstallState) => void,
+  ): () => void;
+  installReleaseUpdate?(): Promise<ReleaseInstallState>;
+  restartForReleaseUpdate?(): Promise<ReleaseInstallState>;
 }
 
 declare global {

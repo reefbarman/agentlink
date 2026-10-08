@@ -102,6 +102,71 @@ describe("runCli", () => {
     }
   });
 
+  it("accepts explicit non-interactive install consent and refuses unsupported layouts", async () => {
+    const dataRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-cli-updates-install-"),
+    );
+    const test = harness();
+    const state = {
+      identity: {
+        product: "cli" as const,
+        version: "0.3.0",
+        target: "darwin-arm64",
+        development: false,
+      },
+      status: "available" as const,
+      automaticChecks: false,
+      lastAttemptAt: null,
+      checkedAt: null,
+      retryAt: null,
+      candidate: {
+        version: "0.4.0",
+        tag: "cli-v0.4.0",
+        target: "darwin-arm64",
+        channel: "stable" as const,
+        releaseUrl:
+          "https://github.com/reefbarman/agentlink/releases/tag/cli-v0.4.0",
+        instructionsUrl: "https://github.com/reefbarman/agentlink/releases",
+      },
+      dismissedVersion: null,
+      stale: false,
+    };
+    const check = vi.fn(async () => state);
+    const dispose = vi.fn();
+    const createUpdateService = vi.fn(() => ({
+      start: vi.fn(async () => undefined),
+      snapshot: () => state,
+      subscribe: vi.fn(() => () => undefined),
+      check,
+      dismiss: vi.fn(async () => state),
+      setAutomaticChecks: vi.fn(async () => undefined),
+      dispose,
+    }));
+    try {
+      await expect(
+        runCli(
+          ["updates", "--install"],
+          test.io,
+          { AGENTLINK_HOME: dataRoot },
+          createUpdateService,
+        ),
+      ).resolves.toBe(1);
+      if (__AGENTLINK_CLI_PACKAGED__) {
+        expect(check).toHaveBeenCalledWith(true);
+        expect(test.stderr()).toContain("Update installation failed");
+        expect(test.stderr()).toContain("preview installs");
+      } else {
+        expect(check).not.toHaveBeenCalled();
+        expect(test.stderr()).toContain(
+          "Source builds must be updated from source",
+        );
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(dataRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not initialize update notifications for version output", async () => {
     const test = harness();
     const createUpdateService = vi.fn();

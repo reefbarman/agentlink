@@ -63,6 +63,7 @@ import { WorktreeSetupPanel } from "./components/WorktreeSetupPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { ReleaseUpdateIndicator } from "../../shared/ui/ReleaseUpdateIndicator";
 import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
+import type { ReleaseInstallState } from "../../updates/releaseInstall";
 import { ChatTabConfirmation } from "./components/ChatTabConfirmation";
 import { ChatSessionPane, ChatWorkspace } from "./components/ChatWorkspace";
 import { ChatView } from "./components/ChatView";
@@ -358,6 +359,8 @@ export function App({
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
   const [releaseUpdateState, setReleaseUpdateState] =
     useState<ReleaseUpdateState | null>(null);
+  const [releaseInstallState, setReleaseInstallState] =
+    useState<ReleaseInstallState | null>(null);
   const [showReleaseUpdateDetails, setShowReleaseUpdateDetails] =
     useState(false);
   const [hostConnectionStale, setHostConnectionStale] = useState(false);
@@ -1128,6 +1131,9 @@ export function App({
       const { dropIfNotStreaming, flushDeltasNow } = controls;
 
       switch (msg.type) {
+        case "releaseInstallState":
+          setReleaseInstallState(msg.state);
+          break;
         case "releaseUpdateState":
           setReleaseUpdateState(msg.state);
           if (msg.showDetails) setShowReleaseUpdateDetails(true);
@@ -4130,6 +4136,13 @@ export function App({
               extraActions={
                 <ReleaseUpdateIndicator
                   state={releaseUpdateState}
+                  installState={releaseInstallState}
+                  onInstall={() =>
+                    vscodeApi.postMessage({ command: "releaseUpdateInstall" })
+                  }
+                  onRestart={() =>
+                    vscodeApi.postMessage({ command: "releaseUpdateRestart" })
+                  }
                   showDetails={showReleaseUpdateDetails}
                   onClose={() => setShowReleaseUpdateDetails(false)}
                   onCheck={() =>

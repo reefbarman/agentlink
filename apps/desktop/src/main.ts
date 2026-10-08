@@ -50,6 +50,13 @@ import { getAskAgentMcpConfigPaths } from "../../../src/agent/mcpConfig.js";
 import type { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import { createDesktopReleaseUpdateService } from "./desktopReleaseUpdates.js";
+import {
+  DesktopReleaseInstaller,
+  drainDesktopUpdateHelper,
+} from "./desktopReleaseInstall.js";
+import { registerDesktopReleaseInstallIpc } from "./desktopReleaseInstallIpc.js";
+import { BrowserGatewayHelperAdminClient } from "../../../src/browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
+import type { ReleaseInstallState } from "../../../src/updates/releaseInstall.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
 
@@ -70,6 +77,8 @@ let authClient: BrowserGatewayHelperModelAuthLeaseClient | null = null;
 let discovery: BrowserGatewayHelperDiscoveryRecord | null = null;
 let credentialRefreshTimer: NodeJS.Timeout | null = null;
 let releaseUpdateService: ReleaseUpdateService | null = null;
+let releaseInstaller: DesktopReleaseInstaller | null = null;
+let releaseInstallerReady = false;
 let releaseUpdateUnsubscribe: (() => void) | null = null;
 let cachedCodexAuth: DesktopResolvedModelAuth | null = null;
 let tray: Tray | null = null;
@@ -543,6 +552,64 @@ async function prepareReleaseUpdateService(): Promise<void> {
     app,
     preferencesPath,
   );
+  releaseInstaller = new DesktopReleaseInstaller({
+    packaged: app.isPackaged,
+    executable: app.getPath("exe"),
+    userData: app.getPath("userData"),
+    identity: releaseUpdateService.snapshot().identity,
+    getCandidate: async () => {
+      if (!releaseUpdateService) throw new Error("release_update_unavailable");
+      return (await releaseUpdateService.check(true)).candidate ?? undefined;
+    },
+    confirmInstall: async (version) =>
+      (
+        await dialog.showMessageBox({
+          type: "warning",
+          title: "Install Desktop update",
+          message: `Download and prepare AgentLink Desktop ${version}?`,
+          detail:
+            "This installs an unsigned preview. The download checksum verifies integrity, not publisher authenticity. Keychain access may be requested again. Restart is a separate confirmation.",
+          buttons: ["Install update", "Cancel"],
+          defaultId: 0,
+          cancelId: 1,
+        })
+      ).response === 0,
+    confirmRestart: async (version) =>
+      (
+        await dialog.showMessageBox({
+          type: "warning",
+          title: "Restart to update",
+          message: `Restart AgentLink Desktop to use ${version}?`,
+          detail:
+            "Restart interrupts all Desktop agent sessions, including sessions connected through a browser. VS Code sessions are not stopped.",
+          buttons: ["Restart Now", "Later"],
+          defaultId: 1,
+          cancelId: 1,
+        })
+      ).response === 0,
+    drainHelper: async () => {
+      if (!discovery)
+        throw new Error(
+          "Desktop helper is unavailable. Quit and reopen Desktop before restarting to update.",
+        );
+      // Never send shutdown to a helper launched by VS Code, even if discovery
+      // namespace or port settings were overridden in the launch environment.
+      const helper = discovery;
+      await drainDesktopUpdateHelper({
+        executable: app.getPath("exe"),
+        helperPid: helper.pid,
+        shutdown: () =>
+          new BrowserGatewayHelperAdminClient({
+            helperUrl: helper.url,
+            clientSharedSecret: helper.clientSharedSecret,
+            log,
+          }).shutdown(),
+      });
+    },
+    quit: () => app.quit(),
+    onState: publishReleaseInstallState,
+    log,
+  });
   releaseUpdateUnsubscribe = releaseUpdateService.subscribe(
     publishReleaseUpdateState,
   );
@@ -585,12 +652,30 @@ function quickAskMenuItem(): MenuItemConstructorOptions {
   };
 }
 
+function publishReleaseInstallState(state: ReleaseInstallState): void {
+  for (const window of [chatWindow, setupWindow]) {
+    if (window && !window.isDestroyed())
+      window.webContents.send("agentlink:release-update:install-state", state);
+  }
+  updateTrayMenu();
+}
+
 function updateTrayMenu(): void {
   tray?.setContextMenu(
     Menu.buildFromTemplate([
       quickAskMenuItem(),
       { label: "Open AgentLink", click: openMainWindow },
       { label: "Check for Updates…", click: checkForUpdates },
+      ...(releaseInstaller?.snapshot().phase === "ready_to_restart"
+        ? [
+            {
+              label: "Restart to Update…",
+              click: () => {
+                void releaseInstaller?.restart();
+              },
+            },
+          ]
+        : []),
       { type: "separator" },
       { label: "Settings…", click: openSettings },
       { type: "separator" },
@@ -610,6 +695,13 @@ function installTray(): void {
 }
 
 function registerCredentialIpc(): void {
+  registerDesktopReleaseInstallIpc({
+    ipc: ipcMain,
+    assertSender: (event) =>
+      assertSetupOrChatSender(event.sender, event.senderFrame),
+    getInstaller: () => releaseInstaller,
+    isReady: () => releaseInstallerReady,
+  });
   ipcMain.handle("agentlink:credentials:status", async (event) => {
     assertSetupSender(event.sender);
     return {
@@ -901,6 +993,14 @@ async function main(): Promise<void> {
   } else {
     await showSetupWindow();
   }
+  // Only a successfully initialized new app may remove the recovery backup.
+  await releaseInstaller
+    ?.reconcile()
+    .then(() => {
+      releaseInstallerReady = true;
+      publishReleaseInstallState(releaseInstaller!.snapshot());
+    })
+    .catch((error) => log(`update reconciliation failed: ${String(error)}`));
   void startReleaseUpdateService().catch((error) =>
     log(`update service failed to start: ${String(error)}`),
   );

@@ -50,6 +50,9 @@ vi.mock("vscode", () => ({
     },
   },
 }));
+vi.mock("./vscodeReleaseInstall.js", () => ({
+  registerVscodeReleaseInstall: () => [],
+}));
 vi.mock("../updates/ReleaseUpdateService.js", () => ({
   ReleaseUpdateService: class {
     constructor(options: unknown) {

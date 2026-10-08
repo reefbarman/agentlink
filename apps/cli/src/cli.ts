@@ -113,6 +113,7 @@ import type { CliConfig } from "./types.js";
 import { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import type { ReleaseUpdateServiceOptions } from "../../../src/updates/ReleaseUpdateService.js";
+import { installCliReleaseUpdate } from "./cliReleaseInstall.js";
 
 interface CliInteractionBroker {
   confirmMcpLaunch(proposal: WorkspaceMcpLaunchProposal): Promise<boolean>;
@@ -198,6 +199,36 @@ export async function runCli(
     try {
       await service.start();
       let state = service.snapshot();
+      if (parsed.install) {
+        if (!__AGENTLINK_CLI_PACKAGED__) {
+          io.error.write("Source builds must be updated from source.\n");
+          return 1;
+        }
+        state = await service.check(true);
+        if (!state.candidate) {
+          io.output.write(formatUpdateState(state));
+          return state.status === "current" ? 0 : 1;
+        }
+        try {
+          await installCliReleaseUpdate(state.identity, state.candidate, {
+            onState: (installState) => {
+              if (installState.phase === "downloading") {
+                io.output.write(
+                  `Downloading update ${installState.version}: ${installState.received ?? 0}${installState.total ? `/${installState.total}` : ""} bytes\n`,
+                );
+              } else if (installState.message) {
+                io.output.write(`${installState.message}\n`);
+              }
+            },
+          });
+          return 0;
+        } catch (error) {
+          io.error.write(
+            `Update installation failed: ${errorMessage(error)}\n`,
+          );
+          return 1;
+        }
+      }
       if (parsed.automaticChecks !== undefined) {
         await service.setAutomaticChecks(parsed.automaticChecks);
         state = service.snapshot();
@@ -1386,6 +1417,9 @@ async function runInkInteractiveChat(
           : []),
         ...(candidate
           ? [
+              ...(__AGENTLINK_CLI_PACKAGED__ && !updateContext.environment.CI
+                ? [{ id: "install", label: "Install update" }]
+                : []),
               { id: "release", label: "Open release notes" },
               { id: "instructions", label: "Open update instructions" },
             ]
@@ -1405,6 +1439,46 @@ async function runInkInteractiveChat(
     } else if (response.optionId === "automatic-off") {
       await updateService.setAutomaticChecks(false);
       await showUpdates();
+    } else if (response.optionId === "install" && candidate) {
+      const latest = await updateService.check(true);
+      if (!latest.candidate) {
+        updateExternalStatus(
+          "No verified compatible update is available. Check again later.",
+        );
+        return;
+      }
+      const installCandidate = latest.candidate;
+      const confirmation = await requestControl({
+        id: `updates-install-confirm:${Date.now()}`,
+        kind: "approval",
+        title: `Install AgentLink ${installCandidate.version}?`,
+        body: [
+          "The CLI preview will be installed atomically. This session stays on the current version until you restart agentlink.",
+        ],
+        options: [
+          { id: "install", label: "Install update", tone: "danger" },
+          { id: "cancel", label: "Cancel" },
+        ],
+      });
+      if (!confirmation.cancelled && confirmation.optionId === "install") {
+        try {
+          await installCliReleaseUpdate(latest.identity, installCandidate, {
+            onState: (installState) => {
+              if (installState.phase === "downloading") {
+                updateExternalStatus(
+                  `Downloading update ${installState.version}: ${installState.received ?? 0} bytes`,
+                );
+              } else if (installState.message) {
+                updateExternalStatus(installState.message);
+              }
+            },
+          });
+        } catch (error) {
+          updateExternalStatus(
+            `Update installation failed: ${errorMessage(error)}`,
+          );
+        }
+      }
     } else if (response.optionId === "release" && candidate) {
       await io.openExternal(candidate.releaseUrl);
     } else if (response.optionId === "instructions" && candidate) {
@@ -2744,6 +2818,7 @@ type ParsedArguments =
   | {
       command: "updates";
       dismiss?: boolean;
+      install?: boolean;
       automaticChecks?: boolean;
     }
   | { command: "chat"; project?: string; session?: string }
@@ -2837,19 +2912,32 @@ function parseArguments(
     .command("updates")
     .description("check for CLI updates or configure automatic checks")
     .option("--dismiss", "dismiss the available version after checking")
+    .option("--install", "install the available update without a prompt")
     .option("--automatic <on|off>", "turn automatic checks on or off")
-    .action((options: { dismiss?: boolean; automatic?: "on" | "off" }) => {
-      if (options.automatic && !["on", "off"].includes(options.automatic)) {
-        throw new Error("--automatic must be on or off");
-      }
-      select({
-        command: "updates",
-        dismiss: options.dismiss,
-        ...(options.automatic !== undefined
-          ? { automaticChecks: options.automatic === "on" }
-          : {}),
-      });
-    });
+    .action(
+      (options: {
+        dismiss?: boolean;
+        install?: boolean;
+        automatic?: "on" | "off";
+      }) => {
+        if (options.automatic && !["on", "off"].includes(options.automatic)) {
+          throw new Error("--automatic must be on or off");
+        }
+        if (options.install && (options.dismiss || options.automatic)) {
+          throw new Error(
+            "--install cannot be combined with other update options",
+          );
+        }
+        select({
+          command: "updates",
+          dismiss: options.dismiss,
+          install: options.install,
+          ...(options.automatic !== undefined
+            ? { automaticChecks: options.automatic === "on" }
+            : {}),
+        });
+      },
+    );
   program.command("version", { hidden: true }).action(() => {
     select({ command: "version" });
   });

@@ -8,6 +8,7 @@ import {
 } from "../../../src/shared/desktopBridge.js";
 import { contextBridge, ipcRenderer } from "electron";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
+import type { ReleaseInstallState } from "../../../src/updates/releaseInstall.js";
 
 if (process.isMainFrame) {
   const askAgentOwnerId =
@@ -83,6 +84,24 @@ if (process.isMainFrame) {
       ipcRenderer.invoke("agentlink:mcp-manager:open-config", scope),
     setMcpOperation: (operationId) =>
       ipcRenderer.send("agentlink:mcp-manager:operation", operationId),
+    getReleaseInstallState: (): Promise<ReleaseInstallState> =>
+      ipcRenderer.invoke("agentlink:release-update:install-state"),
+    installReleaseUpdate: (): Promise<ReleaseInstallState> =>
+      ipcRenderer.invoke("agentlink:release-update:install"),
+    restartForReleaseUpdate: (): Promise<ReleaseInstallState> =>
+      ipcRenderer.invoke("agentlink:release-update:restart"),
+    onReleaseInstallState: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        state: ReleaseInstallState,
+      ): void => listener(state);
+      ipcRenderer.on("agentlink:release-update:install-state", handler);
+      return () =>
+        ipcRenderer.removeListener(
+          "agentlink:release-update:install-state",
+          handler,
+        );
+    },
     getReleaseUpdateState: (): Promise<ReleaseUpdateState> =>
       ipcRenderer.invoke("agentlink:release-update:get"),
     onReleaseUpdateState: (listener) => {

@@ -3,6 +3,7 @@ import {
   formatQuickAskAccelerator,
 } from "./quickAskShortcut.js";
 
+import type { ReleaseInstallState } from "../../../src/updates/releaseInstall.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 
 interface QuickAskShortcutStatus {
@@ -52,6 +53,12 @@ declare global {
       ): Promise<QuickAskShortcutStatus>;
       openAtLogin(): Promise<OpenAtLoginStatus>;
       setOpenAtLogin(enabled: boolean): Promise<OpenAtLoginStatus>;
+      getReleaseInstallState(): Promise<ReleaseInstallState>;
+      onReleaseInstallState(
+        listener: (state: ReleaseInstallState) => void,
+      ): () => void;
+      installReleaseUpdate(): Promise<ReleaseInstallState>;
+      restartForReleaseUpdate(): Promise<ReleaseInstallState>;
       getReleaseUpdateState(): Promise<ReleaseUpdateState>;
       onReleaseUpdateState(
         listener: (state: ReleaseUpdateState) => void,
@@ -100,6 +107,14 @@ const dismissUpdate =
   document.querySelector<HTMLButtonElement>("#dismiss-update")!;
 const checkUpdates =
   document.querySelector<HTMLButtonElement>("#check-updates")!;
+const installUpdate =
+  document.querySelector<HTMLButtonElement>("#install-update")!;
+const restartUpdate =
+  document.querySelector<HTMLButtonElement>("#restart-update")!;
+const installUpdateNote = document.querySelector<HTMLElement>(
+  "#install-update-note",
+)!;
+let releaseInstallState: ReleaseInstallState = { phase: "idle" };
 let releaseUpdateState: ReleaseUpdateState | null = null;
 let shortcutStatus: QuickAskShortcutStatus | null = null;
 let recordingShortcut = false;
@@ -153,6 +168,57 @@ void window.agentlinkDesktop
   .getReleaseUpdateState()
   .then(renderReleaseUpdateState);
 window.agentlinkDesktop.onReleaseUpdateState(renderReleaseUpdateState);
+void window.agentlinkDesktop
+  .getReleaseInstallState()
+  .then(renderReleaseInstallState);
+window.agentlinkDesktop.onReleaseInstallState(renderReleaseInstallState);
+installUpdate.addEventListener("click", () => {
+  installUpdate.disabled = true;
+  void window.agentlinkDesktop
+    .installReleaseUpdate()
+    .then(renderReleaseInstallState)
+    .catch(() =>
+      renderReleaseInstallState({
+        phase: "failed",
+        message: "Could not start the update.",
+      }),
+    );
+});
+restartUpdate.addEventListener("click", () => {
+  restartUpdate.disabled = true;
+  void window.agentlinkDesktop
+    .restartForReleaseUpdate()
+    .then(renderReleaseInstallState)
+    .catch(() =>
+      renderReleaseInstallState({
+        phase: "failed",
+        message: "Could not restart to update.",
+      }),
+    );
+});
+
+function renderReleaseInstallState(state: ReleaseInstallState): void {
+  releaseInstallState = state;
+  const busy = ["preparing", "downloading", "verifying", "installing"].includes(
+    state.phase,
+  );
+  installUpdate.hidden =
+    !releaseUpdateState?.candidate ||
+    releaseUpdateState.identity.development ||
+    ["ready_to_restart", "installed", "blocked"].includes(state.phase);
+  installUpdate.disabled = busy;
+  restartUpdate.hidden = state.phase !== "ready_to_restart";
+  restartUpdate.disabled = busy;
+  const progress =
+    state.phase === "downloading" && state.received !== undefined
+      ? ` (${Math.round(state.received / 1024 / 1024)} MB${state.total ? ` of ${Math.round(state.total / 1024 / 1024)} MB` : ""})`
+      : "";
+  installUpdateNote.textContent =
+    state.message ??
+    (state.phase === "idle"
+      ? ""
+      : `${state.phase.replaceAll("_", " ")}${state.version ? ` ${state.version}` : ""}${progress}`);
+}
 
 openAtLoginInput.addEventListener("change", () => {
   const enabled = openAtLoginInput.checked;
@@ -169,6 +235,7 @@ openAtLoginInput.addEventListener("change", () => {
 
 function renderReleaseUpdateState(state: ReleaseUpdateState): void {
   releaseUpdateState = state;
+  renderReleaseInstallState(releaseInstallState);
   automaticUpdates.checked = state.automaticChecks;
   automaticUpdates.disabled = false;
   checkUpdates.disabled = state.status === "checking";

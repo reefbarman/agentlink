@@ -9899,6 +9899,39 @@ describe("chat tab host routing", () => {
     };
   }
 
+  it("forwards self-update actions from an authoritative editor pane without a session", async () => {
+    const { provider, panelHost } = await makeTabRoutingProvider();
+    panelHost.isAuthoritativeAddress.mockReturnValue(true);
+    const connection = {
+      getAddress: () => ({
+        tabId: "tab-1",
+        paneEpoch: 7,
+        surface: "editor",
+        sessionId: null,
+      }),
+      postMessage: vi.fn(),
+    };
+    await provider.handleEditorPaneMessage(
+      { command: "releaseUpdateInstall" },
+      connection as never,
+    );
+    expect(mockExecuteCommand).toHaveBeenCalledWith("agentlink.installUpdate");
+    await provider.handleEditorPaneMessage(
+      { command: "releaseUpdateRestart" },
+      connection as never,
+    );
+    expect(mockExecuteCommand).toHaveBeenCalledWith(
+      "agentlink.restartForUpdate",
+    );
+    mockExecuteCommand.mockClear();
+    panelHost.isAuthoritativeAddress.mockReturnValue(false);
+    await provider.handleEditorPaneMessage(
+      { command: "releaseUpdateInstall" },
+      connection as never,
+    );
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
   it("reports a thrown handoff preparation error to the docked chat", async () => {
     const { provider, handle, postMessage } = await makeTabRoutingProvider();
     const prepareSessionHandoff = vi.fn(async () => {

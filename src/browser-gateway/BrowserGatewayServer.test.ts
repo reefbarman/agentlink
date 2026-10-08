@@ -489,6 +489,12 @@ describe("BrowserGatewayServer", () => {
       );
       expect(provider.checkReleaseUpdates).not.toHaveBeenCalled();
       const headers = { Authorization: "Bearer test-token" };
+      expect(
+        (await fetch(`${base}/install`, { method: "POST", headers })).status,
+      ).toBe(404);
+      expect(
+        (await fetch(`${base}/restart`, { method: "POST", headers })).status,
+      ).toBe(404);
       const status = await fetch(base, { headers });
       expect(status.status).toBe(200);
       const body = await status.json();
