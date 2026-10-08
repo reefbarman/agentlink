@@ -43,12 +43,12 @@ jobs:
     env:
       TMPDIR: /private/tmp/
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -79,7 +79,7 @@ jobs:
           "$STAGING/agentlink-cli-darwin-arm64/node/bin/node" --input-type=module -e 'await import(process.argv[1])' "$STAGING/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js"
           node apps/cli/smoke-tui.mjs "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --executable --no-color
           (cd cli-releases && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: agentlink-cli-darwin-arm64-release
           path: |
@@ -99,11 +99,11 @@ jobs:
     env:
       RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: agentlink-cli-darwin-arm64-release
           path: dist

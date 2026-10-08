@@ -41,12 +41,12 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -87,12 +87,12 @@ jobs:
           - win32-arm64
           - win32-x64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -160,7 +160,7 @@ jobs:
             | node scripts/verify-retrieval-package.mjs \
                 --target "$AGENTLINK_VSCE_TARGET"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: agentlink-${{ matrix.target }}
           path: agentlink-*-${{ matrix.target }}.vsix
@@ -180,12 +180,12 @@ jobs:
     env:
       RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: agentlink-*
           path: dist

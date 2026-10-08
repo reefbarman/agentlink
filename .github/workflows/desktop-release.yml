@@ -43,12 +43,12 @@ jobs:
     env:
       TMPDIR: /private/tmp/
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -80,12 +80,12 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -124,7 +124,7 @@ jobs:
           npm run build
           npm run package --workspace @agentlink/desktop -- --target "$AGENTLINK_VSCE_TARGET"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: agentlink-desktop-${{ matrix.target }}
           path: |
@@ -145,12 +145,12 @@ jobs:
     env:
       DESKTOP_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: agentlink-desktop-*
           path: dist

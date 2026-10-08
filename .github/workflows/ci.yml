@@ -13,10 +13,10 @@ jobs:
   cli-package:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -30,7 +30,7 @@ jobs:
           cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --help
           cli-releases/agentlink-cli-darwin-arm64/node/bin/node --input-type=module -e 'await import("./cli-releases/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js")'
           node apps/cli/smoke-tui.mjs cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --executable --no-color
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: agentlink-cli-darwin-arm64-unsigned
           path: cli-releases/*.tar.gz
@@ -39,11 +39,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
