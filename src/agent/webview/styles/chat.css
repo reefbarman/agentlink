@@ -411,6 +411,237 @@ body {
   color: #4ec9b0;
 }
 
+/* ── Release update popover ── */
+.release-update {
+  display: inline-flex;
+  align-items: center;
+}
+
+.release-update-dialog {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 24px));
+  padding: 14px 16px 12px;
+  border: 1px solid var(--vscode-widget-border, #445);
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background, #20232c);
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground, #eee));
+  box-shadow: 0 12px 32px #00000059;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.release-update-dialog p {
+  margin: 0;
+}
+
+.release-update-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -2px -6px 2px 0;
+}
+
+.release-update-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.release-update-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.release-update-version-current {
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-weight: 500;
+}
+
+.release-update-dialog .release-update-versions .release-update-version-arrow {
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-size: 13px;
+}
+
+.release-update-version-next {
+  color: var(--vscode-textLink-foreground, #4ec9b0);
+}
+
+.release-update-channel {
+  padding: 1px 7px;
+  border: 1px solid var(--vscode-widget-border, #445);
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.release-update-meta {
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-size: 11px;
+}
+
+.release-update-status {
+  font-weight: 500;
+}
+
+.release-update-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-size: 11px;
+}
+
+.release-update-dialog .release-update-note .codicon {
+  margin-top: 1px;
+  font-size: 12px;
+}
+
+.release-update-notice {
+  padding: 8px 10px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+
+.release-update-notice-info {
+  border-color: rgba(78, 201, 176, 0.3);
+  background: rgba(78, 201, 176, 0.08);
+}
+
+.release-update-notice-success {
+  border-color: rgba(115, 201, 145, 0.4);
+  background: rgba(115, 201, 145, 0.1);
+}
+
+.release-update-notice-warning {
+  border-color: rgba(224, 175, 104, 0.45);
+  background: rgba(224, 175, 104, 0.1);
+  color: var(--vscode-editorWarning-foreground, #e8c07d);
+}
+
+.release-update-primary-actions,
+.release-update-links,
+.release-update-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.release-update-primary-actions {
+  margin-top: 4px;
+}
+
+.release-update-primary-actions .release-update-button {
+  flex: 1 1 auto;
+}
+
+.release-update-links .release-update-button {
+  flex: 1 1 0;
+}
+
+.release-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--vscode-widget-border, #445);
+  border-radius: 6px;
+  background: var(--vscode-button-secondaryBackground, #2a2d35);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.release-update-dialog .release-update-button .codicon {
+  font-size: 13px;
+}
+
+.release-update-button:hover:not(:disabled) {
+  border-color: var(--vscode-focusBorder, #4ec9b0);
+  background: var(--vscode-button-secondaryHoverBackground, #343843);
+}
+
+.release-update-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #4ec9b0);
+  outline-offset: 1px;
+}
+
+.release-update-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.release-update-button-primary {
+  border-color: transparent;
+  background: var(--vscode-button-background, #4ec9b0);
+  color: var(--vscode-button-foreground, #fff);
+  font-weight: 600;
+}
+
+.release-update-button-primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--vscode-button-hoverBackground, #3ab19a);
+}
+
+.release-update-button-ghost {
+  min-height: 24px;
+  padding: 2px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #9aa);
+  font-size: 11px;
+}
+
+.release-update-button-ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  color: var(--vscode-foreground, #eee);
+}
+
+.release-update-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-widget-border, #445);
+}
+
+.release-update-footer-actions {
+  margin-left: -8px;
+}
+
+.release-update-auto-checks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
 .queue-item .icon-button:disabled {
   cursor: not-allowed;
   opacity: 0.35;

@@ -550,6 +550,155 @@
   font-size: 18px;
 }
 
+/* Release update popover: desktop palette and spacing. */
+.browser-shell.browser-shell-desktop .release-update-dialog {
+  top: 60px;
+  right: 22px;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  border-color: var(--ag-border);
+  border-radius: 14px;
+  background: var(--ag-panel-2);
+  color: var(--ag-text);
+  box-shadow: 0 16px 40px #00000059;
+  font-size: 13px;
+  -webkit-app-region: no-drag;
+}
+
+.browser-shell.browser-shell-desktop .release-update-dialog .codicon {
+  font-size: 14px;
+}
+
+.browser-shell.browser-shell-desktop
+  .browser-header
+  .release-update-dialog
+  .icon-button.release-update-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-title {
+  font-size: 14px;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-version-next {
+  color: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-channel {
+  border-color: var(--ag-accent-2);
+  color: #91edda;
+  background: #4ec9b012;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-button {
+  min-height: 32px;
+  border-color: var(--ag-border-2);
+  border-radius: 8px;
+  background: #ffffff08;
+  color: var(--ag-text);
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-button:hover:not(:disabled) {
+  border-color: var(--ag-accent-2);
+  background: #4ec9b015;
+  color: #b9efdc;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-button-primary {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: #102521;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-button-primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: #76dac4;
+  color: #102521;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-button-ghost {
+  min-height: 26px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-footer {
+  border-top-color: var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-meta,
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-note,
+.browser-shell.browser-shell-desktop
+  .release-update-dialog
+  .release-update-auto-checks {
+  font-size: 12px;
+}
+
+/*
+ * Default for otherwise unstyled buttons in the desktop shell, so an ad-hoc
+ * <button> still matches the app instead of falling back to the OS look.
+ * Kept to class-less buttons so it never fights component-specific styles.
+ */
+.browser-shell.browser-shell-desktop button:not([class]) {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 8px;
+  background: #ffffff08;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop button:not([class]):hover:not(:disabled) {
+  border-color: var(--ag-accent-2);
+  background: #4ec9b015;
+  color: #b9efdc;
+}
+
+.browser-shell.browser-shell-desktop button:not([class]):disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .browser-shell.browser-shell-desktop .browser-header .icon-button:hover,
 .browser-shell.browser-shell-desktop .browser-header .icon-button.active {
   color: #91edda;

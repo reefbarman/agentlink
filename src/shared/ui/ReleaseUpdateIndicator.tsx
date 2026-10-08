@@ -72,6 +72,7 @@ export function ReleaseUpdateIndicator({
     return () => document.removeEventListener("keydown", escape);
   }, [open, onClose]);
   const pendingRestart = installState?.phase === "ready_to_restart";
+  const installBlocked = installState?.phase === "blocked";
   const installing = Boolean(
     installState &&
     ["preparing", "downloading", "verifying", "installing"].includes(
@@ -87,8 +88,21 @@ export function ReleaseUpdateIndicator({
     candidate && new RegExp(`^${prefix}\\d+\\.\\d+\\.\\d+$`).test(candidate.tag)
       ? `${RELEASE_REPOSITORY_URL}/releases/tag/${candidate.tag}`
       : `${RELEASE_REPOSITORY_URL}/releases`;
+  const installTone =
+    installState?.phase === "failed" || installState?.phase === "blocked"
+      ? "warning"
+      : installState?.phase === "ready_to_restart" ||
+          installState?.phase === "installed"
+        ? "success"
+        : "info";
+  const canInstall =
+    onInstall &&
+    candidate &&
+    !pendingRestart &&
+    !installBlocked &&
+    !state.identity.development;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center" }}>
+    <span class="release-update">
       {(hasVisibleReleaseUpdate(state) || pendingRestart) && (
         <button
           ref={trigger}
@@ -112,59 +126,62 @@ export function ReleaseUpdateIndicator({
         <section
           role="dialog"
           aria-label="AgentLink update details"
-          style={{
-            position: "fixed",
-            top: "44px",
-            right: "12px",
-            zIndex: 2000,
-            width: "min(340px, calc(100vw - 24px))",
-            padding: "14px",
-            border: "1px solid var(--vscode-widget-border, #445)",
-            borderRadius: "8px",
-            background: "var(--vscode-editorWidget-background, #20232c)",
-            color: "var(--vscode-editorWidget-foreground, #eee)",
-            boxShadow: "0 6px 24px #0005",
-            fontSize: "12px",
-          }}
+          class="release-update-dialog"
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "8px",
-              alignItems: "center",
-            }}
-          >
-            <strong>{productNames[state.identity.product]}</strong>
+          <header class="release-update-header">
+            <strong class="release-update-title">
+              {productNames[state.identity.product]}
+            </strong>
             <button
-              class="icon-button"
+              class="icon-button release-update-close"
               type="button"
               aria-label="Close update details"
               onClick={close}
             >
-              <i class="codicon codicon-close" />
+              <i class="codicon codicon-close" aria-hidden="true" />
             </button>
+          </header>
+          <div class="release-update-versions">
+            <span class="release-update-version-current">
+              {state.identity.version}
+            </span>
+            {candidate && (
+              <>
+                <i
+                  class="codicon codicon-arrow-right release-update-version-arrow"
+                  aria-label="to"
+                />
+                <span class="release-update-version-next">
+                  {candidate.version}
+                </span>
+                <span class="release-update-channel">{candidate.channel}</span>
+              </>
+            )}
           </div>
-          <p>
-            Running {state.identity.version}
-            {candidate
-              ? ` → ${candidate.version} (${candidate.channel})`
-              : ""}{" "}
-            · {state.identity.target}
+          <p class="release-update-meta">
+            {state.identity.target}
+            {state.identity.hostLabel ? ` · ${state.identity.hostLabel}` : ""}
           </p>
-          {state.identity.hostLabel && <p>{state.identity.hostLabel}</p>}
-          <p role="status">{statusLabels[state.status]}</p>
+          <p role="status" class="release-update-status">
+            {statusLabels[state.status]}
+          </p>
           {state.stale && state.checkedAt !== null && (
-            <p>
+            <p class="release-update-meta">
               Last confirmed {new Date(state.checkedAt).toLocaleString()}. This
               result may be out of date.
             </p>
           )}
           {state.identity.product !== "vscode" && (
-            <p>This preview is unsigned and not notarised.</p>
+            <p class="release-update-note">
+              <i class="codicon codicon-shield" aria-hidden="true" />
+              <span>This preview is unsigned and not notarised.</span>
+            </p>
           )}
           {installState && installState.phase !== "idle" && (
-            <p role="status">
+            <p
+              role="status"
+              class={`release-update-notice release-update-notice-${installTone}`}
+            >
               {installState.message ??
                 (
                   {
@@ -184,72 +201,111 @@ export function ReleaseUpdateIndicator({
                 : ""}
             </p>
           )}
-          {!onInstall && <p>Install this update from the host.</p>}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-            {onInstall &&
-              candidate &&
-              !pendingRestart &&
-              !state.identity.development && (
-                <button type="button" disabled={installing} onClick={onInstall}>
+          {!onInstall && (
+            <p class="release-update-meta">
+              Install this update from the host.
+            </p>
+          )}
+          {(canInstall || (pendingRestart && onRestart)) && (
+            <div class="release-update-primary-actions">
+              {canInstall && (
+                <button
+                  type="button"
+                  class="release-update-button release-update-button-primary"
+                  disabled={installing}
+                  onClick={onInstall}
+                >
+                  <i
+                    class="codicon codicon-cloud-download"
+                    aria-hidden="true"
+                  />
                   Install update
                 </button>
               )}
-            {pendingRestart && onRestart && (
-              <button type="button" onClick={onRestart}>
-                {state.identity.product === "vscode"
-                  ? "Reload to finish"
-                  : "Restart to update"}
-              </button>
-            )}
-            <button type="button" onClick={() => onOpenLink(releaseUrl)}>
+              {pendingRestart && onRestart && (
+                <button
+                  type="button"
+                  class="release-update-button release-update-button-primary"
+                  onClick={onRestart}
+                >
+                  <i class="codicon codicon-debug-restart" aria-hidden="true" />
+                  {state.identity.product === "vscode"
+                    ? "Reload to finish"
+                    : "Restart to update"}
+                </button>
+              )}
+            </div>
+          )}
+          <div class="release-update-links">
+            <button
+              type="button"
+              class="release-update-button"
+              onClick={() => onOpenLink(releaseUrl)}
+            >
               Release notes
+              <i class="codicon codicon-link-external" aria-hidden="true" />
             </button>
             <button
               type="button"
+              class="release-update-button"
               onClick={() =>
                 onOpenLink(releaseInstructionsUrl(state.identity.product))
               }
             >
               How to update
+              <i class="codicon codicon-link-external" aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              disabled={
-                state.status === "checking" ||
-                Boolean(state.retryAt && state.retryAt > Date.now())
-              }
-              onClick={onCheck}
-            >
-              Check again
-            </button>
-            {candidate && candidate.version !== state.dismissedVersion && (
-              <button type="button" onClick={onDismiss}>
-                Dismiss this version
-              </button>
-            )}
           </div>
-          {onAutomaticChecksChange ? (
-            <label style={{ display: "flex", gap: "6px", marginTop: "12px" }}>
-              <input
-                type="checkbox"
-                checked={state.automaticChecks}
-                onChange={(event) =>
-                  onAutomaticChecksChange(event.currentTarget.checked)
+          <footer class="release-update-footer">
+            <div class="release-update-footer-actions">
+              <button
+                type="button"
+                class="release-update-button release-update-button-ghost"
+                disabled={
+                  state.status === "checking" ||
+                  Boolean(state.retryAt && state.retryAt > Date.now())
                 }
-              />
-              Check automatically once a day
-            </label>
-          ) : (
-            <p>
-              Automatic checks are{" "}
-              {state.automaticChecks && !state.identity.development
-                ? "on"
-                : "off"}
-              . Change this on the host.
-            </p>
-          )}
+                onClick={onCheck}
+              >
+                <i class="codicon codicon-refresh" aria-hidden="true" />
+                Check again
+              </button>
+              {candidate && candidate.version !== state.dismissedVersion && (
+                <button
+                  type="button"
+                  class="release-update-button release-update-button-ghost"
+                  onClick={onDismiss}
+                >
+                  Dismiss this version
+                </button>
+              )}
+            </div>
+            {renderAutomaticChecks()}
+          </footer>
         </section>
       )}
     </span>
   );
+
+  function renderAutomaticChecks() {
+    if (!state) return null;
+    return onAutomaticChecksChange ? (
+      <label class="release-update-auto-checks">
+        <input
+          type="checkbox"
+          checked={state.automaticChecks}
+          onChange={(event) =>
+            onAutomaticChecksChange(event.currentTarget.checked)
+          }
+        />
+        Check automatically once a day
+      </label>
+    ) : (
+      <p class="release-update-meta">
+        Automatic checks are{" "}
+        {state.automaticChecks && !state.identity.development ? "on" : "off"}.
+        Change this on the host.
+      </p>
+    );
+  }
 }
