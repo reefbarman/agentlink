@@ -8243,25 +8243,6 @@ export function BrowserGatewayApp({
           </div>
           {consumerShell && desktopShell && (
             <div class="desktop-header-actions" aria-label="Desktop updates">
-              {desktopProductUpdate &&
-                !desktopProductUpdate.candidate &&
-                !desktopProductUpdateDetailsOpen && (
-                  <button
-                    class="desktop-update-button"
-                    type="button"
-                    disabled={desktopProductUpdate.status === "checking"}
-                    onClick={() => {
-                      setDesktopProductUpdateDetailsOpen(true);
-                      void desktopShell
-                        .checkForReleaseUpdate?.()
-                        .then(setDesktopProductUpdate)
-                        .catch(() => undefined);
-                    }}
-                  >
-                    <i class="codicon codicon-refresh" aria-hidden="true" />
-                    <span>Check for updates</span>
-                  </button>
-                )}
               <ReleaseUpdateIndicator
                 state={desktopProductUpdate}
                 label="Desktop update"
@@ -8436,6 +8417,25 @@ export function BrowserGatewayApp({
                     Settings…
                   </button>
                 )}
+                {desktopShell?.checkForReleaseUpdate &&
+                  desktopProductUpdate && (
+                    <button
+                      class="desktop-more-item"
+                      type="button"
+                      title="Check for updates"
+                      disabled={desktopProductUpdate.status === "checking"}
+                      onClick={() => {
+                        setDesktopProductUpdateDetailsOpen(true);
+                        void desktopShell
+                          .checkForReleaseUpdate?.()
+                          .then(setDesktopProductUpdate)
+                          .catch(() => undefined);
+                      }}
+                    >
+                      <i class="codicon codicon-refresh" aria-hidden="true" />
+                      Check for updates…
+                    </button>
+                  )}
               </DesktopMoreActions>
             </div>
           )}
