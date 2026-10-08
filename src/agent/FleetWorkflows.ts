@@ -2,6 +2,10 @@ import type {
   AgentBudget,
   SpawnBackgroundRequest,
 } from "../core/capabilities/background.js";
+import {
+  isWorkspaceRelativeArtifact,
+  validateFleetResult,
+} from "../shared/fleetResultSchema.js";
 
 import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 
@@ -504,71 +508,7 @@ export function parseFleetResultEnvelope(
 export function isFleetResultEnvelope(
   value: unknown,
 ): value is FleetResultEnvelope {
-  if (!value || typeof value !== "object") return false;
-  const result = value as Record<string, unknown>;
-  if (result.type === "text") return typeof result.text === "string";
-  if (result.type === "patch") {
-    return (
-      typeof result.summary === "string" &&
-      isStringArray(result.files) &&
-      result.files.every(isWorkspaceRelativeArtifact) &&
-      (result.verification === undefined ||
-        typeof result.verification === "string")
-    );
-  }
-  if (result.type === "verification") {
-    return (
-      typeof result.passed === "boolean" &&
-      typeof result.summary === "string" &&
-      (result.screenshots === undefined ||
-        (isStringArray(result.screenshots) &&
-          result.screenshots.every(isWorkspaceRelativeArtifact))) &&
-      (result.logs === undefined || isStringArray(result.logs))
-    );
-  }
-  if (result.type === "review_findings") {
-    return (
-      (result.reviewedScope === undefined ||
-        typeof result.reviewedScope === "string") &&
-      (result.emptyDiff === undefined ||
-        typeof result.emptyDiff === "boolean") &&
-      Array.isArray(result.findings) &&
-      result.findings.every((finding) => {
-        if (!finding || typeof finding !== "object") return false;
-        const item = finding as Record<string, unknown>;
-        return (
-          ["critical", "high", "medium", "low"].includes(
-            String(item.severity),
-          ) &&
-          typeof item.message === "string" &&
-          (item.path === undefined ||
-            (typeof item.path === "string" &&
-              isWorkspaceRelativeArtifact(item.path))) &&
-          (item.line === undefined ||
-            (typeof item.line === "number" &&
-              Number.isInteger(item.line) &&
-              item.line > 0))
-        );
-      })
-    );
-  }
-  return false;
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
-}
-
-function isWorkspaceRelativeArtifact(value: string): boolean {
-  const normalized = value.replaceAll("\\", "/");
-  return (
-    normalized.length > 0 &&
-    !normalized.startsWith("/") &&
-    !/^[a-zA-Z]:\//.test(normalized) &&
-    !normalized.split("/").includes("..")
-  );
+  return validateFleetResult(value).length === 0;
 }
 
 export function scoreFleetCandidate(result: FleetResultEnvelope): number {

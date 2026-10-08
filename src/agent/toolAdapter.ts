@@ -35,6 +35,10 @@ import type {
   FleetWorkflowRequest,
 } from "./FleetWorkflows.js";
 import { isFleetResultEnvelope } from "./FleetWorkflows.js";
+import {
+  getFleetResultSchema,
+  validateFleetResult,
+} from "../shared/fleetResultSchema.js";
 import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
   mcpMutationTarget,
@@ -580,84 +584,9 @@ function getSetTaskStatusTool(
   isBackground = false,
 ): ToolDefinition {
   if (!isBackground) return SET_TASK_STATUS_TOOL;
-  const resultSchemas: Record<
-    ExpectedBackgroundResult,
-    Record<string, unknown>
-  > = {
-    text: {
-      type: "object",
-      properties: {
-        type: { type: "string", enum: ["text"] },
-        text: { type: "string" },
-      },
-      required: ["type", "text"],
-      additionalProperties: false,
-    },
-    review_findings: {
-      type: "object",
-      description:
-        "Review the delegated target. Set emptyDiff=true when the requested live diff or range is empty or unavailable; the runtime attributes the normalized target automatically.",
-      properties: {
-        type: { type: "string", enum: ["review_findings"] },
-        findings: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              severity: {
-                type: "string",
-                enum: ["critical", "high", "medium", "low"],
-              },
-              message: { type: "string" },
-              path: { type: "string" },
-              line: { type: "number" },
-            },
-            required: ["severity", "message"],
-            additionalProperties: false,
-          },
-        },
-        reviewedScope: {
-          type: "string",
-          description:
-            "Optional override when the reviewed scope materially differs from the runtime target.",
-        },
-        emptyDiff: { type: "boolean" },
-      },
-      required: ["type", "findings", "emptyDiff"],
-      additionalProperties: false,
-    },
-    patch: {
-      type: "object",
-      properties: {
-        type: { type: "string", enum: ["patch"] },
-        summary: { type: "string" },
-        files: { type: "array", items: { type: "string" } },
-        verification: { type: "string" },
-      },
-      required: ["type", "summary", "files"],
-      additionalProperties: false,
-    },
-    verification: {
-      type: "object",
-      properties: {
-        type: { type: "string", enum: ["verification"] },
-        passed: { type: "boolean" },
-        summary: { type: "string" },
-        screenshots: { type: "array", items: { type: "string" } },
-        logs: { type: "array", items: { type: "string" } },
-      },
-      required: ["type", "passed", "summary"],
-      additionalProperties: false,
-    },
-  };
-  const resultSchema = expectedResult
-    ? resultSchemas[expectedResult]
-    : {
-        type: "object",
-        description:
-          "Optional coordinator-facing result. Use type='text' with text for general information or summaries, type='review_findings' for reviews, type='patch' for implementation results, or type='verification' for verification evidence.",
-        additionalProperties: true,
-      };
+  const { $schema: _, ...resultSchema } = z.toJSONSchema(
+    getFleetResultSchema(expectedResult),
+  );
   const resultGuidance = expectedResult
     ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.`
     : "For coordinator-facing information or summaries, you may return a structured result instead of serializing data into assistant text.";
@@ -3919,37 +3848,25 @@ async function dispatchToolCallWithTrackedApprovals(
           ],
         };
       }
-      if (status === "completed" && expectedResult) {
-        if (
-          !isFleetResultEnvelope(structuredResult) ||
-          structuredResult.type !== expectedResult ||
-          (expectedResult === "review_findings" &&
-            structuredResult.type === "review_findings" &&
-            typeof structuredResult.emptyDiff !== "boolean")
-        ) {
+      const requiredResult =
+        status === "completed" ? expectedResult : undefined;
+      if (requiredResult || structuredResult !== undefined) {
+        const issues = validateFleetResult(structuredResult, requiredResult);
+        if (issues.length) {
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify({
-                  error: `Background completion requires a valid ${expectedResult} result in set_task_status.result`,
+                  error: requiredResult
+                    ? `Background completion requires a valid ${requiredResult} result in set_task_status.result`
+                    : "Invalid structured result",
+                  issues,
                 }),
               },
             ],
           };
         }
-      } else if (
-        structuredResult !== undefined &&
-        !isFleetResultEnvelope(structuredResult)
-      ) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "Invalid structured result" }),
-            },
-          ],
-        };
       }
       let summary =
         typeof params.summary === "string" ? params.summary.trim() : "";

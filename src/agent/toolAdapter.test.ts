@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -5235,6 +5236,94 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it.each([undefined, "patch"] as const)(
+    "advertises and dispatches patch results consistently (expected=%s)",
+    async (expected) => {
+      const tool = getAgentTools(
+        undefined,
+        undefined,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        expected,
+      ).find((candidate) => candidate.name === "set_task_status")!;
+      const validate = new Ajv2020().compile(tool.input_schema);
+      const reported = {
+        status: "completed",
+        result: {
+          type: "patch",
+          summary: "Fixed",
+          changedFiles: ["src/fix.ts"],
+          contracts: ["legacy metadata"],
+          validation: "Tests passed",
+        },
+      };
+      expect(validate(reported)).toBe(false);
+      const sessionStatusProvider = {
+        setFinalStatus: vi.fn(),
+        completeTodos: vi.fn(),
+      };
+      const ctx = {
+        ...mockCtx,
+        sessionStatusProvider,
+        backgroundExpectedResult: expected,
+      };
+      const rejected = await dispatchToolCall("set_task_status", reported, ctx);
+      expect(
+        JSON.parse((rejected.content[0] as { text: string }).text),
+      ).toMatchObject({
+        issues: [
+          { path: "result.files", message: expect.stringContaining("array") },
+        ],
+      });
+      expect(sessionStatusProvider.setFinalStatus).not.toHaveBeenCalled();
+      expect(sessionStatusProvider.completeTodos).not.toHaveBeenCalled();
+
+      const corrected = {
+        ...reported,
+        result: { ...reported.result, files: reported.result.changedFiles },
+      };
+      expect(validate(corrected)).toBe(true);
+      await dispatchToolCall("set_task_status", corrected, ctx);
+      expect(sessionStatusProvider.setFinalStatus).toHaveBeenCalledWith({
+        status: "completed",
+        source: "tool",
+        result: corrected.result,
+      });
+    },
+  );
+
+  it.each([
+    { type: "text", text: "Findings" },
+    {
+      type: "verification",
+      passed: true,
+      summary: "Passed",
+      logs: ["test output"],
+    },
+    { type: "review_findings", findings: [], emptyDiff: true },
+  ])(
+    "forwards advertised $type results through production dispatch",
+    async (envelope) => {
+      const tool = getAgentTools(undefined, undefined, true).find(
+        (candidate) => candidate.name === "set_task_status",
+      )!;
+      const params = { status: "completed", result: envelope };
+      expect(new Ajv2020().compile(tool.input_schema)(params)).toBe(true);
+      const onFinalStatus = vi.fn();
+      await dispatchToolCall("set_task_status", params, {
+        ...mockCtx,
+        onFinalStatus,
+      });
+      expect(onFinalStatus).toHaveBeenCalledWith({
+        status: "completed",
+        source: "tool",
+        result: envelope,
+      });
+    },
+  );
+
   it("records a validated structured background result", async () => {
     const onFinalStatus = vi.fn();
     const structuredResult = {
@@ -5280,9 +5369,16 @@ describe("dispatchToolCall", () => {
     );
 
     expect(onFinalStatus).not.toHaveBeenCalled();
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+    expect(
+      JSON.parse((result.content[0] as { text: string }).text),
+    ).toMatchObject({
       error:
         "Background completion requires a valid review_findings result in set_task_status.result",
+      issues: expect.arrayContaining([
+        { path: "result.type", message: expect.any(String) },
+        { path: "result.findings", message: expect.any(String) },
+        { path: "result.emptyDiff", message: expect.any(String) },
+      ]),
     });
   });
 
