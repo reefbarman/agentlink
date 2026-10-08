@@ -177,6 +177,38 @@ async function collect(
 }
 
 describe("public E6 agent engine", () => {
+  it("forwards the actual one-turn model to host instruction composition without changing session selection", async () => {
+    const backend = new ScriptedBackend([finalTurn("override")]);
+    const entries = backend.listModels();
+    backend.listModels = () => [...entries, { ...entries[0]!, id: "model-b" }];
+    const agent = engine(backend, undefined, undefined, {
+      resolveInstructions: (request) =>
+        `Instructions for ${request.model?.modelId}`,
+    });
+    await agent.sessions.create({ principal: PRINCIPAL, model: MODEL });
+    const run = await collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "Use a one-turn override", attachments: undefined },
+        model: { providerId: "fake", modelId: "model-b" },
+      }),
+    );
+    expect(run.result.status).toBe("completed");
+    expect(backend.requests[0]?.model).toBe("model-b");
+    expect(backend.requests[0]?.systemPrompt).toContain(
+      "Instructions for model-b",
+    );
+    expect(
+      (
+        await agent.sessions.hydrate({
+          principal: PRINCIPAL,
+          sessionId: "session-1",
+        })
+      ).record.selectedModel,
+    ).toEqual(MODEL);
+  });
+
   it("creates a session and commits exact completed transcript state", async () => {
     const state = new InMemoryAgentStateRepository();
     const backend = new ScriptedBackend([finalTurn("Hello")]);

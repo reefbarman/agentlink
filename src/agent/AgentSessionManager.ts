@@ -4718,6 +4718,9 @@ export class AgentSessionManager {
     const expected = resolvePromptProfile({
       providerId,
       modelId: session.model,
+      configuredProfile: this.host.providers
+        .tryResolveProvider(session.model)
+        ?.getPromptProfile?.(session.model),
       overrides: normalizePromptProfileOverrides(config.promptProfileOverrides),
     });
 

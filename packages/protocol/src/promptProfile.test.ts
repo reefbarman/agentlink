@@ -25,7 +25,11 @@ describe("prompt profile protocol", () => {
       "compatibility" | "reasoning"
     >();
     expectTypeOf<PromptProfileResolutionSource>().toEqualTypeOf<
-      "exact-model-override" | "evaluated-model" | "compatibility-default"
+      | "exact-model-override"
+      | "configured-model"
+      | "automatic-model"
+      | "evaluated-model"
+      | "compatibility-default"
     >();
     expectTypeOf<PromptProfileResolution>().toEqualTypeOf<{
       profile: PromptProfile;

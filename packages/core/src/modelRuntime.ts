@@ -508,6 +508,10 @@ export interface CoreModelBackend {
   ): Promise<CoreModelCatalogEntry[]>;
   listRoutableModelIds?(): string[];
   getCapabilities(modelId: string): CoreModelCapabilities;
+
+  getPromptProfile?(
+    modelId: string,
+  ): import("@agentlink/protocol/prompt-profile").PromptProfile | undefined;
   getAuthStatus?(
     request: CoreModelRequestContext,
   ): Promise<CoreModelProviderAuthStatus>;

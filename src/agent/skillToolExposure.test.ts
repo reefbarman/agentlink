@@ -80,7 +80,7 @@ beforeEach(() => {
     promptProfile: {
       profile: "compatibility",
       source: "compatibility-default",
-      policyRevision: "prompt-profile-policy-v1",
+      policyRevision: "prompt-profile-policy-v2",
       providerId: "test",
       modelId: "test",
     },

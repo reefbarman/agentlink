@@ -5,6 +5,7 @@ import type {
 
 import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import type { PromptProfile } from "@agentlink/protocol/prompt-profile";
 
 export type OpenAiCompatibleProfileKind = "generic" | "openrouter";
 
@@ -29,6 +30,8 @@ export interface OpenAiCompatibleRuntimeModel {
   model: string;
   /** Optional vendor-family behavior for prompts; never sent to the upstream API. */
   modelFamily?: OpenAiCompatibleModelFamily;
+  /** Explicit prompt profile override; never sent to the upstream API. */
+  promptProfile?: PromptProfile;
   capabilities: CoreModelCapabilities;
 }
 

@@ -39,6 +39,18 @@
         "default": "./dist/cjs/agentEngine.cjs"
       }
     },
+    "./prompt-profile": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/promptProfilePolicy.d.ts",
+        "default": "./dist/promptProfilePolicy.js"
+      },
+      "require": {
+        "types": "./dist/cjs/promptProfilePolicy.d.cts",
+        "default": "./dist/cjs/promptProfilePolicy.cjs"
+      }
+    },
     "./agent-tool-loop": {
       "browser": null,
       "edge": null,

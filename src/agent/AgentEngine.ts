@@ -56,6 +56,7 @@ import {
 } from "@agentlink/protocol/context-ledger";
 import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
+import { isProjectlessSessionScope } from "@agentlink/protocol/workspace-project";
 
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
@@ -1282,6 +1283,8 @@ export class AgentEngine {
       let emptyResponseCondenseAttempted = false;
       let contextTooLongCondenseAttempted = false;
       let toolPairingRepairAttempts = 0;
+      let modelFallbackRestarts = 0;
+      const MAX_MODEL_FALLBACK_RESTARTS = 4;
       const MAX_TOOL_PAIRING_REPAIR_ATTEMPTS = 2;
       // Sticky for the whole user turn: once we fall back from remote response
       // state to full local replay, keep reporting that on the eventual
@@ -1293,7 +1296,7 @@ export class AgentEngine {
           `[perf] ${label} ${Date.now() - startedAt}ms${details ? ` ${details}` : ""}`,
         );
       };
-      while (true) {
+      requestLoop: while (true) {
         if (signal.aborted) break;
 
         const driftedSkill = session.takeActiveSkillCatalogDrift();
@@ -2006,6 +2009,7 @@ export class AgentEngine {
             },
           });
           const streamIterator = streamGen[Symbol.asyncIterator]();
+          let restartingForModelFallback = false;
 
           try {
             while (true) {
@@ -2035,17 +2039,54 @@ export class AgentEngine {
                   yield { type: "warning", message: event.message };
                   break;
                 case "model_fallback":
-                  activeModel = event.effectiveModel;
-                  const fallbackStillSelected =
+                  restartingForModelFallback = true;
+                  modelFallbackRestarts += 1;
+                  if (modelFallbackRestarts > MAX_MODEL_FALLBACK_RESTARTS) {
+                    yield {
+                      type: "error",
+                      error: "Provider model fallback restart limit reached",
+                      code: "model_fallback_limit",
+                      retryable: false,
+                    };
+                    return;
+                  }
+                  let fallbackStillSelected =
                     session.modelSelectionRevision ===
                     requestModelSelectionRevision;
                   if (fallbackStillSelected) {
+                    if (
+                      !opts?.onModelFallback &&
+                      session.projectAvailability !== "available" &&
+                      !isProjectlessSessionScope(session.projectScope)
+                    ) {
+                      yield {
+                        type: "error",
+                        error:
+                          "Cannot rebuild model fallback instructions while the session project is unavailable",
+                        code: "model_fallback_prompt_unavailable",
+                        retryable: false,
+                      };
+                      return;
+                    }
+                    activeModel = event.effectiveModel;
                     session.model = activeModel;
-                    await opts?.onModelFallback?.({
-                      requestedModel: event.requestedModel,
-                      effectiveModel: event.effectiveModel,
-                    });
+                    if (opts?.onModelFallback) {
+                      await opts.onModelFallback({
+                        requestedModel: event.requestedModel,
+                        effectiveModel: event.effectiveModel,
+                      });
+                    } else {
+                      await session.rebuildSystemPrompt();
+                    }
+                    fallbackStillSelected =
+                      session.modelSelectionRevision ===
+                        requestModelSelectionRevision &&
+                      session.model === activeModel;
+                    if (fallbackStillSelected)
+                      session.resetProviderResponseState();
                   }
+                  codexTurnState.dispose();
+                  codexTurnState = new CodexTurnState();
                   yield {
                     type: "warning",
                     message: fallbackStillSelected
@@ -2060,7 +2101,7 @@ export class AgentEngine {
                         }
                       : {}),
                   };
-                  break;
+                  continue requestLoop;
                 case "thinking_start":
                   openThinkingId = event.thinkingId;
                   yield {
@@ -2154,7 +2195,12 @@ export class AgentEngine {
             signal.removeEventListener("abort", abortRequest);
             transportMonitor.dispose();
             try {
-              void streamIterator.return?.(undefined).catch(() => undefined);
+              if (restartingForModelFallback) {
+                requestController.abort();
+                await streamIterator.return?.(undefined);
+              } else {
+                void streamIterator.return?.(undefined).catch(() => undefined);
+              }
             } catch {
               // Best-effort cancellation prevents abandoned streaming bodies
               // from occupying sockets after timeout/retry.

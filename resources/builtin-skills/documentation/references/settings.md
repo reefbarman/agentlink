@@ -16,7 +16,7 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 
 - `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
 - `modeReasoningEffortPreferences` — desired thinking level per mode slug (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`). A session clamps an unsupported preference to the nearest lower level without overwriting the saved preference; GPT-6 Astra exposes Codex's `ultra` preset with ChatGPT/Codex OAuth (sent as Astra's `xhigh` wire effort) and supports up to `max` with an OpenAI API key.
-- `modelPromptProfiles` — exact model-ID overrides for `compatibility` or compact `reasoning` prompts; evaluated full-size Codex models automatically use `reasoning`, while unknown, invalid, compatible-provider, and small-tier models fail closed to compatibility
+- `modelPromptProfiles` — exact local model-ID overrides for `compatibility` or compact `reasoning` prompts, ahead of each compatible model's JSON `promptProfile` and automatic policy. Omit the override to use the model's configured or automatic choice. Unknown and smaller models default to compatibility; see [Instruction profiles](providers.md#instruction-profiles) for the maintained defaults, surface scope, and rollback.
 - Built-in agent responses default to 8,192 output tokens unless an OpenAI-compatible model declares `agentMaxTokens` in the shared connection file. This is no longer a VS Code setting.
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions

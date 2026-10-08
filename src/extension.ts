@@ -1758,6 +1758,9 @@ export async function activate(
                 model.providerId,
               ),
               modelId: model.id,
+              configuredProfile: providerRegistry
+                .tryResolveProvider(model.id)
+                ?.getPromptProfile?.(model.id),
               overrides: promptProfileOverrides,
             }),
           ]),

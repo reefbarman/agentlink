@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.29.1",
+  "version": "1.29.3",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -101,6 +101,14 @@
       {
         "command": "agentlink.checkForUpdates",
         "title": "AgentLink: Check for Updates"
+      },
+      {
+        "command": "agentlink.installUpdate",
+        "title": "AgentLink: Install Update"
+      },
+      {
+        "command": "agentlink.restartForUpdate",
+        "title": "AgentLink: Reload for Update"
       },
       {
         "command": "agentlink.acceptDiff",
@@ -766,6 +774,14 @@
                         "openai"
                       ],
                       "description": "Optional vendor family used only to select prompt behavior when this model is served through an OpenAI-compatible connection. It does not change transport, authentication, or the upstream model ID."
+                    },
+                    "promptProfile": {
+                      "type": "string",
+                      "enum": [
+                        "compatibility",
+                        "reasoning"
+                      ],
+                      "description": "Optional instruction profile: compatibility uses fuller guidance; reasoning uses compact guidance, independently of thinking effort. Omit for automatic policy. Exact modelPromptProfiles overrides take precedence."
                     }
                   }
                 }
@@ -1063,7 +1079,7 @@
               "reasoning"
             ]
           },
-          "description": "Exact model-ID prompt profile overrides. Compatibility preserves the full provider prompt; reasoning selects the independently authored compact prompt. Unknown models and invalid entries fail closed to compatibility."
+          "description": "Exact local model-ID instruction-profile overrides, taking precedence over each compatible model's promptProfile and automatic defaults. Compatibility uses fuller guidance; reasoning uses compact guidance, independently of thinking effort. Unknown models without an explicit choice default to compatibility; invalid overrides are ignored."
         },
         "agentlink.thinkingBudget": {
           "scope": "resource",

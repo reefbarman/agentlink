@@ -195,10 +195,12 @@ import {
 } from "@agentlink/core/model-runtime";
 import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
 import {
+  PROMPT_PROFILE_POLICY_REVISION,
   isCurrentPromptProfileResolution,
+  isPromptProfile,
   type PromptProfileResolution,
 } from "@agentlink/protocol/prompt-profile";
-import { resolvePromptProfile } from "../../core/promptProfilePolicy.js";
+import { resolvePromptProfile } from "@agentlink/core/prompt-profile";
 import { getCodexModelCapabilities } from "@agentlink/core/codex";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 
@@ -1861,6 +1863,10 @@ export class BrowserGatewayHelper {
           uptimeMs: Date.now() - this.startedAtMs,
           activeClientLeases: this.getActiveLeaseCount(),
           activeLivenessReasons: this.lifecycle.getLivenessReasons(),
+          promptProfilePolicyRevisions: [
+            "prompt-profile-policy-v1",
+            PROMPT_PROFILE_POLICY_REVISION,
+          ],
           helperGenerationId: this.helperGenerationId,
           dataPlaneMode,
           dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
@@ -3740,11 +3746,25 @@ export class BrowserGatewayHelper {
     providerId: string,
   ): Readonly<PromptProfileResolution> {
     const publishedPromptProfile = snapshot.promptProfileResolutions[model];
-    return publishedPromptProfile &&
-      publishedPromptProfile.modelId === model &&
+    const ownerProfile =
+      publishedPromptProfile?.modelId === model &&
       publishedPromptProfile.providerId === providerId
-      ? publishedPromptProfile
-      : resolvePromptProfile({ providerId, modelId: model });
+        ? publishedPromptProfile
+        : undefined;
+    return resolvePromptProfile({
+      providerId,
+      modelId: model,
+      configuredProfile:
+        snapshot.openAiCompatibleRuntimeProfiles[providerId]?.models[model]
+          ?.promptProfile ??
+        (ownerProfile?.source === "configured-model"
+          ? ownerProfile.profile
+          : undefined),
+      overrides:
+        ownerProfile?.source === "exact-model-override"
+          ? { [model]: ownerProfile.profile }
+          : undefined,
+    });
   }
 
   private getAskAgentModelExecutionContextFromSnapshot(params: {
@@ -5849,6 +5869,26 @@ export class BrowserGatewayHelper {
     theme: BrowserGatewayThemeSnapshot;
     signal: AbortSignal;
   }): Promise<AskAgentToolLoopResult> {
+    const profileSnapshot = this.getModelCatalogSnapshot(
+      params.modelContext.modelOwnerId,
+    );
+    const resolveModelPromptProfile = (model: string) => {
+      if (model === params.modelContext.model) {
+        return params.modelContext.promptProfile.profile;
+      }
+      return (
+        profileSnapshot
+          ? this.resolvePromptProfileFromSnapshot(
+              profileSnapshot,
+              model,
+              params.modelContext.providerId,
+            )
+          : resolvePromptProfile({
+              providerId: params.modelContext.providerId,
+              modelId: model,
+            })
+      ).profile;
+    };
     const conversationId = this.askAgentSessionStore.getActiveSessionId();
     let conversationState = this.askAgentConversationStates.get(conversationId);
     if (!conversationState) {
@@ -5924,6 +5964,7 @@ export class BrowserGatewayHelper {
             params.modelContext.openAiCompatibleRuntimeProfile,
           model: params.modelContext.model,
           promptProfile: params.modelContext.promptProfile.profile,
+          resolvePromptProfile: resolveModelPromptProfile,
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
           messages: [],
           memoryContext: params.memoryContext,
@@ -5982,6 +6023,7 @@ export class BrowserGatewayHelper {
               params.modelContext.openAiCompatibleRuntimeProfile,
             model: params.modelContext.model,
             promptProfile: params.modelContext.promptProfile.profile,
+            resolvePromptProfile: resolveModelPromptProfile,
             reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
             messages: [],
             memoryContext: params.memoryContext,
@@ -10004,6 +10046,22 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "owner_generation_mismatch" });
         return;
       }
+      const decodedProfiles = this.decodePublishedPromptProfiles(body);
+      if (decodedProfiles.status !== "valid") {
+        writeJson(res, decodedProfiles.status === "version" ? 409 : 400, {
+          error:
+            decodedProfiles.status === "version"
+              ? "prompt_profile_version_mismatch"
+              : "invalid_request",
+          ...(decodedProfiles.status === "version"
+            ? {
+                message:
+                  "Prompt profile publication is incompatible. Update AgentLink and reload the model owner and browser helper, then republish the catalog.",
+              }
+            : {}),
+        });
+        return;
+      }
       const publishedAt = Date.now();
       const candidateSnapshot: BrowserGatewayPrivateModelCatalogSnapshot = {
         publishedByOwnerId: body.publishedByOwnerId.trim(),
@@ -10026,7 +10084,7 @@ export class BrowserGatewayHelper {
             ],
           ),
         ),
-        promptProfileResolutions: body.promptProfileResolutions ?? {},
+        promptProfileResolutions: decodedProfiles.resolutions,
       };
       this.modelCatalogSnapshots.set(
         candidateSnapshot.publishedByOwnerId,
@@ -10076,12 +10134,10 @@ export class BrowserGatewayHelper {
       Array.isArray(body.models) &&
       body.models.length > 0 &&
       body.models.every((model) => this.isValidModelCatalogEntry(model)) &&
+      new Set(body.models.map((model) => model.id.trim())).size ===
+        body.models.length &&
       this.isValidOpenAiCompatibleRuntimeProfiles(
         body.openAiCompatibleRuntimeProfiles,
-        body.models,
-      ) &&
-      this.isValidPromptProfileResolutions(
-        body.promptProfileResolutions,
         body.models,
       ),
     );
@@ -10146,25 +10202,84 @@ export class BrowserGatewayHelper {
     );
   }
 
-  private isValidPromptProfileResolutions(
-    value: BrowserGatewayPromptProfileResolutions | undefined,
-    models: readonly CoreModelCatalogEntry[],
-  ): boolean {
-    if (value === undefined) return true;
+  private decodePublishedPromptProfiles(
+    body: BrowserGatewayModelCatalogPublishRequest,
+  ):
+    | { status: "valid"; resolutions: BrowserGatewayPromptProfileResolutions }
+    | { status: "invalid" | "version" } {
+    const value = body.promptProfileResolutions;
+    if (value === undefined) return { status: "valid", resolutions: {} };
     if (!value || typeof value !== "object" || Array.isArray(value))
-      return false;
+      return { status: "invalid" };
     const advertisedProviders = new Map(
-      models.map((model) => [
+      body.models.map((model) => [
         model.id,
         normalizeBrowserGatewayModelCredentialProviderId(model.providerId),
       ]),
     );
-    return Object.entries(value).every(
-      ([modelId, resolution]) =>
-        advertisedProviders.get(modelId) === resolution.providerId &&
-        resolution.modelId === modelId &&
-        isCurrentPromptProfileResolution(resolution),
-    );
+    const resolutions = new Map<string, PromptProfileResolution>();
+    let unsupportedVersion = false;
+    for (const [modelId, evidence] of Object.entries(value)) {
+      if (!evidence || typeof evidence !== "object" || Array.isArray(evidence))
+        return { status: "invalid" };
+      const resolution = evidence as unknown as Record<string, unknown>;
+      if (
+        !isPromptProfile(resolution.profile) ||
+        resolution.modelId !== modelId ||
+        !advertisedProviders.has(modelId) ||
+        advertisedProviders.get(modelId) !== resolution.providerId ||
+        typeof resolution.source !== "string" ||
+        !resolution.source ||
+        resolution.source.length > 128 ||
+        typeof resolution.policyRevision !== "string" ||
+        !resolution.policyRevision ||
+        resolution.policyRevision.length > 128
+      ) {
+        return { status: "invalid" };
+      }
+      const legacy = resolution.policyRevision === "prompt-profile-policy-v1";
+      const knownSource = [
+        "exact-model-override",
+        "evaluated-model",
+        "compatibility-default",
+        ...(!legacy ? ["configured-model", "automatic-model"] : []),
+      ].includes(resolution.source);
+      if (
+        !knownSource ||
+        (!legacy &&
+          resolution.policyRevision !== PROMPT_PROFILE_POLICY_REVISION)
+      ) {
+        unsupportedVersion = true;
+        continue;
+      }
+      const currentEvidence = {
+        ...resolution,
+        policyRevision: PROMPT_PROFILE_POLICY_REVISION,
+      };
+      if (!isCurrentPromptProfileResolution(currentEvidence))
+        return { status: "invalid" };
+      const providerId = advertisedProviders.get(modelId)!;
+      resolutions.set(
+        modelId,
+        resolvePromptProfile({
+          providerId,
+          modelId,
+          configuredProfile:
+            body.openAiCompatibleRuntimeProfiles?.[providerId]?.models[modelId]
+              ?.promptProfile ??
+            (currentEvidence.source === "configured-model"
+              ? currentEvidence.profile
+              : undefined),
+          overrides:
+            currentEvidence.source === "exact-model-override"
+              ? { [modelId]: currentEvidence.profile }
+              : undefined,
+        }),
+      );
+    }
+    return unsupportedVersion
+      ? { status: "version" }
+      : { status: "valid", resolutions: Object.fromEntries(resolutions) };
   }
 
   private isValidOpenAiCompatibleRuntimeProfiles(
@@ -10315,12 +10430,20 @@ export class BrowserGatewayHelper {
         Array.isArray(model) ||
         Object.keys(model).some(
           (key) =>
-            !["id", "model", "modelFamily", "capabilities"].includes(key),
+            ![
+              "id",
+              "model",
+              "modelFamily",
+              "promptProfile",
+              "capabilities",
+            ].includes(key),
         ) ||
         model.id !== modelId ||
         typeof model.model !== "string" ||
         !model.model.trim() ||
         model.model.length > 1_024 ||
+        (model.promptProfile !== undefined &&
+          !isPromptProfile(model.promptProfile)) ||
         (model.modelFamily !== undefined &&
           model.modelFamily !== "anthropic" &&
           model.modelFamily !== "openai") ||

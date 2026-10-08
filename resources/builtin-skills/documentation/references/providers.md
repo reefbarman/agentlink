@@ -59,6 +59,17 @@ The file uses this envelope. If it already exists, merge entries into its `conne
 - `contextWindow` and `maxOutputTokens` describe the served model's limits. VS Code agent responses default to 8,192 tokens; optional model-level `agentMaxTokens` overrides that request size and must not exceed `maxOutputTokens`.
 - Declare thinking only when supported. Generic connections send no effort field by default. If the endpoint documents one, set connection-level `reasoningEffortMode` to `reasoning_effort`, `reasoning.effort`, or `output_config.effort`, and declare the model's supported `reasoningEfforts` and `defaultReasoningEffort`. These are wire contracts, not interchangeable spellings.
 - Optional model-level `modelFamily: "anthropic"` or `"openai"` selects vendor-appropriate prompt guidance. It does not change the endpoint, credential, or API format.
+- Optional model-level `promptProfile: "compatibility"` or `"reasoning"` selects the fuller or compact instruction profile. Omit it for automatic selection. This is local AgentLink configuration, not an upstream API parameter; invalid values are rejected.
+
+### Instruction profiles
+
+For example, add `"promptProfile": "reasoning"` to a Claude model's object to try the compact profile through Meridian. `modelFamily`, thinking support, effort, and transport do not automatically select it. Keep `"compatibility"` as a rollback if a model needs more guidance. Shorter instructions do not by themselves establish better behaviour.
+
+Selection precedence is: VS Code's exact local model-ID override in `agentlink.modelPromptProfiles`, then the model's JSON `promptProfile`, then the maintained automatic policy, then `compatibility`. Automatic compact defaults cover Codex GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Sol/Terra, and GPT-5.5. Astra and Sol are maintained defaults, not claims of completed behavioural evaluation. Unknown models, Claude/other compatible models without an explicit choice, Luna, and Spark stay on compatibility.
+
+VS Code workspace, projectless and native background sessions, Browser Ask Agent, Desktop, and the CLI apply the shared selection policy to their own capability-appropriate instructions. The CLI uses its separate `cli/config.json` model objects, not the shared connection file. Browser/Desktop publications keep choices scoped to the selected model's owner even when credentials are borrowed. ACP/external agents own their own prompts. Model changes and native Codex cross-model fallback rebuild instructions before the next request; caller-authored auxiliary completion prompts remain unchanged.
+
+Helpers advertise the profile-policy revisions they accept. Startup replaces an idle older helper that cannot accept the new catalog; an active older helper is preserved with an explicit update/restart error, not silently attached to or given stripped model preferences. Finish active browser sessions before restarting it. A newer helper can migrate authenticated previous-revision evidence; unsupported publications return reload guidance and preserve the last valid catalog.
 
 Authenticated endpoints require HTTPS or loopback HTTP by default. Redirects are rejected. Keep local servers on loopback; do not enable `allowInsecureHttp` as a routine fix for network or authentication failures. An endpoint offering only Anthropic Messages or OpenAI Responses is not sufficient for this connection path.
 
@@ -138,6 +149,36 @@ After saving, edit that connection in `~/.agentlink/openai-compatible.json` to e
 Merge this connection into an existing file, do not overwrite other entries or add a second connection with the same ID. If the wizard already created it, update that entry instead. For a protected server, add `"authKey": "meridian-local"` to the connection and store the server key with **AgentLink: Set OpenAI-compatible API Key**.
 
 `meridianSessionAffinity` sends AgentLink's current conversation ID as `x-session-affinity`, allowing Meridian to resume its SDK session across tool-loop rounds. Do not add a fixed `x-session-affinity` or `x-session-id` header: AgentLink rejects those static headers, and a shared constant would mix conversations. Do not combine this option with a generic `sessionId` mapping.
+
+### AgentLink companion plugin
+
+The AgentLink source checkout includes a dependency-free Meridian plugin in
+`integrations/meridian-plugin-agentlink`. It uses Meridian's existing plugin API;
+the package is not yet published to npm. From that checkout, run:
+
+```sh
+node integrations/meridian-plugin-agentlink/install.mjs
+curl -fsS -X POST http://127.0.0.1:3456/plugins/reload
+```
+
+Authenticate the reload if your server is protected. Enable
+`meridianSessionAffinity`, confirm `agentlink-client-tools` is active in Meridian's
+Plugins UI, and start a fresh conversation. Existing conversations retain
+Meridian's pinned deferral policy. Docker users can mount the plugin `.js` into
+Meridian's plugin directory or register its container path in `plugins.json`.
+
+The plugin recognizes AgentLink's system-prompt identity and affinity header,
+preserves the supplied tool catalog, forces client-owned execution, and disables
+Meridian's automatic tool deferral for those requests. This avoids the hidden SDK
+continuation that deferred tool calls can trigger. Other clients keep their
+existing policy. Explicit tool deferral and operator-pinned SDK turn budgets can
+still allow extra turns. High reasoning effort and large context also affect
+latency. Compare the same model, effort, prompt and tools when measuring changes.
+
+Tool renames normally need no plugin change because it uses the current catalog.
+Changes to prompt identity, session headers or explicit deferral require checking
+the companion plugin. To revert, disable it in Meridian, reload, and start a fresh
+conversation.
 
 The optional `quota` object enables `/usage` for the selected Meridian model in VS Code and browser workspace chats. It queries the configured endpoint only when invoked, displays each profile separately, and reuses the connection credential for this same-origin URL. Meridian's active profile label is not proof of which account served a particular chat. Browser Ask Agent does not currently offer `/usage`.
 

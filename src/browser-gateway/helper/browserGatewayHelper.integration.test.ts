@@ -47,6 +47,8 @@ import {
   type HelperRuntimeOptions,
 } from "./browserGatewayHelper.js";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
+import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
+import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
 import {
   BrowserGatewayAskAgentModelClient,
   type BrowserGatewayAskAgentCompletionParams,
@@ -207,6 +209,7 @@ async function provisionAskAgentModelForTest(params: {
   openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
   promptProfileResolutions?: Record<string, unknown>;
   ownerId?: string;
+  ownerKind?: "vscode" | "desktop";
   ownerGenerationId?: string;
   instanceId?: string;
   memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
@@ -225,13 +228,16 @@ async function provisionAskAgentModelForTest(params: {
       headers: internalHeaders,
       body: JSON.stringify({
         ownerId,
-        ownerKind: "vscode",
-        displayName: "VS Code Test Owner",
-        scope: {
-          kind: "workspace",
-          workspaceId: "workspace-test",
-          displayName: "Workspace Test",
-        },
+        ownerKind: params.ownerKind ?? "vscode",
+        displayName: "Test Model Owner",
+        scope:
+          params.ownerKind === "desktop"
+            ? { kind: "projectless", scopeId: "ask", displayName: "Ask" }
+            : {
+                kind: "workspace",
+                workspaceId: "workspace-test",
+                displayName: "Workspace Test",
+              },
         ownerGenerationId,
         instanceId,
         processId: process.pid,
@@ -298,6 +304,7 @@ async function provisionAskAgentModelForTest(params: {
 
 async function makeAskAgentToolLoopTestHarness(params: {
   modelClient: AskAgentToolLoopTestClient;
+  ownerKind?: "vscode" | "desktop";
   helperVersion?: string;
   streamingMetrics?: StreamingBaselineRecorder;
   grantCredential?: boolean;
@@ -378,6 +385,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   const internalHeaders = await provisionAskAgentModelForTest({
     helperBase,
     discovery,
+    ownerKind: params.ownerKind,
     grantCredential: params.grantCredential,
     credentialMethod: params.credentialMethod,
     providerId: params.providerId,
@@ -3120,6 +3128,27 @@ describe("BrowserGatewayHelper proxy routing", () => {
         providerId: "anthropic",
         modelId: "claude-sonnet-4-5",
       },
+      {
+        profile: "reasoning",
+        source: "future-model-source",
+        policyRevision: PROMPT_PROFILE_POLICY_REVISION,
+        providerId: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      },
+      {
+        profile: "reasoning",
+        source: "exact-model-override",
+        policyRevision: "prompt-profile-policy-v1",
+        providerId: "another-owner-provider",
+        modelId: "claude-sonnet-4-5",
+      },
+      {
+        profile: "reasoning",
+        source: "exact-model-override",
+        policyRevision: "prompt-profile-policy-v1",
+        providerId: "anthropic",
+        modelId: "another-model",
+      },
     ]) {
       const invalidCatalog = await fetch(
         `${helperBase}/internal/model-catalog`,
@@ -3145,10 +3174,20 @@ describe("BrowserGatewayHelper proxy routing", () => {
           }),
         },
       );
-      expect(invalidCatalog.status).toBe(400);
-      await expect(invalidCatalog.json()).resolves.toEqual({
-        error: "invalid_request",
-      });
+      const unsupportedVersion =
+        promptProfileResolution.policyRevision === "prompt-profile-policy-v0" ||
+        promptProfileResolution.source === "future-model-source";
+      expect(invalidCatalog.status).toBe(unsupportedVersion ? 409 : 400);
+      await expect(invalidCatalog.json()).resolves.toEqual(
+        unsupportedVersion
+          ? {
+              error: "prompt_profile_version_mismatch",
+              message: expect.stringContaining(
+                "reload the model owner and browser helper",
+              ),
+            }
+          : { error: "invalid_request" },
+      );
     }
 
     const modelsResponse = await fetch(`${helperBase}/api/ask-agent/models`, {
@@ -7538,17 +7577,379 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams).toHaveLength(1);
   });
 
+  it.each(
+    (["vscode", "desktop"] as const).flatMap((ownerKind) =>
+      [
+        { configured: "reasoning", expected: "reasoning" },
+        { configured: "compatibility", expected: "compatibility" },
+        { configured: undefined, expected: "compatibility" },
+        {
+          configured: "reasoning",
+          expected: "reasoning",
+          legacyAutomatic: true,
+        },
+        {
+          configured: undefined,
+          expected: "compatibility",
+          legacyAutomatic: true,
+          legacyEvaluated: true,
+        },
+        {
+          configured: "reasoning",
+          expected: "compatibility",
+          override: "compatibility",
+          revision: "prompt-profile-policy-v1",
+        },
+        {
+          configured: "compatibility",
+          expected: "reasoning",
+          override: "reasoning",
+          revision: PROMPT_PROFILE_POLICY_REVISION,
+        },
+      ].map((scenario) => ({ ownerKind, ...scenario })),
+    ),
+  )(
+    "composes $ownerKind JSON prompt profile $configured as $expected (override $override, legacy $legacyAutomatic)",
+    async ({
+      ownerKind,
+      configured,
+      expected,
+      override,
+      revision,
+      legacyAutomatic,
+      legacyEvaluated,
+    }) => {
+      const outgoingBodies: Record<string, unknown>[] = [];
+      const modelClient = new BrowserGatewayAskAgentModelClient({
+        sessionId: "profile-composition",
+        webFetch: async (_input, init) => {
+          outgoingBodies.push(JSON.parse(String(init?.body)));
+          return new Response(
+            'data: {"choices":[{"index":0,"delta":{"content":"Profile applied."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        },
+      });
+      const modelId = "opaque-local-model";
+      const normalized = normalizeOpenAiCompatibleConnections(
+        JSON.parse(
+          JSON.stringify([
+            {
+              id: "profile-test",
+              displayName: "Profile Test",
+              baseUrl: "https://models.example/v1",
+              profile: "generic",
+              authKey: "profile-test-key",
+              models: [
+                {
+                  id: modelId,
+                  model: "opaque-wire-model",
+                  displayName: "Configured Model",
+                  modelFamily: "anthropic",
+                  promptProfile: configured,
+                  supportsToolUse: true,
+                  contextWindow: 32_768,
+                  maxOutputTokens: 4_096,
+                },
+              ],
+            },
+          ]),
+        ),
+      );
+      expect(normalized.issues).toEqual([]);
+      const connection = normalized.connections[0]!;
+      const providerId = connection.providerId;
+      const evidence =
+        override || legacyAutomatic
+          ? {
+              [modelId]: {
+                profile:
+                  override ?? (legacyEvaluated ? "reasoning" : "compatibility"),
+                source: override
+                  ? "exact-model-override"
+                  : legacyEvaluated
+                    ? "evaluated-model"
+                    : "compatibility-default",
+                policyRevision: revision ?? "prompt-profile-policy-v1",
+                modelId,
+                providerId,
+              },
+            }
+          : undefined;
+      const harness = await makeAskAgentToolLoopTestHarness({
+        ownerKind,
+        modelClient,
+        providerId,
+        credentialMethod: "apiKey",
+        model: {
+          id: modelId,
+          displayName: "Configured Model",
+          providerId,
+          contextWindow: 32_768,
+          authenticated: true,
+        },
+        openAiCompatibleRuntimeProfiles: {
+          [providerId]: connection.runtimeProfile,
+        },
+        promptProfileResolutions: evidence,
+      });
+      helper = harness.helper;
+      servers.push(harness.helperServer);
+      if (override) {
+        const discovery = JSON.parse(
+          await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+        ) as { clientSharedSecret: string; helperGenerationId: string };
+        for (const rejection of [
+          {
+            changedEvidence: { policyRevision: "prompt-profile-policy-v999" },
+            version: true,
+          },
+          { changedEvidence: { source: "future-source" }, version: true },
+          { duplicateModel: true, version: false },
+          { invalidConfiguredProfile: true, version: false },
+        ]) {
+          const rejectedPublication = await fetch(
+            `${harness.helperBase}/internal/model-catalog`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${discovery.clientSharedSecret}`,
+              },
+              body: JSON.stringify({
+                publishedByOwnerId: "vscode-owner",
+                publishedByOwnerGenerationId: "vscode-generation-1",
+                helperGenerationId: discovery.helperGenerationId,
+                models: Array.from(
+                  { length: rejection.duplicateModel ? 2 : 1 },
+                  () => ({
+                    id: modelId,
+                    displayName: "Replacement",
+                    providerId,
+                    contextWindow: 32_768,
+                    authenticated: true,
+                  }),
+                ),
+                openAiCompatibleRuntimeProfiles: {
+                  [providerId]: {
+                    ...connection.runtimeProfile,
+                    ...(rejection.invalidConfiguredProfile
+                      ? {
+                          models: {
+                            [modelId]: {
+                              ...connection.runtimeProfile.models[modelId],
+                              promptProfile: "auto",
+                            },
+                          },
+                        }
+                      : {}),
+                  },
+                },
+                promptProfileResolutions: {
+                  [modelId]: {
+                    ...evidence?.[modelId],
+                    ...rejection.changedEvidence,
+                  },
+                },
+              }),
+            },
+          );
+          expect(rejectedPublication.status).toBe(
+            rejection.version ? 409 : 400,
+          );
+          await expect(rejectedPublication.json()).resolves.toMatchObject({
+            error: rejection.version
+              ? "prompt_profile_version_mismatch"
+              : "invalid_request",
+          });
+        }
+      }
+      const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          text: "Use the configured profile",
+          instanceId: "vscode-instance-1",
+        }),
+      });
+      expect(send.ok).toBe(true);
+      expect(await send.text()).toContain("Profile applied.");
+      expect(outgoingBodies).toHaveLength(1);
+      const body = outgoingBodies[0] as {
+        model: string;
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(body.model).toBe("opaque-wire-model");
+      const instructions = body.messages.find(
+        (message) => message.role === "system",
+      )?.content;
+      expect(instructions).toContain("You are AgentLink Ask Agent");
+      expect(instructions).toContain(
+        "You cannot edit files, run shell commands",
+      );
+      if (expected === "reasoning") {
+        expect(instructions).toContain("Local file access is read-only");
+        expect(instructions).not.toContain("Conversation memory, when present");
+      } else {
+        expect(instructions).toContain("Conversation memory, when present");
+      }
+      expect(body).not.toHaveProperty("promptProfile");
+      const context = (
+        harness.helper as unknown as {
+          getAskAgentModelExecutionContext(): { promptProfile: unknown } | null;
+        }
+      ).getAskAgentModelExecutionContext();
+      expect(context?.promptProfile).toMatchObject({
+        profile: expected,
+        source: override
+          ? "exact-model-override"
+          : configured
+            ? "configured-model"
+            : "compatibility-default",
+        policyRevision: PROMPT_PROFILE_POLICY_REVISION,
+        modelId,
+        providerId,
+      });
+    },
+  );
+
+  it.each(
+    ["codex", "openai-codex"].flatMap((providerId) =>
+      [
+        undefined,
+        "prompt-profile-policy-v1",
+        PROMPT_PROFILE_POLICY_REVISION,
+      ].flatMap((revision) =>
+        ["gpt-6.1-sol", "gpt-5.4-pro"].map((modelId) => ({
+          providerId,
+          revision,
+          modelId,
+        })),
+      ),
+    ),
+  )(
+    "composes automatic Codex alias $providerId for $modelId without a manual override (revision $revision)",
+    async ({ providerId, revision, modelId }) => {
+      const bodies: Record<string, unknown>[] = [];
+      const modelClient = new BrowserGatewayAskAgentModelClient({
+        sessionId: "codex-profile-composition",
+        createClient: () =>
+          ({
+            responses: {
+              create: async (body: Record<string, unknown>) => {
+                bodies.push(body);
+                return (async function* () {
+                  yield {
+                    type: "response.output_text.delta",
+                    delta: "Automatic profile applied.",
+                  };
+                })();
+              },
+            },
+          }) as never,
+      });
+      const harness = await makeAskAgentToolLoopTestHarness({
+        modelClient,
+        providerId,
+        credentialMethod: "oauth",
+        model: {
+          id: modelId,
+          displayName: "Sol",
+          providerId,
+          contextWindow: 100_000,
+          authenticated: true,
+        },
+        // Automatic evidence is recomputed locally, including old owner defaults.
+        promptProfileResolutions: revision
+          ? {
+              [modelId]: {
+                modelId,
+                providerId: "openai-codex",
+                profile:
+                  revision === PROMPT_PROFILE_POLICY_REVISION
+                    ? "reasoning"
+                    : "compatibility",
+                source:
+                  revision === PROMPT_PROFILE_POLICY_REVISION
+                    ? "automatic-model"
+                    : "compatibility-default",
+                policyRevision: revision,
+              },
+            }
+          : undefined,
+      });
+      helper = harness.helper;
+      servers.push(harness.helperServer);
+      const response = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          text: "Use automatic selection",
+          instanceId: "vscode-instance-1",
+        }),
+      });
+      expect(response.ok).toBe(true);
+      expect(await response.text()).toContain("Automatic profile applied.");
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.model).toBe(
+        modelId === "gpt-5.4-pro" ? "gpt-5.6-sol" : modelId,
+      );
+      const input = bodies[0]?.input as Array<{
+        role?: string;
+        content?: Array<{ text?: string }>;
+      }>;
+      const instructions =
+        bodies[0]?.instructions ??
+        input.find((item) => item.role === "developer" && item.content)
+          ?.content?.[0]?.text;
+      expect(instructions).toContain("Local file access is read-only");
+      expect(instructions).not.toContain("Conversation memory, when present");
+      const context = (
+        harness.helper as unknown as {
+          getAskAgentModelExecutionContext(): { promptProfile: unknown } | null;
+        }
+      ).getAskAgentModelExecutionContext();
+      expect(context?.promptProfile).toMatchObject({
+        profile: modelId === "gpt-5.4-pro" ? "compatibility" : "reasoning",
+        source:
+          modelId === "gpt-5.4-pro"
+            ? "compatibility-default"
+            : "automatic-model",
+        policyRevision: PROMPT_PROFILE_POLICY_REVISION,
+        providerId: "openai-codex",
+        modelId,
+      });
+    },
+  );
+
   it("switches from an owner-pinned custom model to Codex credentials from another connected owner", async () => {
     const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const codexBodies: Record<string, unknown>[] = [];
+    const actualClient = new BrowserGatewayAskAgentModelClient({
+      sessionId: "owner-isolation",
+      webFetch: async () =>
+        new Response(
+          'data: {"choices":[{"index":0,"delta":{"content":"Kimi answered."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      createClient: () =>
+        ({
+          responses: {
+            create: async (body: Record<string, unknown>) => {
+              codexBodies.push(body);
+              return (async function* () {
+                yield {
+                  type: "response.output_text.delta",
+                  delta: "Sol answered.",
+                };
+              })();
+            },
+          },
+        }) as never,
+    });
     const modelClient = makeAskAgentToolLoopClient(async (params) => {
       completionParams.push(params);
-      return {
-        text:
-          params.providerId === "openai-codex"
-            ? "Sol answered."
-            : "Kimi answered.",
-        toolCalls: [],
-      };
+      return actualClient.completeWithToolCalls(params);
     });
     const customProviderId = "openai-compatible:openrouter-main";
     const customModelId = "openrouter-moonshotai-kimi-k3";
@@ -7579,7 +7980,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ],
       promptProfileResolutions: {
         [codexModelId]: {
-          profile: "reasoning",
+          profile: "compatibility",
           source: "exact-model-override",
           policyRevision: "prompt-profile-policy-v1",
           providerId: "openai-codex",
@@ -7628,7 +8029,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       model: codexModel,
       promptProfileResolutions: {
         [codexModelId]: {
-          profile: "compatibility",
+          profile: "reasoning",
           source: "exact-model-override",
           policyRevision: "prompt-profile-policy-v1",
           providerId: "openai-codex",
@@ -7674,12 +8075,19 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams[1]).toMatchObject({
       model: codexModelId,
       providerId: "openai-codex",
-      promptProfile: "reasoning",
+      promptProfile: "compatibility",
       credential: {
         bearerToken: "codex-owner-token",
         grantedByOwnerId: "codex-owner",
       },
     });
+    expect(codexBodies).toHaveLength(1);
+    expect(codexBodies[0]?.instructions).toContain(
+      "Conversation memory, when present",
+    );
+    expect(codexBodies[0]?.instructions).not.toContain(
+      "Local file access is read-only",
+    );
     await expect(harness.preferencesStore.read()).resolves.toMatchObject({
       model: codexModelId,
       modelOwnerId: "vscode-owner",

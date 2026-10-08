@@ -54,6 +54,7 @@ import {
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
 import {
+  CODEX_DEFAULT_MODEL,
   CodexCredentialSession,
   CodexResponsesAuthError,
   CodexResponsesStreamAbortedError,
@@ -61,6 +62,7 @@ import {
   getCodexEndpointConfig,
   getCodexWebSocketConfig,
   getEndpointCaps,
+  resolveCodexEffectiveModel,
   isNonReplayableResponsesError,
   ResponsesTransportPolicy,
   type ResponsesWebSocketConnector,
@@ -195,6 +197,7 @@ export type BrowserGatewayAskAgentCompletionParams = {
   openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
   model?: string;
   promptProfile?: PromptProfile;
+  resolvePromptProfile?: (model: string) => PromptProfile;
   reasoningEffort?: ReasoningEffort;
   messages: readonly ChatMessage[];
   memoryContext?: string;
@@ -767,6 +770,12 @@ export class BrowserGatewayAskAgentModelClient {
           maxRetries: 0,
         });
 
+    const effectiveModel = resolveCodexEffectiveModel(
+      params.model?.trim() || CODEX_DEFAULT_MODEL,
+      params.credential.method,
+    ).model;
+    const promptProfile =
+      params.resolvePromptProfile?.(effectiveModel) ?? params.promptProfile;
     try {
       const result = await executeCodexResolvedCompletion({
         client,
@@ -786,8 +795,7 @@ export class BrowserGatewayAskAgentModelClient {
           : undefined,
         model: params.model,
         instructions:
-          params.instructions ??
-          buildAskAgentInstructions(params.promptProfile),
+          params.instructions ?? buildAskAgentInstructions(promptProfile),
         input: translateCodexMessages(buildAskAgentMessages(params)),
         maxTokens: params.maxTokens ?? 2048,
         state: { store: false },

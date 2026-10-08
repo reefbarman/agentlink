@@ -88,6 +88,9 @@ export interface ModelProvider {
    * separate from the provider ID, which owns routing, authentication, and transport.
    */
   getModelFamily?(model: string): "anthropic" | "openai" | undefined;
+  getPromptProfile?(
+    model: string,
+  ): import("@agentlink/protocol/prompt-profile").PromptProfile | undefined;
 
   /**
    * Whether the system prompt should declare the working directory in an

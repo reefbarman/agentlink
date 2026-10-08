@@ -78,6 +78,57 @@ describe("parseCliConfig", () => {
     ).toThrow("must use HTTPS or loopback HTTP");
   });
 
+  it.each([undefined, "compatibility", "reasoning"])(
+    "retains the compatible model instruction profile: %s",
+    (promptProfile) => {
+      const parsed = parseCliConfig({
+        ...base,
+        compatibleProviders: [
+          {
+            id: "custom",
+            baseURL: "https://example.invalid/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "local-model",
+                contextWindow: 8192,
+                maxOutputTokens: 1024,
+                supportsToolUse: true,
+                promptProfile,
+              },
+            ],
+          },
+        ],
+      });
+      expect(parsed.compatibleProviders[0]?.models[0]?.promptProfile).toBe(
+        promptProfile,
+      );
+    },
+  );
+
+  it("rejects an invalid model instruction profile at the exact JSON path", () => {
+    expect(() =>
+      parseCliConfig({
+        ...base,
+        compatibleProviders: [
+          {
+            id: "custom",
+            baseURL: "https://example.invalid/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "local-model",
+                contextWindow: 8192,
+                maxOutputTokens: 1024,
+                promptProfile: "auto",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow("compatibleProviders[0].models[0].promptProfile");
+  });
+
   it("accepts explicit loopback HTTP metadata with no secret override", () => {
     const parsed = parseCliConfig({
       ...base,

@@ -198,6 +198,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
             defaultReasoningEffort: "medium",
             supportsImages: true,
             modelFamily: "anthropic",
+            promptProfile: "reasoning",
           }),
           model({
             id: "deepseek",
@@ -245,6 +246,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
           id: "kimi",
           model: "moonshotai/kimi",
           modelFamily: "anthropic",
+          promptProfile: "reasoning",
           capabilities: {
             supportsThinking: true,
             supportsCaching: false,
@@ -336,6 +338,36 @@ describe("normalizeOpenAiCompatibleConnections", () => {
     expect(
       issuePaths([connection({ models: [model({ tier: "fast" })] })]),
     ).toContain("$[0].models[0].tier");
+  });
+
+  it.each(["compatibility", "reasoning"] as const)(
+    "preserves the %s per-model prompt profile in runtime config",
+    (promptProfile) => {
+      const valid = normalizeOpenAiCompatibleConnections([
+        connection({ models: [model({ promptProfile })] }),
+      ]);
+
+      expect(valid.issues).toEqual([]);
+      expect(valid.connections[0]?.models[0]?.promptProfile).toBe(
+        promptProfile,
+      );
+      expect(
+        valid.connections[0]?.runtimeProfile.models["local-model"]
+          ?.promptProfile,
+      ).toBe(promptProfile);
+    },
+  );
+
+  it("omits an unspecified per-model prompt profile and rejects invalid values", () => {
+    const valid = normalizeOpenAiCompatibleConnections([connection()]);
+    expect(valid.issues).toEqual([]);
+    expect(valid.connections[0]?.models[0]).not.toHaveProperty("promptProfile");
+    expect(
+      valid.connections[0]?.runtimeProfile.models["local-model"],
+    ).not.toHaveProperty("promptProfile");
+    expect(
+      issuePaths([connection({ models: [model({ promptProfile: "other" })] })]),
+    ).toContain("$[0].models[0].promptProfile");
   });
 
   it("accepts per-model prompt family metadata and rejects unknown values", () => {

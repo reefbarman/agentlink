@@ -19,6 +19,7 @@ import {
 } from "../browserGatewayHelperDiscovery.js";
 
 import { BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION } from "../protocol.js";
+import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
 
 afterEach(async () => {
   await clearBrowserGatewayHelperDiscovery();
@@ -227,6 +228,7 @@ describe("browser gateway helper bootstrap", () => {
               now: new Date().toISOString(),
               uptimeMs: 123,
               activeClientLeases: 1,
+              promptProfilePolicyRevisions: [PROMPT_PROFILE_POLICY_REVISION],
             }),
           );
           return;
@@ -278,6 +280,7 @@ describe("browser gateway helper bootstrap", () => {
             now: new Date().toISOString(),
             uptimeMs: 123,
             activeClientLeases: 1,
+            promptProfilePolicyRevisions: [PROMPT_PROFILE_POLICY_REVISION],
           }),
         );
         return;
@@ -327,6 +330,7 @@ describe("browser gateway helper bootstrap", () => {
             now: new Date().toISOString(),
             uptimeMs: 123,
             activeClientLeases: 1,
+            promptProfilePolicyRevisions: [PROMPT_PROFILE_POLICY_REVISION],
           }),
         );
         return;
@@ -384,6 +388,7 @@ describe("browser gateway helper bootstrap", () => {
             now: new Date().toISOString(),
             uptimeMs: 123,
             activeClientLeases: 1,
+            promptProfilePolicyRevisions: [PROMPT_PROFILE_POLICY_REVISION],
           }),
         );
         return;
@@ -428,6 +433,65 @@ describe("browser gateway helper bootstrap", () => {
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+  it.each([
+    { leases: 1, reasons: [], error: "helper_prompt_profile_incompatible" },
+    {
+      leases: 0,
+      reasons: ["browser_stream"],
+      error: "helper_prompt_profile_incompatible",
+    },
+    { leases: 0, reasons: [], error: "helper_bundle_missing" },
+  ])(
+    "does not attach v2 publication to a legacy helper ($leases, $reasons)",
+    async ({ leases, reasons, error }) => {
+      const tempRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), ".tmp-helper-profile-"),
+      );
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+            helperVersion: "development",
+            activeClientLeases: leases,
+            activeLivenessReasons: reasons,
+            promptProfilePolicyRevisions: ["prompt-profile-policy-v1"],
+          }),
+        );
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const port = (server.address() as { port: number }).port;
+      await writeBrowserGatewayHelperDiscovery({
+        pid: process.pid,
+        port,
+        url: `http://127.0.0.1:${port}`,
+        protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+        helperVersion: "development",
+        startedAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        browserBootstrapToken: "token",
+        clientSharedSecret: "secret",
+      });
+      try {
+        await expect(
+          bootstrapBrowserGatewayHelper({
+            extensionRootPath: tempRoot,
+            browserGatewayPort: port,
+            helperVersion: "development",
+            log: vi.fn(),
+          }),
+        ).rejects.toThrow(error);
+        expect((await fetch(`http://127.0.0.1:${port}/health`)).ok).toBe(true);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("fails fast when helper bundle is missing", async () => {
     const tempRoot = await fs.mkdtemp(

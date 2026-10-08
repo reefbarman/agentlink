@@ -2,10 +2,12 @@ export const PROMPT_PROFILES = ["compatibility", "reasoning"] as const;
 
 export type PromptProfile = (typeof PROMPT_PROFILES)[number];
 
-export const PROMPT_PROFILE_POLICY_REVISION = "prompt-profile-policy-v1";
+export const PROMPT_PROFILE_POLICY_REVISION = "prompt-profile-policy-v2";
 
 export type PromptProfileResolutionSource =
   | "exact-model-override"
+  | "configured-model"
+  | "automatic-model"
   | "evaluated-model"
   | "compatibility-default";
 
@@ -32,6 +34,9 @@ export function isCurrentPromptProfileResolution(
   const candidate = value as Partial<PromptProfileResolution>;
   const coherentProfileSource =
     candidate.source === "exact-model-override" ||
+    candidate.source === "configured-model" ||
+    (candidate.source === "automatic-model" &&
+      candidate.profile === "reasoning") ||
     (candidate.source === "evaluated-model" &&
       candidate.profile === "reasoning") ||
     (candidate.source === "compatibility-default" &&

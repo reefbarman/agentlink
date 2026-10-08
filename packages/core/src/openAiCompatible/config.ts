@@ -3,6 +3,10 @@ import {
   type CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
 import type { CoreModelCapabilities } from "../modelRuntime.js";
+import {
+  isPromptProfile,
+  type PromptProfile,
+} from "@agentlink/protocol/prompt-profile";
 import type {
   OpenAiCompatibleModelFamily,
   OpenAiCompatibleProfileKind,
@@ -158,6 +162,7 @@ export interface OpenAiCompatibleModelDto {
   supportsImages?: boolean;
   structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
+  promptProfile?: PromptProfile;
   tier?: "cheap" | "balanced" | "deep_reasoning";
 }
 
@@ -166,6 +171,7 @@ export interface NormalizedOpenAiCompatibleModel {
   model: string;
   displayName: string;
   modelFamily?: OpenAiCompatibleModelFamily;
+  promptProfile?: PromptProfile;
   tier?: "cheap" | "balanced" | "deep_reasoning";
   agentMaxTokens?: number;
   capabilities: CoreModelCapabilities;
@@ -304,6 +310,9 @@ export function toOpenAiCompatibleRuntimeProfile(
           id: model.id,
           model: model.model,
           ...(model.modelFamily ? { modelFamily: model.modelFamily } : {}),
+          ...(model.promptProfile
+            ? { promptProfile: model.promptProfile }
+            : {}),
           capabilities: model.capabilities,
         },
       ]),
@@ -617,6 +626,11 @@ function parseModel(
     `${path}.modelFamily`,
     context,
   );
+  const promptProfile = parsePromptProfile(
+    raw.promptProfile,
+    `${path}.promptProfile`,
+    context,
+  );
   const tier =
     raw.tier === "cheap" ||
     raw.tier === "balanced" ||
@@ -749,6 +763,7 @@ function parseModel(
     model,
     displayName,
     ...(modelFamily === undefined ? {} : { modelFamily }),
+    ...(promptProfile === undefined ? {} : { promptProfile }),
     ...(tier === undefined ? {} : { tier }),
     ...(agentMaxTokens === undefined ? {} : { agentMaxTokens }),
 
@@ -977,6 +992,16 @@ function parseReasoningEffortMode(
     path,
     'Expected "none", "reasoning_effort", "reasoning.effort", or "output_config.effort".',
   );
+  return undefined;
+}
+
+function parsePromptProfile(
+  value: unknown,
+  path: string,
+  context: ParseContext,
+): PromptProfile | undefined {
+  if (value === undefined || isPromptProfile(value)) return value;
+  issue(context, path, 'Expected "compatibility" or "reasoning".');
   return undefined;
 }
 

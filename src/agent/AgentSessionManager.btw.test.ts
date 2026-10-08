@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
     promptProfile: {
       profile: "compatibility",
       source: "compatibility-default",
-      policyRevision: "prompt-profile-policy-v1",
+      policyRevision: "prompt-profile-policy-v2",
       providerId: "btw-test-provider",
       modelId: "btw-test-model",
     },
@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
       estimatedTokens: 5,
       profile: "compatibility",
       profileSource: "compatibility-default",
-      profilePolicyRevision: "prompt-profile-policy-v1",
+      profilePolicyRevision: "prompt-profile-policy-v2",
     },
   }),
   getConfiguration: vi.fn(),

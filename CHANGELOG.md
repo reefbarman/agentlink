@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Added per-model JSON `promptProfile` selection for OpenAI-compatible models and aligned selection across VS Code, Browser Ask Agent, Desktop, and CLI instructions. Exact VS Code overrides remain highest priority; maintained newer full-size Codex defaults use compact guidance while unknown/smaller models stay on compatibility. Model changes and native Codex fallback rebuild prompts before retrying, and browser catalogs preserve owner isolation and migrate known previous profile evidence. Compact defaults are not claims of completed behavioural evaluation.
 - Git metadata preflight now recognises explicit `git apply --cached`/`--index`, including check-then-apply chains and supported literal apply pipelines, before sandbox launch. Standalone checks keep their existing route. Inline-patch recovery preserves the original command template and payload identity for a fresh reviewed retry, instead of recommending deleted temporary paths. Approval and sandbox boundaries are unchanged.
 - Fixed Codex `web_fetch` continuation previews: explicit `start_line` reads now show the requested numbered content before inline truncation, rather than spending the preview budget on earlier navigation. Original retained content, valid overlapping pages, and truthful stalled-pagination warnings are preserved.
 - Multi-project terminal creation now asks for the project directory inside the AgentLink Terminal panel, with project names, full paths, keyboard navigation, and Cancel/Escape, instead of opening VS Code's top-of-window picker.
+- Added user-triggered self-update for the CLI, Desktop, and local VS Code extension hosts. Install actions download and SHA-256-verify the compatible release, preserve running sessions until an explicit restart/reload, and refuse source or locally signed standalone builds. Browser remote remains check-only; remote VS Code hosts retain manual installation.
 
 ## 1.29.1
 

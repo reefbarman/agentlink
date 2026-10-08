@@ -24,6 +24,7 @@ import {
   truncateToolText,
 } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
+import { buildModeInstructionBlock } from "./systemPrompt.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { SkillEntry } from "./skillLoader.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
@@ -49,7 +50,7 @@ const mocks = vi.hoisted(() => ({
     promptProfile: {
       profile: "compatibility",
       source: "compatibility-default",
-      policyRevision: "prompt-profile-policy-v1",
+      policyRevision: "prompt-profile-policy-v2",
       providerId: "mock",
       modelId: "claude-sonnet-4-6",
     },
@@ -60,7 +61,7 @@ const mocks = vi.hoisted(() => ({
       estimatedTokens: 5,
       profile: "compatibility",
       profileSource: "compatibility-default",
-      profilePolicyRevision: "prompt-profile-policy-v1",
+      profilePolicyRevision: "prompt-profile-policy-v2",
     },
   }),
   mockSummarizeConversation: vi.fn(),
@@ -6055,91 +6056,108 @@ describe("AgentEngine", () => {
       expect(session.model).toBe(nextModel);
     });
 
-    it("does not let a stale provider fallback overwrite a newer selection", async () => {
-      const nextModel = "next-provider-model";
-      const firstProvider = makeMockProvider();
-      firstProvider.stream = async function* () {
-        await session.updateModelSelection(nextModel, "next");
-        yield {
-          type: "model_fallback",
-          requestedModel: TEST_MODEL,
-          effectiveModel: "mock-fallback",
+    it.each(["before-event", "during-reconciliation"] as const)(
+      "does not let a stale provider fallback overwrite a newer selection %s",
+      async (timing) => {
+        const nextModel = "next-provider-model";
+        const firstProvider = makeMockProvider();
+        firstProvider.stream = async function* () {
+          if (timing === "before-event") {
+            await session.updateModelSelection(nextModel, "next");
+          }
+          yield {
+            type: "model_fallback",
+            requestedModel: TEST_MODEL,
+            effectiveModel: "mock-fallback",
+          };
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
         };
-        yield {
-          type: "content_blocks",
-          blocks: [
+        const nextProvider: ModelProvider = {
+          ...makeMockProvider(),
+          id: "next",
+          displayName: "Next",
+          listModels: () => [
             {
-              type: "tool_use",
-              id: "call_read",
-              name: "read_file",
-              input: { path: "src/a.ts" },
+              id: nextModel,
+              displayName: "Next Model",
+              provider: "next",
+              capabilities: TEST_CAPABILITIES,
             },
           ],
         };
-        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
-        yield { type: "done" };
-      };
-      const nextProvider: ModelProvider = {
-        ...makeMockProvider(),
-        id: "next",
-        displayName: "Next",
-        listModels: () => [
-          {
-            id: nextModel,
-            displayName: "Next Model",
-            provider: "next",
-            capabilities: TEST_CAPABILITIES,
-          },
-        ],
-      };
-      const registry = new ProviderRegistry();
-      registry.reconcile([firstProvider, nextProvider]);
+        const registry = new ProviderRegistry();
+        registry.reconcile([firstProvider, nextProvider]);
 
-      const session = await makeSession();
-      session.addUserMessage("run one tool");
-      const engine = new AgentEngine(registry);
-      engine.setToolRuntime({
-        listTools: () => [
-          {
-            name: "read_file",
-            description: "read",
-            input_schema: { type: "object" },
-          },
-        ],
-        isParallelSafe: () => true,
-        executeTool: async () => ({
-          content: [{ type: "text", text: "file contents" }],
-        }),
-      });
+        const session = await makeSession();
+        session.addUserMessage("run one tool");
+        const engine = new AgentEngine(registry);
+        engine.setToolRuntime({
+          listTools: () => [
+            {
+              name: "read_file",
+              description: "read",
+              input_schema: { type: "object" },
+            },
+          ],
+          isParallelSafe: () => true,
+          executeTool: async () => ({
+            content: [{ type: "text", text: "file contents" }],
+          }),
+        });
 
-      const events = await collectEvents(engine.run(session));
+        const events = await collectEvents(
+          engine.run(session, {
+            onModelFallback: async () => {
+              if (timing === "during-reconciliation") {
+                await session.updateModelSelection(nextModel, "next");
+              }
+            },
+          }),
+        );
 
-      expect(session.model).toBe(nextModel);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: "warning",
-          message: expect.stringContaining(
-            "superseded by a newer model selection",
+        expect(session.model).toBe(nextModel);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "warning",
+            message: expect.stringContaining(
+              "superseded by a newer model selection",
+            ),
+          }),
+        );
+        expect(
+          events.some(
+            (event) =>
+              event.type === "warning" && event.modelFallback !== undefined,
           ),
-        }),
-      );
-      expect(
-        events.some(
-          (event) =>
-            event.type === "warning" && event.modelFallback !== undefined,
-        ),
-      ).toBe(false);
-    });
+        ).toBe(false);
+      },
+    );
 
     it("surfaces model fallback and records the effective model", async () => {
-      const provider = makeMockProvider([
-        {
-          type: "model_fallback",
-          requestedModel: "gpt-5.6-luna",
-          effectiveModel: "gpt-5.4-mini",
-        },
-        ...makeProviderStream(),
-      ]);
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        if (request.model === "gpt-5.6-luna") {
+          yield {
+            type: "model_fallback",
+            requestedModel: "gpt-5.6-luna",
+            effectiveModel: "gpt-5.4-mini",
+          };
+          throw new Error("The old iterator must not resume after fallback");
+        }
+        yield* makeProviderStream();
+      };
       provider.listModels = () => [
         {
           id: "gpt-5.6-luna",
@@ -6194,24 +6212,16 @@ describe("AgentEngine", () => {
         requests.push(request);
         streamCount += 1;
         if (streamCount === 1) {
-          yield {
-            type: "model_fallback",
-            requestedModel: "gpt-5.6-luna",
-            effectiveModel: "gpt-5.4-mini",
-          };
-          yield {
-            type: "content_blocks",
-            blocks: [
-              {
-                type: "tool_use",
-                id: "fallback-tool",
-                name: "read_file",
-                input: { path: "README.md" },
-              },
-            ],
-          };
-          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
-          yield { type: "done" };
+          try {
+            yield {
+              type: "model_fallback",
+              requestedModel: "gpt-5.6-luna",
+              effectiveModel: "gpt-5.4-mini",
+            };
+            ordering.push("stale-request-resumed");
+          } finally {
+            ordering.push("old-request-closed");
+          }
           return;
         }
         ordering.push("second-request");
@@ -6221,6 +6231,11 @@ describe("AgentEngine", () => {
       session.model = "gpt-5.6-luna";
       session.systemPrompt = "requested prompt";
       session.addUserMessage("read the file");
+      session.modeInstructionPlacement = "conversation";
+      vi.mocked(buildModeInstructionBlock).mockResolvedValueOnce(
+        "requested mode anchor",
+      );
+      await session.refreshModeInstructionAnchor();
       const engine = new AgentEngine(makeRegistry(provider));
       engine.setToolRuntime({
         listTools: () => [
@@ -6242,11 +6257,19 @@ describe("AgentEngine", () => {
             await Promise.resolve();
             ordering.push(`reconciled:${effectiveModel}`);
             session.systemPrompt = "fallback prompt";
+            vi.mocked(buildModeInstructionBlock).mockResolvedValueOnce(
+              "fallback mode anchor",
+            );
+            await session.refreshModeInstructionAnchor();
           },
         }),
       );
 
-      expect(ordering).toEqual(["reconciled:gpt-5.4-mini", "second-request"]);
+      expect(ordering).toEqual([
+        "reconciled:gpt-5.4-mini",
+        "old-request-closed",
+        "second-request",
+      ]);
       expect(requests.map((request) => request.model)).toEqual([
         "gpt-5.6-luna",
         "gpt-5.4-mini",
@@ -6255,6 +6278,134 @@ describe("AgentEngine", () => {
         "requested prompt",
         "fallback prompt",
       ]);
+      expect(JSON.stringify(requests[0]?.messages)).toContain(
+        "requested mode anchor",
+      );
+      expect(JSON.stringify(requests[1]?.messages)).toContain(
+        "fallback mode anchor",
+      );
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain(
+        "requested mode anchor",
+      );
+    });
+
+    it("bounds fallback restarts even when reconciliation changes the selection revision", async () => {
+      const provider = makeMockProvider();
+      const requests: StreamRequest[] = [];
+      let closedStreams = 0;
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        try {
+          yield {
+            type: "model_fallback",
+            requestedModel: request.model,
+            effectiveModel: TEST_MODEL,
+          };
+          throw new Error("The abandoned iterator resumed");
+        } finally {
+          closedStreams += 1;
+        }
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const registry = makeRegistry(provider);
+      const onModelFallback = vi.fn(
+        async ({ effectiveModel }: { effectiveModel: string }) => {
+          await session.updateModelSelection(effectiveModel, provider.id);
+        },
+      );
+
+      const events = await collectEvents(
+        new AgentEngine(registry).run(session, {
+          onModelFallback,
+        }),
+      );
+
+      expect(requests).toHaveLength(5);
+      expect(onModelFallback).toHaveBeenCalledTimes(4);
+      expect(closedStreams).toBe(5);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "model_fallback_limit",
+          retryable: false,
+        }),
+      );
+      expect(events.some((event) => event.type === "api_request")).toBe(false);
+      expect(
+        registry.requestScheduler.hasCapacity(provider.id, "interactive"),
+      ).toBe(true);
+    });
+
+    it("does not dispatch after cancellation during fallback reconciliation", async () => {
+      const provider = makeMockProvider();
+      const requests: StreamRequest[] = [];
+      let closed = false;
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        try {
+          yield {
+            type: "model_fallback",
+            requestedModel: request.model,
+            effectiveModel: TEST_MODEL,
+          };
+          throw new Error("The abandoned iterator resumed");
+        } finally {
+          closed = true;
+        }
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const registry = makeRegistry(provider);
+
+      await collectEvents(
+        new AgentEngine(registry).run(session, {
+          onModelFallback: async () => {
+            await Promise.resolve();
+            session.abort();
+          },
+        }),
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.signal?.aborted).toBe(true);
+      expect(closed).toBe(true);
+      expect(
+        registry.requestScheduler.hasCapacity(provider.id, "interactive"),
+      ).toBe(true);
+    });
+
+    it("stops fallback explicitly when transcript-only project instructions cannot be rebuilt", async () => {
+      const originalSession = await makeSession();
+      const session = AgentSession.createTranscriptOnly({
+        mode: "code",
+        config: testConfig,
+        projectScope: originalSession.projectScope,
+        projectAvailability: "missing",
+      });
+      session.addUserMessage("hello");
+      const provider = makeMockProvider([
+        {
+          type: "model_fallback",
+          requestedModel: TEST_MODEL,
+          effectiveModel: "unavailable-project-fallback",
+        },
+      ]);
+      const rebuild = vi.spyOn(session, "rebuildSystemPrompt");
+
+      const events = await collectEvents(
+        new AgentEngine(makeRegistry(provider)).run(session),
+      );
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "model_fallback_prompt_unavailable",
+          retryable: false,
+        }),
+      );
+      expect(rebuild).not.toHaveBeenCalled();
+      expect(session.model).toBe(TEST_MODEL);
     });
 
     it("retries codex once without previous_response_id when the remote state cannot be resolved", async () => {

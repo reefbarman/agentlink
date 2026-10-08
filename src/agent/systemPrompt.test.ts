@@ -288,7 +288,7 @@ describe("buildSystemPrompt", () => {
     const forgedLunaEvidence = {
       profile: "reasoning" as const,
       source: "exact-model-override" as const,
-      policyRevision: "prompt-profile-policy-v1" as const,
+      policyRevision: "prompt-profile-policy-v2" as const,
       providerId: "codex",
       modelId: "gpt-5.6-luna",
     };
@@ -312,7 +312,7 @@ describe("buildSystemPrompt", () => {
     const overrideEvidence = {
       profile: "reasoning" as const,
       source: "exact-model-override" as const,
-      policyRevision: "prompt-profile-policy-v1" as const,
+      policyRevision: "prompt-profile-policy-v2" as const,
       providerId: "codex",
       modelId: "gpt-5.6-sol",
     };
@@ -335,7 +335,7 @@ describe("buildSystemPrompt", () => {
     const expected = {
       profile: "reasoning" as const,
       source: "exact-model-override" as const,
-      policyRevision: "prompt-profile-policy-v1" as const,
+      policyRevision: "prompt-profile-policy-v2" as const,
       providerId: "codex",
       modelId: "gpt-5.6-sol",
     };

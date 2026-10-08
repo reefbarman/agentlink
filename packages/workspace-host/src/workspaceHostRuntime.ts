@@ -81,6 +81,7 @@ import {
   resolveWorkspaceProject,
   type WorkspaceProjectIdentity,
 } from "./projectIdentity.js";
+import { composeWorkspacePromptProfile } from "./promptProfile.js";
 
 export interface CreateWorkspaceHostOptions {
   readonly projectRoot: string;
@@ -754,6 +755,14 @@ export async function createWorkspaceHost(
         }
       : {}),
     instructions: async (request) => {
+      const model = runtime.resolveModel({
+        principal: request.principal,
+        authContext: undefined,
+        model:
+          request.model ??
+          request.session.selectedModel ??
+          options.defaultModel,
+      });
       const resolvedArtifacts = artifactTools
         ? await artifactTools.resolveInstructions(request)
         : undefined;
@@ -764,6 +773,7 @@ export async function createWorkspaceHost(
       return [
         "You are AgentLink's standalone local coding assistant.",
         `The canonical project root is ${project.root}.`,
+        composeWorkspacePromptProfile(model),
         options.files
           ? "Use only the project-relative file tools that are actually exposed. Read before editing, preserve the SHA-256 baseline, and expect every ungranted write to pause for human review."
           : "File tools are not enabled.",

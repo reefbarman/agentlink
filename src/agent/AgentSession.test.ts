@@ -47,7 +47,7 @@ function makePromptArtifacts(
   promptProfile: PromptProfileResolution = {
     profile: "compatibility" as const,
     source: "compatibility-default" as const,
-    policyRevision: "prompt-profile-policy-v1" as const,
+    policyRevision: "prompt-profile-policy-v2" as const,
     providerId: "test",
     modelId: "test-model",
   },
@@ -1687,7 +1687,7 @@ describe("AgentSession", () => {
       const reasoningProfile = {
         profile: "reasoning" as const,
         source: "exact-model-override" as const,
-        policyRevision: "prompt-profile-policy-v1" as const,
+        policyRevision: "prompt-profile-policy-v2" as const,
         providerId: "codex",
         modelId: session.model,
       };
@@ -1734,7 +1734,7 @@ describe("AgentSession", () => {
         makePromptArtifacts("uncommitted prompt", {
           profile: "reasoning",
           source: "exact-model-override",
-          policyRevision: "prompt-profile-policy-v1",
+          policyRevision: "prompt-profile-policy-v2",
           providerId: "codex",
           modelId: session.model,
         }),

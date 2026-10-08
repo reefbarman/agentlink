@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
     return {
       profile: override ?? "compatibility",
       source: override ? "exact-model-override" : "compatibility-default",
-      policyRevision: "prompt-profile-policy-v1",
+      policyRevision: "prompt-profile-policy-v2",
       ...(session.providerId ? { providerId: session.providerId } : {}),
       modelId: session.model,
     };
@@ -2631,7 +2631,7 @@ describe("AgentSessionManager host injection", () => {
     expect(session.promptProfile).toEqual({
       profile: "reasoning",
       source: "exact-model-override",
-      policyRevision: "prompt-profile-policy-v1",
+      policyRevision: "prompt-profile-policy-v2",
       providerId: "test",
       modelId: "model-b",
     });

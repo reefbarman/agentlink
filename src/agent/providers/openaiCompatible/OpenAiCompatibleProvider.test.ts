@@ -134,12 +134,13 @@ describe("OpenAiCompatibleProvider", () => {
     expect(provider.getCapabilities("local-model").maxOutputTokens).toBe(4_096);
   });
 
-  it("exposes configured model family without changing provider identity", () => {
+  it("exposes configured model family and prompt profile without changing provider identity", () => {
     const configured = connection({
       models: [
         {
           ...connection().models[0]!,
           modelFamily: "anthropic",
+          promptProfile: "compatibility",
         },
       ],
     });
@@ -151,6 +152,8 @@ describe("OpenAiCompatibleProvider", () => {
     expect(provider.id).toBe("openai-compatible:test");
     expect(provider.getModelFamily("local-model")).toBe("anthropic");
     expect(provider.getModelFamily("unknown")).toBeUndefined();
+    expect(provider.getPromptProfile("local-model")).toBe("compatibility");
+    expect(provider.getPromptProfile("unknown")).toBeUndefined();
   });
 
   it("resolves the current secret for every request and sends the wire model", async () => {

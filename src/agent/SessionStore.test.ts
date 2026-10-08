@@ -545,7 +545,7 @@ describe("SessionStore", () => {
     const promptProfile = {
       profile: "reasoning" as const,
       source: "exact-model-override" as const,
-      policyRevision: "prompt-profile-policy-v1" as const,
+      policyRevision: "prompt-profile-policy-v2" as const,
       providerId: "anthropic",
       modelId: "claude-sonnet-4-6",
     };

@@ -40,6 +40,7 @@ export interface OpenAiCompatibleProviderModel {
   supportsImages?: boolean;
   structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
+  promptProfile?: OpenAiCompatibleModelDto["promptProfile"];
 }
 
 export interface CreateOpenAiCompatibleProviderOptions {
@@ -97,6 +98,7 @@ export function createOpenAICompatibleProvider(
       supportsImages: model.supportsImages,
       structuredOutput: model.structuredOutput,
       modelFamily: model.modelFamily,
+      promptProfile: model.promptProfile,
     })),
   };
   const normalized = normalizeOpenAiCompatibleConnections([dto]);
@@ -138,6 +140,9 @@ export function createOpenAICompatibleProvider(
             id: model.id,
             model: model.model,
             ...(model.modelFamily ? { modelFamily: model.modelFamily } : {}),
+            ...(model.promptProfile
+              ? { promptProfile: model.promptProfile }
+              : {}),
             capabilities: model.capabilities,
           },
         ]),

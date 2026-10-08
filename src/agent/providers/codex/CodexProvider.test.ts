@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AgentEngine } from "../../AgentEngine.js";
+import { AgentSession } from "../../AgentSession.js";
 import { CodexProvider } from "./CodexProvider.js";
 import { CodexTurnState } from "@agentlink/core/codex";
+import { ProviderRegistry } from "../index.js";
+import { createProjectlessSessionScope } from "@agentlink/protocol/workspace-project";
 
 const {
   createMock,
@@ -1145,6 +1149,11 @@ describe("CodexProvider.stream", () => {
 
     expect(events).toEqual([
       {
+        type: "model_fallback",
+        requestedModel: "gpt-5.2-codex",
+        effectiveModel: "gpt-5.6-sol",
+      },
+      {
         type: "tool_start",
         toolCallId: "call_123",
         toolName: "demo_tool",
@@ -1238,6 +1247,11 @@ describe("CodexProvider.stream", () => {
     );
     expect(thinkingStart).toBeDefined();
     expect(events).toEqual([
+      {
+        type: "model_fallback",
+        requestedModel: "gpt-5.2-codex",
+        effectiveModel: "gpt-5.6-sol",
+      },
       {
         type: "thinking_start",
         thinkingId: thinkingStart?.thinkingId,
@@ -1333,6 +1347,11 @@ describe("CodexProvider.stream", () => {
     }
 
     expect(events).toEqual([
+      {
+        type: "model_fallback",
+        requestedModel: "gpt-5.2-codex",
+        effectiveModel: "gpt-5.6-sol",
+      },
       { type: "text_delta", text: "hello" },
       { type: "text_delta", text: " world" },
       {
@@ -1483,6 +1502,131 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     );
     return captured;
   }
+
+  it("announces auth remapping before the first wire request and can be closed without dispatch", async () => {
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const stream = provider.stream({
+      model: "gpt-5.4-nano",
+      systemPrompt: "caller instructions",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    });
+
+    await expect(stream.next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: "model_fallback",
+        requestedModel: "gpt-5.4-nano",
+        effectiveModel: "gpt-5.6-luna",
+      },
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    await stream.return(undefined);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["remap", "unavailable"] as const)(
+    "rebuilds projectless instructions at the immediate %s engine/provider seam",
+    async (kind) => {
+      const bodies: Record<string, unknown>[] = [];
+      createMock.mockImplementation(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        if (kind === "unavailable" && body.model === "gpt-5.6-luna") {
+          throw Object.assign(new Error("Model not found gpt-5.6-luna"), {
+            status: 404,
+          });
+        }
+        return (async function* () {
+          yield { type: "response.output_text.delta", delta: "done" };
+          yield {
+            type: "response.done",
+            response: {
+              id: "fresh-response",
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "output_text", text: "done" }],
+                },
+              ],
+              usage: { input_tokens: 12, output_tokens: 3 },
+            },
+          };
+        })();
+      });
+      const selectedModel = kind === "remap" ? "gpt-5.4-nano" : "gpt-5.6-luna";
+      const effectiveModel = kind === "remap" ? "gpt-5.6-luna" : "gpt-5.5";
+      const provider = new CodexProvider(makeAuthManager() as never);
+      if (kind === "remap") {
+        const catalog = provider.listModels();
+        vi.spyOn(provider, "listModels").mockReturnValue([
+          ...catalog,
+          {
+            id: selectedModel,
+            displayName: selectedModel,
+            provider: provider.id,
+            capabilities: provider.getCapabilities(selectedModel),
+          },
+        ]);
+      }
+      const registry = new ProviderRegistry();
+      registry.register(provider);
+      const session = AgentSession.createProjectlessAsk({
+        config: {
+          model: selectedModel,
+          maxTokens: 128,
+          thinkingBudget: 0,
+          showThinking: false,
+          autoCondense: false,
+          autoCondenseThreshold: 0.9,
+          promptProfileOverrides: {
+            [selectedModel]: "reasoning",
+            [effectiveModel]: "compatibility",
+          },
+        },
+        providerId: "codex",
+        projectScope: createProjectlessSessionScope(),
+      });
+      const originalPrompt = session.systemPrompt;
+      session.addUserMessage("ping");
+      session.setProviderResponseId("old-response");
+      session.codexStatefulResponses = true;
+      const events = [];
+      for await (const event of new AgentEngine(registry).run(session, {
+        maxApiTurns: 1,
+      })) {
+        events.push(event);
+      }
+
+      expect(events.filter((event) => event.type === "error")).toEqual([]);
+      expect(bodies.map((body) => body.model)).toEqual(
+        kind === "remap" ? [effectiveModel] : [selectedModel, effectiveModel],
+      );
+      expect(bodies.at(-1)?.instructions).toBe(session.systemPrompt);
+      expect(bodies.at(-1)?.instructions).not.toBe(originalPrompt);
+      expect(bodies.at(-1)?.previous_response_id).toBeUndefined();
+      expect(session.promptProfile).toMatchObject({
+        profile: "compatibility",
+        modelId: effectiveModel,
+      });
+      expect(session.providerResponseId).toBe("fresh-response");
+      expect(
+        events.filter((event) => event.type === "api_request"),
+      ).toHaveLength(1);
+      expect(
+        events
+          .filter((event) => event.type === "request_context_attribution")
+          .at(-1),
+      ).toMatchObject({
+        model: effectiveModel,
+        promptProfile: "compatibility",
+        contextLedger: {
+          contextWindowTokens:
+            provider.getCapabilities(effectiveModel).contextWindow,
+        },
+      });
+    },
+  );
 
   it("remaps an OAuth-unavailable model to gpt-5.6-sol on the ChatGPT backend", async () => {
     const captured = captureBodyOnce();

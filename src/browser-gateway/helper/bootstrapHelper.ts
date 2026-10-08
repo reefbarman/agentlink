@@ -9,6 +9,7 @@ import {
   type BrowserGatewayHelperHealthResponse,
 } from "../protocol.js";
 import { sleep } from "../../util/sleep.js";
+import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
 
 export interface BrowserGatewayHelperBootstrapOptions {
   extensionRootPath: string;
@@ -75,6 +76,17 @@ export interface DesiredHelperConfig {
   mdnsName?: string;
   secureLanAccess?: boolean;
   helperVersion?: string;
+  promptProfilePolicyRevision?: string;
+}
+
+function supportsPromptProfilePolicy(
+  health: BrowserGatewayHelperHealthResponse | null,
+  revision: string,
+): boolean {
+  return (
+    Array.isArray(health?.promptProfilePolicyRevisions) &&
+    health.promptProfilePolicyRevisions.includes(revision)
+  );
 }
 
 type ReleaseVersion = {
@@ -181,6 +193,15 @@ export async function resolveHealthyDiscoveredHelper(
 ): Promise<BrowserGatewayHelperDiscoveryRecord | null> {
   const discovery = await resolveCompatibleDiscoveredHelper(expectedPort);
   if (!discovery) return null;
+  if (
+    desired.promptProfilePolicyRevision &&
+    !supportsPromptProfilePolicy(
+      await fetchHelperHealth(discovery),
+      desired.promptProfilePolicyRevision,
+    )
+  ) {
+    return null;
+  }
   const versionOrder = desired.helperVersion
     ? compareHelperReleaseVersions(
         discovery.helperVersion,
@@ -309,6 +330,7 @@ export async function bootstrapBrowserGatewayHelper(
     mdnsName: options.mdnsName,
     secureLanAccess: Boolean(options.secureLanAccess),
     helperVersion: options.helperVersion,
+    promptProfilePolicyRevision: PROMPT_PROFILE_POLICY_REVISION,
   };
 
   const existing = await resolveHealthyDiscoveredHelper(
@@ -335,7 +357,26 @@ export async function bootstrapBrowserGatewayHelper(
     const activeLivenessReasons = health?.activeLivenessReasons;
     const active =
       activeClientLeases > 0 || (activeLivenessReasons?.length ?? 0) > 0;
+    const profileCompatible = supportsPromptProfilePolicy(
+      health,
+      PROMPT_PROFILE_POLICY_REVISION,
+    );
+    const newerRunningHelper =
+      compareHelperReleaseVersions(
+        discovered.helperVersion,
+        options.helperVersion,
+      ) === 1;
     if (
+      !profileCompatible &&
+      (newerRunningHelper ||
+        (active && options.replaceIncompatibleHelper !== true))
+    ) {
+      throw new Error(
+        `helper_prompt_profile_incompatible:running=${discovered.helperVersion}:required=${PROMPT_PROFILE_POLICY_REVISION}. Update AgentLink and restart the browser helper after active browser sessions have finished. No model preferences were discarded.`,
+      );
+    }
+    if (
+      profileCompatible &&
       shouldAttachToCompatibleHelper({
         runningVersion: discovered.helperVersion,
         requestedVersion: options.helperVersion,
@@ -349,7 +390,7 @@ export async function bootstrapBrowserGatewayHelper(
       return { source: "existing", discovery: discovered };
     }
     options.log(
-      `[browser-gateway-helper] replacing idle compatible helper pid=${discovered.pid} runningVersion=${discovered.helperVersion} requestedVersion=${options.helperVersion}`,
+      `[browser-gateway-helper] replacing ${active ? "explicitly authorised active" : "idle"} compatible helper pid=${discovered.pid} runningVersion=${discovered.helperVersion} requestedVersion=${options.helperVersion} profileCompatible=${profileCompatible}`,
     );
     replacingIdleCompatibleHelper = true;
   }

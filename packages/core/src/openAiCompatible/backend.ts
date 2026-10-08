@@ -19,6 +19,7 @@ import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 import type { NormalizedOpenAiCompatibleConnection } from "./config.js";
 import type { OpenAiCompatibleFetch } from "./types.js";
 import { OpenAiCompatibleRequestError } from "./errors.js";
+import type { PromptProfile } from "@agentlink/protocol/prompt-profile";
 
 export interface OpenAiCompatibleBackendOptions {
   connection: NormalizedOpenAiCompatibleConnection;
@@ -88,6 +89,10 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
 
   getModelFamily(modelId: string): "anthropic" | "openai" | undefined {
     return this.modelsById.get(modelId)?.modelFamily;
+  }
+
+  getPromptProfile(modelId: string): PromptProfile | undefined {
+    return this.modelsById.get(modelId)?.promptProfile;
   }
 
   getCapabilities(modelId: string): CoreModelCapabilities {

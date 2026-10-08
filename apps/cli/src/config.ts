@@ -179,8 +179,14 @@ function compatibleModel(value: unknown, label: string) {
       throw new Error(`${label}.${key} must be a boolean`);
     }
   }
+  const promptProfile = optionalEnum(
+    value.promptProfile,
+    ["compatibility", "reasoning"] as const,
+    `${label}.promptProfile`,
+  );
   return {
     id: identifier(value.id, `${label}.id`),
+    ...(promptProfile ? { promptProfile } : {}),
     ...(typeof value.model === "string" && value.model.trim()
       ? { model: value.model.trim() }
       : {}),

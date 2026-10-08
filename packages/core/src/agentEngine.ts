@@ -59,6 +59,7 @@ export interface ResolveAgentInstructionsRequest<
   readonly principal: TPrincipal;
   readonly session: AgentSessionRecord<TPrincipal>;
   readonly turnId: string;
+  readonly model: AgentModelReference | undefined;
 }
 
 export type ResolveAgentInstructions<
@@ -479,6 +480,10 @@ export function createAgentEngine<
                 principal: request.principal,
                 session: current.record,
                 turnId,
+                model:
+                  request.model ??
+                  current.record.selectedModel ??
+                  options.defaultModel,
               });
               const reasoningSelection = resolveAgentReasoningEffort({
                 turnReasoningEffort: optionalReasoningEffort(

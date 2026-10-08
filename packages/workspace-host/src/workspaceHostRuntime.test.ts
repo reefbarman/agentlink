@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createHash } from "node:crypto";
-import { createWorkspaceHost } from "./workspaceHostRuntime.js";
+import {
+  createWorkspaceHost,
+  type CreateWorkspaceHostOptions,
+} from "./workspaceHostRuntime.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,7 +50,256 @@ function completion(text: string): Response {
   );
 }
 
+const profileConfig = JSON.stringify({
+  providers: [
+    {
+      type: "openai-compatible",
+      id: "profiles",
+      baseURL: "https://example.invalid/v1",
+      noAuth: true,
+      models: [
+        {
+          id: "compatibility-model",
+          model: "upstream-compatible",
+          promptProfile: "compatibility",
+          contextWindow: 32_768,
+          maxOutputTokens: 4_096,
+          supportsToolUse: true,
+        },
+        {
+          id: "reasoning-model",
+          model: "upstream-compact",
+          promptProfile: "reasoning",
+          contextWindow: 32_768,
+          maxOutputTokens: 4_096,
+          supportsToolUse: true,
+        },
+        {
+          id: "unknown-model",
+          model: "upstream-unknown",
+          modelFamily: "anthropic",
+          contextWindow: 32_768,
+          maxOutputTokens: 4_096,
+          supportsToolUse: true,
+        },
+      ],
+    },
+  ],
+  defaultModel: { providerId: "profiles", modelId: "reasoning-model" },
+});
+
+function readProfileConfig(fetch: typeof globalThis.fetch) {
+  const config = JSON.parse(profileConfig) as Pick<
+    CreateWorkspaceHostOptions,
+    "providers" | "defaultModel"
+  >;
+  return {
+    ...config,
+    providers: config.providers.map((provider) => ({ ...provider, fetch })),
+  };
+}
+
 describe("createWorkspaceHost", () => {
+  it("rejects retired OAuth models before composing or dispatching instructions", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-remap-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const resolveAuth = vi.fn();
+    try {
+      await expect(
+        createWorkspaceHost({
+          projectRoot,
+          dataRoot: path.join(parent, "data"),
+          ownerId: "remap-owner",
+          defaultModel: { providerId: "codex", modelId: "gpt-5.4-pro" },
+          providers: [
+            {
+              type: "codex",
+              modelIds: ["gpt-5.4-pro"],
+              credentialProvider: { resolveAuth },
+            },
+          ],
+        }),
+      ).rejects.toThrow("not served by the ChatGPT/Codex OAuth endpoint");
+      expect(resolveAuth).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("composes JSON profiles for the default and current selected request models", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-profiles-"),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const requests: Array<{
+      model: string;
+      messages: Array<{ role: string; content: string }>;
+      tools?: unknown[];
+    }> = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return completion("profile applied");
+      });
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "profile-owner",
+      instructions: "Keep the user's supplied instruction unchanged.",
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await host.runTurn(sessionId, "Use the default model");
+      await host.setSessionModel(sessionId, {
+        providerId: "profiles",
+        modelId: "compatibility-model",
+      });
+      await host.runTurn(sessionId, "Use the selected model");
+      await host.setSessionModel(sessionId, {
+        providerId: "profiles",
+        modelId: "reasoning-model",
+      });
+      await host.runTurn(sessionId, "Switch back to compact");
+      await host.setSessionModel(sessionId, {
+        providerId: "profiles",
+        modelId: "unknown-model",
+      });
+      await host.runTurn(sessionId, "Use an unknown model without a profile");
+
+      expect(requests.map((request) => request.model)).toEqual([
+        "upstream-compact",
+        "upstream-compatible",
+        "upstream-compact",
+        "upstream-unknown",
+      ]);
+      const prompts = requests.map(
+        (request) =>
+          request.messages.find((message) => message.role === "system")!
+            .content,
+      );
+      expect(prompts[0]).toContain("Clarify real ambiguity;");
+      expect(prompts[1]).toContain(
+        "Confirm the goal when requirements are unclear.",
+      );
+      expect(prompts[2]).toContain("Clarify real ambiguity;");
+      expect(prompts[3]).toContain(
+        "Confirm the goal when requirements are unclear.",
+      );
+      for (const prompt of prompts) {
+        expect(prompt).toContain(
+          `The canonical project root is ${host.project.root}.`,
+        );
+        expect(prompt).toContain("File tools are not enabled.");
+        expect(prompt).toContain("Command tools are not enabled.");
+        expect(prompt).toContain(
+          "Instruction and skill artifacts are not enabled.",
+        );
+        expect(prompt).toContain("MCP tools are not enabled.");
+        expect(prompt).toContain(
+          "Managed TypeScript/JavaScript intelligence is not enabled.",
+        );
+        expect(prompt).toContain("Background writers are not enabled.");
+        expect(prompt).toContain(
+          "Keep the user's supplied instruction unchanged.",
+        );
+      }
+      for (const request of requests) expect(request.tools ?? []).toEqual([]);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["inherited", "explicit"] as const)(
+    "composes the %s native child's own model profile without granting delegation",
+    async (selection) => {
+      const parent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "workspace-child-profile-"),
+      );
+      const projectRoot = path.join(parent, "project");
+      await fs.mkdir(projectRoot);
+      const requests: Array<{
+        model: string;
+        messages: Array<{ role: string; content: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      }> = [];
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (_input, init) => {
+          const request = JSON.parse(
+            String(init?.body),
+          ) as (typeof requests)[number];
+          requests.push(request);
+          if (requests.length === 1) {
+            return toolCall("spawn_background_agent", {
+              task: "Inspect assigned scope",
+              message: "Inspect only the assigned scope and report findings.",
+              read_paths: [{ path: ".", kind: "directory" }],
+              write_paths: [{ path: "assigned.txt", kind: "file" }],
+              ...(selection === "explicit"
+                ? { provider_id: "profiles", model_id: "reasoning-model" }
+                : {}),
+            });
+          }
+          return completion("profile applied");
+        });
+      const host = await createWorkspaceHost({
+        ...readProfileConfig(fetch),
+        projectRoot,
+        dataRoot: path.join(parent, "data"),
+        ownerId: "child-profile-owner",
+        files: { enabled: true },
+        background: { enabled: true },
+      });
+      try {
+        const { sessionId } = await host.createSession({
+          model: { providerId: "profiles", modelId: "compatibility-model" },
+        });
+        await host.runTurn(sessionId, "Delegate the scoped inspection");
+        await vi.waitFor(() => {
+          expect(host.listBackgroundAgents(sessionId)).toEqual([
+            expect.objectContaining({ lifecycle: "completed" }),
+          ]);
+        });
+        const child = requests.find((request) =>
+          request.messages.some(
+            (message) =>
+              message.role === "system" &&
+              message.content.includes("You are a one-level background child."),
+          ),
+        );
+        expect(child).toBeDefined();
+        expect(child!.model).toBe(
+          selection === "explicit" ? "upstream-compact" : "upstream-compatible",
+        );
+        const prompt = child!.messages.find(
+          (message) => message.role === "system",
+        )!.content;
+        expect(prompt).toContain(
+          selection === "explicit"
+            ? "Clarify real ambiguity;"
+            : "Confirm the goal when requirements are unclear.",
+        );
+        expect(prompt).toContain(
+          "Work only within your assigned file scopes. You cannot delegate.",
+        );
+        expect(prompt).toContain(
+          "Commands, MCP calls, and writes may pause for foreground human approval.",
+        );
+        expect(child!.tools?.map((tool) => tool.function?.name)).not.toContain(
+          "spawn_background_agent",
+        );
+      } finally {
+        await host.close();
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("continues a durable project session after reopening the host", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

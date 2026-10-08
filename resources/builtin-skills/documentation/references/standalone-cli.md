@@ -38,11 +38,11 @@ The archive includes Node 22.23.3, the Keychain runtime, and ripgrep. It needs n
 
 ### Update notifications
 
-`agentlink updates` explicitly checks the CLI release stream and prints the running version, target, result, release notes, and installation-guide links. It needs no project, session, or provider login and never runs the installer. Use `agentlink updates --dismiss` to hide the current version's passive notice, and `agentlink updates --automatic off` (or `on`) to persist automatic-check preferences in CLI config.
+`agentlink updates` explicitly checks the CLI release stream and prints the running version, target, result, release notes, and installation-guide links. It needs no project, session, or provider login and does not install anything unless you pass `--install`. `agentlink updates --install` authorises downloading, checksum-verifying, and installing the compatible preview. It works noninteractively, without restarting the current process. New invocations use the updated bundle; existing sessions keep their current version. Use `agentlink updates --dismiss` to hide the current version's passive notice, and `agentlink updates --automatic off` (or `on`) to persist automatic-check preferences in CLI config.
 
-Packaged interactive chat checks metadata in the background at most once a day and can show one bounded notice in the terminal UI, outside stdout and the persisted transcript. `/updates` opens details with check, dismissal, links, and automatic-check controls. Source builds, CI, non-TTY execution, help/version, auth/config, and machine-readable paths do not automatically check or show passive notices. Manual checks remain available in source builds on supported targets.
+Packaged interactive chat checks metadata in the background at most once a day and can show one bounded notice in the terminal UI, outside stdout and the persisted transcript. `/updates` opens details with check, **Install update** (with confirmation), dismissal, links, and automatic-check controls. Source builds, CI, non-TTY execution, help/version, auth/config, and machine-readable paths do not automatically check or show passive notices. Manual checks remain available in source builds on supported targets.
 
-Release compatibility requires valid published `agentlink-update.json` metadata and the correct packaged target. Older releases without that metadata remain installable, but do not produce a compatible-update notice. Failed checks retain cached candidates as stale, and manual checks respect GitHub cooldowns. Cache and dismissal live under `<AGENTLINK_HOME>/cli/updates`, separate from sessions. The public preview is still unsigned and not notarised: verify its checksum and update deliberately using the release installation instructions above.
+Release compatibility requires valid published `agentlink-update.json` metadata and the correct packaged target. Older releases without that metadata remain installable, but do not produce a compatible-update notice. Failed checks retain cached candidates as stale, and manual checks respect GitHub cooldowns. Cache and dismissal live under `<AGENTLINK_HOME>/cli/updates`, separate from sessions. The public preview is still unsigned and not notarised. Self-update requires the installer-managed `~/.local/lib/agentlink/cli-preview.*` bundle and matching `~/.local/bin/agentlink` symlink. It verifies `SHA256SUMS`, GitHub's digest when available, and the extracted bundle inventory and hashes before atomically switching the launcher. The old bundle remains for active sessions and recovery. Source builds, signed local installs, and unknown launchers are never replaced; use their original installation workflow. The install lock lives at the installation root, independent of `AGENTLINK_HOME`. Checksums establish download integrity, not independent publisher authenticity.
 
 ### Signed local installation
 
@@ -106,6 +106,12 @@ agentlink config model PROVIDER_ID/MODEL_ID
 ```
 
 Append `no-auth` only for an endpoint that genuinely requires no API key. API keys and OAuth accounts are stored in the shared macOS Keychain service. Endpoint/model metadata is stored under `~/.agentlink/cli/config.json`; secrets are never written there. `AGENTLINK_HOME` changes the CLI data root for development or testing but does not change the shared Keychain service.
+
+### Instruction profiles
+
+Each compatible provider's model object in `~/.agentlink/cli/config.json` can set `"promptProfile": "compatibility"` or `"promptProfile": "reasoning"`. Omit the field for automatic selection; invalid values are rejected. This changes local instructions, not endpoint routing, reasoning effort, permissions, or upstream request parameters. The CLI does not read VS Code's `modelPromptProfiles` setting or the shared compatible connection file.
+
+The CLI uses the shared maintained model policy for foreground and native child sessions, with terminal-appropriate instructions. Unknown and smaller models stay on compatibility; an explicit model setting can opt into compact guidance or roll back. See [Instruction profiles](providers.md#instruction-profiles) for maintained defaults and behavioural-evaluation limits.
 
 ## Sessions
 

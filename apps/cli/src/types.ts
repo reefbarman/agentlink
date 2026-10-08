@@ -7,6 +7,7 @@ export interface CliCompatibleModel {
   readonly maxOutputTokens: number;
   readonly supportsToolUse: boolean;
   readonly supportsThinking?: boolean;
+  readonly promptProfile?: import("@agentlink/protocol/prompt-profile").PromptProfile;
 }
 
 export interface CliCompatibleProvider {

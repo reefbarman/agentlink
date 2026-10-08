@@ -366,6 +366,13 @@ export class CodexProvider implements ModelProvider {
     let auth = credentialSession.auth;
     this.lastResolvedAuthMethod = auth.method;
     let effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
+    if (effectiveModel !== model) {
+      yield {
+        type: "model_fallback",
+        requestedModel: model,
+        effectiveModel,
+      };
+    }
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
       authMethod: auth.method,

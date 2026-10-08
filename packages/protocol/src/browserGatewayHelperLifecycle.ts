@@ -54,5 +54,6 @@ export interface BrowserGatewayHelperHealthResponse {
   helperGenerationId?: string;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
   dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];
+  promptProfilePolicyRevisions?: string[];
   coreOwners?: number;
 }

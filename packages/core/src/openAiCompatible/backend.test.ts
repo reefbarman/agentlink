@@ -92,6 +92,40 @@ describe("OpenAiCompatibleBackend", () => {
     ]);
   });
 
+  it("exposes an explicit per-model prompt profile without sending it upstream", async () => {
+    const base = connection();
+    const model = { ...base.models[0]!, promptProfile: "reasoning" as const };
+    const configured = connection({
+      models: [model],
+      runtimeProfile: {
+        ...base.runtimeProfile,
+        models: {
+          "local-model": {
+            ...base.runtimeProfile.models["local-model"]!,
+            promptProfile: "reasoning",
+          },
+        },
+      },
+    });
+    let body: Record<string, unknown> | undefined;
+    const backend = new OpenAiCompatibleBackend({
+      connection: {
+        ...configured,
+        authKey: undefined,
+        runtimeProfile: { ...configured.runtimeProfile, authRequired: false },
+      },
+      fetch: async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return response();
+      },
+    });
+
+    expect(backend.getPromptProfile("local-model")).toBe("reasoning");
+    expect(backend.getPromptProfile("unknown")).toBeUndefined();
+    await backend.complete(request(), requestContext);
+    expect(body).not.toHaveProperty("promptProfile");
+  });
+
   it.each([
     ["reasoning_effort", { reasoning_effort: "high" }],
     ["reasoning.effort", { reasoning: { effort: "high" } }],

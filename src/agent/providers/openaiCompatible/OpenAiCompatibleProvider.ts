@@ -7,6 +7,7 @@ import type {
   CoreModelCredentialResolver,
   CoreModelRequestContext,
 } from "@agentlink/core/model-runtime";
+import type { PromptProfile } from "@agentlink/protocol/prompt-profile";
 
 import type {
   CompleteRequest,
@@ -110,6 +111,10 @@ export class OpenAiCompatibleProvider implements ModelProvider {
 
   getModelFamily(model: string): "anthropic" | "openai" | undefined {
     return this.backend.getModelFamily(model);
+  }
+
+  getPromptProfile(model: string): PromptProfile | undefined {
+    return this.backend.getPromptProfile(model);
   }
 
   declaresWorkingDirectoryInPrompt(): boolean {
