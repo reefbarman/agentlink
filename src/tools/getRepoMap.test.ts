@@ -143,6 +143,48 @@ function makeGraph(): StructuralGraphCache {
   };
 }
 
+function makeEntry(
+  relPath: string,
+  exportName?: string,
+): StructuralGraphCache["files"][string] {
+  return {
+    relPath,
+    hash: `${relPath}-hash`,
+    indexedAt: "2026-01-01T00:00:00.000Z",
+    language: relPath.endsWith(".json") ? "json" : "typescript",
+    imports: [],
+    exports: exportName ? [{ name: exportName, kind: "named", line: 1 }] : [],
+    symbols: exportName
+      ? [{ name: exportName, kind: "function", exported: true, line: 1 }]
+      : [],
+  };
+}
+
+/**
+ * Mirrors the reported project: 11 TypeScript sources beside an npm cache
+ * spread across hundreds of content-addressed directories.
+ */
+function makeCacheHeavyGraph(): StructuralGraphCache {
+  const files: StructuralGraphCache["files"] = {};
+  for (const relPath of [
+    "src/service.ts",
+    "src/storage.ts",
+    "src/mcp.ts",
+    "src/providers/openai.ts",
+    "src/providers/anthropic.ts",
+    ...Array.from({ length: 6 }, (_, i) => `src/util/helper${i}.ts`),
+  ]) {
+    files[relPath] = makeEntry(relPath, path.basename(relPath, ".ts"));
+  }
+  for (let i = 0; i < 456; i++) {
+    const relPath = `.npm-cache/_cacache/content-v2/sha512/${i
+      .toString(16)
+      .padStart(2, "0")}/entry.json`;
+    files[relPath] = makeEntry(relPath);
+  }
+  return { ...makeGraph(), files };
+}
+
 describe("handleGetRepoMap", () => {
   it("returns the legacy unavailable error when structural graph provider is unavailable", async () => {
     const result = await handleGetRepoMap({}, undefined);
@@ -337,6 +379,98 @@ describe("buildRepoMapPayload", () => {
     expect(payload).toMatchObject({
       budget: { max_chars: 2_000, actual_chars: serialized.length },
     });
+  });
+
+  it("keeps project files ahead of a cache-heavy tree within the same budget", () => {
+    const graph = makeCacheHeavyGraph();
+    const payload = buildRepoMapPayload({
+      graph,
+      maxChars: 19_000,
+      maxFiles: 75,
+    });
+
+    expect(JSON.stringify(payload, null, 2).length).toBeLessThanOrEqual(19_000);
+    const files = payload.files as {
+      items: Array<{ path: string }>;
+      total: number;
+      omitted: number;
+    };
+    const paths = files.items.map((item) => item.path);
+    expect(files.total).toBe(467);
+    expect(files.omitted).toBe(467 - paths.length);
+    expect(paths.slice(0, 11)).toEqual(
+      [
+        "src/mcp.ts",
+        "src/providers/anthropic.ts",
+        "src/providers/openai.ts",
+        "src/service.ts",
+        "src/storage.ts",
+        ...Array.from({ length: 6 }, (_, i) => `src/util/helper${i}.ts`),
+      ].sort((a, b) => a.localeCompare(b)),
+    );
+    expect(
+      paths.slice(11).every((item) => item.startsWith(".npm-cache/")),
+    ).toBe(true);
+
+    const directories = payload.directories as {
+      items: Array<{ path: string }>;
+      total: number;
+      omitted: number;
+    };
+    expect(directories.items.slice(0, 3).map((item) => item.path)).toEqual([
+      "src/util",
+      "src",
+      "src/providers",
+    ]);
+    expect(directories.total).toBe(459);
+    expect(directories.omitted).toBe(459 - directories.items.length);
+  });
+
+  it("reserves file space when project directories alone exceed the budget", () => {
+    const files: StructuralGraphCache["files"] = {};
+    for (let i = 0; i < 300; i++) {
+      const relPath = `packages/pkg${String(i).padStart(3, "0")}/index.ts`;
+      files[relPath] = makeEntry(relPath, `export${i}`);
+    }
+    const payload = buildRepoMapPayload({
+      graph: { ...makeGraph(), files },
+      maxChars: 20_000,
+    });
+
+    const fileItems = (payload.files as { items: unknown[] }).items;
+    const directoryItems = (payload.directories as { items: unknown[] }).items;
+    expect(fileItems.length).toBeGreaterThan(0);
+    expect(directoryItems.length).toBeGreaterThan(0);
+    expect(JSON.stringify(payload, null, 2).length).toBeLessThanOrEqual(20_000);
+  });
+
+  it("backfills directory summaries when file skeletons leave space", () => {
+    const payload = buildRepoMapPayload({
+      graph: makeGraph(),
+      maxChars: 20_000,
+    });
+
+    expect(payload).toMatchObject({
+      directories: { total: 3, truncated: false, omitted: 0 },
+      files: { total: 4, truncated: false },
+    });
+  });
+
+  it("keeps ordinary ordering when the scope is itself a cache tree", () => {
+    const payload = buildRepoMapPayload({
+      graph: makeCacheHeavyGraph(),
+      scopeRelPath: ".npm-cache",
+      maxChars: 6_000,
+    });
+
+    const paths = (
+      payload.files as { items: Array<{ path: string }> }
+    ).items.map((item) => item.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths[0]).toBe(
+      ".npm-cache/_cacache/content-v2/sha512/00/entry.json",
+    );
+    expect(payload).toMatchObject({ scope: { matched_files: 456 } });
   });
 
   it("reports missing graph and empty scope notes", () => {

@@ -194,22 +194,32 @@ export function buildRepoMapPayload(args: {
   const entries =
     args.entries ?? filterEntriesByScope(args.graph, scopeRelPath);
   const incomingCounts = buildIncomingCounts(args.graph);
-  const directoryCandidates = buildDirectorySummaries(entries);
+  const isLowPriority = (relPath: string) =>
+    isLowPriorityRelPath(relPath, scopeRelPath);
+  const directoryCandidates = buildDirectorySummaries(entries, isLowPriority);
   const externalCandidates = includeExternal
     ? buildExternalDependencySummaries(entries)
     : [];
-  const fileCandidates = entries.map((entry) =>
-    buildFileSummary(
-      entry,
-      incomingCounts.get(normalizeRelPath(entry.relPath)) ?? 0,
-    ),
-  );
+  // Project code first; recognised dependency/cache trees keep their relative
+  // order but follow project files. The stable sort preserves path order.
+  const fileCandidates = entries
+    .map((entry) =>
+      buildFileSummary(
+        entry,
+        incomingCounts.get(normalizeRelPath(entry.relPath)) ?? 0,
+      ),
+    )
+    .map((summary) => ({ summary, low: isLowPriority(summary.path) }))
+    .sort((a, b) => Number(a.low) - Number(b.low))
+    .map(({ summary }) => summary);
 
-  let directories: DirectorySummary[] = [];
-  let externalDependencies: ExternalDependencySummary[] = [];
-  let files: FileSummary[] = [];
+  const selected = {
+    directories: [] as DirectorySummary[],
+    externalDependencies: [] as ExternalDependencySummary[],
+    files: [] as FileSummary[],
+  };
 
-  const make = () =>
+  const make = (overrides: Partial<typeof selected> = {}) =>
     makePayload({
       graph: args.graph,
       workspaceRoot: args.workspaceRoot,
@@ -221,101 +231,112 @@ export function buildRepoMapPayload(args: {
       maxChars,
       maxFiles,
       entries,
-      directories,
+      directories: overrides.directories ?? selected.directories,
       directoryTotal: directoryCandidates.length,
-      externalDependencies,
+      externalDependencies:
+        overrides.externalDependencies ?? selected.externalDependencies,
       externalDependencyTotal: externalCandidates.length,
-      files,
+      files: overrides.files ?? selected.files,
       fileTotal: fileCandidates.length,
       includeExternal,
     });
 
-  for (const candidate of directoryCandidates) {
-    const nextDirectories = [...directories, candidate];
-    const nextPayload = makePayload({
-      graph: args.graph,
-      workspaceRoot: args.workspaceRoot,
-      indexName: args.indexName,
-      structuralStorePath: args.structuralStorePath,
-      graphExists,
-      scopeRelPath,
-      scopeStatus: args.scopeStatus,
-      maxChars,
-      maxFiles,
-      entries,
-      directories: nextDirectories,
-      directoryTotal: directoryCandidates.length,
-      externalDependencies,
-      externalDependencyTotal: externalCandidates.length,
-      files,
-      fileTotal: fileCandidates.length,
-      includeExternal,
-    });
-    if (payloadLength(nextPayload) <= maxChars) {
-      directories = nextDirectories;
-    } else {
-      break;
+  // Greedily append candidates in order until the next one would exceed the
+  // character limit. Returns the index of the first unselected candidate so a
+  // later pass can resume from it.
+  const fill = <K extends keyof typeof selected>(
+    key: K,
+    candidates: Array<(typeof selected)[K][number]>,
+    start: number,
+    charLimit: number,
+    maxItems = Number.POSITIVE_INFINITY,
+  ): number => {
+    let index = start;
+    while (index < candidates.length) {
+      const current = selected[key] as Array<(typeof selected)[K][number]>;
+      if (current.length >= maxItems) break;
+      const next = [...current, candidates[index]];
+      if (payloadLength(make({ [key]: next })) > charLimit) break;
+      selected[key] = next as (typeof selected)[K];
+      index += 1;
     }
-  }
+    return index;
+  };
 
-  for (const candidate of externalCandidates) {
-    const nextExternalDependencies = [...externalDependencies, candidate];
-    const nextPayload = makePayload({
-      graph: args.graph,
-      workspaceRoot: args.workspaceRoot,
-      indexName: args.indexName,
-      structuralStorePath: args.structuralStorePath,
-      graphExists,
-      scopeRelPath,
-      scopeStatus: args.scopeStatus,
-      maxChars,
-      maxFiles,
-      entries,
-      directories,
-      directoryTotal: directoryCandidates.length,
-      externalDependencies: nextExternalDependencies,
-      externalDependencyTotal: externalCandidates.length,
-      files,
-      fileTotal: fileCandidates.length,
-      includeExternal,
-    });
-    if (payloadLength(nextPayload) <= maxChars) {
-      externalDependencies = nextExternalDependencies;
-    } else {
-      break;
-    }
-  }
-
-  for (const candidate of fileCandidates) {
-    if (files.length >= maxFiles) break;
-    const nextFiles = [...files, candidate];
-    const nextPayload = makePayload({
-      graph: args.graph,
-      workspaceRoot: args.workspaceRoot,
-      indexName: args.indexName,
-      structuralStorePath: args.structuralStorePath,
-      graphExists,
-      scopeRelPath,
-      scopeStatus: args.scopeStatus,
-      maxChars,
-      maxFiles,
-      entries,
-      directories,
-      directoryTotal: directoryCandidates.length,
-      externalDependencies,
-      externalDependencyTotal: externalCandidates.length,
-      files: nextFiles,
-      fileTotal: fileCandidates.length,
-      includeExternal,
-    });
-    if (payloadLength(nextPayload) <= maxChars) {
-      files = nextFiles;
-    } else {
-      break;
-    }
-  }
+  // Reserve budget so directory and dependency summaries cannot starve the
+  // file skeletons, then let summaries reclaim any space files leave unused.
+  const baseChars = payloadLength(make());
+  const flexibleChars = Math.max(0, maxChars - baseChars);
+  const directoryLimit =
+    baseChars + Math.floor(flexibleChars * DIRECTORY_BUDGET_SHARE);
+  const directoryIndex = fill(
+    "directories",
+    directoryCandidates,
+    0,
+    directoryLimit,
+  );
+  const externalLimit =
+    payloadLength(make()) +
+    Math.floor(flexibleChars * EXTERNAL_DEPENDENCY_BUDGET_SHARE);
+  const externalIndex = fill(
+    "externalDependencies",
+    externalCandidates,
+    0,
+    externalLimit,
+  );
+  fill("files", fileCandidates, 0, maxChars, maxFiles);
+  fill("directories", directoryCandidates, directoryIndex, maxChars);
+  fill("externalDependencies", externalCandidates, externalIndex, maxChars);
 
   return withActualChars(make());
+}
+
+/**
+ * Directory names whose contents are almost always installed dependencies or
+ * tool caches rather than project source. Matching paths are ranked after
+ * project code in a map, never excluded, so totals and omission counts remain
+ * accurate. Segments are matched below the requested scope, so explicitly
+ * mapping one of these trees keeps its ordinary ordering.
+ */
+const LOW_PRIORITY_DIRECTORY_SEGMENTS = new Set([
+  "node_modules",
+  "bower_components",
+  "jspm_packages",
+  ".npm",
+  ".npm-cache",
+  "_cacache",
+  ".pnpm-store",
+  ".yarn",
+  ".cache",
+  "__pycache__",
+  ".venv",
+  "site-packages",
+  ".tox",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".gradle",
+  ".m2",
+]);
+
+const DIRECTORY_BUDGET_SHARE = 0.3;
+const EXTERNAL_DEPENDENCY_BUDGET_SHARE = 0.15;
+
+function isLowPriorityRelPath(
+  relPath: string,
+  scopeRelPath: string | undefined,
+): boolean {
+  const normalized = normalizeRelPath(relPath);
+  const relative = !scopeRelPath
+    ? normalized
+    : normalized === scopeRelPath
+      ? ""
+      : normalized.startsWith(`${scopeRelPath}/`)
+        ? normalized.slice(scopeRelPath.length + 1)
+        : normalized;
+  return relative
+    .split("/")
+    .some((segment) => LOW_PRIORITY_DIRECTORY_SEGMENTS.has(segment));
 }
 
 function makePayload(args: {
@@ -448,6 +469,7 @@ function buildTotals(entries: StructuralFileEntry[]): Record<string, number> {
 
 function buildDirectorySummaries(
   entries: StructuralFileEntry[],
+  isLowPriority: (relPath: string) => boolean,
 ): DirectorySummary[] {
   const byDirectory = new Map<string, DirectorySummary>();
 
@@ -474,9 +496,15 @@ function buildDirectorySummaries(
     byDirectory.set(key, summary);
   }
 
-  return [...byDirectory.values()].sort(
-    (a, b) => b.files - a.files || a.path.localeCompare(b.path),
-  );
+  return [...byDirectory.values()]
+    .map((summary) => ({ summary, low: isLowPriority(summary.path) }))
+    .sort(
+      (a, b) =>
+        Number(a.low) - Number(b.low) ||
+        b.summary.files - a.summary.files ||
+        a.summary.path.localeCompare(b.summary.path),
+    )
+    .map(({ summary }) => summary);
 }
 
 function buildExternalDependencySummaries(

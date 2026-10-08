@@ -893,6 +893,9 @@ Read the structural code index as a budgeted whole-project or scoped skeleton. U
 - `external_dependencies` — budgeted external specifier summaries by importer count (omitted when `include_external: false`)
 - `files` — budgeted file/module skeletons: path, language, internal imports, external imports, exports, top-level symbols, and reverse import count
 - `budget` — requested budget, final serialized character count, truncation flag, and omitted counts
+
+Budget allocation keeps file skeletons from being starved by summaries. Directory summaries initially use up to about 30% of the space left after fixed metadata, and dependency summaries about 15%. File skeletons then fill the remainder, and both summary lists reclaim any space files leave unused. Paths inside recognised dependency and cache directories (for example `node_modules`, `.npm-cache`, `_cacache`, `.pnpm-store`, `.yarn`, `.cache`, `__pycache__`, `.venv`, and `site-packages`) are listed after project code in both directories and files. They are never removed from the index, totals, or omitted counts. When the requested `path` is itself inside one of those trees, its contents keep their ordinary order.
+
 - `note` — present for unavailable structural-index or empty-scope cases
 
 The tool is intentionally static and budgeted. It is best for orientation, module-boundary discovery, and deciding where to inspect next; use `get_module_neighbors` for a complete single-file neighborhood and LSP tools for symbol-precise semantics. Requires the codebase index to be built.
