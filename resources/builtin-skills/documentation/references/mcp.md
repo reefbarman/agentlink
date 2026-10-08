@@ -12,6 +12,8 @@ The MCP Manager has four views: **Overview** (config + status + enabled/disabled
 
 Failed server rows can be expanded even when no tools loaded. The expanded details show the complete, selectable error with wrapped text and preserved line breaks; hovering the shortened summary also shows the full error. This uses the same Manager in VS Code and browser workspace chat.
 
+In narrow panels, server names and status summaries stay above the wrapping badges and action buttons. The layout follows the Manager's own width, including a narrow chat pane inside a wider browser window.
+
 ### Desktop MCP window
 
 In standalone Desktop, **More → MCP** and the **MCP Servers…** app-menu item open a separate, resizable manager window. `/mcp`, `/mcp-config`, and `/mcp-refresh` open that same window rather than a panel beside the composer. Reopening focuses the existing window; closing it does not disconnect servers.
