@@ -10,7 +10,7 @@ import {
 interface UseEmojiPopupOptions {
   text: string;
   onTextChange: (text: string) => void;
-  textareaRef: RefObject<HTMLTextAreaElement>;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
 }
 
 export function useEmojiPopup({

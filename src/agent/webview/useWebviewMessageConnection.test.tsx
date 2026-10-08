@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render } from "@testing-library/preact";
+import { act, cleanup, render } from "@testing-library/preact";
 import { h } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -75,7 +75,9 @@ describe("useWebviewMessageConnection", () => {
   });
 
   afterEach(() => {
-    cleanup();
+    act(() => {
+      cleanup();
+    });
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -101,7 +103,11 @@ describe("useWebviewMessageConnection", () => {
     expect(registration).toBeDefined();
     expect(postMessage).toHaveBeenCalledWith({ command: "webviewReady" });
 
-    unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+
+    act(() => {
+      unmount();
+    });
 
     expect(removeEventListener).toHaveBeenCalledWith(
       "message",
@@ -607,7 +613,10 @@ describe("useWebviewMessageConnection", () => {
     });
 
     expect(vi.getTimerCount()).toBe(pendingTimersBefore + 1);
-    unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+    act(() => {
+      unmount();
+    });
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
     expect(clearTimeoutSpy).toHaveBeenCalled();
@@ -634,7 +643,11 @@ describe("useWebviewMessageConnection", () => {
       text: "pending",
     });
 
-    unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+
+    act(() => {
+      unmount();
+    });
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
   });

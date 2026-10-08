@@ -1,4 +1,4 @@
-import { Fragment, type JSX } from "preact";
+import { Fragment, type CSSProperties, type JSX } from "preact";
 import type { CoreServiceTierSelection } from "@agentlink/protocol/model-catalog";
 import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {
@@ -8700,7 +8700,7 @@ export function BrowserGatewayApp({
                       style={
                         {
                           "--instance-group-color": groupColor,
-                        } as unknown as JSX.CSSProperties
+                        } as unknown as CSSProperties
                       }
                       title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
                       type="button"
@@ -8741,7 +8741,7 @@ export function BrowserGatewayApp({
                   style={
                     {
                       "--instance-group-color": groupColor,
-                    } as unknown as JSX.CSSProperties
+                    } as unknown as CSSProperties
                   }
                 >
                   <i
@@ -8779,11 +8779,13 @@ export function BrowserGatewayApp({
         }
         class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${!reviewPaneVisible ? " browser-layout-chat-only" : ""}`}
         id="browser-instance-panel"
-        role={consumerShell ? "region" : "tabpanel"}
+        // Preact 11 limits <main> to role="main"; this element intentionally
+        // overrides it as a region or tab panel.
+        role={(consumerShell ? "region" : "tabpanel") as unknown as "main"}
         style={
           {
             "--browser-side-width": `${sidePanePercent}%`,
-          } as unknown as JSX.CSSProperties
+          } as unknown as CSSProperties
         }
       >
         {reviewPaneVisible && (

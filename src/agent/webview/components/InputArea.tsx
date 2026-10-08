@@ -1971,7 +1971,13 @@ export function InputArea({
                   ? "question-context-composer-help"
                   : undefined
               }
-              role={shouldShowSlashPopup ? "combobox" : undefined}
+              // Preact 11 limits <textarea> to role="textbox"; the slash
+              // picker intentionally uses the ARIA combobox pattern.
+              role={
+                (shouldShowSlashPopup ? "combobox" : undefined) as unknown as
+                  | "textbox"
+                  | undefined
+              }
               aria-autocomplete={shouldShowSlashPopup ? "list" : undefined}
               aria-expanded={shouldShowSlashPopup}
               aria-controls={

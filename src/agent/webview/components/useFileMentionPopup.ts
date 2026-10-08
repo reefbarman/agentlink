@@ -6,7 +6,7 @@ import { autosizeTextarea } from "../../../shared/composerBehavior";
 interface UseFileMentionPopupOptions {
   text: string;
   onTextChange: (text: string) => void;
-  textareaRef: RefObject<HTMLTextAreaElement>;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
 }
 
 export function useFileMentionPopup({

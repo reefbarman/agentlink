@@ -82,7 +82,9 @@ const configSnapshot = {
 };
 
 afterEach(() => {
-  cleanup();
+  act(() => {
+    cleanup();
+  });
   delete window.agentlinkDesktopShell;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -322,7 +324,10 @@ describe("Desktop MCP manager recovery actions", () => {
         onClose: vi.fn(),
       }),
     );
-    view.unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+    act(() => {
+      view.unmount();
+    });
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(

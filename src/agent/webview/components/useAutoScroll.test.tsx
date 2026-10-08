@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
+import { act, cleanup, fireEvent, render } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/preact";
 
 import { h } from "preact";
 import { useAutoScroll } from "./useAutoScroll";
@@ -79,7 +79,9 @@ describe("useAutoScroll", () => {
   });
 
   afterEach(() => {
-    cleanup();
+    act(() => {
+      cleanup();
+    });
     vi.unstubAllGlobals();
   });
 
@@ -206,7 +208,11 @@ describe("useAutoScroll", () => {
     expect(resizeObservers).toHaveLength(1);
     expect(resizeObservers[0].observe).toHaveBeenCalledTimes(1);
 
-    unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+
+    act(() => {
+      unmount();
+    });
     expect(resizeObservers[0].disconnect).toHaveBeenCalledTimes(1);
   });
 });

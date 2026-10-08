@@ -1,4 +1,4 @@
-import type { ComponentChildren, JSX } from "preact";
+import type { CSSProperties, ComponentChildren } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 const DEFAULT_MAX_HEIGHT = "50vh";
@@ -253,7 +253,7 @@ export function ChatActivityShelf({
             effectiveMaxHeight === null
               ? DEFAULT_MAX_HEIGHT
               : `${effectiveMaxHeight}px`,
-        } as JSX.CSSProperties
+        } as CSSProperties
       }
     >
       <div

@@ -22,6 +22,10 @@ updates:
       # Must track the Node runtime we target, not the latest Node major.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # react-ink-textarea peer-requires ink ^7; a newer ink major splits the CLI
+      # across two Ink instances. Revisit when react-ink-textarea supports it.
+      - dependency-name: "ink"
+        update-types: ["version-update:semver-major"]
     groups:
       # Matched first so provider and protocol SDKs always land together, including majors.
       ai-sdks:

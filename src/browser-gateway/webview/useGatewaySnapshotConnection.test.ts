@@ -65,7 +65,9 @@ describe("useGatewaySnapshotConnection", () => {
   });
 
   afterEach(() => {
-    cleanup();
+    act(() => {
+      cleanup();
+    });
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -88,7 +90,11 @@ describe("useGatewaySnapshotConnection", () => {
     expect(options.fetchDebugInfo).toHaveBeenCalledWith("instance-1");
     expect(options.fetchInstances).toHaveBeenCalledWith();
 
-    view.unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+
+    act(() => {
+      view.unmount();
+    });
 
     expect(ControllableEventSource.instances[0].closeCount).toBe(1);
     expect(
@@ -107,7 +113,11 @@ describe("useGatewaySnapshotConnection", () => {
     const queuedOpen = source.onopen;
     const queuedError = source.onerror;
 
-    view.unmount();
+    // Preact 11 defers unmount effect cleanup until after paint; flush it.
+
+    act(() => {
+      view.unmount();
+    });
     vi.mocked(globalThis.fetch).mockClear();
     vi.mocked(options.setStatus).mockClear();
 

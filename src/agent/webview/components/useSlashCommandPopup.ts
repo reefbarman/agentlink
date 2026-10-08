@@ -24,7 +24,7 @@ interface UseSlashCommandPopupOptions {
   availableModels: WebviewModelInfo[];
   currentModel: string;
   matchedCommand: SlashCommandInfo | null;
-  inputWrapperRef: RefObject<HTMLDivElement>;
+  inputWrapperRef: RefObject<HTMLDivElement | null>;
 }
 
 export function withSlashCommandDisplayName(

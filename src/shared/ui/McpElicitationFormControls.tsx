@@ -176,7 +176,9 @@ function renderControl(
         <input
           {...accessibilityProps}
           class="mcp-elicitation-input"
-          type={inputTypeForStringField(field)}
+          // Preact 11 types <input> attributes per literal `type`, so a
+          // computed union needs a cast. The rendered value is unchanged.
+          type={inputTypeForStringField(field) as "text"}
           value={typeof value === "string" ? value : ""}
           minLength={field.minLength}
           maxLength={field.maxLength}
@@ -222,7 +224,9 @@ function renderMultiSelect(
   );
 }
 
-function inputTypeForStringField(field: McpElicitationStringField): string {
+function inputTypeForStringField(
+  field: McpElicitationStringField,
+): "email" | "url" | "date" | "text" {
   switch (field.format) {
     case "email":
       return "email";

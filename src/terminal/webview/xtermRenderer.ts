@@ -41,6 +41,14 @@ function terminalTheme(): ITheme {
       "--vscode-terminal-inactiveSelectionBackground",
     ),
     selectionForeground: cssColor("--vscode-terminal-selectionForeground"),
+    // xterm 6 draws its own scrollbar, styled through the theme.
+    scrollbarSliderBackground: cssColor("--vscode-scrollbarSlider-background"),
+    scrollbarSliderHoverBackground: cssColor(
+      "--vscode-scrollbarSlider-hoverBackground",
+    ),
+    scrollbarSliderActiveBackground: cssColor(
+      "--vscode-scrollbarSlider-activeBackground",
+    ),
     black: cssColor("--vscode-terminal-ansiBlack"),
     red: cssColor("--vscode-terminal-ansiRed"),
     green: cssColor("--vscode-terminal-ansiGreen"),

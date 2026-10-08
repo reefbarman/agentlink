@@ -2,7 +2,7 @@ import type {
   ChatTabViewStatus,
   ChatWorkspaceViewSnapshot,
 } from "@agentlink/protocol/chat-workspace";
-import type { ComponentChildren, JSX } from "preact";
+import type { ComponentChildren, TargetedDragEvent } from "preact";
 
 import { useState } from "preact/hooks";
 
@@ -45,7 +45,7 @@ export function ChatWorkspace({
     snapshot?.tabs.filter((tab) => tab.placement === "docked") ?? [];
 
   const handleDrop = (
-    event: JSX.TargetedDragEvent<HTMLDivElement>,
+    event: TargetedDragEvent<HTMLDivElement>,
     targetTabId: string,
   ) => {
     event.preventDefault();

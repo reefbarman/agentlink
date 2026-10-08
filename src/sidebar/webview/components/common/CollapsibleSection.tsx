@@ -1,4 +1,5 @@
-import { useState, useCallback } from "preact/hooks";
+import { useCallback, useState } from "preact/hooks";
+
 import type { ComponentChildren } from "preact";
 
 const STORAGE_PREFIX = "section:";
@@ -53,7 +54,9 @@ export function CollapsibleSection({
             toggle();
           }
         }}
-        role="button"
+        // Preact 11 does not allow role="button" on headings; keep the
+        // existing interactive header semantics unchanged.
+        role={"button" as unknown as "heading"}
         tabIndex={0}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} ${title}`}

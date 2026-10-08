@@ -188,13 +188,13 @@ const monacoWorkerOptions = {
     "monaco-editor.worker":
       "node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
     "monaco-json.worker":
-      "node_modules/monaco-editor/esm/vs/language/json/json.worker.js",
+      "node_modules/monaco-editor/esm/vs/languages/features/json/json.worker.js",
     "monaco-css.worker":
-      "node_modules/monaco-editor/esm/vs/language/css/css.worker.js",
+      "node_modules/monaco-editor/esm/vs/languages/features/css/css.worker.js",
     "monaco-html.worker":
-      "node_modules/monaco-editor/esm/vs/language/html/html.worker.js",
+      "node_modules/monaco-editor/esm/vs/languages/features/html/html.worker.js",
     "monaco-ts.worker":
-      "node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js",
+      "node_modules/monaco-editor/esm/vs/languages/features/typescript/ts.worker.js",
   },
   bundle: true,
   outdir: "dist",
