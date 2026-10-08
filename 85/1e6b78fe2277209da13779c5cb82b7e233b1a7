@@ -1,0 +1,58 @@
+src/agent/compose/composeScope.test.ts
+  h_e08a86bb3a33a2 36,54,186-325
+  s_00484e46888b65::t_3eb319bfbaad24 326
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 74,76,199
+  h_e08a86bb3a33a2 75
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 1277-1286,1309,1348,1793-1795,2049-2050,2679-2696,2825,2948-2956,3562-3571
+  h_e08a86bb3a33a2 1287-1308,3572
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 24,26-27,1944,1956-1969,1983,2015,7283-7307,8411-8551
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 791-792,1787,1798
+  h_e08a86bb3a33a2 1799
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/agent/compose/composeScope.ts
+  h_e08a86bb3a33a2 7,106-172,329,365-396,468-472,490,495-498
+  s_00484e46888b65::t_f4fbf7f3ea5322 397-399,473-489,491
+src/core/tools/types.ts
+  h_e08a86bb3a33a2 277-281
+src/core/capabilities/mcp.ts
+  h_e08a86bb3a33a2 30-31
+src/core/tools/toolCapabilities.ts
+  h_e08a86bb3a33a2 700-704,719,726,730-751,790-794,831-839,859-861,868
+  h_e08a86bb3a33a2 840-841,865-867,869
+src/agent/composeEfficiency.ts
+  h_e08a86bb3a33a2 6,96,168
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "851e6b78fe2277209da13779c5cb82b7e233b1a7",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_00484e46888b65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5fa27bef-449d-4332-990d-f407d572604b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
