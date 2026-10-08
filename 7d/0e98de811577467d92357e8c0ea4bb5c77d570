@@ -1,0 +1,91 @@
+src/agent/webview/components/useEmojiPopup.ts
+  h_e08a86bb3a33a2 13
+src/agent/webview/components/ChatWorkspace.tsx
+  h_e08a86bb3a33a2 5,48
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 1,8782-8784
+  s_0704ca49c903a4::t_a76ee9cd46fbab 8703,8744,8788
+src/shared/ui/ChatActivityShelf.tsx
+  h_e08a86bb3a33a2 1,256
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 1974-1979
+  s_4f62fb6f1f7a99::t_7d994ba8ae3595 1980
+src/agent/webview/useWebviewMessageConnection.test.tsx
+  h_e08a86bb3a33a2 3,78-80,106,108-110,616-619,646,648-650
+  s_10f64e8ab087fb::t_104abaa9bbf2fa 107,647
+src/browser-gateway/webview/components/browserMonaco.ts
+  h_e08a86bb3a33a2 1-16,18
+.github/dependabot.yml
+  h_e08a86bb3a33a2 25-28
+src/browser-gateway/webview/useGatewaySnapshotConnection.test.ts
+  h_e08a86bb3a33a2 68-70,93,95-97,116,118-120
+  s_10f64e8ab087fb::t_a2f76a460bfb1d 94,117
+src/agent/webview/components/useAutoScroll.test.tsx
+  h_e08a86bb3a33a2 3,82-84,211-215
+src/sidebar/webview/components/common/CollapsibleSection.tsx
+  h_e08a86bb3a33a2 1-2,57-59
+src/shared/ui/McpElicitationFormControls.tsx
+  h_e08a86bb3a33a2 179-181,228-229
+  s_0704ca49c903a4::t_ac4583015a057a 227
+src/agent/webview/components/useFileMentionPopup.ts
+  h_e08a86bb3a33a2 9
+src/terminal/webview/xtermRenderer.ts
+  h_e08a86bb3a33a2 44-51
+src/browser-gateway/webview/DesktopMcpManager.test.tsx
+  h_e08a86bb3a33a2 85-87,327-330
+src/agent/webview/components/useSlashCommandPopup.ts
+  h_e08a86bb3a33a2 27
+esbuild.mjs
+  h_e08a86bb3a33a2 191,193,195,197
+package.json
+  s_000ac20fe1dc56::t_bbddcac482f0f0 1231-1234,1242,1248,1259,1271,1284
+apps/cli/package.json
+  h_e08a86bb3a33a2 39
+package-lock.json
+  h_e08a86bb3a33a2 28-31,39,45,77,107,418-442,444-452,2306-2308,2311-2314,4807-4810,4813-4816,4819-4822,4825-4831,5751-5766,7369-7374,9923-9925,9930,9933,9941-9942,9951-9953,10088-10090,10094,11007-11009,11016,11640
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7d0e98de811577467d92357e8c0ea4bb5c77d570",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_000ac20fe1dc56": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c835baca-c7e7-48f6-aad0-52a8c3990b2b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0704ca49c903a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d5a661f1-ef6b-44b2-9b0f-541d27f29e1a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_10f64e8ab087fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de565872-277b-49bc-8b36-8661e334c745",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_4f62fb6f1f7a99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22273c3b-74eb-4784-a6a9-b366f8ae1a18",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
