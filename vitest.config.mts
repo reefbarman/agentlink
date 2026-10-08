@@ -7,7 +7,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      vscode: path.resolve(__dirname, "src/__mocks__/vscode.ts"),
+      vscode: path.resolve(import.meta.dirname, "src/__mocks__/vscode.ts"),
     },
   },
   test: {
@@ -15,6 +15,8 @@ export default defineConfig({
     execArgv: ["--no-experimental-webstorage"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     // Absolute so workspaces that inherit this config (apps/desktop) resolve it.
-    setupFiles: [path.resolve(__dirname, "src/testing/vitestSetup.ts")],
+    setupFiles: [
+      path.resolve(import.meta.dirname, "src/testing/vitestSetup.ts"),
+    ],
   },
 });
