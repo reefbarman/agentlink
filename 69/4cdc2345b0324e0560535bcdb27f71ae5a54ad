@@ -1,0 +1,82 @@
+src/sidebar/webview/components/FeedbackList.test.tsx
+  h_e08a86bb3a33a2 96-121
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 75,155-177
+  s_056b895fbab742::t_9bb778657af65f 178
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 214
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 324
+src/tools/getFeedback.ts
+  h_e08a86bb3a33a2 2-7,12-16,20-22,24-56,58-99,101-122,124-137,139,141-221
+  s_056b895fbab742::t_4dfdd103977131 1,8,23,57
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 5658-5665,5672-5674
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/util/feedbackStore.ts
+  h_e08a86bb3a33a2 8,10-14,19,22-68,89-90,114-119,121-134,139,146-190,239-368,370-376,378-383,385-388,390-393,395-400,402-451,453-479,481-591,593-594,596-606,660,682-687,689-710,712-741,744-775,778
+  h_e08a86bb3a33a2 91-92,120,135,384,389,394,742-743,776
+src/tools/sendFeedback.test.ts
+  h_e08a86bb3a33a2 22-25,29-33,40-86,88-89,92-117,270,275-277,297,301
+  s_056b895fbab742::t_4f8527ecedb8ca 87,90-91,271-274,298-300
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2273,2286-2288,2290-2292
+src/util/feedbackStore.test.ts
+  h_e08a86bb3a33a2 6-8,12,15,18-20,438-836
+  h_e08a86bb3a33a2 837-838
+packages/protocol/src/sidebarTransport.ts
+  h_e08a86bb3a33a2 97-109
+src/agent/toolAdapter.feedback.test.ts
+  h_e08a86bb3a33a2 5,213-369
+src/sidebar/webview/components/FeedbackList.tsx
+  h_e08a86bb3a33a2 170-183
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 1727-1730,3779-3791
+  s_056b895fbab742::t_584f1204025793 3792-3794
+src/tools/feedbackTools.test.ts
+  h_e08a86bb3a33a2 9,14-19,65-86
+  s_0a875bc51f6f1c::t_83f55a699fd3fb 87-89
+src/tools/sendFeedback.ts
+  h_e08a86bb3a33a2 6,10-44,135-136,141-151,153
+  s_056b895fbab742::t_4f792dbf7fe4c8 137-140
+src/sidebar/webview/styles/sidebar.css
+  h_e08a86bb3a33a2 508-515
+.agentlink/skills/triage/SKILL.md
+  h_e08a86bb3a33a2 27
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+scripts/tool-inventory.json
+  h_e08a86bb3a33a2 300-307,868
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_056b895fbab742": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e20be3e8-f169-4c37-93fd-67bc44e390ba",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0a875bc51f6f1c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51283382-f078-40a7-96e2-545dee0f3630",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
