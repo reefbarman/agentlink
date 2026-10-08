@@ -106,12 +106,48 @@ describe("getRelativePath", () => {
       },
     ];
 
-    const { resolveAndValidatePath } = await import("./paths.js");
+    const { resolveAndValidatePath, resolveWorkspacePathLexically } =
+      await import("./paths.js");
 
+    expect(resolveWorkspacePathLexically("second-root/assets/image.png")).toBe(
+      "/workspace/second-root/assets/image.png",
+    );
     expect(resolveAndValidatePath("second-root/assets/image.png")).toEqual({
       absolutePath: "/workspace/second-root/assets/image.png",
       inWorkspace: true,
     });
+  });
+
+  it("resolves discovery paths lexically through a symlinked session root", async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-lexical-paths-"),
+    );
+    try {
+      const realRoot = path.join(tempDir, "real");
+      const aliasRoot = path.join(tempDir, "alias");
+      fs.mkdirSync(realRoot);
+      fs.writeFileSync(path.join(realRoot, "SKILL.md"), "description only");
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      const {
+        resolveWorkspacePathLexically,
+        resolveAndValidatePath,
+        withWorkspaceRoots,
+      } = await import("./paths.js");
+      withWorkspaceRoots([aliasRoot], () => {
+        expect(resolveWorkspacePathLexically("SKILL.md")).toBe(
+          path.join(aliasRoot, "SKILL.md"),
+        );
+        expect(resolveAndValidatePath("SKILL.md")).toEqual({
+          absolutePath: fs.realpathSync(path.join(realRoot, "SKILL.md")),
+          inWorkspace: true,
+        });
+      });
+      expect(() => resolveWorkspacePathLexically("SKILL.md")).toThrow(
+        "No workspace folder open",
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("recognizes files inside the host temporary directory", async () => {

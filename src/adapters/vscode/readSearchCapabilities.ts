@@ -32,6 +32,7 @@ import {
   getWorkspaceRoots,
   isPathWithinRoot,
   resolveAndValidatePath,
+  resolveWorkspacePathLexically,
   tryGetFirstWorkspaceRoot,
 } from "../../util/paths.js";
 import { getCodeIndexWorkspaceRootForPath } from "../../indexer/codeIndexPaths.js";
@@ -65,6 +66,7 @@ export function createVscodeWorkspaceFileProvider(): WorkspaceFileProvider {
 
 export function createVscodeAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
   return {
+    resolveLexicalPath: resolveWorkspacePathLexically,
     resolvePath(inputPath) {
       return resolveAndValidatePath(inputPath).absolutePath;
     },

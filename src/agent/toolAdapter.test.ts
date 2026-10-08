@@ -4466,8 +4466,43 @@ describe("dispatchToolCall", () => {
       { path: skillPath },
       advertisedSkills,
       expect.anything(),
+      [],
     );
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("forwards session diagnostics through the production runtime without activation", async () => {
+    const diagnostic = {
+      sourcePath: "/tmp/project/.agents/skills/pull-request/SKILL.md",
+      code: "invalid-metadata",
+      severity: "error" as const,
+      message: "distinctive missing-name diagnostic",
+    };
+    const onSkillLoad = vi.fn();
+    const runtime = createAgentToolRuntime(mockCtx);
+    vi.mocked(loadSkill).mockResolvedValueOnce({
+      result: {
+        isError: true,
+        content: [{ type: "text", text: "catalogue rejection" }],
+      },
+    });
+    await runtime.executeTool({
+      name: "load_skill",
+      input: { path: diagnostic.sourcePath },
+      context: {
+        sessionId: "test-session",
+        getAdvertisedSkills: () => [],
+        getSkillDiagnostics: () => [diagnostic],
+        onSkillLoad,
+      },
+    });
+    expect(loadSkill).toHaveBeenCalledWith(
+      { path: diagnostic.sourcePath },
+      [],
+      expect.anything(),
+      [diagnostic],
+    );
+    expect(onSkillLoad).not.toHaveBeenCalled();
   });
 
   it("activates only canonical skill results, not catalog lookup candidates", async () => {
@@ -4605,6 +4640,7 @@ describe("dispatchToolCall", () => {
       { path: resourcePath },
       advertisedSkills,
       expect.anything(),
+      [],
     );
   });
 

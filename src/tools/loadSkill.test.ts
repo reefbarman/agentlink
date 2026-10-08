@@ -8,6 +8,113 @@ function textOf(result: Awaited<ReturnType<typeof handleLoadSkill>>): string {
 }
 
 describe("handleLoadSkill", () => {
+  it("returns only exact discovery diagnostics without reading or activating excluded skills", async () => {
+    const skillPath = "/workspace/.agents/skills/pull-request/SKILL.md";
+    const provider = {
+      resolveLexicalPath: (input: string) => `/workspace/${input}`,
+      resolvePath: vi.fn((input: string) =>
+        input.startsWith("/") ? input : `/workspace/${input}`,
+      ),
+      normalizeExistingPath: vi.fn((input: string) => input),
+      readTextFile: vi.fn(async () => "must not be read"),
+    };
+    const diagnostics = [
+      {
+        code: "invalid-metadata",
+        severity: "error" as const,
+        sourcePath: skillPath,
+        message: "frontmatter field 'name' is required",
+      },
+      {
+        code: "invalid-metadata",
+        severity: "error" as const,
+        sourcePath: "/workspace/.agents/skills/other/SKILL.md",
+        message: "unrelated diagnostic",
+      },
+    ];
+    const outcome = await loadSkill(
+      { path: ".agents/skills/pull-request/SKILL.md" },
+      [],
+      provider,
+      diagnostics,
+    );
+    expect(outcome.activation).toBeUndefined();
+    expect(outcome.result.isError).toBe(true);
+    expect(outcome.result.data).toMatchObject({
+      status: "skill_not_in_catalog",
+      diagnostics: [
+        {
+          code: "invalid-metadata",
+          severity: "error",
+          message: "frontmatter field 'name' is required",
+        },
+      ],
+      guidance: expect.stringContaining("no file access has been granted"),
+    });
+    expect(provider.readTextFile).not.toHaveBeenCalled();
+    expect(textOf(outcome.result)).not.toContain("unrelated diagnostic");
+  });
+
+  it.each([
+    "/elsewhere/pull-request/SKILL.md",
+    "/workspace/.agents/skills/pull-request/guide.md",
+    "pull-request",
+    ".agents/skills/pull-request/SKILL.md",
+    "/alias/SKILL.md",
+  ])(
+    "does not disclose diagnostics for an undiscovered path or alias: %s",
+    async (requested) => {
+      const skillPath = "/workspace/.agents/skills/pull-request/SKILL.md";
+      const provider = {
+        resolvePath: (input: string) =>
+          input === "/alias/SKILL.md" ? skillPath : input,
+        normalizeExistingPath: (input: string) =>
+          input === "/alias/SKILL.md" ? skillPath : input,
+        readTextFile: vi.fn(async () => "must not be read"),
+      };
+      const outcome = await loadSkill({ path: requested }, [], provider, [
+        {
+          code: "invalid-metadata",
+          severity: "error",
+          sourcePath: skillPath,
+          message: "hidden diagnostic",
+        },
+      ]);
+      expect(outcome.activation).toBeUndefined();
+      expect(outcome.result.data).not.toHaveProperty("diagnostics");
+      expect(textOf(outcome.result)).not.toContain("hidden diagnostic");
+      expect(provider.readTextFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("bounds exact-path diagnostic output", async () => {
+    const skillPath = "/workspace/broken/SKILL.md";
+    const provider = {
+      resolvePath: (input: string) => input,
+      normalizeExistingPath: (input: string) => input,
+      readTextFile: vi.fn(async () => "must not be read"),
+    };
+    const outcome = await loadSkill(
+      { path: skillPath },
+      [],
+      provider,
+      Array.from({ length: 12 }, () => ({
+        code: "invalid-metadata",
+        severity: "error" as const,
+        sourcePath: skillPath,
+        message: "x".repeat(2000),
+      })),
+    );
+    const data = outcome.result.data as {
+      diagnostics: Array<{ message: string }>;
+    };
+    expect(data.diagnostics).toHaveLength(8);
+    expect(data.diagnostics.every((item) => item.message.length === 1000)).toBe(
+      true,
+    );
+    expect(provider.readTextFile).not.toHaveBeenCalled();
+  });
+
   it("loads advertised skill files through an artifact provider", async () => {
     const content = "# Helper skill\nUse helper workflow.";
     const revision = createHash("sha256").update(content).digest("hex");

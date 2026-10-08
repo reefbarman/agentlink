@@ -1,6 +1,7 @@
 import * as path from "path";
 
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
+import type { SkillCatalogDiagnostic } from "../core/tools/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import {
@@ -161,6 +162,7 @@ export async function loadSkill(
   params: { path: string },
   advertisedSkills: AllowedSkill[] = [],
   artifactProvider?: AdvertisedArtifactProvider,
+  catalogDiagnostics: readonly SkillCatalogDiagnostic[] = [],
 ): Promise<LoadSkillOutcome> {
   if (artifactProvider) {
     const legacyResource = await loadLegacyBuiltInSkillResource(
@@ -220,6 +222,27 @@ export async function loadSkill(
       : "";
   if (!error.includes("not in the current session")) return { result };
 
+  // Match discovery paths lexically, never through realpath resolution. Older
+  // providers without a lexical resolver can safely match only absolute paths.
+  const requestedPath = path.isAbsolute(params.path)
+    ? path.resolve(params.path)
+    : artifactProvider?.resolveLexicalPath?.(params.path);
+  const diagnostics =
+    requestedPath && path.basename(requestedPath) === "SKILL.md"
+      ? catalogDiagnostics
+          .filter(
+            (diagnostic) =>
+              path.resolve(diagnostic.sourcePath) ===
+              path.resolve(requestedPath),
+          )
+          .slice(0, 8)
+          .map((diagnostic) => ({
+            code: diagnostic.code,
+            severity: diagnostic.severity,
+            message: diagnostic.message.slice(0, 1000),
+          }))
+      : [];
+
   const requestedName =
     path.basename(params.path) === "SKILL.md"
       ? path.basename(path.dirname(params.path))
@@ -249,11 +272,14 @@ export async function loadSkill(
       status: "skill_not_in_catalog",
       candidates,
       omittedCandidates: Math.max(0, matches.length - candidates.length),
-      guidance: candidates.length
-        ? "Retry load_skill with the intended candidate's exact canonical path. No skill has been activated by this lookup."
-        : resourceOwner
-          ? `This path is a supporting file inside the ${resourceOwner.name} skill directory, not a skill. load_skill only activates SKILL.md files; read this file with read_file using its absolute path. No skill has been activated by this lookup.`
-          : "No matching skill exists in the current session catalog. Refresh the session catalog or check the skill's enabled state and mode; reading an arbitrary file does not activate it.",
+      ...(diagnostics.length ? { diagnostics } : {}),
+      guidance: diagnostics.length
+        ? "This exact skill path was excluded during session catalogue discovery. Correct the reported problem through the normal reviewed workflow, then refresh the catalogue. Diagnostics are discovery evidence only; no skill has been activated and no file access has been granted."
+        : candidates.length
+          ? "Retry load_skill with the intended candidate's exact canonical path. No skill has been activated by this lookup."
+          : resourceOwner
+            ? `This path is a supporting file inside the ${resourceOwner.name} skill directory, not a skill. load_skill only activates SKILL.md files; read this file with read_file using its absolute path. No skill has been activated by this lookup.`
+            : "No matching skill exists in the current session catalog. Refresh the session catalog or check the skill's enabled state and mode; reading an arbitrary file does not activate it.",
     }),
   };
 }
@@ -267,6 +293,14 @@ export async function handleLoadSkill(
   _sessionId: string,
   advertisedSkills: AllowedSkill[] = [],
   artifactProvider?: AdvertisedArtifactProvider,
+  catalogDiagnostics: readonly SkillCatalogDiagnostic[] = [],
 ): Promise<ToolResult> {
-  return (await loadSkill(params, advertisedSkills, artifactProvider)).result;
+  return (
+    await loadSkill(
+      params,
+      advertisedSkills,
+      artifactProvider,
+      catalogDiagnostics,
+    )
+  ).result;
 }

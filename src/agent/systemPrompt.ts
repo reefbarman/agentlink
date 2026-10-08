@@ -24,9 +24,10 @@ import {
   type ProjectActiveFileResolution,
 } from "./configLoader.js";
 import {
-  loadCanonicalSkillsForModes,
+  loadCanonicalSkillCatalogForModes,
   loadSkillCatalog,
   type SkillEntry,
+  type SkillDiagnostic,
 } from "./skillLoader.js";
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
@@ -47,6 +48,8 @@ export interface PromptArtifacts {
   systemPrompt: string;
   promptProfile: Readonly<PromptProfileResolution>;
   skills: SkillEntry[];
+  /** Discovery evidence only, never activation authority or prompt instructions. */
+  skillDiagnostics?: SkillDiagnostic[];
   advertisedRules: AdvertisedRuleEntry[];
   skillCatalog?: SkillCatalogProjection;
   activeFileContext?: ProjectActiveFileResolution;
@@ -1355,7 +1358,7 @@ export async function buildPromptArtifacts(
     disabledSkillIds: options?.disabledSkillIds,
     additionalEntries: pluginSkills,
   };
-  const [instructionBlocks, modeRules, skills] = await Promise.all([
+  const [instructionBlocks, modeRules, discoveredSkills] = await Promise.all([
     loadWorkspaceInstructionBlocks(
       cwd,
       options?.workspaceFolders,
@@ -1367,11 +1370,10 @@ export async function buildPromptArtifacts(
     // Likewise the skills TOC must not vary by mode: advertise the union
     // across modes (mode-restricted skills are still labeled by their dirs).
     conversationModePlacement
-      ? loadCanonicalSkillsForModes(cwd, skillModeSlugs, skillOptions)
-      : loadSkillCatalog(cwd, mode, skillOptions).then((catalog) =>
-          catalog.entries.filter((entry) => entry.enabled),
-        ),
+      ? loadCanonicalSkillCatalogForModes(cwd, skillModeSlugs, skillOptions)
+      : loadSkillCatalog(cwd, mode, skillOptions),
   ]);
+  const skills = discoveredSkills.entries.filter((entry) => entry.enabled);
   const instructionSections = buildInstructionSections(instructionBlocks, cwd, {
     activeFilePath,
   });
@@ -1489,6 +1491,7 @@ ${devFeedback}${composeRouting}${customSection}${instructionSections.ruleCatalog
     systemPrompt,
     promptProfile,
     skills,
+    skillDiagnostics: discoveredSkills.diagnostics,
     skillCatalog,
     advertisedRules: instructionSections.advertisedRules,
     ...(activeFileContext ? { activeFileContext } : {}),

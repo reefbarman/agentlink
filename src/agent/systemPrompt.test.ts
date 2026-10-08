@@ -192,6 +192,46 @@ describe("conversation mode placement", () => {
 });
 
 describe("buildSystemPrompt", () => {
+  it.each(["system", "conversation"] as const)(
+    "retains discovery diagnostics outside the prompt (%s placement)",
+    async (modeInstructionPlacement) => {
+      const skillPath = path.join(
+        tmpDir,
+        ".agents",
+        "skills",
+        "broken",
+        "SKILL.md",
+      );
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(
+        skillPath,
+        "---\ndescription: synthetic broken skill\n---\nDO_NOT_LOAD_THIS_BODY",
+      );
+      const artifacts = await buildPromptArtifacts("code", tmpDir, {
+        modeInstructionPlacement,
+      });
+      expect(artifacts.skillDiagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourcePath: skillPath,
+            code: "invalid-metadata",
+            message: "frontmatter field 'name' is required",
+          }),
+        ]),
+      );
+      expect(
+        artifacts.skills.some((skill) => skill.skillPath === skillPath),
+      ).toBe(false);
+      expect(artifacts.systemPrompt).not.toContain("DO_NOT_LOAD_THIS_BODY");
+      expect(artifacts.systemPrompt).not.toContain(
+        "frontmatter field 'name' is required",
+      );
+      const lightweight = await buildPromptArtifacts("review", tmpDir, {
+        lightweight: true,
+      });
+      expect(lightweight.skillDiagnostics ?? []).toEqual([]);
+    },
+  );
   it.each([
     ["codex", "compatibility"],
     ["codex", "reasoning"],

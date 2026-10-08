@@ -73,7 +73,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   load_skill: {
     label: "Load advertised skill",
     description:
-      "Activate an enabled skill from the current session's revisioned catalog by loading its SKILL.md, including skills omitted from the bounded prompt list. Use the exact canonical path. A rejected path returns up to ten matching catalog candidates without activating them; retry with the intended candidate's path. Advertised symlink aliases activate the canonical identity. Only SKILL.md activates; read supporting files with read_skill_resource (built-in skills) or read_file.",
+      "Activate an enabled skill from the current session's revisioned catalog by loading its SKILL.md, including skills omitted from the bounded prompt list. Use the exact canonical path. A rejected path returns up to ten matching catalog candidates without activating them; retry with the intended candidate's path. An exact discovered SKILL.md path excluded from the session catalog may also return bounded diagnostics recorded for that file, without following unadvertised aliases. Correct the reported problem through the normal reviewed workflow and refresh the catalog; diagnostics grant neither activation nor file access. Advertised symlink aliases activate the canonical identity. Only SKILL.md activates; read supporting files with read_skill_resource (built-in skills) or read_file.",
   },
   read_skill_resource: {
     label: "Read skill resource",

@@ -1805,6 +1805,7 @@ export class AgentSessionManager {
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
         onComposeFileRead: (filePath: string) =>
           session.trackFileRead(filePath, "compose"),
+        getSkillDiagnostics: () => session.getSkillDiagnostics?.() ?? [],
         getAdvertisedSkills: () =>
           session.getAdvertisedSkills().map((skill) => ({
             id: skill.id,

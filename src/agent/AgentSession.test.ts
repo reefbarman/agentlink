@@ -11,7 +11,7 @@ import { AgentSession } from "./AgentSession.js";
 import { buildContextLedger } from "@agentlink/protocol/context-ledger";
 import type { ContentBlock } from "./providers/types.js";
 import type { PersistedActiveSkillState } from "./persistenceContracts.js";
-import type { SkillEntry } from "./skillLoader.js";
+import type { SkillDiagnostic, SkillEntry } from "./skillLoader.js";
 import type { SkillCatalogProjection } from "./skillCatalogProjection.js";
 import {
   createProjectlessSessionScope,
@@ -51,11 +51,13 @@ function makePromptArtifacts(
     providerId: "test",
     modelId: "test-model",
   },
+  skillDiagnostics: SkillDiagnostic[] = [],
 ) {
   return {
     systemPrompt,
     promptProfile,
     skills: [],
+    skillDiagnostics,
     advertisedRules: [],
     promptBreakdown: {
       sections: [
@@ -393,6 +395,39 @@ describe("AgentSession", () => {
         "/test",
         expect.objectContaining({ skillCatalogBudgetChars: budgetChars }),
       );
+    });
+
+    it("refreshes and clears copied skill diagnostics after lightweight prompt rebuilds", async () => {
+      const initialDiagnostic: SkillDiagnostic = {
+        code: "invalid-metadata",
+        severity: "warning",
+        message: "DISTINCTIVE_INVALID_SKILL_METADATA",
+        sourcePath: "/test/.agentlink/skills/broken/SKILL.md",
+        skillId: "project:agentlink:.agentlink/skills/broken",
+      };
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("lightweight prompt", undefined, [
+          initialDiagnostic,
+        ]),
+      );
+      const session = await AgentSession.create({
+        mode: "review",
+        config: testConfig,
+        projectScope: testProjectScope,
+        background: true,
+        isBackground: true,
+        lightweight: true,
+      });
+      const snapshot = session.getSkillDiagnostics();
+      expect(snapshot).toEqual([initialDiagnostic]);
+      expect(snapshot[0]).not.toBe(initialDiagnostic);
+      expect(session.getLoadedSkills()).toEqual([]);
+
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("rebuilt lightweight prompt"),
+      );
+      await session.rebuildSystemPrompt();
+      expect(session.getSkillDiagnostics()).toEqual([]);
     });
 
     it("keeps the committed skill catalog projection in sync across prompt changes", async () => {

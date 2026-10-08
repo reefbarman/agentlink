@@ -41,6 +41,7 @@ import {
   isVerifiedSkillCapabilityPolicy,
   type SkillCapabilityPolicySnapshot,
   type SkillEntry,
+  type SkillDiagnostic,
 } from "./skillLoader.js";
 import type { SkillLoadActivation } from "../core/tools/types.js";
 import type { ExplicitSkillSelection } from "@agentlink/protocol/chat-catalog";
@@ -243,6 +244,7 @@ export class AgentSession {
   readonly composeFilesRead = new Set<string>();
   /** Complete canonical skill catalog for activation authorization, keyed by path. */
   private advertisedSkills = new Map<string, SkillEntry>();
+  private skillDiagnostics: SkillDiagnostic[] = [];
   /** Bounded prompt projection paired with the complete canonical skill catalog. */
   private skillCatalogProjection: SkillCatalogProjection | undefined;
   /** Deferred rules advertised in the current system prompt, keyed by path for allowlist validation. */
@@ -523,7 +525,7 @@ export class AgentSession {
       initialArchitectReviewPending,
     });
     session.lightweightPrompt = opts.lightweight === true;
-    session.setAdvertisedSkills(artifacts.skills);
+    session.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
     session.setSkillCatalogProjection(artifacts.skillCatalog);
     session.setAdvertisedRules(artifacts.advertisedRules);
     session.modeInstructionPlacement = modeInstructionPlacement;
@@ -717,7 +719,7 @@ export class AgentSession {
           prompt: artifacts.promptBreakdown,
         };
         this.activeFileContext = artifacts.activeFileContext;
-        this.setAdvertisedSkills(artifacts.skills);
+        this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
         this.setSkillCatalogProjection(artifacts.skillCatalog);
         this.setAdvertisedRules(artifacts.advertisedRules);
         await this.refreshModeInstructionAnchor();
@@ -810,7 +812,7 @@ export class AgentSession {
       prompt: artifacts.promptBreakdown,
     };
     this.activeFileContext = artifacts.activeFileContext;
-    this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
     this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
     if (modeInstructionBlock !== undefined) {
@@ -870,7 +872,7 @@ export class AgentSession {
     this.promptProfile = artifacts.promptProfile;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.activeFileContext = artifacts.activeFileContext;
-    this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
     this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
     await this.refreshModeInstructionAnchor();
@@ -1469,7 +1471,13 @@ export class AgentSession {
     if (source === "compose") this.composeFilesRead.add(filePath);
   }
 
-  setAdvertisedSkills(skills: SkillEntry[]): void {
+  setAdvertisedSkills(
+    skills: SkillEntry[],
+    diagnostics: SkillDiagnostic[] = [],
+  ): void {
+    this.skillDiagnostics = diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+    }));
     const previouslyAdvertisedById = new Map(
       Array.from(this.advertisedSkills.values()).map((skill) => [
         skill.id,
@@ -1510,6 +1518,10 @@ export class AgentSession {
 
   getAdvertisedSkills(): SkillEntry[] {
     return Array.from(this.advertisedSkills.values());
+  }
+
+  getSkillDiagnostics(): SkillDiagnostic[] {
+    return this.skillDiagnostics.map((diagnostic) => ({ ...diagnostic }));
   }
 
   setSkillCatalogProjection(

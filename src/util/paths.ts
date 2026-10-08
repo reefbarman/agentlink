@@ -129,18 +129,8 @@ export function isPathInsideHostTemporaryDirectory(filePath: string): boolean {
 export function resolveAndValidatePath(inputPath: string): ResolvedPath {
   const roots = getWorkspaceRoots();
 
-  // Resolve relative to workspace root (or treat as absolute)
-  let resolved: string;
-  if (path.isAbsolute(inputPath)) {
-    resolved = path.resolve(inputPath);
-  } else if (roots.length > 0) {
-    resolved = resolveRelativeToWorkspace(inputPath, roots);
-  } else {
-    throw new Error("No workspace folder open and path is relative");
-  }
-
   // Resolve symlinks for existing files and canonicalize the parent for new files.
-  const real = canonicalizePath(resolved);
+  const real = canonicalizePath(resolveWorkspacePathLexically(inputPath));
 
   // Check workspace boundary
   const inWorkspace = roots.some((root) => {
@@ -151,6 +141,14 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
   });
 
   return { absolutePath: real, inWorkspace };
+}
+
+/** Resolve against the session workspace without following symlinks or granting access. */
+export function resolveWorkspacePathLexically(inputPath: string): string {
+  if (path.isAbsolute(inputPath)) return path.resolve(inputPath);
+  const roots = getWorkspaceRoots();
+  if (roots.length > 0) return resolveRelativeToWorkspace(inputPath, roots);
+  throw new Error("No workspace folder open and path is relative");
 }
 
 /**

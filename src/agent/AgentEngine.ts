@@ -3905,6 +3905,8 @@ export class AgentEngine {
                     : {}),
                   trackerCtx,
                   toolAbortSignal: controller?.signal,
+                  getSkillDiagnostics: () =>
+                    session.getSkillDiagnostics?.() ?? [],
                   getAdvertisedSkills: () =>
                     session.getAdvertisedSkills().map((skill) => ({
                       id: skill.id,
@@ -3937,6 +3939,8 @@ export class AgentEngine {
                   : {}),
                 trackerCtx,
                 toolAbortSignal: controller?.signal,
+                getSkillDiagnostics: () =>
+                  session.getSkillDiagnostics?.() ?? [],
                 getAdvertisedSkills: () =>
                   session.getAdvertisedSkills().map((skill) => ({
                     id: skill.id,

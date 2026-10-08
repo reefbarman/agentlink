@@ -2,14 +2,17 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   composeSkillCapabilityPolicy,
   getSkillDiscoveryRoots,
   isVerifiedSkillCapabilityPolicy,
+  loadCanonicalSkillCatalogForModes,
   loadSkillCatalog,
   parseFrontmatter,
 } from "./skillLoader.js";
+
+import { loadSkill } from "../tools/loadSkill.js";
 
 let tmpDir: string;
 let tmpHome: string;
@@ -304,6 +307,57 @@ describe("canonical skill catalog", () => {
     }
   });
 
+  it("matches a symlinked discovery root lexically without disclosing through other aliases", async () => {
+    const sourceRoot = path.join(tmpDir, ".agents", "skills");
+    const realRoot = path.join(tmpDir, "real-skills");
+    fs.mkdirSync(path.dirname(sourceRoot), { recursive: true });
+    fs.mkdirSync(realRoot);
+    fs.symlinkSync(realRoot, sourceRoot, "dir");
+    const skillPath = writeSkill(
+      sourceRoot,
+      "broken",
+      "description: Missing name",
+    );
+    const aliasPath = path.join(tmpDir, "alias", "SKILL.md");
+    fs.mkdirSync(path.dirname(aliasPath));
+    fs.symlinkSync(skillPath, aliasPath);
+    const catalog = await loadSkillCatalog(tmpDir, "code");
+    const provider = {
+      resolveLexicalPath: (input: string) => path.resolve(tmpDir, input),
+      resolvePath: (input: string) =>
+        fs.realpathSync(path.resolve(tmpDir, input)),
+      normalizeExistingPath: (input: string) => fs.realpathSync(input),
+      readTextFile: vi.fn(async () => "must not be read"),
+    };
+    expect(provider.resolvePath(skillPath)).not.toBe(skillPath);
+    const rejected = await loadSkill(
+      { path: ".agents/skills/broken/SKILL.md" },
+      [],
+      provider,
+      catalog.diagnostics,
+    );
+    expect(rejected.result.data).toMatchObject({
+      status: "skill_not_in_catalog",
+      diagnostics: [expect.objectContaining({ code: "invalid-metadata" })],
+    });
+    expect(rejected.activation).toBeUndefined();
+    for (const requested of [
+      aliasPath,
+      "alias/SKILL.md",
+      fs.realpathSync(skillPath),
+    ]) {
+      const alias = await loadSkill(
+        { path: requested },
+        [],
+        provider,
+        catalog.diagnostics,
+      );
+      expect(alias.result.data).not.toHaveProperty("diagnostics");
+      expect(alias.activation).toBeUndefined();
+    }
+    expect(provider.readTextFile).not.toHaveBeenCalled();
+  });
+
   it("excludes description-only repository skills until the required name is repaired", async () => {
     const sourceRoot = path.join(tmpDir, ".agents", "skills");
     const description =
@@ -326,6 +380,49 @@ describe("canonical skill catalog", () => {
       ]),
     );
 
+    const union = await loadCanonicalSkillCatalogForModes(tmpDir, [
+      "code",
+      "ask",
+    ]);
+    expect(
+      union.diagnostics.filter((item) => item.sourcePath === skillPath),
+    ).toHaveLength(1);
+    const readTextFile = vi.fn(async (target: string) =>
+      fs.readFileSync(target, "utf8"),
+    );
+    const provider = {
+      resolveLexicalPath: (input: string) => path.resolve(tmpDir, input),
+      resolvePath: (input: string) =>
+        fs.realpathSync(path.resolve(tmpDir, input)),
+      normalizeExistingPath: (input: string) => fs.realpathSync(input),
+      readTextFile,
+    };
+    const allowed = union.entries.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      revision: entry.revision,
+      skillPath: entry.skillPath,
+      realSkillPath: entry.provenance.realSkillPath,
+      sourceScope: entry.provenance.scope,
+    }));
+    const rejected = await loadSkill(
+      { path: ".agents/skills/pull-request/SKILL.md" },
+      allowed,
+      provider,
+      union.diagnostics,
+    );
+    expect(rejected.activation).toBeUndefined();
+    expect(rejected.result.data).toMatchObject({
+      status: "skill_not_in_catalog",
+      diagnostics: [
+        {
+          code: "invalid-metadata",
+          message: "frontmatter field 'name' is required",
+        },
+      ],
+    });
+    expect(readTextFile).not.toHaveBeenCalled();
+
     writeSkill(
       sourceRoot,
       "pull-request",
@@ -346,6 +443,26 @@ describe("canonical skill catalog", () => {
         (diagnostic) => diagnostic.sourcePath === skillPath,
       ),
     ).toBe(false);
+    const repaired = repairedCatalog.entries.find(
+      (entry) => entry.skillPath === skillPath,
+    )!;
+    const loaded = await loadSkill(
+      { path: skillPath },
+      [
+        {
+          id: repaired.id,
+          name: repaired.name,
+          revision: repaired.revision,
+          skillPath,
+          realSkillPath: repaired.provenance.realSkillPath,
+          sourceScope: repaired.provenance.scope,
+        },
+      ],
+      provider,
+      repairedCatalog.diagnostics,
+    );
+    expect(loaded.activation?.id).toBe(repaired.id);
+    expect(loaded.result.data).not.toHaveProperty("diagnostics");
   });
 
   it("reports malformed metadata and missing dependencies without advertising them", async () => {

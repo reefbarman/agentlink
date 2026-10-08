@@ -52,6 +52,7 @@ const isPathWithinRoot = vi.hoisted(() =>
   }),
 );
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
+const resolveWorkspacePathLexically = vi.hoisted(() => vi.fn());
 const tryGetFirstWorkspaceRoot = vi.hoisted(() => vi.fn());
 const resolveAndOpenDocument = vi.hoisted(() => vi.fn());
 vi.mock("../../util/paths.js", () => ({
@@ -59,6 +60,7 @@ vi.mock("../../util/paths.js", () => ({
   getWorkspaceRoots,
   isPathWithinRoot,
   resolveAndValidatePath,
+  resolveWorkspacePathLexically,
   tryGetFirstWorkspaceRoot,
 }));
 vi.mock("../../tools/languageFeatures.js", () => ({
@@ -66,10 +68,40 @@ vi.mock("../../tools/languageFeatures.js", () => ({
 }));
 
 describe("createVscodeAdvertisedArtifactProvider", () => {
+  it("keeps relative diagnostic identity separate from canonical access resolution", async () => {
+    const { loadSkill } = await import("../../tools/loadSkill.js");
+    const requested = ".agents/skills/broken/SKILL.md";
+    const discovered = `/workspace/${requested}`;
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: "/real-workspace/broken/SKILL.md",
+      inWorkspace: true,
+    });
+    resolveWorkspacePathLexically.mockReturnValue(discovered);
+    const provider = createVscodeAdvertisedArtifactProvider();
+    const read = vi.spyOn(provider, "readTextFile");
+    const outcome = await loadSkill({ path: requested }, [], provider, [
+      {
+        sourcePath: discovered,
+        code: "invalid-metadata",
+        severity: "error",
+        message: "frontmatter field 'name' is required",
+      },
+    ]);
+    expect(outcome.result.data).toMatchObject({
+      status: "skill_not_in_catalog",
+      diagnostics: [expect.objectContaining({ code: "invalid-metadata" })],
+    });
+    expect(resolveWorkspacePathLexically).toHaveBeenCalledWith(requested);
+    expect(outcome.activation).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
+  });
+
   it("exposes advertised artifact filesystem hooks", () => {
     const provider = createVscodeAdvertisedArtifactProvider();
 
     expect(provider.resolvePath).toBeTypeOf("function");
+    expect(provider.resolveLexicalPath).toBe(resolveWorkspacePathLexically);
     expect(provider.normalizeExistingPath).toBeTypeOf("function");
     expect(provider.readTextFile).toBeTypeOf("function");
   });

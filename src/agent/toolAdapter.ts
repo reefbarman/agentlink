@@ -2087,6 +2087,7 @@ export interface ToolDispatchContext {
   sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"];
+  getSkillDiagnostics?: AgentToolExecutionRequest["context"]["getSkillDiagnostics"];
   /** Returns the set of deferred rules explicitly advertised to the current session. */
   getAdvertisedRules?: () => Array<{
     source: string;
@@ -2809,6 +2810,7 @@ export function createAgentToolRuntime(
                   toolAbortSignal: request.context.toolAbortSignal,
                   toolCallId: request.context.toolCallId,
                   getAdvertisedSkills: request.context.getAdvertisedSkills,
+                  getSkillDiagnostics: request.context.getSkillDiagnostics,
                   getAdvertisedRules: request.context.getAdvertisedRules,
                   onSkillLoad: request.context.onSkillLoad,
                   skillAllowedTools: request.context.skillAllowedTools,
@@ -4025,6 +4027,7 @@ async function dispatchToolCallWithTrackedApprovals(
         params,
         ctx.getAdvertisedSkills?.() ?? [],
         createVscodeAdvertisedArtifactProvider(),
+        ctx.getSkillDiagnostics?.() ?? [],
       );
       if (activation) ctx.onSkillLoad?.(activation);
       return result;

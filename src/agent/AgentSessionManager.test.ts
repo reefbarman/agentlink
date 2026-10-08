@@ -26,6 +26,7 @@ import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
 const mocks = vi.hoisted(() => {
   let skillCatalogProjection: any;
   let advertisedSkills: any[] = [];
+  let skillDiagnostics: any[] = [];
   const resolveTestPromptProfile = (session: {
     model: string;
     providerId?: string;
@@ -100,6 +101,7 @@ const mocks = vi.hoisted(() => {
       getAllMessages: vi.fn(() => []),
       getActiveSkillAllowedTools: vi.fn(() => undefined),
       getAdvertisedSkills: vi.fn(() => advertisedSkills),
+      getSkillDiagnostics: vi.fn(() => skillDiagnostics),
       getSkillCatalogProjection: vi.fn(() => skillCatalogProjection),
       restoreFromStore: vi.fn(function (this: any, data: any) {
         this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
@@ -134,6 +136,9 @@ const mocks = vi.hoisted(() => {
     setSkillCatalog(projection: any, skills: any[]) {
       skillCatalogProjection = projection;
       advertisedSkills = skills;
+    },
+    setSkillDiagnostics(diagnostics: any[]) {
+      skillDiagnostics = diagnostics;
     },
   };
 });
@@ -211,6 +216,7 @@ describe("AgentSessionManager host injection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.setSkillCatalog(undefined, []);
+    mocks.setSkillDiagnostics([]);
     mocks.getConfiguration.mockReturnValue({
       get: () => undefined,
       inspect: () => undefined,
@@ -405,6 +411,14 @@ describe("AgentSessionManager host injection", () => {
       resolvedDependencies: [],
       enabled: true,
     };
+    const diagnostic = {
+      code: "invalid-metadata",
+      severity: "warning",
+      message: "DISTINCTIVE_INVALID_SKILL_METADATA",
+      sourcePath: skillPath,
+      skillId: omittedSkill.id,
+    };
+    mocks.setSkillDiagnostics([diagnostic]);
     mocks.setSkillCatalog(
       {
         revision: "catalog-with-omission",
@@ -435,10 +449,12 @@ describe("AgentSessionManager host injection", () => {
       mgr as unknown as {
         captureSessionToolContext: (session: unknown) => {
           getAdvertisedSkills?: () => unknown[];
+          getSkillDiagnostics?: () => unknown[];
         };
       }
     ).captureSessionToolContext(session);
 
+    expect(captured.getSkillDiagnostics?.()).toEqual([diagnostic]);
     expect(captured.getAdvertisedSkills?.()).toEqual([
       {
         id: omittedSkill.id,

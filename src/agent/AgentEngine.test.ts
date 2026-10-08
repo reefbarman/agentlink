@@ -741,6 +741,75 @@ describe("AgentEngine", () => {
     vi.clearAllMocks();
   });
 
+  it("forwards prompt skill diagnostics through native tool execution", async () => {
+    const diagnostic = {
+      code: "invalid-metadata",
+      severity: "warning",
+      message: "DISTINCTIVE_INVALID_SKILL_METADATA",
+      sourcePath: "/test/.agentlink/skills/broken/SKILL.md",
+      skillId: "project:agentlink:.agentlink/skills/broken",
+    };
+    mocks.mockBuildPromptArtifacts.mockResolvedValueOnce({
+      systemPrompt: "mock system prompt",
+      promptProfile: {
+        profile: "compatibility",
+        source: "compatibility-default",
+        policyRevision: "prompt-profile-policy-v2",
+        providerId: "mock",
+        modelId: TEST_MODEL,
+      },
+      skills: [],
+      skillDiagnostics: [diagnostic],
+      promptBreakdown: {
+        sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
+        totalChars: 18,
+        estimatedTokens: 5,
+      },
+    });
+    const session = await makeSession();
+    session.addUserMessage("Track the diagnostic");
+    const provider = makeMockProvider();
+    let calls = 0;
+    provider.stream = async function* () {
+      if (calls++ === 0) {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "diagnostic-write",
+              name: "write_file",
+              input: { path: "/test/output.txt", content: "ok" },
+            },
+          ],
+        };
+      } else {
+        yield* makeProviderStream();
+      }
+      yield { type: "done" };
+    };
+    let terminalDiagnostics: unknown;
+    const engine = new AgentEngine(makeRegistry(provider));
+    setEngineToolContext(
+      engine,
+      {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+        sessionId: session.id,
+      },
+      async (request) => {
+        terminalDiagnostics = request.context.getSkillDiagnostics?.() ?? [];
+        return { success: true };
+      },
+    );
+
+    await collectEvents(engine.run(session));
+
+    expect(terminalDiagnostics).toEqual([diagnostic]);
+    expect(session.getLoadedSkills()).toEqual([]);
+  });
+
   it("forwards internal invocation and request exposure through the production runtime", async () => {
     const session = await makeSession();
     session.addUserMessage("Track this task");

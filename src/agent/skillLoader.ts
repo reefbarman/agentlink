@@ -899,16 +899,33 @@ export async function loadCanonicalSkillsForModes(
   modeSlugs: readonly string[],
   options: SkillCatalogOptions = {},
 ): Promise<SkillEntry[]> {
+  return (await loadCanonicalSkillCatalogForModes(cwd, modeSlugs, options))
+    .entries;
+}
+
+/** Keep diagnostics paired with the same discovered catalogue, not a later filesystem scan. */
+export async function loadCanonicalSkillCatalogForModes(
+  cwd: string,
+  modeSlugs: readonly string[],
+  options: SkillCatalogOptions = {},
+): Promise<Pick<SkillCatalogSnapshot, "entries" | "diagnostics">> {
   const merged = new Map<string, SkillEntry>();
+  const diagnostics = new Map<string, SkillDiagnostic>();
   for (const slug of modeSlugs) {
     const catalog = await loadSkillCatalog(cwd, slug, options);
     for (const skill of catalog.entries) {
       if (skill.enabled && !merged.has(skill.id)) merged.set(skill.id, skill);
     }
+    for (const diagnostic of catalog.diagnostics) {
+      diagnostics.set(JSON.stringify(diagnostic), diagnostic);
+    }
   }
-  return [...merged.values()].sort((left, right) =>
-    left.id.localeCompare(right.id),
-  );
+  return {
+    entries: [...merged.values()].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    ),
+    diagnostics: [...diagnostics.values()],
+  };
 }
 
 /** Compatibility union across modes with legacy short-name precedence. */

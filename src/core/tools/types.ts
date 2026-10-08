@@ -119,6 +119,14 @@ export type ToolResultArtifactWriter = (
   request: ToolResultArtifactWriteRequest,
 ) => Promise<ToolResultArtifactReference | null>;
 
+/** Session-scoped discovery evidence. This does not grant file or activation access. */
+export interface SkillCatalogDiagnostic {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+  sourcePath: string;
+}
+
 export interface AgentToolExecutionContext {
   sessionId: string;
   mode?: string;
@@ -174,6 +182,7 @@ export interface AgentToolExecutionContext {
   trackerCtx?: unknown;
   toolAbortSignal?: AbortSignal;
   getAdvertisedSkills?: () => AdvertisedSkillReference[];
+  getSkillDiagnostics?: () => readonly SkillCatalogDiagnostic[];
   getAdvertisedRules?: () => AdvertisedRuleReference[];
   onSkillLoad?: (activation: SkillLoadActivation) => void;
   skillAllowedTools?: readonly string[];

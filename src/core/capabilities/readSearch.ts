@@ -105,6 +105,8 @@ export interface ReadFileEnrichmentProvider {
 
 export interface AdvertisedArtifactProvider {
   resolvePath(inputPath: string): string;
+  /** Discovery identity only, without following symlinks or granting file access. */
+  resolveLexicalPath?(inputPath: string): string;
   normalizeExistingPath(filePath: string): string;
   readTextFile(filePath: string): Promise<string>;
 }
