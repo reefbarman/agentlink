@@ -87,6 +87,33 @@ describe("AgentPluginInstaller", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "hands hardened Git sources to git instead of failing simple-git safety checks",
+    async () => {
+      const installer = new AgentPluginInstaller({ stagingParent: staging });
+
+      // Port 1 on loopback refuses immediately, so git itself fails offline.
+      const failure = await installer
+        .acquire({
+          kind: "git",
+          remote: "https://127.0.0.1:1/agentlink/plugin.git",
+          display: "https://127.0.0.1:1/agentlink/plugin.git",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+      expect(failure).toMatchObject({ code: "git_failed" });
+      const message = (failure as Error).message;
+      expect(message).not.toMatch(/not permitted without enabling/);
+      expect(message).toMatch(
+        /127\.0\.0\.1|unable to access|Failed to connect/i,
+      );
+      await expect(fs.readdir(staging)).resolves.toEqual([]);
+    },
+  );
+
   it("imports a local directory into unique staging and discovers a plugin", async () => {
     const source = path.join(directory, "source");
     await writePlugin(source, "local-fixture");

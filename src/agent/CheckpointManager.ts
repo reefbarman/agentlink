@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import simpleGit, { type SimpleGit } from "simple-git";
+import { simpleGit, type SimpleGit } from "simple-git";
 
 import type { WorkspaceMutationSnapshot } from "./WorkspaceMutationCoordinator.js";
 
@@ -60,6 +60,18 @@ const PROTECTED_PATHS = [
   path.join(process.env.HOME ?? "", "Documents"),
   path.join(process.env.HOME ?? "", "Downloads"),
 ].filter(Boolean);
+
+const SHADOW_REPO_ENV = ["GIT_DIR", "GIT_WORK_TREE"] as const;
+
+// Non-GIT_* environment variables that git (or simple-git's safety checks)
+// treat as command hooks. Stripped from the inherited environment.
+const INHERITED_ENV_DENYLIST = new Set([
+  "EDITOR",
+  "VISUAL",
+  "PAGER",
+  "SSH_ASKPASS",
+  "PREFIX",
+]);
 
 // Files/directories to exclude from checkpoints
 const EXCLUDE_PATTERNS = [
@@ -160,15 +172,28 @@ export class CheckpointManager {
         binary: "git",
         maxConcurrentProcesses: 1,
         trimmed: true,
+        // getGitEnv() points git at the shadow repo explicitly.
+        allowEnvironment: SHADOW_REPO_ENV,
       });
 
       // Check if the shadow repo's own .git exists (not a parent repo)
       const isRepo = this.isShadowGitRepo();
 
       if (!isRepo) {
-        // git init needs to run WITHOUT GIT_DIR set (the dir doesn't exist yet)
+        // git init needs to run WITHOUT GIT_DIR set (the dir doesn't exist yet).
+        // `--template=` (empty) keeps a global init.templateDir from planting
+        // hooks in the shadow repo. simple-git treats any --template as unsafe,
+        // so opt in on a one-off instance used only for this init.
         const initEnv = this.getSanitizedBaseEnv();
-        await this.git.env(initEnv).init(["--template="]); // empty template, no hooks
+        await simpleGit({
+          baseDir: this.shadowDir,
+          binary: "git",
+          maxConcurrentProcesses: 1,
+          trimmed: true,
+          unsafe: { allowUnsafeTemplateDir: true },
+        })
+          .env(initEnv)
+          .init(["--template="]);
 
         // Now .git exists — configure it
         const env = this.getGitEnv();
@@ -471,11 +496,17 @@ export class CheckpointManager {
       string,
       string
     >;
-    delete env.GIT_DIR;
-    delete env.GIT_WORK_TREE;
-    delete env.GIT_INDEX_FILE;
-    delete env.GIT_OBJECT_DIRECTORY;
-    delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+    // Drop every inherited GIT_* variable (repository location, config
+    // overrides, askpass, ssh, pager, ...) plus the editor/pager variables git
+    // would honour. Checkpoints never need them, they could redirect the
+    // shadow repo, and simple-git rejects many of them outright when passed
+    // explicitly via env().
+    for (const key of Object.keys(env)) {
+      const upper = key.toUpperCase();
+      if (upper.startsWith("GIT_") || INHERITED_ENV_DENYLIST.has(upper)) {
+        delete env[key];
+      }
+    }
     return env;
   }
 

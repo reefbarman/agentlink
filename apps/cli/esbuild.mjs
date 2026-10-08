@@ -65,7 +65,14 @@ await chmod(output, 0o755);
 const outputMetadata =
   build.metafile.outputs[path.relative(process.cwd(), output)];
 if (!outputMetadata) throw new Error("CLI bundle metadata is unavailable");
-const OPTIONAL_EXTERNAL_IMPORTS = new Set(["bufferutil", "utf-8-validate"]);
+// Optional peers loaded lazily by bundled dependencies; absent at runtime they
+// only disable the feature that needs them (ws native speedups, and Kerberos
+// "Negotiate" proxy authentication in https-proxy-agent).
+const OPTIONAL_EXTERNAL_IMPORTS = new Set([
+  "bufferutil",
+  "kerberos",
+  "utf-8-validate",
+]);
 const externalImports = [
   ...new Set(
     outputMetadata.imports
@@ -282,6 +289,17 @@ async function collectBundledPackages(metafile) {
       packageManifest.version === "3.2.1"
     ) {
       licenseFiles = [path.join(root, "licenses", "yoga-layout-3.2.1-LICENSE")];
+    }
+    // Declared MIT but published without a licence file; the text is the
+    // sibling https-proxy-agent licence from the same author and monorepo.
+    if (
+      licenseFiles.length === 0 &&
+      packageManifest.name === "proxy-agent-negotiate" &&
+      packageManifest.version === "1.1.0"
+    ) {
+      licenseFiles = [
+        path.join(root, "licenses", "proxy-agent-negotiate-1.1.0-LICENSE"),
+      ];
     }
     if (licenseFiles.length === 0 && packageLicense) {
       const readme = (await readdir(packageRoot)).find((entry) =>

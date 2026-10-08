@@ -5,7 +5,7 @@ import {
 
 import path from "node:path";
 import { readdir } from "node:fs/promises";
-import { signAsync } from "@electron/osx-sign";
+import { sign } from "@electron/osx-sign";
 
 const APP_ID = "com.agentlink.desktop";
 
@@ -19,7 +19,7 @@ export default async function signDesktop({ appOutDir, packager }) {
   const app = path.join(appOutDir, `${packager.appInfo.productFilename}.app`);
   const resources = path.join(app, "Contents", "Resources");
   const binaries = await nativeAddons(resources);
-  await signAsync({
+  await sign({
     app,
     platform: "darwin",
     type: "development",
@@ -27,7 +27,7 @@ export default async function signDesktop({ appOutDir, packager }) {
     identityValidation: false, // Already validated against security find-identity.
     preEmbedProvisioningProfile: false,
     preAutoEntitlements: false,
-    // signAsync walks Contents recursively, including the native addons in
+    // sign walks Contents recursively, including the native addons in
     // app.asar.unpacked and extraResources. Avoid signing them twice as binaries.
     optionsForFile: () => ({
       entitlements: [],

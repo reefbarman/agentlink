@@ -12,7 +12,11 @@ import {
   JSONRPCMessageSchema,
   type JSONRPCMessage,
 } from "@modelcontextprotocol/sdk/types.js";
-import { EventSource } from "eventsource";
+// eventsource is ESM-only; this module compiles as CommonJS, so load it with a
+// dynamic import at connect time and keep a type-only static import.
+import type { EventSource } from "eventsource" with {
+  "resolution-mode": "import",
+};
 
 import { validateAgentPluginMcpHttpUrl } from "../core/agentPlugins/httpPolicy.js";
 
@@ -144,7 +148,8 @@ export class AgentPluginSseClientTransport implements Transport {
     return headers;
   }
 
-  private startOrAuth(): Promise<void> {
+  private async startOrAuth(): Promise<void> {
+    const { EventSource } = await import("eventsource");
     return new Promise((resolve, reject) => {
       const eventSource = new EventSource(this.url, {
         fetch: async (url, init) => {

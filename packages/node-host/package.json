@@ -39,7 +39,7 @@
     "@agentlink/protocol": "0.6.1",
     "@napi-rs/keyring": "2.1.0",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "https-proxy-agent": "7.0.6",
+    "https-proxy-agent": "9.1.0",
     "proxy-from-env": "2.1.0",
     "ws": "8.22.0"
   },

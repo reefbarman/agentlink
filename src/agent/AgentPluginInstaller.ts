@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 
-import simpleGit from "simple-git";
+import { simpleGit } from "simple-git";
 import { extract as extractTar } from "tar";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 
@@ -29,6 +29,28 @@ const MAX_COMPRESSION_RATIO = 1_000;
 const MAX_CANDIDATE_DEPTH = 6;
 const MAX_VISITED_DIRECTORIES = 5_000;
 const MAX_CANDIDATES = 100;
+// simple-git refuses GIT_CONFIG_COUNT, protocol.*.allow and core.hooksPath
+// regardless of value. Every value the Git source path sets is a fixed constant
+// that only restricts git (deny protocols, disable hooks), so opt in to exactly
+// those checks and keep every other simple-git safety check enabled.
+const HARDENING_ENV = [
+  "GIT_ALLOW_PROTOCOL",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_KEY_0",
+  "GIT_CONFIG_VALUE_0",
+  "GIT_CONFIG_KEY_1",
+  "GIT_CONFIG_VALUE_1",
+  "GIT_CONFIG_KEY_2",
+  "GIT_CONFIG_VALUE_2",
+  "GIT_CONFIG_KEY_3",
+  "GIT_CONFIG_VALUE_3",
+  "GIT_TERMINAL_PROMPT",
+] as const;
+const HARDENING_CONFIG_OPT_IN = {
+  allowUnsafeConfigEnvCount: true,
+  allowUnsafeProtocolOverride: true,
+  allowUnsafeHooksPath: true,
+} as const;
 const SKIPPED_DIRECTORIES = new Set([
   ".git",
   ".hg",
@@ -240,6 +262,8 @@ export class AgentPluginInstaller {
       binary: "git",
       maxConcurrentProcesses: 1,
       trimmed: true,
+      allowEnvironment: HARDENING_ENV,
+      unsafe: HARDENING_CONFIG_OPT_IN,
     }).env({
       GIT_ALLOW_PROTOCOL: "https:ssh",
       GIT_CONFIG_COUNT: "4",
@@ -272,6 +296,8 @@ export class AgentPluginInstaller {
         binary: "git",
         maxConcurrentProcesses: 1,
         trimmed: true,
+        allowEnvironment: HARDENING_ENV,
+        unsafe: HARDENING_CONFIG_OPT_IN,
       }).env({
         GIT_ALLOW_PROTOCOL: "https:ssh",
         GIT_CONFIG_COUNT: "3",
