@@ -1,0 +1,51 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    # Root lockfile covers the packages/* and apps/* workspaces.
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Let new releases settle before proposing them (security updates are not delayed).
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # Our own workspace packages are versioned by the release workflows.
+      - dependency-name: "@agentlink/*"
+      # Must track engines.vscode; bump deliberately alongside the minimum VS Code version.
+      - dependency-name: "@types/vscode"
+      # Must track the Node runtime we target, not the latest Node major.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # Matched first so provider and protocol SDKs always land together, including majors.
+      ai-sdks:
+        patterns:
+          - "openai"
+          - "@modelcontextprotocol/*"
+          - "@agentclientprotocol/*"
+          - "@anthropic-ai/*"
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      github-actions:
+        patterns:
+          - "*"
