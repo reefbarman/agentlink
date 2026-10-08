@@ -1278,7 +1278,7 @@
     "@types/vscode": "1.109.0",
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.3",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "monaco-editor": "^0.57.0",
