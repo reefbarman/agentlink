@@ -25,6 +25,7 @@ import {
 import { ProtectedRootLeaseCoordinator } from "./sandbox-protected-roots.mjs";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { generateProxyEnvVars } from "@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-utils.js";
 import { homedir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -412,6 +413,33 @@ test("constrains only the exact known SRT localhost clauses", () => {
   }
 });
 
+test("authenticates the installed SRT proxy environment without leaving unauthenticated URLs", () => {
+  const request = { shell: "/bin/bash", command: "/usr/bin/true" };
+  const networkProxies = {
+    httpPort: 41001,
+    socksPort: 41002,
+    credentials: { username: "agentlink", password: "a".repeat(64) },
+  };
+  const environment = generateProxyEnvVars(
+    networkProxies.httpPort,
+    networkProxies.socksPort,
+  );
+  const descriptor = [
+    request.shell,
+    "-c",
+    `env ${environment.map(shellQuote).join(" ")} /usr/bin/sandbox-exec -p 'profile' /bin/bash -c /usr/bin/true`,
+  ];
+  const authenticated = bindProxyCredentialsToRuntimeDescriptor(
+    descriptor,
+    request,
+    networkProxies,
+  );
+  assert.equal(authenticated[2].split("http://agentlink:").length - 1, 10);
+  assert.equal(authenticated[2].split("socks5h://agentlink:").length - 1, 2);
+  assert.equal(authenticated[2].includes("http://localhost:41001"), false);
+  assert.equal(authenticated[2].includes("socks5h://localhost:41002"), false);
+});
+
 test("binds generated credentials only to the exact external proxy descriptor contract", () => {
   const request = {
     shell: "/bin/bash",
@@ -423,13 +451,20 @@ test("binds generated credentials only to the exact external proxy descriptor co
     "-c",
     [
       "env",
-      ...Array.from(
-        { length: 8 },
-        (_, index) => `P${index}=http://localhost:41001`,
-      ),
-      ...Array.from(
-        { length: 4 },
-        (_, index) => `S${index}=socks5h://localhost:41002`,
+      ...[
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "GRPC_PROXY",
+        "grpc_proxy",
+        "DOCKER_HTTP_PROXY",
+        "DOCKER_HTTPS_PROXY",
+      ].map((name) => `${name}=http://localhost:41001`),
+      ...["FTP_PROXY", "ftp_proxy"].map(
+        (name) => `${name}=socks5h://localhost:41002`,
       ),
       "/usr/bin/sandbox-exec -p 'profile' /bin/bash -c /usr/bin/true",
     ].join(" "),
@@ -449,8 +484,8 @@ test("binds generated credentials only to the exact external proxy descriptor co
   );
   assert.equal(authenticated[0], unauthenticated[0]);
   assert.equal(authenticated[1], unauthenticated[1]);
-  assert.equal(authenticated[2].split("http://agentlink:").length - 1, 8);
-  assert.equal(authenticated[2].split("socks5h://agentlink:").length - 1, 4);
+  assert.equal(authenticated[2].split("http://agentlink:").length - 1, 10);
+  assert.equal(authenticated[2].split("socks5h://agentlink:").length - 1, 2);
   assert.equal(authenticated[2].includes("http://localhost:41001"), false);
   assert.equal(authenticated[2].includes("socks5h://localhost:41002"), false);
   const launch = describeLaunch(authenticated, {}, "/workspace");
@@ -459,19 +494,31 @@ test("binds generated credentials only to the exact external proxy descriptor co
     false,
   );
 
-  assert.throws(
-    () =>
-      bindProxyCredentialsToRuntimeDescriptor(
-        [
-          unauthenticated[0],
-          unauthenticated[1],
-          unauthenticated[2].replace("P7=http://localhost:41001 ", ""),
-        ],
-        request,
-        networkProxies,
-      ),
-    /proxy contract drifted for HTTP proxy URLs: expected 8, found 7/,
-  );
+  for (const [assignment, label, expectedCount] of [
+    ["HTTP_PROXY=http://localhost:41001", "HTTP", 10],
+    ["FTP_PROXY=socks5h://localhost:41002", "SOCKS", 2],
+  ]) {
+    for (const [replacement, actualCount] of [
+      ["", expectedCount - 1],
+      [`${assignment} EXTRA_${assignment} `, expectedCount + 1],
+    ]) {
+      assert.throws(
+        () =>
+          bindProxyCredentialsToRuntimeDescriptor(
+            [
+              unauthenticated[0],
+              unauthenticated[1],
+              unauthenticated[2].replace(`${assignment} `, replacement),
+            ],
+            request,
+            networkProxies,
+          ),
+        new RegExp(
+          `proxy contract drifted for ${label} proxy URLs: expected ${expectedCount}, found ${actualCount}`,
+        ),
+      );
+    }
+  }
   assert.throws(
     () =>
       bindProxyCredentialsToRuntimeDescriptor(unauthenticated, request, {

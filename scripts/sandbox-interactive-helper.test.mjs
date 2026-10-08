@@ -169,7 +169,7 @@ function createHarness({
         argv: [
           "/bin/bash",
           "-c",
-          `env ${Array.from({ length: 8 }, () => httpProxy).join(" ")} ${Array.from({ length: 4 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p '${loopbackRules}' /bin/bash -c /usr/bin/true`,
+          `env ${Array.from({ length: 10 }, () => httpProxy).join(" ")} ${Array.from({ length: 2 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p '${loopbackRules}' /bin/bash -c /usr/bin/true`,
         ],
       };
     },

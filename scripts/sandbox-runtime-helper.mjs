@@ -409,18 +409,21 @@ export function bindProxyCredentialsToRuntimeDescriptor(
   const authenticatedHttpUrl = `http://${username}:${password}@localhost:${networkProxies.httpPort}`;
   const authenticatedSocksUrl = `socks5h://${username}:${password}@localhost:${networkProxies.socksPort}`;
   let wrapper = argv[2];
+  // SRT 0.0.79 routes ALL_PROXY and GRPC_PROXY (and their lowercase aliases)
+  // through HTTP CONNECT. Only FTP_PROXY and ftp_proxy still use SOCKS URLs.
+  // Keep exact counts so unreviewed runtime-wrapper changes fail closed.
   wrapper = replaceExactCount(
     wrapper,
     httpUrl,
     authenticatedHttpUrl,
-    8,
+    10,
     "HTTP proxy URLs",
   );
   wrapper = replaceExactCount(
     wrapper,
     socksUrl,
     authenticatedSocksUrl,
-    4,
+    2,
     "SOCKS proxy URLs",
   );
   const authenticated = [argv[0], argv[1], wrapper];
