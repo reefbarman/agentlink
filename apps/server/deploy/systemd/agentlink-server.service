@@ -1,0 +1,68 @@
+# AgentLink assistant server (Ubuntu / systemd).
+#
+# Install (as root):
+#   useradd --system --home-dir /var/lib/agentlink --shell /usr/sbin/nologin agentlink
+#   install -D -m 0644 agentlink-server.js /opt/agentlink/server/agentlink-server.js
+#   install -D -m 0640 -g agentlink server.json /etc/agentlink/server.json
+#   install -d -o agentlink -g agentlink -m 0750 /srv/agentlink/projects
+#   install -m 0644 agentlink-server.service /etc/systemd/system/
+#   systemd-analyze verify /etc/systemd/system/agentlink-server.service
+#   systemctl daemon-reload && systemctl enable --now agentlink-server
+#   journalctl -u agentlink-server   # shows the one-time setup credential
+#
+# Adjust ExecStart if node is not /usr/bin/node (Node 22.19 or newer).
+
+[Unit]
+Description=AgentLink assistant server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=agentlink
+Group=agentlink
+ExecStart=/usr/bin/node /opt/agentlink/server/agentlink-server.js --config /etc/agentlink/server.json
+Environment=NODE_ENV=production
+
+# Provider API keys: encrypt with systemd-creds (TPM-bound where available),
+#   systemd-creds encrypt --name=openai-api-key key.txt /etc/agentlink/credentials/openai-api-key.cred
+# then reference it in server.json as "apiKey": { "credential": "openai-api-key" }.
+#LoadCredentialEncrypted=openai-api-key:/etc/agentlink/credentials/openai-api-key.cred
+
+# /var/lib/agentlink holds access state and session data; /etc/agentlink is
+# read-only to the service.
+StateDirectory=agentlink
+StateDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=5s
+# Running turns are stopped and awaited on SIGTERM before exit.
+KillMode=mixed
+TimeoutStopSec=60s
+
+# Hardening. Node's JIT needs writable executable memory, so
+# MemoryDenyWriteExecute is deliberately not set.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/agentlink/projects
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

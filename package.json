@@ -1169,7 +1169,7 @@
   },
   "scripts": {
     "build": "npm run build:workspaces && npm run telemetry:inventory:generate && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build:cjs --workspace packages/node-host && npm run build --workspace apps/desktop && npm run build --workspace apps/cli",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build:cjs --workspace packages/node-host && npm run build --workspace apps/desktop && npm run build --workspace apps/cli && npm run build --workspace apps/server",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",

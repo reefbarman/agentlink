@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "dataRoot": "/usr/local/var/agentlink",
+  "listen": { "host": "192.168.1.21", "port": 8443 },
+  "publicOrigins": ["https://assistant-mini.home.arpa:8443"],
+  "tls": {
+    "certFile": "/usr/local/etc/agentlink/tls/server.crt",
+    "keyFile": "/usr/local/etc/agentlink/tls/server.key"
+  },
+  "defaultModel": { "providerId": "openai", "modelId": "gpt-5.5" },
+  "providers": [
+    {
+      "type": "openai",
+      "id": "openai",
+      "modelIds": ["gpt-5.5"],
+      "apiKey": {
+        "file": "/usr/local/etc/agentlink/credentials/openai-api-key"
+      }
+    }
+  ],
+  "projects": [
+    {
+      "id": "home",
+      "label": "Home",
+      "root": "/usr/local/var/agentlink/projects/home"
+    }
+  ],
+  "ripgrepPath": "/opt/homebrew/bin/rg"
+}

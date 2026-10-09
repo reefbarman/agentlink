@@ -5,6 +5,27 @@ export {
   type CreateAssistantServerOptions,
 } from "./assistantServer.js";
 export {
+  preflightAssistantService,
+  startAssistantService,
+  type AssistantService,
+  type AssistantServiceOptions,
+} from "./assistantService.js";
+export {
+  ASSISTANT_SERVER_USAGE,
+  runAssistantServerCli,
+  type AssistantServerCliIo,
+} from "./serverCli.js";
+export {
+  loadAssistantServerConfig,
+  parseAssistantServerConfig,
+  resolveWorkspaceProviders,
+  type AssistantServerCompatibleModelConfig,
+  type AssistantServerConfig,
+  type AssistantServerProjectConfig,
+  type AssistantServerProviderConfig,
+  type AssistantServerSecretSource,
+} from "./serverConfig.js";
+export {
   AttemptLimiter,
   type AttemptLimiterOptions,
 } from "./AttemptLimiter.js";

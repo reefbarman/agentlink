@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AgentLink assistant server (macOS / launchd LaunchDaemon).
+
+  Install (as root):
+    create a hidden _agentlink service user and group (dscl or sysadminctl)
+    install -d -o _agentlink -g _agentlink -m 0700 /usr/local/var/agentlink /usr/local/var/log/agentlink
+    install -m 0644 agentlink-server.js /usr/local/lib/agentlink/server/agentlink-server.js
+    install -m 0640 -g _agentlink server.json /usr/local/etc/agentlink/server.json
+    install -m 0644 local.agentlink.server.plist /Library/LaunchDaemons/
+    plutil -lint /Library/LaunchDaemons/local.agentlink.server.plist
+    launchctl bootstrap system /Library/LaunchDaemons/local.agentlink.server.plist
+
+  The one-time setup credential is written to the log file below, which must
+  stay readable only by the service user and administrators.
+  Adjust the node path if it is not /opt/homebrew/bin/node (Node 22.19+).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.agentlink.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/usr/local/lib/agentlink/server/agentlink-server.js</string>
+    <string>--config</string>
+    <string>/usr/local/etc/agentlink/server.json</string>
+  </array>
+  <key>UserName</key>
+  <string>_agentlink</string>
+  <key>GroupName</key>
+  <string>_agentlink</string>
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/agentlink</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <!-- Running turns are stopped and awaited on SIGTERM before exit. -->
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+  <!-- 0077: new files are private to the service user. -->
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/agentlink/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/agentlink/server.log</string>
+</dict>
+</plist>

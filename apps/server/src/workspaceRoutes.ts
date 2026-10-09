@@ -360,7 +360,11 @@ export function createAssistantWorkspaceRoutes(
       if (snapshot.pendingInteraction) {
         throw new HttpError(409, "interaction_pending");
       }
-      if (snapshot.phase !== "idle") throw new HttpError(409, "session_busy");
+      // Matches the engine: an interrupted (cancelled, failed, or recovered)
+      // turn leaves the session runnable.
+      if (snapshot.phase !== "idle" && snapshot.phase !== "interrupted") {
+        throw new HttpError(409, "session_busy");
+      }
       await assertStillAuthorized(auth, false);
       assertStartable(key);
       const taskId = startTask(

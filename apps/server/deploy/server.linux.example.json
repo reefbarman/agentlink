@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "dataRoot": "/var/lib/agentlink",
+  "listen": { "host": "192.168.1.20", "port": 8443 },
+  "publicOrigins": ["https://assistant.home.arpa:8443"],
+  "tls": {
+    "certFile": "/etc/agentlink/tls/server.crt",
+    "keyFile": "/etc/agentlink/tls/server.key"
+  },
+  "defaultModel": { "providerId": "openai", "modelId": "gpt-5.5" },
+  "providers": [
+    {
+      "type": "openai",
+      "id": "openai",
+      "modelIds": ["gpt-5.5"],
+      "apiKey": { "credential": "openai-api-key" }
+    }
+  ],
+  "projects": [
+    { "id": "home", "label": "Home", "root": "/srv/agentlink/projects/home" }
+  ],
+  "ripgrepPath": "/usr/bin/rg"
+}

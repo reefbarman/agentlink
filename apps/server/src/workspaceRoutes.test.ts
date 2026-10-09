@@ -540,6 +540,59 @@ describe("assistant workspace routes", () => {
     reconnected.close();
   });
 
+  it("accepts a new turn after the owner cancels one", async () => {
+    const harness = await startHarness();
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    harness.fetch
+      .mockImplementationOnce(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            const signal = init?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          }),
+      )
+      .mockResolvedValueOnce(completion("after cancel"));
+    await expect(
+      harness.request({
+        method: "POST",
+        path: `${base}/turns`,
+        session: harness.owner,
+        body: { text: "long task" },
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    await vi.waitFor(() => expect(harness.fetch).toHaveBeenCalledTimes(1));
+    await expect(
+      harness.request({
+        method: "POST",
+        path: `${base}/cancel`,
+        session: harness.owner,
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    await harness.routes.whenIdle("home", sessionId);
+
+    // A cancelled turn leaves the session interrupted, which is runnable.
+    const snapshot = await harness.request({
+      path: base,
+      session: harness.owner,
+    });
+    expect(
+      (snapshot.body as { session: { phase: string } }).session.phase,
+    ).toBe("interrupted");
+    await expect(
+      harness.request({
+        method: "POST",
+        path: `${base}/turns`,
+        session: harness.owner,
+        body: { text: "try again" },
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    await harness.routes.whenIdle("home", sessionId);
+    await expect(readPending(harness, base)).resolves.toBeUndefined();
+  });
+
   it("maps project access explicitly", async () => {
     const authorizeProject = vi.fn<AuthorizeAssistantProject>(
       ({ access }) => access !== "approve",
