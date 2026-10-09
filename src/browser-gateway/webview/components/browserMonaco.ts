@@ -1,4 +1,7 @@
-import "monaco-editor/features/diffEditor/register";
+// Monaco's language-worker helper loads all editor contributions lazily. Load
+// their services before the first editor initialises the standalone collection,
+// otherwise later contributions reference services that collection never saw.
+import "monaco-editor/features/register.all";
 import "monaco-editor/languages/definitions/cpp/register";
 import "monaco-editor/languages/definitions/go/register";
 import "monaco-editor/languages/definitions/java/register";
