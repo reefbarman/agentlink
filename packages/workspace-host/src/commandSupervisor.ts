@@ -1,7 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+
+import {
+  createLocalWorkspaceExecutionBackend,
+  WorkspaceProcessLaunchError,
+  type WorkspaceExecutionBackend,
+  type WorkspaceProcessExit,
+  type WorkspaceProcessHandle,
+} from "./workspaceExecutionBackend.js";
 
 export type WorkspaceCommandMode = "foreground" | "background";
 export type WorkspaceCommandState =
@@ -86,6 +93,8 @@ export interface CreateWorkspaceCommandSupervisorOptions {
   readonly terminationGraceMs?: number;
   readonly now?: () => number;
   readonly createCommandId?: () => string;
+  /** Process launcher. Defaults to unsandboxed local spawning. */
+  readonly executionBackend?: WorkspaceExecutionBackend;
 }
 
 interface RetainedChunk {
@@ -95,7 +104,7 @@ interface RetainedChunk {
 }
 
 interface LiveCommand {
-  readonly child: ChildProcess;
+  readonly process: WorkspaceProcessHandle;
   readonly completion: Promise<WorkspaceCommandRecord>;
   readonly finish: (
     state: WorkspaceCommandState,
@@ -130,6 +139,7 @@ export class WorkspaceCommandSupervisor {
   private readonly terminationGraceMs: number;
   private readonly now: () => number;
   private readonly createCommandId: () => string;
+  private readonly executionBackend: WorkspaceExecutionBackend;
   private persistTail: Promise<void> = Promise.resolve();
   private persistTimer: NodeJS.Timeout | undefined;
   private persistError: Error | undefined;
@@ -145,6 +155,8 @@ export class WorkspaceCommandSupervisor {
       options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
     this.now = options.now ?? Date.now;
     this.createCommandId = options.createCommandId ?? randomUUID;
+    this.executionBackend =
+      options.executionBackend ?? createLocalWorkspaceExecutionBackend();
   }
 
   static async create(
@@ -329,12 +341,26 @@ export class WorkspaceCommandSupervisor {
     if (signal?.aborted) throw new Error("command_cancelled_before_launch");
 
     const startedAt = this.now();
-    const child = spawn(launch.executable, [...launch.args], {
-      cwd: launch.cwd,
-      env: { ...launch.environment },
-      shell: false,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+    // Output reported before the live record exists is replayed in order.
+    let earlyOutput: Array<["stdout" | "stderr", Buffer]> | undefined = [];
+    const child = this.executionBackend.launchProcess({
+      request: {
+        schemaVersion: 1,
+        operationId: launch.commandId,
+        ownerId: launch.ownerId,
+        sessionId: launch.sessionId,
+        turnId: launch.turnId,
+        policyFingerprint: launch.policyFingerprint,
+        operationDigest: launch.operationDigest,
+        executable: launch.executable,
+        args: [...launch.args],
+        cwd: launch.cwd,
+        environment: { ...launch.environment },
+      },
+      onOutput: (stream, bytes) => {
+        if (earlyOutput) earlyOutput.push([stream, Buffer.from(bytes)]);
+        else this.appendProcessOutput(launch.commandId, stream, bytes);
+      },
     });
     let settled = false;
     let resolveCompletion!: (record: WorkspaceCommandRecord) => void;
@@ -367,7 +393,7 @@ export class WorkspaceCommandSupervisor {
         .then(() => resolveCompletion(structuredClone(record)));
     };
     const live: LiveCommand = {
-      child,
+      process: child,
       completion,
       finish,
       redactionValues: sensitiveEnvironmentValues(launch.environment),
@@ -387,16 +413,19 @@ export class WorkspaceCommandSupervisor {
     };
     this.records.set(launch.commandId, running);
     this.live.set(launch.commandId, live);
+    const replay = earlyOutput;
+    earlyOutput = undefined;
+    for (const [stream, bytes] of replay) {
+      this.appendProcessOutput(launch.commandId, stream, bytes);
+    }
 
-    child.stdout?.on("data", (bytes: Buffer | string) => {
-      this.appendProcessOutput(launch.commandId, "stdout", Buffer.from(bytes));
-    });
-    child.stderr?.on("data", (bytes: Buffer | string) => {
-      this.appendProcessOutput(launch.commandId, "stderr", Buffer.from(bytes));
-    });
-    // Wait for `close`, not merely `exit`, so the retained record includes all
-    // stdout/stderr delivered before the process handles close.
-    child.once("close", (code, exitSignal) => {
+    // The backend resolves `exited` only after output streams close, so the
+    // retained record includes all stdout/stderr delivered before exit. A
+    // failed start is recorded by the launch-failure path below instead.
+    const onExit = ({
+      exitCode: code,
+      signal: exitSignal,
+    }: WorkspaceProcessExit): void => {
       const current = this.records.get(launch.commandId);
       if (
         !current ||
@@ -406,15 +435,16 @@ export class WorkspaceCommandSupervisor {
       }
       finish(
         live.terminalState ?? (code === 0 ? "completed" : "failed"),
-        code ?? undefined,
-        exitSignal ?? undefined,
+        code,
+        exitSignal,
       );
-    });
+    };
+    void child.started.then(
+      () => child.exited.then(onExit),
+      () => undefined,
+    );
 
-    await new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
-    }).catch(async (error) => {
+    await child.started.catch(async (error: unknown) => {
       const failed: WorkspaceCommandRecord = {
         ...publicRecord(launch, startedAt),
         state: "failed",
@@ -426,7 +456,11 @@ export class WorkspaceCommandSupervisor {
       this.records.set(launch.commandId, failed);
       this.live.delete(launch.commandId);
       await this.persist();
-      throw new Error(`command_launch_failed:${errorCode(error) ?? "unknown"}`);
+      const code =
+        error instanceof WorkspaceProcessLaunchError
+          ? error.code
+          : (errorCode(error) ?? "unknown");
+      throw new Error(`command_launch_failed:${code}`);
     });
 
     if (!settled) {
@@ -545,7 +579,7 @@ export class WorkspaceCommandSupervisor {
       return true;
     }
     live.terminalState = terminalState;
-    if (!signalProcess(live.child, "SIGTERM")) {
+    if (!live.process.signal("SIGTERM")) {
       await this.markInterrupted(commandId);
       return false;
     }
@@ -554,7 +588,7 @@ export class WorkspaceCommandSupervisor {
       delay(this.terminationGraceMs).then(() => false),
     ]);
     if (exited) return true;
-    if (!signalProcess(live.child, "SIGKILL")) {
+    if (!live.process.signal("SIGKILL")) {
       await this.markInterrupted(commandId);
       return false;
     }
@@ -767,17 +801,6 @@ function redactBuffer(bytes: Buffer, values: readonly Buffer[]): Buffer {
     }
   }
   return redacted;
-}
-
-function signalProcess(child: ChildProcess, signal: NodeJS.Signals): boolean {
-  if (!child.pid) return false;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-    return true;
-  } catch (error) {
-    return errorCode(error) === "ESRCH";
-  }
 }
 
 function delay(milliseconds: number): Promise<void> {

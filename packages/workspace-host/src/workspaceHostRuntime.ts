@@ -81,7 +81,13 @@ import {
   resolveWorkspaceProject,
   type WorkspaceProjectIdentity,
 } from "./projectIdentity.js";
-import { composeWorkspacePromptProfile } from "./promptProfile.js";
+import {
+  composeWorkspaceIdentity,
+  composeWorkspacePromptProfile,
+  validateWorkspacePromptIdentity,
+  type WorkspacePromptIdentity,
+} from "./promptProfile.js";
+import type { WorkspaceExecutionBackend } from "./workspaceExecutionBackend.js";
 
 export interface CreateWorkspaceHostOptions {
   readonly projectRoot: string;
@@ -92,6 +98,11 @@ export interface CreateWorkspaceHostOptions {
   readonly defaultReasoningEffort?: CoreReasoningEffort;
   readonly requestLimits?: WorkspaceModelRequestLimits;
   readonly instructions?: string;
+  /**
+   * Optional assistant identity. When set, prompts lead with
+   * `You are AgentLink, <role>.` for foreground and background sessions.
+   */
+  readonly promptIdentity?: WorkspacePromptIdentity;
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
@@ -104,6 +115,12 @@ export interface CreateWorkspaceHostOptions {
   readonly commands?: {
     readonly enabled: true;
     readonly shellExecutable?: string;
+    /**
+     * Process launcher for `execute_command`. Defaults to local spawning.
+     * Supplying one requires an explicit `resolveEnvironment` so the host
+     * process environment is never forwarded implicitly.
+     */
+    readonly executionBackend?: WorkspaceExecutionBackend;
     readonly resolveEnvironment?: () =>
       | NodeJS.ProcessEnv
       | Promise<NodeJS.ProcessEnv>;
@@ -238,6 +255,17 @@ export interface WorkspaceHost {
 export async function createWorkspaceHost(
   options: CreateWorkspaceHostOptions,
 ): Promise<WorkspaceHost> {
+  if (options.promptIdentity) {
+    validateWorkspacePromptIdentity(options.promptIdentity);
+  }
+  if (
+    options.commands?.executionBackend &&
+    !options.commands.resolveEnvironment
+  ) {
+    throw new Error(
+      "A command execution backend requires an explicit resolveEnvironment",
+    );
+  }
   const project = await resolveWorkspaceProject(options.projectRoot);
   const principal: AgentPrincipal = {
     tenantId: "local",
@@ -303,6 +331,7 @@ export async function createWorkspaceHost(
     ? await WorkspaceCommandSupervisor.create({
         stateDirectory: path.join(projectDataRoot, "commands"),
         ownerId: commandOwnerId,
+        executionBackend: options.commands.executionBackend,
       })
     : undefined;
   const commandTools =
@@ -771,7 +800,7 @@ export async function createWorkspaceHost(
           ? resolvedArtifacts
           : resolvedArtifacts?.instructions;
       return [
-        "You are AgentLink's standalone local coding assistant.",
+        composeWorkspaceIdentity(options.promptIdentity),
         `The canonical project root is ${project.root}.`,
         composeWorkspacePromptProfile(model),
         options.files
