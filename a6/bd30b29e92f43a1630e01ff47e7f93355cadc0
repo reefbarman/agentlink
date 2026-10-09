@@ -1,0 +1,56 @@
+apps/server/deploy/container/smoke-test.sh
+  h_e08a86bb3a33a2 122-183
+apps/server/README.md
+  h_e08a86bb3a33a2 40,49-50,81,92-102
+  s_03cba6800136cf::t_3f8baa474f5240 39,41-48
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 120,139,148-168,170-182
+  s_03cba6800136cf::t_0150e2632a1bed 169
+apps/server/src/egressGateway.test.ts
+  h_e08a86bb3a33a2 1-370
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 115-135,175
+  s_03cba6800136cf::t_70dce1afb3f4d7 174
+apps/server/deploy/container/compose.worker-egress.yaml
+  h_e08a86bb3a33a2 1-4,8-9
+apps/server/src/egressGateway.ts
+  h_e08a86bb3a33a2 1-451
+apps/server/src/commandWorker.test.ts
+  h_e08a86bb3a33a2 10-11,217-239
+  s_03cba6800136cf::t_3fa152a38fd187 9,12,240-241
+apps/server/deploy/container/compose.yaml
+  h_e08a86bb3a33a2 20-22,85-86,103-134,138-143
+apps/server/deploy/container/server.example.json
+  h_e08a86bb3a33a2 20-21
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 329-367
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 10-13,56-57,96-106,110,127-129,365-367,389-445,447-451,455-463
+  s_03cba6800136cf::t_8b57a6d4f86cf9 9,446,452-454,464-465
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 53-57,385,389,410-412,416-450
+  s_03cba6800136cf::t_171d241dacf9e4 451-452
+apps/server/deploy/container/server.with-meridian.example.json
+  h_e08a86bb3a33a2 63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a6bd30b29e92f43a1630e01ff47e7f93355cadc0",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_03cba6800136cf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb40c611-e88a-485a-a4b4-77166a613599",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
