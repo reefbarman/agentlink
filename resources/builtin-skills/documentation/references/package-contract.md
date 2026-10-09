@@ -12,7 +12,7 @@ This bundled reference is generated from the extension's `package.json` during b
 | Version        | `1.30.0`    |
 | Publisher      | `agentlink` |
 | License        | `MIT`       |
-| VS Code engine | `^1.109.0`  |
+| VS Code engine | `^1.140.0`  |
 | Node.js engine | `>=22.19.0` |
 
 ## Commands

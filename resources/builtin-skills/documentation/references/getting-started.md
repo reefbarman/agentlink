@@ -4,6 +4,8 @@ AgentLink is a coding-agent harness built into VS Code, with standalone Desktop 
 
 ## Install
 
+The extension requires VS Code 1.140.0 or newer. Older VS Code versions cannot install the current release.
+
 ### From a GitHub release
 
 Use the installer to download the VSIX for the machine running the VS Code extension host:
