@@ -1,0 +1,42 @@
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 19,608-609,755-756
+apps/cli/src/tui/TextArea.test.tsx
+  h_e08a86bb3a33a2 1-177
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 136-137
+apps/cli/package.json
+  h_e08a86bb3a33a2 39
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 1078-1108,1207-1208
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/cli/src/tui/TextArea.tsx
+  h_e08a86bb3a33a2 1-337
+package-lock.json
+  s_c7b59284c230c2::t_a5a1e2f586a9cb 107,9273-9275,9279,9281,9283,9288,9292-9293,9296,9298,9300,9307-9308,9388-9390,9394,9401-9403,9407,9413-9425,12004-12006,12010,12016,12340-12342
+apps/cli/THIRD_PARTY_NOTICES.md
+  h_e08a86bb3a33a2 1263,2266,3296,3299,3301,3305,3307,3309,3311,3313,3316,3322,3342,3345,3451,3454
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdc9bc7d8db870f651a8b96b667d6868a37a5cce",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c7b59284c230c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "496ff00d-2830-4237-b91f-5ef189c2c23c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
