@@ -12,6 +12,11 @@ import {
   type AssistantServer,
 } from "./assistantServer.js";
 import {
+  createServerCodexRuntime,
+  describeCodexSignIn,
+  hasCodexProvider,
+} from "./codexSignIn.js";
+import {
   FileLockHeldError,
   acquireFileLock,
   releaseFileLock,
@@ -62,7 +67,7 @@ export function serverTlsDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "tls");
 }
 
-export type AssistantServicePreflight =
+export type AssistantServicePreflight = (
   | {
       readonly kind: "files";
       readonly tls: { readonly cert: Buffer; readonly key: Buffer };
@@ -71,7 +76,11 @@ export type AssistantServicePreflight =
       readonly kind: "local-ca";
       /** Undefined until the first start creates the CA. */
       readonly caFingerprint256?: string;
-    };
+    }
+) & {
+  /** Present when a codex provider is configured. */
+  readonly codexSignIn?: string;
+};
 
 /**
  * Check everything that can be checked without taking locks, listening, or
@@ -107,6 +116,15 @@ export async function preflightAssistantService(
     await fs.access(config.ripgrepPath, fs.constants.X_OK).catch(() => {
       throw new Error(`ripgrepPath is not executable: ${config.ripgrepPath}`);
     });
+  }
+  if (hasCodexProvider(config)) {
+    // A missing sign-in is reported, not fatal: the server can start and be
+    // signed in afterwards without a restart.
+    const codex = createServerCodexRuntime(config);
+    await resolveWorkspaceProviders(config.providers, env, {
+      codexCredentialProvider: codex.provider,
+    });
+    return { ...result, codexSignIn: await describeCodexSignIn(codex) };
   }
   await resolveWorkspaceProviders(config.providers, env);
   return result;
@@ -162,7 +180,7 @@ async function startLocalCertificates(
   } catch (error) {
     if (error instanceof FileLockHeldError) {
       throw new Error(
-        `Another agentlink-server process is using ${directory}; stop it first`,
+        `Another agentlink-server process is using ${directory}; stop it first. A lock left by a crash is replaced automatically (after up to a minute if it came from another container); one written by an older version must be deleted by hand: ${lockPath}`,
       );
     }
     throw error;
@@ -251,7 +269,15 @@ export async function startAssistantService(
       ? await startLocalCertificates(config, options)
       : undefined;
   const tls = preflight.kind === "files" ? preflight.tls : certificates!.tls;
-  const providers = await resolveWorkspaceProviders(config.providers, env);
+  const codex = hasCodexProvider(config)
+    ? createServerCodexRuntime(config, log)
+    : undefined;
+  if (preflight.codexSignIn) log(preflight.codexSignIn);
+  const providers = await resolveWorkspaceProviders(
+    config.providers,
+    env,
+    codex ? { codexCredentialProvider: codex.provider } : {},
+  );
   const ownerId = `agentlink-server-${process.pid}-${randomUUID()}`;
 
   const hosts: Array<{ readonly id: string; readonly host: WorkspaceHost }> =

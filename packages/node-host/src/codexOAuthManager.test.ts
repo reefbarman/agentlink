@@ -528,3 +528,197 @@ describe("CodexOAuthManager", () => {
     expect(finalAccounts[0].id).toBe(accountB.account.id);
   });
 });
+
+describe("CodexOAuthManager shared-storage cleanup", () => {
+  it("cleans up unreadable state only under the lock, against a fresh read", async () => {
+    let value: string | undefined = "not json";
+    const valid = JSON.stringify({
+      version: 2,
+      activeAccountId: "a",
+      accounts: [
+        {
+          id: "a",
+          label: "Signed in elsewhere",
+          accessToken: "at",
+          refreshToken: "rt",
+          expiresAt: Date.now() + 3_600_000,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    let lockDepth = 0;
+    const storage = {
+      get: vi.fn(async () => value),
+      store: vi.fn(async (next: string) => {
+        expect(lockDepth).toBe(1);
+        value = next;
+      }),
+      delete: vi.fn(async () => {
+        expect(lockDepth).toBe(1);
+        value = undefined;
+      }),
+      withMutationLock: vi.fn(async <T>(operation: () => Promise<T>) => {
+        expect(lockDepth).toBe(0);
+        // Another process signed in while this one was reading.
+        value = valid;
+        lockDepth += 1;
+        try {
+          return await operation();
+        } finally {
+          lockDepth -= 1;
+        }
+      }),
+    };
+    const manager = new CodexOAuthManager(() => {});
+    manager.initializeStorage(storage as never);
+    const accounts = await manager.listAccounts();
+    expect(accounts.map((account) => account.label)).toEqual([
+      "Signed in elsewhere",
+    ]);
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(value).toBe(valid);
+
+    // Still unreadable under the lock: deleted there.
+    value = "still not json";
+    storage.withMutationLock.mockImplementationOnce(
+      async (operation: () => Promise<unknown>) => {
+        lockDepth += 1;
+        try {
+          return await operation();
+        } finally {
+          lockDepth -= 1;
+        }
+      },
+    );
+    await expect(manager.listAccounts()).resolves.toEqual([]);
+    expect(storage.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up once with storage that has no cross-process lock", async () => {
+    const context = createContext(
+      new Map([["codex-oauth-credentials", "not json"]]),
+    );
+    const manager = new CodexOAuthManager(() => {});
+    manager.initialize(context as never);
+    await expect(manager.listAccounts()).resolves.toEqual([]);
+    expect(context.secrets.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies listeners only after the storage lock is released", async () => {
+    let locked = false;
+    let value: string | undefined;
+    const manager = new CodexOAuthManager(() => {});
+    manager.initializeStorage({
+      get: async () => value,
+      store: async (next) => {
+        value = next;
+      },
+      delete: async () => {
+        value = undefined;
+      },
+      withMutationLock: async (operation) => {
+        locked = true;
+        try {
+          return await operation();
+        } finally {
+          locked = false;
+        }
+      },
+    });
+    const lockedDuringNotify: boolean[] = [];
+    manager.onAuthStateChanged = () => lockedDuringNotify.push(locked);
+    await manager.saveOAuthAccount(
+      makeCreds({
+        accountId: "acct",
+        email: "a@example.com",
+        accessToken: "at",
+        refreshToken: "rt",
+      }),
+    );
+    expect(lockedDuringNotify).toEqual([false]);
+  });
+});
+
+describe("CodexOAuthManager pasted redirect completion", () => {
+  function jwt(claims: Record<string, unknown>): string {
+    const part = (value: unknown) =>
+      Buffer.from(JSON.stringify(value)).toString("base64url");
+    return `${part({ alg: "none" })}.${part(claims)}.sig`;
+  }
+
+  it("exchanges the code from a pasted callback address with the flow's verifier", async () => {
+    const manager = new CodexOAuthManager(() => {});
+    const authorizeUrl = new URL(manager.startAuthorizationFlow());
+    const state = authorizeUrl.searchParams.get("state")!;
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = new URLSearchParams(String(init.body));
+      expect(body.get("code")).toBe("the-code");
+      expect(body.get("grant_type")).toBe("authorization_code");
+      expect(body.get("code_verifier")).toMatch(/^[\w-]{43}$/u);
+      return new Response(
+        JSON.stringify({
+          access_token: jwt({ email: "me@example.com" }),
+          refresh_token: "rt",
+          id_token: jwt({
+            email: "me@example.com",
+            "https://api.openai.com/auth": { chatgpt_account_id: "acct" },
+          }),
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const credentials = await manager.completeAuthorizationFromRedirect(
+        ` http://localhost:1455/auth/callback?code=the-code&state=${state} `,
+      );
+      expect(credentials).toMatchObject({
+        refreshToken: "rt",
+        email: "me@example.com",
+        accountId: "acct",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // The flow is single use.
+      await expect(
+        manager.completeAuthorizationFromRedirect(
+          `http://localhost:1455/auth/callback?code=the-code&state=${state}`,
+        ),
+      ).rejects.toThrow(/No pending authorization flow/u);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a mismatched state, a foreign address, and an OAuth error without exchanging", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      for (const [address, code] of [
+        [
+          "http://localhost:1455/auth/callback?code=c&state=wrong",
+          "state_mismatch",
+        ],
+        [
+          "https://evil.example/auth/callback?code=c&state=wrong",
+          "missing_code",
+        ],
+        [
+          "http://localhost:1455/auth/callback?error=access_denied",
+          "oauth_error",
+        ],
+        ["not a url", "missing_code"],
+      ] as const) {
+        const manager = new CodexOAuthManager(() => {});
+        manager.startAuthorizationFlow();
+        await expect(
+          manager.completeAuthorizationFromRedirect(address),
+        ).rejects.toMatchObject({ code });
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

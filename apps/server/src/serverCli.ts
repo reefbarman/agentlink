@@ -10,6 +10,11 @@ import {
   readLocalCertificateAuthority,
 } from "./localCertificateAuthority.js";
 import {
+  createServerCodexRuntime,
+  describeCodexSignIn,
+  hasCodexProvider,
+} from "./codexSignIn.js";
+import {
   issueLocalRecoveryCredential,
   ServerAccessError,
 } from "./ServerAccessStore.js";
@@ -27,6 +32,8 @@ export interface AssistantServerCliIo {
   readonly env: NodeJS.ProcessEnv;
   /** Resolves with the signal name when the process should stop. */
   readonly waitForShutdown: () => Promise<string>;
+  /** One line from the operator's terminal; undefined at end of input. */
+  readonly readLine?: () => Promise<string | undefined>;
   /** Observes the running service; used by tests. */
   readonly onStarted?: (service: AssistantService) => void;
 }
@@ -34,11 +41,15 @@ export interface AssistantServerCliIo {
 export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [--check]
        agentlink-server recover --config <file>
        agentlink-server export-ca --config <file> > agentlink-ca.pem
+       agentlink-server codex-login --config <file>
+       agentlink-server codex-logout --config <file>
 
 Runs the AgentLink assistant server over HTTPS.
 
 Options:
-  --config <file>  Server configuration (JSON). Required.
+  --config <file>  Server configuration (JSON). Required unless the
+                   AGENTLINK_SERVER_CONFIG environment variable is set
+                   (the container image sets it).
   --check          Validate the configuration, TLS files, project
                    directories, and provider secrets, then exit.
   --help           Show this help.
@@ -52,15 +63,27 @@ Commands:
                    local CA certificate (PEM) to install on devices. Its
                    SHA-256 fingerprint goes to stderr so you can compare
                    it on each device.
+  codex-login      Sign in with ChatGPT for "codex" providers. Open the
+                   printed link on any device, then paste back the
+                   address the browser ends on (http://localhost:1455/...,
+                   which does not load). Run it as the service account.
+                   The running server uses the new sign-in immediately.
+  codex-logout     Remove every stored ChatGPT sign-in.
 `;
+
+const COMMANDS = new Set([
+  "recover",
+  "export-ca",
+  "codex-login",
+  "codex-logout",
+]);
 
 /** Returns the process exit code. */
 export async function runAssistantServerCli(
   argv: readonly string[],
   io: AssistantServerCliIo,
 ): Promise<number> {
-  const command =
-    argv[0] === "recover" || argv[0] === "export-ca" ? argv[0] : undefined;
+  const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
   let check = false;
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
@@ -81,6 +104,7 @@ export async function runAssistantServerCli(
       return usageError(io, `Unknown argument: ${argument}`);
     }
   }
+  configPath ??= io.env.AGENTLINK_SERVER_CONFIG || undefined;
   if (!configPath) return usageError(io, "--config is required");
 
   const config = await loadAssistantServerConfig(configPath);
@@ -88,6 +112,17 @@ export async function runAssistantServerCli(
     return await runRecover(serverAccessDataRoot(config), io);
   }
   if (command === "export-ca") return await runExportCa(config, io);
+  if (command === "codex-login" || command === "codex-logout") {
+    if (!hasCodexProvider(config)) {
+      io.log(
+        `agentlink-server: ${command} needs a provider with "type": "codex" in the configuration`,
+      );
+      return 1;
+    }
+    return command === "codex-login"
+      ? await runCodexLogin(config, io)
+      : await runCodexLogout(config, io);
+  }
   if (check) {
     const preflight = await preflightAssistantService(config, io.env);
     const tlsSummary =
@@ -99,6 +134,7 @@ export async function runAssistantServerCli(
     io.stdout(
       `Configuration OK: ${config.projects.length} project(s), listening on ${config.listen.host}:${config.listen.port} for ${config.publicOrigins.join(", ")}; ${tlsSummary}\n`,
     );
+    if (preflight.codexSignIn) io.stdout(`${preflight.codexSignIn}\n`);
     return 0;
   }
 
@@ -176,6 +212,67 @@ async function runExportCa(
   io.log(
     `CA SHA-256 fingerprint: ${authority.fingerprint256}\nCompare it with the fingerprint each device shows before trusting the certificate.`,
   );
+  return 0;
+}
+
+async function runCodexLogin(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  if (!io.readLine) {
+    io.log("agentlink-server: codex-login needs an interactive terminal");
+    return 1;
+  }
+  const codex = createServerCodexRuntime(config, io.log);
+  await codex.ready();
+  const authorizeUrl = codex.manager.startAuthorizationFlow();
+  io.stdout(
+    [
+      "Sign in with ChatGPT:",
+      "",
+      "1. Open this link in a browser on any device:",
+      "",
+      `   ${authorizeUrl}`,
+      "",
+      "2. After signing in, the browser goes to an http://localhost:1455/...",
+      "   address that fails to load. That is expected.",
+      "3. Copy that full address from the address bar and paste it here.",
+      "",
+      "Address: ",
+    ].join("\n"),
+  );
+  const pasted = await io.readLine();
+  if (!pasted?.trim()) {
+    codex.manager.cancelAuthorizationFlow();
+    io.log("agentlink-server: no address entered; sign-in cancelled");
+    return 1;
+  }
+  let credentials;
+  try {
+    credentials = await codex.manager.completeAuthorizationFromRedirect(pasted);
+  } catch (error) {
+    io.log(
+      `agentlink-server: sign-in failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+  const saved = await codex.manager.saveOAuthAccount(credentials, {
+    makeActive: true,
+  });
+  io.stdout(
+    `\nSigned in as ${saved.account.label} (${saved.action}).\n${await describeCodexSignIn(codex)}\n`,
+  );
+  return 0;
+}
+
+async function runCodexLogout(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const codex = createServerCodexRuntime(config, io.log);
+  await codex.ready();
+  await codex.manager.clearCredentials();
+  io.stdout("Removed every stored ChatGPT sign-in.\n");
   return 0;
 }
 

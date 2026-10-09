@@ -1,0 +1,46 @@
+# AgentLink assistant server under Docker Compose.
+#
+# Put this file, server.json, and an optional .env in one directory, with
+# private data/ and projects/ directories owned by the host user:
+#   mkdir -m 700 data && mkdir -p projects/home
+#   docker compose up -d
+#   docker compose logs assistant          # one-time setup credential
+#   docker compose exec assistant agentlink-server codex-login
+#   docker compose exec assistant agentlink-server export-ca > agentlink-ca.pem
+#   docker compose exec assistant agentlink-server recover
+#
+# .env settings (all optional):
+#   AGENTLINK_PUBLISH  host address and port to publish (default 0.0.0.0:8443)
+#   AGENTLINK_UID / AGENTLINK_GID  owner of data/ and projects/ (default 1000)
+
+name: agentlink-assistant
+
+services:
+  assistant:
+    image: agentlink-assistant:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    user: "${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Docker publishes ports outside ufw. The server itself only answers
+      # HTTPS for the hosts in publicOrigins, to signed-in devices.
+      - "${AGENTLINK_PUBLISH:-0.0.0.0:8443}:8443"
+    volumes:
+      - ./server.json:/etc/agentlink/server.json:ro
+      - ./data:/var/lib/agentlink
+      - ./projects:/srv/agentlink/projects
+    # Running turns are stopped and awaited on SIGTERM.
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

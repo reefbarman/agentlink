@@ -155,6 +155,20 @@ describe("parseAssistantServerConfig", () => {
       "tls.localCa must be true",
     ],
     [
+      "an API key on a codex (sign-in) provider",
+      withChange((config) => {
+        config.providers = [
+          ...(config.providers as unknown[]),
+          {
+            type: "codex",
+            modelIds: ["gpt-6.1-sol"],
+            apiKey: { file: "/etc/agentlink/key" },
+          },
+        ];
+      }),
+      'unknown key "apiKey"',
+    ],
+    [
       "an out-of-range port",
       withChange((config) => {
         config.listen = { host: "127.0.0.1", port: 70_000 };
@@ -183,6 +197,7 @@ describe("parseAssistantServerConfig", () => {
     for (const name of [
       "server.linux.example.json",
       "server.macos.example.json",
+      "container/server.example.json",
     ]) {
       await expect(
         loadAssistantServerConfig(path.join(deploy, name)),
@@ -258,5 +273,31 @@ describe("provider secrets", () => {
     await expect(
       (openai as { resolveApiKey: () => Promise<string> }).resolveApiKey(),
     ).resolves.toBe("sk-test");
+  });
+
+  it("maps a codex provider to the server's sign-in credential provider", async () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.providers = [{ type: "codex", modelIds: ["gpt-6.1-sol"] }];
+        value.defaultModel = { providerId: "codex", modelId: "gpt-6.1-sol" };
+      }),
+      "/etc/agentlink",
+    );
+    await expect(resolveWorkspaceProviders(config.providers)).rejects.toThrow(
+      "no Codex sign-in store",
+    );
+    const credentialProvider = { resolveAuth: async () => null };
+    const [codex] = await resolveWorkspaceProviders(
+      config.providers,
+      {},
+      {
+        codexCredentialProvider: credentialProvider,
+      },
+    );
+    expect(codex).toEqual({
+      type: "codex",
+      modelIds: ["gpt-6.1-sol"],
+      credentialProvider,
+    });
   });
 });

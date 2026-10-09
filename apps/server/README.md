@@ -1,6 +1,6 @@
 # @agentlink/server
 
-Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, and a runnable service with systemd and launchd definitions. The web app and jobs come in later slices.
+Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. The web app and jobs come in later slices.
 
 Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.js APIs (Node 22.19+), and its test suite runs on both.
 
@@ -13,7 +13,11 @@ agentlink-server --config /etc/agentlink/server.json --check   # validate and ex
 agentlink-server --config /etc/agentlink/server.json           # serve until SIGTERM/SIGINT
 agentlink-server recover --config /etc/agentlink/server.json   # print a recovery code
 agentlink-server export-ca --config /etc/agentlink/server.json > agentlink-ca.pem
+agentlink-server codex-login --config /etc/agentlink/server.json # sign in with ChatGPT
+agentlink-server codex-logout --config /etc/agentlink/server.json
 ```
+
+`--config` can be omitted when `AGENTLINK_SERVER_CONFIG` names the file; the container image sets it.
 
 `--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. On first start without an owner, the server writes a single-use setup credential to stderr (the journal under systemd, the log file under launchd); see [Access layer](#access-layer). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
 
@@ -21,18 +25,48 @@ agentlink-server export-ca --config /etc/agentlink/server.json > agentlink-ca.pe
 
 One JSON file. Relative paths resolve against its directory, and unknown keys are rejected so a typo cannot silently drop a setting. Examples: [`deploy/server.linux.example.json`](deploy/server.linux.example.json) and [`deploy/server.macos.example.json`](deploy/server.macos.example.json).
 
-| Key             | Meaning                                                                                                                                        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), and the local CA (`tls/`). Created `0700`.                                    |
-| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                          |
-| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                       |
-| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).    |
-| `providers`     | `openai` (`modelIds`, `apiKey`) or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS. |
-| `defaultModel`  | `{ providerId, modelId }`.                                                                                                                     |
-| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                       |
-| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                              |
+| Key             | Meaning                                                                                                                                                                                |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), and the local CA (`tls/`). Created `0700`.                                                                            |
+| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                                                                  |
+| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                               |
+| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                            |
+| `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS. |
+| `defaultModel`  | `{ providerId, modelId }`.                                                                                                                                                             |
+| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                                                               |
+| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                                                                      |
 
 API keys are never inline. `{ "file": "/path" }` reads a file that must not be readable by group or others. `{ "credential": "name" }` reads `$CREDENTIALS_DIRECTORY/name`, which systemd provides through `LoadCredential=` or `LoadCredentialEncrypted=` (use `systemd-creds encrypt` to bind the key to the TPM). Keys are reread on each use, so rotation needs no restart.
+
+### ChatGPT sign-in (Codex)
+
+A `{ "type": "codex", "modelIds": ["gpt-6.1-sol"] }` provider uses a ChatGPT subscription instead of an API key. The server has no browser, so `codex-login` prints a sign-in link to open on any device. After signing in, that browser is sent to an `http://localhost:1455/auth/callback?...` address that does not load; paste that address back into the command. The pasted address must carry the state of the flow the command started, so an address from another sign-in is refused.
+
+Tokens are stored in `<dataRoot>/credentials/codex-sign-in.json` (directory `0700`, file `0600`; the server refuses a file others can read) and refreshed automatically. Run the command as the service account. The running server and the command share the file under a lock, so signing in or out takes effect without a restart. A server with no sign-in still starts; `--check` and the startup log say whether it is signed in, and model requests fail until it is. Signing in again with the same account updates it; a different account is added and becomes active. `codex-logout` removes every stored sign-in.
+
+### Container (Docker)
+
+The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds a small image (Node 22, git, ripgrep, the bundle) that runs as a non-root user, and [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs it with a read-only root filesystem, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible to the server. The same image runs on Linux and on macOS with Docker Desktop.
+
+```sh
+# Build (from the repository root)
+npm run build:workspaces
+docker build -t agentlink-assistant:local -f apps/server/deploy/container/Dockerfile apps/server
+
+# Deploy directory: compose.yaml, server.json (from deploy/container/server.example.json)
+mkdir -m 700 data && mkdir -p projects/home
+docker compose up -d
+docker compose logs assistant                                  # setup credential, CA fingerprint
+docker compose exec assistant agentlink-server codex-login     # ChatGPT sign-in
+docker compose exec assistant agentlink-server export-ca > agentlink-ca.pem
+docker compose exec assistant agentlink-server recover
+```
+
+- **Ownership.** The container runs as uid/gid 1000 by default (`AGENTLINK_UID`/`AGENTLINK_GID` in `.env`), so `data/` and `projects/` belong to the host user. Create them before the first start, or Docker creates them owned by root.
+- **Network.** The port is published on all addresses by default (`AGENTLINK_PUBLISH`, for example `192.168.1.20:8443`, narrows it). Docker publishes ports outside ufw, so ufw neither blocks nor protects it. Binding a single LAN address fails at boot if that address is not up yet. The server answers only HTTPS, only for `publicOrigins`, and only to signed-in devices.
+- **Config.** In the container, `listen` is `0.0.0.0:8443`, `dataRoot` is `/var/lib/agentlink`, and project roots are under `/srv/agentlink/projects`. `publicOrigins` lists the addresses devices use on the LAN.
+- **Restarts.** `restart: unless-stopped` brings it back after a crash or reboot. Locks record the hostname and process start time, so a lock left by the previous run of the same container is not mistaken for a live one when the new process gets the same PID.
+- **Admin commands.** Use `docker compose exec`, which runs inside the service's container. A separate container on the same `data/` (`docker compose run`, or a recreated container after a crash) cannot check the holder's PID, so it honours a lock until its 15-second heartbeat is 60 seconds old; a recreated container may restart a few times before it acquires its locks.
 
 ### Ubuntu (systemd)
 
@@ -109,7 +143,7 @@ It prints a single-use code, valid for 15 minutes, to the terminal only (never t
 
 `onClose` runs during `close()`, after the listener stops accepting connections and before open connections and the access store close. Use it to stop application work.
 
-State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). Only hashes of setup credentials, session tokens, and the passphrase are stored. A corrupt file stops startup rather than reopening bootstrap. Each write is fsynced, including the directory, before a response reports success. An exclusive `access-state.lock` lets only one live process own a data root; `close()` releases it, and a lock left by a dead process is replaced.
+State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). Only hashes of setup credentials, session tokens, and the passphrase are stored. A corrupt file stops startup rather than reopening bootstrap. Each write is fsynced, including the directory, before a response reports success. An exclusive `access-state.lock` lets only one live process own a data root; `close()` releases it, and a lock left by a dead process is replaced (under a `.reclaim` marker, so two starting processes cannot both take it).
 
 ## Workspace sessions
 

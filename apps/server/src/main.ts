@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline";
 import { runAssistantServerCli } from "./serverCli.js";
 
 const log = (line: string) => {
@@ -26,6 +27,19 @@ try {
     log,
     env: process.env,
     waitForShutdown,
+    readLine: () =>
+      new Promise((resolve) => {
+        const input = createInterface({ input: process.stdin });
+        let answered = false;
+        input.once("line", (line) => {
+          answered = true;
+          input.close();
+          resolve(line);
+        });
+        input.once("close", () => {
+          if (!answered) resolve(undefined);
+        });
+      }),
   });
 } catch (error) {
   log(

@@ -1,4 +1,8 @@
-import type { WorkspaceProviderConfig } from "@agentlink/workspace-host";
+import type {
+  WorkspaceCodexProviderConfig,
+  WorkspaceProviderConfig,
+} from "@agentlink/workspace-host";
+
 import { createServerOriginPolicy } from "./requestGuard.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -86,6 +90,16 @@ export type AssistantServerProviderConfig =
       readonly displayName?: string;
       readonly modelIds: readonly string[];
       readonly apiKey: AssistantServerSecretSource;
+    }
+  | {
+      /**
+       * ChatGPT sign-in. Tokens come from `agentlink-server codex-login`
+       * and live in a private file under the data root, never in config.
+       */
+      readonly type: "codex";
+      readonly id?: string;
+      readonly displayName?: string;
+      readonly modelIds: readonly string[];
     };
 
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
@@ -246,13 +260,18 @@ function parseProvider(
   baseDirectory: string,
 ): AssistantServerProviderConfig {
   const item = record(value, label);
-  if (item.type === "openai") {
-    allowKeys(item, label, ["type", "id", "displayName", "modelIds", "apiKey"]);
+  if (item.type === "openai" || item.type === "codex") {
+    allowKeys(item, label, [
+      "type",
+      "id",
+      "displayName",
+      "modelIds",
+      ...(item.type === "openai" ? ["apiKey"] : []),
+    ]);
     if (!Array.isArray(item.modelIds) || item.modelIds.length === 0) {
       throw new Error(`${label}.modelIds must be a non-empty array`);
     }
-    return {
-      type: "openai",
+    const common = {
       ...(item.id === undefined
         ? {}
         : { id: identifier(item.id, `${label}.id`) }),
@@ -260,11 +279,19 @@ function parseProvider(
       modelIds: item.modelIds.map((id, index) =>
         text(id, `${label}.modelIds[${index}]`),
       ),
-      apiKey: secretSource(item.apiKey, `${label}.apiKey`, baseDirectory),
     };
+    return item.type === "codex"
+      ? { type: "codex", ...common }
+      : {
+          type: "openai",
+          ...common,
+          apiKey: secretSource(item.apiKey, `${label}.apiKey`, baseDirectory),
+        };
   }
   if (item.type !== "openai-compatible") {
-    throw new Error(`${label}.type must be "openai-compatible" or "openai"`);
+    throw new Error(
+      `${label}.type must be "codex", "openai", or "openai-compatible"`,
+    );
   }
   allowKeys(item, label, [
     "type",
@@ -484,10 +511,29 @@ export async function prepareSecret(
 export async function resolveWorkspaceProviders(
   providers: readonly AssistantServerProviderConfig[],
   env: NodeJS.ProcessEnv = process.env,
+  options: {
+    /** Required when a `codex` provider is configured. */
+    readonly codexCredentialProvider?: WorkspaceCodexProviderConfig["credentialProvider"];
+  } = {},
 ): Promise<WorkspaceProviderConfig[]> {
   const resolved: WorkspaceProviderConfig[] = [];
   for (const [index, provider] of providers.entries()) {
     const label = `providers[${index}].apiKey`;
+    if (provider.type === "codex") {
+      if (!options.codexCredentialProvider) {
+        throw new Error(
+          `providers[${index}] is a codex provider but no Codex sign-in store is available`,
+        );
+      }
+      resolved.push({
+        type: "codex",
+        ...(provider.id ? { id: provider.id } : {}),
+        ...(provider.displayName ? { displayName: provider.displayName } : {}),
+        modelIds: provider.modelIds,
+        credentialProvider: options.codexCredentialProvider,
+      });
+      continue;
+    }
     if (provider.type === "openai") {
       resolved.push({
         type: "openai",
@@ -498,10 +544,10 @@ export async function resolveWorkspaceProviders(
       });
       continue;
     }
-    const { type: _type, apiKey, models, ...options } = provider;
+    const { type: _type, apiKey, models, ...compatible } = provider;
     resolved.push({
       type: "openai-compatible",
-      ...options,
+      ...compatible,
       models: models.map((model) => ({ ...model })),
       ...(apiKey
         ? { resolveApiKey: await prepareSecret(apiKey, label, env) }

@@ -7,6 +7,7 @@
 import * as crypto from "node:crypto";
 import * as http from "node:http";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { URL } from "node:url";
 import { getCodexOriginator } from "@agentlink/core/codex";
 import { randomUUID } from "node:crypto";
@@ -243,6 +244,15 @@ function isStateShape(value: unknown): value is CodexOAuthState {
   );
 }
 
+/** Mirrors `normalizeLoadedState`: would loading this state rewrite it? */
+function needsNormalization(state: CodexOAuthState): boolean {
+  if (state.accounts.length === 0) return state.activeAccountId !== null;
+  return (
+    !state.activeAccountId ||
+    !state.accounts.some((account) => account.id === state.activeAccountId)
+  );
+}
+
 function isTokenExpired(credentials: CodexCredentials): boolean {
   return Date.now() >= credentials.expiresAt - EXPIRY_BUFFER_MS;
 }
@@ -412,6 +422,14 @@ export class CodexOAuthManager {
     Promise<CodexOAuthAccountRecord>
   >();
   private log: (msg: string) => void;
+  /**
+   * Marks async work running under the storage mutation lock. `held` is
+   * cleared on release, so detached work started inside the lock (which
+   * inherits the context) does not count as holding it afterwards.
+   */
+  private readonly mutationLockContext = new AsyncLocalStorage<{
+    held: boolean;
+  }>();
   private pendingAuth: {
     codeVerifier: string;
     state: string;
@@ -580,7 +598,31 @@ export class CodexOAuthManager {
   }): Promise<void> {
     if (!this.storage) return;
 
+    // Deleting an unreadable payload or persisting a migration writes to
+    // shared storage, so it happens under the mutation lock against a fresh
+    // read: another process may have just stored valid state.
     const raw = await this.storage.get();
+    if (raw && !this.holdsMutationLock()) {
+      const parsed = this.parseStoredState(raw);
+      if (
+        !parsed ||
+        parsed.shouldPersist ||
+        (options?.persistNormalization && needsNormalization(parsed.state))
+      ) {
+        await this.withStorageMutationLock(() =>
+          this.loadStateFromStorage(options),
+        );
+        return;
+      }
+    }
+    await this.applyStoredState(raw, options);
+  }
+
+  private async applyStoredState(
+    raw: string | undefined,
+    options?: { persistNormalization?: boolean },
+  ): Promise<void> {
+    if (!this.storage) return;
     if (!raw) {
       this.state = {
         version: OAUTH_STATE_VERSION,
@@ -667,12 +709,31 @@ export class CodexOAuthManager {
     }
   }
 
+  /**
+   * Run `operation` under the storage's cross-process lock. Re-entrant per
+   * async call chain, so code already holding it never waits on itself.
+   */
   private async withStorageMutationLock<T>(
     operation: () => Promise<T>,
   ): Promise<T> {
+    if (this.holdsMutationLock()) return operation();
+    const context = { held: true };
+    const run = async () => {
+      try {
+        return await this.mutationLockContext.run(context, operation);
+      } finally {
+        context.held = false;
+      }
+    };
+    // Storage without a cross-process lock still marks the section, so
+    // code that re-enters to write does not loop.
     return this.storage?.withMutationLock
-      ? this.storage.withMutationLock(operation)
-      : operation();
+      ? this.storage.withMutationLock(run)
+      : run();
+  }
+
+  private holdsMutationLock(): boolean {
+    return this.mutationLockContext.getStore()?.held === true;
   }
 
   private async withFreshStateWrite<T>(options: {
@@ -685,12 +746,14 @@ export class CodexOAuthManager {
         persistNormalization: true,
       });
       const result = options.mutate();
-      await this.saveState(options.notify ?? false, {
-        checkForExternalChanges: false,
-      });
+      await this.saveState(false, { checkForExternalChanges: false });
       return result;
     };
-    return this.withStorageMutationLock(operation);
+    const result = await this.withStorageMutationLock(operation);
+    // Listeners may start credential work of their own; run them after the
+    // lock is released.
+    if (options.notify) this.onAuthStateChanged?.();
+    return result;
   }
 
   private findAccountById(
@@ -1252,50 +1315,25 @@ export class CodexOAuthManager {
             return;
           }
 
-          const code = url.searchParams.get("code");
-          const state = url.searchParams.get("state");
-          const error = url.searchParams.get("error");
-
-          if (error) {
+          let code: string;
+          try {
+            code = callbackCode(url.searchParams, this.pendingAuth?.state);
+          } catch (callbackError) {
             res.writeHead(400);
-            res.end(`Authentication failed: ${error}`);
-            finish({
-              error: new CodexOAuthFlowError(
-                `OAuth error: ${error}`,
-                "oauth_error",
-              ),
-            });
-            return;
-          }
-
-          if (!code || !state) {
-            res.writeHead(400);
-            res.end("Missing code or state parameter");
-            finish({
-              error: new CodexOAuthFlowError(
-                "Missing code or state parameter",
-                "missing_code",
-              ),
-            });
-            return;
-          }
-
-          if (state !== this.pendingAuth?.state) {
-            res.writeHead(400);
-            res.end("State mismatch — possible CSRF attack");
-            finish({
-              error: new CodexOAuthFlowError(
-                "State mismatch",
-                "state_mismatch",
-              ),
-            });
+            res.end(
+              callbackError instanceof CodexOAuthFlowError &&
+                callbackError.code === "state_mismatch"
+                ? "State mismatch — possible CSRF attack"
+                : `Authentication failed: ${callbackError instanceof Error ? callbackError.message : String(callbackError)}`,
+            );
+            finish({ error: callbackError });
             return;
           }
 
           try {
             const credentials = await exchangeCodeForTokens(
               code,
-              this.pendingAuth.codeVerifier,
+              this.pendingAuth!.codeVerifier,
             );
 
             res.writeHead(200, {
@@ -1348,6 +1386,43 @@ export class CodexOAuthManager {
     });
   }
 
+  /**
+   * Finish the flow from the redirect URL the browser was sent to, for hosts
+   * with no local browser: the user signs in on another device, the final
+   * `http://localhost:1455/auth/callback?...` page fails to load there, and
+   * they paste its address back. The state must match this flow, and the
+   * flow ends whether or not the exchange succeeds.
+   */
+  async completeAuthorizationFromRedirect(
+    redirectUrl: string,
+  ): Promise<CodexCredentials> {
+    const pending = this.pendingAuth;
+    if (!pending) {
+      throw new Error(
+        "No pending authorization flow — call startAuthorizationFlow() first",
+      );
+    }
+    this.cancelAuthorizationFlow();
+    let url: URL;
+    try {
+      url = new URL(redirectUrl.trim());
+    } catch {
+      throw new CodexOAuthFlowError(
+        "Paste the full address of the page the browser ended on",
+        "missing_code",
+      );
+    }
+    const expected = new URL(OAUTH_CONFIG.redirectUri);
+    if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
+      throw new CodexOAuthFlowError(
+        `The address must start with ${OAUTH_CONFIG.redirectUri}`,
+        "missing_code",
+      );
+    }
+    const code = callbackCode(url.searchParams, pending.state);
+    return await exchangeCodeForTokens(code, pending.codeVerifier);
+  }
+
   /** Cancel any in-progress authorization flow. */
   cancelAuthorizationFlow(): void {
     this.closePendingServer();
@@ -1365,6 +1440,29 @@ export class CodexOAuthManager {
     }
     this.pendingAuth.server = undefined;
   }
+}
+
+/** The authorization code from a callback, after checking error and state. */
+function callbackCode(
+  params: URLSearchParams,
+  expectedState: string | undefined,
+): string {
+  const error = params.get("error");
+  if (error) {
+    throw new CodexOAuthFlowError(`OAuth error: ${error}`, "oauth_error");
+  }
+  const code = params.get("code");
+  const state = params.get("state");
+  if (!code || !state) {
+    throw new CodexOAuthFlowError(
+      "Missing code or state parameter",
+      "missing_code",
+    );
+  }
+  if (!expectedState || state !== expectedState) {
+    throw new CodexOAuthFlowError("State mismatch", "state_mismatch");
+  }
+  return code;
 }
 
 function successHtml(): string {

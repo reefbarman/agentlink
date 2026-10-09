@@ -1267,6 +1267,7 @@
   "devDependencies": {
     "@agentlink/cli": "0.11.0",
     "@agentlink/desktop": "0.9.0",
+    "@agentlink/server": "0.1.0",
     "@anthropic-ai/sandbox-runtime": "0.0.79",
     "@electron/osx-sign": "2.7.1",
     "@testing-library/preact": "^3.2.4",

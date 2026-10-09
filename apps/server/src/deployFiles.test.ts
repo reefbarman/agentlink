@@ -59,6 +59,46 @@ describe("deployment files", () => {
     ]);
   });
 
+  it("ships a non-root container image and a hardened compose service", async () => {
+    const container = path.join(deploy, "container");
+    const dockerfile = await fs.readFile(
+      path.join(container, "Dockerfile"),
+      "utf8",
+    );
+    expect(dockerfile).toMatch(/^FROM node:22-/mu);
+    expect(dockerfile).toMatch(/^USER node$/mu);
+    expect(dockerfile).toMatch(/^ENTRYPOINT \["agentlink-server"\]$/mu);
+    expect(dockerfile).toContain(
+      "AGENTLINK_SERVER_CONFIG=/etc/agentlink/server.json",
+    );
+    // The build context admits only the bundle.
+    const ignore = await fs.readFile(
+      path.join(deploy, "..", ".dockerignore"),
+      "utf8",
+    );
+    expect(
+      ignore.split("\n").filter((line) => line && !line.startsWith("#")),
+    ).toEqual(["*", "!dist/agentlink-server.js"]);
+
+    const compose = await fs.readFile(
+      path.join(container, "compose.yaml"),
+      "utf8",
+    );
+    for (const line of [
+      "read_only: true",
+      "init: true",
+      "pull_policy: never",
+      "- ALL",
+      "- no-new-privileges:true",
+      "- ./server.json:/etc/agentlink/server.json:ro",
+      "stop_grace_period: 60s",
+    ]) {
+      expect(compose, line).toContain(`      ${line}`.trimStart());
+    }
+    expect(compose).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    expect(compose).not.toMatch(/privileged:\s*true|network_mode:\s*host/u);
+  });
+
   it("ships a launchd daemon that runs as a service user", async () => {
     const file = path.join(deploy, "launchd", "local.agentlink.server.plist");
     const plist = await fs.readFile(file, "utf8");
