@@ -1,0 +1,60 @@
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 1-83
+package.json
+  h_e08a86bb3a33a2 1172
+apps/server/package.json
+  h_e08a86bb3a33a2 5,8-10,12
+apps/server/deploy/systemd/agentlink-server.service
+  h_e08a86bb3a33a2 1-68
+apps/server/deploy/launchd/local.agentlink.server.plist
+  h_e08a86bb3a33a2 1-61
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 1-540
+apps/server/src/main.ts
+  h_e08a86bb3a33a2 1-38
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 1-81
+apps/server/README.md
+  h_e08a86bb3a33a2 3,7-46,75,81
+apps/server/esbuild.mjs
+  h_e08a86bb3a33a2 1-104
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 363-365,367
+  s_0e270b26a4af34::t_514cabc6cef3fc 366
+apps/server/src/index.ts
+  h_e08a86bb3a33a2 8-27
+  s_0e270b26a4af34::t_a289e959a7f549 7
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 543-595
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 1-309
+apps/server/deploy/server.linux.example.json
+  h_e08a86bb3a33a2 1-23
+apps/server/deploy/server.macos.example.json
+  h_e08a86bb3a33a2 1-29
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 1-237
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae5b32c0eb962022de828886b5207e0cc662dfd8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0e270b26a4af34": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27f8a790-27db-4f78-9f9a-4e72aaf24c32",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

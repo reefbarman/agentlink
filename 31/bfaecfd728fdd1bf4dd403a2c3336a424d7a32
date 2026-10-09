@@ -1,0 +1,59 @@
+packages/workspace-host/src/backgroundTools.ts
+  h_e08a86bb3a33a2 3,19-23,55,58-65,73-75,95-110,112-113,121
+apps/server/README.md
+  h_e08a86bb3a33a2 210,224,226-243
+  s_de2ca0dd57a626::t_ce12e0aea1add9 225,247
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 36-39,56-59,111-119,252-255,378-389,494,570,618-761,892-899,914-937
+  s_de2ca0dd57a626::t_ac2aac3e814fc0 390-392,762-763,938-939
+packages/workspace-host/src/backgroundSupervisor.ts
+  h_e08a86bb3a33a2 302-303
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 91-95,134-145,173,337-362,877-1182,1187-1214,1216-1221
+  s_d44cbe5f2445ec::t_c55c3b9406a1ff 1183-1186,1215,1222-1223
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 175
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 296-301,317-329,351
+packages/workspace-host/src/workspaceHostMcp.test.ts
+  h_e08a86bb3a33a2 339-419
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 143-147,457-459,759-763,849-853
+packages/workspace-host/src/workspaceHostBackground.test.ts
+  h_e08a86bb3a33a2 175-304
+apps/server/src/SessionEventHub.ts
+  h_e08a86bb3a33a2 33-46
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31bfaecfd728fdd1bf4dd403a2c3336a424d7a32",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d44cbe5f2445ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4ed59b1c-ec24-43e4-b505-de517c8bf99c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_de2ca0dd57a626": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c26400-184d-46d3-a28f-73c53281278f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

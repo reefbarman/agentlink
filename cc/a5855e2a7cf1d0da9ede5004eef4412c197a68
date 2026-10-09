@@ -1,0 +1,77 @@
+packages/workspace-host/src/commandSupervisor.ts
+  h_e08a86bb3a33a2 8,97,142
+packages/node-host/src/readTools.ts
+  h_e08a86bb3a33a2 8-12,52-53,86,90,92,95,117-118,120,180-181,189,255,291,298,307,317,332,343-344,348,350,353,355,358-359,370,387-388,395,397-398,414-415,417
+  s_0b6ea623ffe141::t_fc2164c09054be 89,91,93,299-300,345-346
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 8,1003,1050,1105-1107,1109,1116-1161
+  s_2700bb2b3a8e30::t_94c369f8001214 1162-1164
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 11
+packages/node-host/src/fileSystem.test.ts
+  h_e08a86bb3a33a2 1-317
+packages/workspace-host/src/workspaceExecutionBackend.ts
+  h_e08a86bb3a33a2 1-4,8-11,13-16,21-22,64,68-77,86,89
+  h_e08a86bb3a33a2 20,23
+packages/node-host/src/writeTools.ts
+  h_e08a86bb3a33a2 12-16,49-53,91,95,97,147,149-150,152,197,201,203,228,233,235,246,252,298,302,304,344,404,424,450,462,475,483,497,515,525,527,531,616,623,631,638,653,667,673-674,680,687-691,694,697,703-704,706,714,717,725,731,757,761,763,778,799-805,808-812,815,835,840,849,855,861
+  s_0b6ea623ffe141::t_75fce81eb41195 94,96,98,200,202,204,245,247-251,253,301,303,305,463-464,675,702,705,730,732
+packages/node-host/src/index.ts
+  h_e08a86bb3a33a2 6
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 16,110-118,128,267-268,335-336,415,528,551-552,568-569,649-650
+  s_01d50c12850df6::t_5e4ccc04361801 342,548-550,553,646-648,651
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 15,17,20-27,46-49,117-132,155-156,162,165,172,176,180,190,199,210,231,237,289,296,299,317-388,392,416,421,426,452,454,477,516,522,530,536,540,555-561,578,612-614,620,624-630,650-687,691,699,723-725,730,735,748-749,753,766,781,846,855,870-871,877,960,971,982-983,986,995,1004,1006,1012,1017,1024,1029,1159-1160,1163-1164,1181,1187,1194,1210,1215,1218-1219,1226,1436,1439,1441,1445-1449,1451-1467,1470-1472,1474-1490
+  s_31d43911172eda::t_1cd0870539bd83 161,163-164,166,288,290-295,297,389-390,415,417-420,422,451,453,455,688,726-729,731,981,984,1450,1468
+packages/workspace-host/src/fileTools.test.ts
+  h_e08a86bb3a33a2 7-8,13-16,626-759,762-800
+  s_01d50c12850df6::t_54eddde3600828 760
+packages/node-host/src/fileSystem.ts
+  h_e08a86bb3a33a2 1-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cca5855e2a7cf1d0da9ede5004eef4412c197a68",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_01d50c12850df6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ee33a33-a742-4939-a0f6-c4667bb60f33",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0b6ea623ffe141": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3e9d81a-df8f-4963-8fef-649848bc8e19",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_2700bb2b3a8e30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85169bd5-d64c-4c98-8e8d-5bad8f2aa1bd",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_31d43911172eda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5fb6da82-4b7f-4c45-a07d-069a6f1dbbb3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}

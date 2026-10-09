@@ -1,0 +1,48 @@
+apps/server/src/AttemptLimiter.ts
+  h_e08a86bb3a33a2 1-85
+apps/server/src/index.ts
+  h_e08a86bb3a33a2 1-31
+apps/server/src/testSupport.ts
+  h_e08a86bb3a33a2 1-162
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 1-629
+apps/server/src/requestGuard.ts
+  h_e08a86bb3a33a2 1-166
+apps/server/src/ServerAccessStore.ts
+  h_e08a86bb3a33a2 1-674
+apps/server/README.md
+  h_e08a86bb3a33a2 1-18
+apps/server/src/ServerAccessStore.test.ts
+  h_e08a86bb3a33a2 1-163
+apps/server/tsconfig.json
+  h_e08a86bb3a33a2 1-13
+apps/server/vitest.config.ts
+  h_e08a86bb3a33a2 1-8
+apps/server/src/assistantServer.ts
+  h_e08a86bb3a33a2 1-533
+apps/server/package.json
+  h_e08a86bb3a33a2 1-19
+package-lock.json
+  s_034209a6a04411::t_61054c873065c3 149-160,190-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b7a57778007e6be58f991e9a9af6e79dff0f798",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_034209a6a04411": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6653647-2113-42ac-b0ed-937c0f895510",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
