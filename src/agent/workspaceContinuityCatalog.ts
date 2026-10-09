@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 import {
-  hasCompatibleWorkspaceFileUri,
+  classifyWorkspaceHistoryTransition,
+  isWorkspaceHistoryMigrationOffer,
   type WorkspaceHistoryShape,
 } from "./workspaceHistoryMigration.js";
 
@@ -47,16 +48,18 @@ export class WorkspaceContinuityCatalog {
     this.write({ version: CATALOG_VERSION, entries });
   }
 
-  findExpansionCandidates(
+  /**
+   * Earlier workspace shapes whose history should be offered to destination:
+   * strict folder-set expansions and untitled workspaces saved to a file.
+   */
+  findMigrationCandidates(
     destination: WorkspaceHistoryShape,
   ): WorkspaceHistoryCatalogEntry[] {
     return this.list().filter(
       (entry) =>
         entry.workspaceIdentity !== destination.workspaceIdentity &&
-        hasCompatibleWorkspaceFileUri(entry, destination) &&
-        isStrictSubset(
-          entry.workspaceFolderUris,
-          destination.workspaceFolderUris,
+        isWorkspaceHistoryMigrationOffer(
+          classifyWorkspaceHistoryTransition(entry, destination),
         ),
     );
   }
@@ -93,19 +96,6 @@ export class WorkspaceContinuityCatalog {
     );
     fs.renameSync(temporaryPath, this.filePath);
   }
-}
-
-function isStrictSubset(
-  source: readonly string[],
-  destination: readonly string[],
-): boolean {
-  const sourceSet = new Set(source);
-  const destinationSet = new Set(destination);
-  return (
-    sourceSet.size > 0 &&
-    sourceSet.size < destinationSet.size &&
-    [...sourceSet].every((entry) => destinationSet.has(entry))
-  );
 }
 
 function isCatalogEntry(value: unknown): value is WorkspaceHistoryCatalogEntry {

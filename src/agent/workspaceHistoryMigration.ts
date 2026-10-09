@@ -11,6 +11,7 @@ export interface WorkspaceHistoryShape {
 export type WorkspaceHistoryTransition =
   | "source_subset_of_destination"
   | "destination_subset_of_source"
+  | "untitled_workspace_saved"
   | "unrelated";
 
 export interface WorkspaceHistoryInventoryEntry {
@@ -104,20 +105,52 @@ export function hasCompatibleWorkspaceFileUri(
 }
 
 /**
+ * Saving an untitled workspace to a file keeps the same folders but changes the
+ * workspace-file URI. With an identical folder set, the untitled workspace is
+ * the only plausible history source for the newly saved workspace.
+ */
+function isUntitledWorkspaceSave(
+  source: WorkspaceHistoryShape,
+  destination: WorkspaceHistoryShape,
+): boolean {
+  return (
+    source.workspaceFileUri?.startsWith("untitled:") === true &&
+    destination.workspaceFileUri !== undefined &&
+    !destination.workspaceFileUri.startsWith("untitled:")
+  );
+}
+
+function hasSameFolders(
+  sourceFolders: ReadonlySet<string>,
+  destinationFolders: ReadonlySet<string>,
+): boolean {
+  return (
+    sourceFolders.size === destinationFolders.size &&
+    [...sourceFolders].every((folder) => destinationFolders.has(folder))
+  );
+}
+
+/**
  * A transition is eligible for automatic migration only when the folder sets
- * differ by strict containment. Equal and partially-overlapping sets require
- * explicit recovery because there is no safe source to infer.
+ * differ by strict containment, or when an untitled workspace was saved to a
+ * workspace file with the same folders. Other equal and partially-overlapping
+ * sets require explicit recovery because there is no safe source to infer.
  */
 export function classifyWorkspaceHistoryTransition(
   source: WorkspaceHistoryShape,
   destination: WorkspaceHistoryShape,
 ): WorkspaceHistoryTransition {
-  if (!hasCompatibleWorkspaceFileUri(source, destination)) {
-    return "unrelated";
-  }
   const sourceFolders = new Set(source.workspaceFolderUris);
   const destinationFolders = new Set(destination.workspaceFolderUris);
   if (sourceFolders.size === 0 || destinationFolders.size === 0) {
+    return "unrelated";
+  }
+  if (isUntitledWorkspaceSave(source, destination)) {
+    return hasSameFolders(sourceFolders, destinationFolders)
+      ? "untitled_workspace_saved"
+      : "unrelated";
+  }
+  if (!hasCompatibleWorkspaceFileUri(source, destination)) {
     return "unrelated";
   }
   if (
@@ -136,6 +169,19 @@ export function classifyWorkspaceHistoryTransition(
 }
 
 /**
+ * Transitions where the source history should be offered to the destination
+ * when the destination opens: workspace expansion and untitled-workspace save.
+ */
+export function isWorkspaceHistoryMigrationOffer(
+  transition: WorkspaceHistoryTransition,
+): boolean {
+  return (
+    transition === "source_subset_of_destination" ||
+    transition === "untitled_workspace_saved"
+  );
+}
+
+/**
  * Copies a closed source history into a new destination lineage. The source is
  * never mutated; a partially copied stage is never selected by workspace.json.
  */
@@ -147,7 +193,7 @@ export async function migrateWorkspaceHistory(
     "unrelated"
   ) {
     throw new Error(
-      "Workspace-history migration requires strict source/destination folder containment",
+      "Workspace-history migration requires strict source/destination folder containment or an untitled-workspace save",
     );
   }
 
