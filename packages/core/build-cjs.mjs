@@ -19,6 +19,7 @@ const modules = [
   "nativeWebTools",
   "openAiCompatible",
   "openAiResponses",
+  "promptProfilePolicy",
   "providerStreamWatchdog",
   "sessionRepository",
   "sessionTranscriptRecall",
