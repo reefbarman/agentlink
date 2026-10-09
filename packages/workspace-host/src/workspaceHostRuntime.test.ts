@@ -5,6 +5,7 @@ import {
   createWorkspaceHost,
   type CreateWorkspaceHostOptions,
 } from "./workspaceHostRuntime.js";
+import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 import type {
   WorkspaceExecutionBackend,
   WorkspaceProcessLaunch,
@@ -999,6 +1000,7 @@ describe("createWorkspaceHost", () => {
     await fs.mkdir(projectRoot);
     const launches: WorkspaceProcessLaunch[] = [];
     const executionBackend: WorkspaceExecutionBackend = {
+      fileSystem: createNodeHostLocalFileSystem(),
       launchProcess(launch) {
         launches.push(launch);
         let exit!: (result: { exitCode: number }) => void;
@@ -1045,10 +1047,10 @@ describe("createWorkspaceHost", () => {
           fetch,
         },
       ],
+      executionBackend,
       commands: {
         enabled: true,
         shellExecutable: "/bin/sh",
-        executionBackend,
         resolveEnvironment: () => ({ PATH: "/usr/bin:/bin" }),
       },
     });
@@ -1100,13 +1102,63 @@ describe("createWorkspaceHost", () => {
           projectRoot,
           dataRoot: path.join(parent, "data"),
           ownerId: "backend-owner",
-          commands: {
-            enabled: true,
-            executionBackend: { launchProcess: vi.fn() },
+          executionBackend: {
+            fileSystem: createNodeHostLocalFileSystem(),
+            launchProcess: vi.fn(),
           },
+          commands: { enabled: true },
         }),
       ).rejects.toThrow("requires an explicit resolveEnvironment");
     } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("reads project files through the injected execution backend", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-backend-files-"),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "notes.txt"), "from-backend\n");
+    const local = createNodeHostLocalFileSystem();
+    const backendReads: string[] = [];
+    const executionBackend: WorkspaceExecutionBackend = {
+      fileSystem: {
+        ...local,
+        readFile: async (target) => {
+          backendReads.push(target);
+          return await local.readFile(target);
+        },
+      },
+      launchProcess: vi.fn(),
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(toolCall("read_file", { path: "notes.txt" }))
+      .mockResolvedValueOnce(completion("done"));
+    // Files without commands need no command environment.
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "backend-files-owner",
+      executionBackend,
+      files: { enabled: true },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await expect(host.runTurn(sessionId, "read it")).resolves.toMatchObject({
+        status: "completed",
+        text: "done",
+      });
+      expect(backendReads).toEqual([path.join(host.project.root, "notes.txt")]);
+      const toolRequest = JSON.parse(String(fetch.mock.calls[1]![1]!.body)) as {
+        messages: Array<{ role: string; content?: unknown }>;
+      };
+      expect(JSON.stringify(toolRequest.messages)).toContain("from-backend");
+    } finally {
+      await host.close();
       await fs.rm(parent, { recursive: true, force: true });
     }
   });

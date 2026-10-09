@@ -3,6 +3,7 @@ export * from "./codexOAuthRuntime.js";
 export * from "./responsesWebSocket.js";
 export * from "./commandTools.js";
 export * from "./fileStateRepository.js";
+export * from "./fileSystem.js";
 export * from "./instructionCatalog.js";
 export * from "./keychainSecretStorage.js";
 export * from "./keychainMcpCredentialRepository.js";

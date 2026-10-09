@@ -6,9 +6,13 @@ import {
   type MultiFileWriteTransactionProvider,
 } from "@agentlink/core";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import {
+  createNodeHostLocalFileSystem,
+  type NodeHostFileSystem,
+} from "./fileSystem.js";
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_MULTI_FILE_CHANGES = 20;
@@ -42,6 +46,11 @@ export interface CreateNodeHostWriteToolsOptions<
   readonly resolveGrants: ResolveNodeHostWriteGrants<TPrincipal>;
   /** Maximum UTF-8 content size accepted for one replacement. */
   readonly maxFileBytes?: number;
+  /**
+   * Filesystem used for grant resolution, preconditions, locks, and the
+   * atomic write. Defaults to this machine's filesystem.
+   */
+  readonly fileSystem?: NodeHostFileSystem;
 }
 
 export type NodeHostApplyDiffFailure =
@@ -79,9 +88,14 @@ export function createNodeHostWriteTools<
     "maxFileBytes",
     MAX_FILE_BYTES,
   );
+  const files = options.fileSystem ?? createNodeHostLocalFileSystem();
 
   return async (request) => {
-    const grants = await resolveGrantedRoots(options.resolveGrants, request);
+    const grants = await resolveGrantedRoots(
+      files,
+      options.resolveGrants,
+      request,
+    );
     return [
       defineTool<TPrincipal>({
         name: "write_file",
@@ -130,12 +144,12 @@ export function createNodeHostWriteTools<
           if (Buffer.byteLength(content, "utf8") > maxFileBytes) {
             return error("file_too_large");
           }
-          const target = await resolveWriteTarget(input.path, grants);
+          const target = await resolveWriteTarget(files, input.path, grants);
           if (!target.ok) return error(target.error);
-          return await withWriteLock(target.path, async () => {
-            const precondition = await verifyPrecondition(target, input);
+          return await withWriteLock(files, target.path, async () => {
+            const precondition = await verifyPrecondition(files, target, input);
             if (!precondition.ok) return error(precondition.error);
-            const committed = await atomicWrite(target.path, content, {
+            const committed = await atomicWrite(files, target.path, content, {
               expectedAbsent: !precondition.existed,
               expectedContentHash: precondition.existed
                 ? String(input.expectedContentHash)
@@ -180,9 +194,14 @@ export function createNodeHostApplyDiffTools<
     "maxFileBytes",
     MAX_FILE_BYTES,
   );
+  const files = options.fileSystem ?? createNodeHostLocalFileSystem();
 
   return async (request) => {
-    const grants = await resolveGrantedRoots(options.resolveGrants, request);
+    const grants = await resolveGrantedRoots(
+      files,
+      options.resolveGrants,
+      request,
+    );
     return [
       defineTool<TPrincipal>({
         name: "apply_diff",
@@ -206,13 +225,14 @@ export function createNodeHostApplyDiffTools<
         displayInput: (input) => ({ path: input.path }),
         handler: async (input, context) => {
           if (!sameTurn(request, context)) return error("write_turn_mismatch");
-          const target = await resolveWriteTarget(input.path, grants);
+          const target = await resolveWriteTarget(files, input.path, grants);
           if (!target.ok) return error(target.error);
           const diff = typeof input.diff === "string" ? input.diff : "";
           const parsed = parseStrictSearchReplaceBlocks(diff);
           if (!parsed.ok) return error(parsed.error);
-          return await withWriteLock(target.path, async () => {
+          return await withWriteLock(files, target.path, async () => {
             const current = await readPinnedText(
+              files,
               target,
               input.expectedContentHash,
             );
@@ -222,10 +242,15 @@ export function createNodeHostApplyDiffTools<
             if (Buffer.byteLength(applied.content, "utf8") > maxFileBytes) {
               return error("file_too_large");
             }
-            const committed = await atomicWrite(target.path, applied.content, {
-              expectedAbsent: false,
-              expectedContentHash: String(input.expectedContentHash),
-            });
+            const committed = await atomicWrite(
+              files,
+              target.path,
+              applied.content,
+              {
+                expectedAbsent: false,
+                expectedContentHash: String(input.expectedContentHash),
+              },
+            );
             if (!committed.ok) return error(committed.error);
             return {
               modelContent: JSON.stringify({
@@ -270,9 +295,14 @@ export function createNodeHostMultiFileWriteTools<
     "maxFileBytes",
     MAX_FILE_BYTES,
   );
+  const files = options.fileSystem ?? createNodeHostLocalFileSystem();
 
   return async (request) => {
-    const grants = await resolveGrantedRoots(options.resolveGrants, request);
+    const grants = await resolveGrantedRoots(
+      files,
+      options.resolveGrants,
+      request,
+    );
     return [
       defineTool<TPrincipal>({
         name: "apply_multi_file",
@@ -311,6 +341,7 @@ export function createNodeHostMultiFileWriteTools<
         handler: async (input, context) => {
           if (!sameTurn(request, context)) return error("write_turn_mismatch");
           const resolved = await resolveMultiFileChanges(
+            files,
             input.changes,
             grants,
             maxChanges,
@@ -370,6 +401,7 @@ export function createNodeHostMultiFileWriteTools<
 }
 
 async function resolveMultiFileChanges(
+  files: NodeHostFileSystem,
   input: unknown,
   grants: readonly GrantedRoot[],
   maxChanges: number,
@@ -389,7 +421,7 @@ async function resolveMultiFileChanges(
   const paths = new Set<string>();
   for (const change of input) {
     if (!isRecord(change)) return { ok: false, error: "invalid_change_set" };
-    const target = await resolveWriteTarget(change.path, grants);
+    const target = await resolveWriteTarget(files, change.path, grants);
     if (!target.ok) return target;
     if (paths.has(target.path))
       return { ok: false, error: "duplicate_change_path" };
@@ -415,6 +447,7 @@ interface GrantedRoot {
 }
 
 async function resolveGrantedRoots<TPrincipal extends AgentPrincipal>(
+  files: NodeHostFileSystem,
   resolveGrants: ResolveNodeHostWriteGrants<TPrincipal>,
   request: ResolveNodeHostWriteGrantsRequest<TPrincipal>,
 ): Promise<readonly GrantedRoot[]> {
@@ -426,7 +459,9 @@ async function resolveGrantedRoots<TPrincipal extends AgentPrincipal>(
     ) {
       continue;
     }
-    const realPath = await fs.realpath(grant.rootPath).catch(() => undefined);
+    const realPath = await files
+      .realpath(grant.rootPath)
+      .catch(() => undefined);
     if (realPath) roots.push({ path: realPath, kind: grant.kind });
   }
   return roots;
@@ -437,6 +472,7 @@ type WriteTarget =
   | { readonly ok: false; readonly error: string };
 
 async function resolveWriteTarget(
+  files: NodeHostFileSystem,
   input: unknown,
   grants: readonly GrantedRoot[],
 ): Promise<WriteTarget> {
@@ -444,7 +480,7 @@ async function resolveWriteTarget(
     return { ok: false, error: "absolute_path_required" };
   }
   const requested = path.resolve(input);
-  const existing = await fs.realpath(requested).catch(() => undefined);
+  const existing = await files.realpath(requested).catch(() => undefined);
   if (existing) {
     if (existing !== requested) return { ok: false, error: "path_alias" };
     for (const grant of grants) {
@@ -458,7 +494,7 @@ async function resolveWriteTarget(
     return { ok: false, error: "path_not_granted" };
   }
 
-  const parent = await fs
+  const parent = await files
     .realpath(path.dirname(requested))
     .catch(() => undefined);
   if (!parent) return { ok: false, error: "parent_not_found" };
@@ -476,6 +512,7 @@ async function resolveWriteTarget(
 }
 
 async function readPinnedText(
+  files: NodeHostFileSystem,
   target: Extract<WriteTarget, { ok: true }>,
   expectedHash: unknown,
 ): Promise<
@@ -485,13 +522,13 @@ async function readPinnedText(
   if (typeof expectedHash !== "string") {
     return { ok: false, error: "expected_content_hash_required" };
   }
-  const stat = await fs.lstat(target.path).catch(() => undefined);
+  const stat = await files.lstat(target.path).catch(() => undefined);
   if (!stat) return { ok: false, error: "expected_file_missing" };
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+  if (stat.kind !== "file" || stat.nlink > 1) {
     return { ok: false, error: "not_a_private_regular_file" };
   }
   if (stat.size > MAX_FILE_BYTES) return { ok: false, error: "file_too_large" };
-  const bytes = await fs.readFile(target.path).catch(() => undefined);
+  const bytes = await files.readFile(target.path).catch(() => undefined);
   if (!bytes) return { ok: false, error: "file_unreadable" };
   if (contentHash(bytes) !== expectedHash) {
     return { ok: false, error: "content_hash_mismatch" };
@@ -576,13 +613,14 @@ function isReservedMarker(line: string): boolean {
 }
 
 async function verifyPrecondition(
+  files: NodeHostFileSystem,
   target: Extract<WriteTarget, { ok: true }>,
   input: Record<string, unknown>,
 ): Promise<
   | { readonly ok: true; readonly existed: boolean }
   | { readonly ok: false; readonly error: string }
 > {
-  const stat = await fs.lstat(target.path).catch(() => undefined);
+  const stat = await files.lstat(target.path).catch(() => undefined);
   const expectedAbsent = input.expectedAbsent === true;
   const expectedHash = input.expectedContentHash;
   if (!stat) {
@@ -590,14 +628,14 @@ async function verifyPrecondition(
       ? { ok: true, existed: false }
       : { ok: false, error: "expected_file_missing" };
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+  if (stat.kind !== "file" || stat.nlink > 1) {
     return { ok: false, error: "not_a_private_regular_file" };
   }
   if (expectedAbsent) return { ok: false, error: "expected_file_absent" };
   if (typeof expectedHash !== "string") {
     return { ok: false, error: "expected_content_hash_required" };
   }
-  const bytes = await fs.readFile(target.path).catch(() => undefined);
+  const bytes = await files.readFile(target.path).catch(() => undefined);
   if (!bytes) return { ok: false, error: "file_unreadable" };
   return contentHash(bytes) === expectedHash
     ? { ok: true, existed: true }
@@ -612,6 +650,7 @@ interface WriteLockOwner {
 }
 
 async function withWriteLock<T>(
+  files: NodeHostFileSystem,
   destination: string,
   operation: () => Promise<T>,
 ): Promise<T | ReturnType<typeof error>> {
@@ -625,48 +664,46 @@ async function withWriteLock<T>(
     hostname: os.hostname(),
     pid: process.pid,
   };
-  if (!(await acquireWriteLock(lockPath, owner))) {
+  if (!(await acquireWriteLock(files, lockPath, owner))) {
     return error("write_locked");
   }
   try {
     return await operation();
   } finally {
-    await releaseWriteLock(lockPath, owner.ownerNonce).catch(() => undefined);
+    await releaseWriteLock(files, lockPath, owner.ownerNonce).catch(
+      () => undefined,
+    );
   }
 }
 
 async function acquireWriteLock(
+  files: NodeHostFileSystem,
   lockPath: string,
   owner: WriteLockOwner,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const temporary = `${lockPath}.${owner.ownerNonce}.tmp`;
     try {
-      const handle = await fs.open(
-        temporary,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-        0o600,
-      );
-      try {
-        await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await fs.link(temporary, lockPath);
-      await fs.unlink(temporary).catch(() => undefined);
+      await files.createFile(temporary, `${JSON.stringify(owner)}\n`, {
+        mode: 0o600,
+      });
+      await files.link(temporary, lockPath);
+      await files.unlink(temporary).catch(() => undefined);
       return true;
     } catch (lockError) {
-      await fs.unlink(temporary).catch(() => undefined);
+      await files.unlink(temporary).catch(() => undefined);
       if (!hasCode(lockError, "EEXIST")) return false;
     }
-    if (!(await reclaimDeadWriteLock(lockPath))) return false;
+    if (!(await reclaimDeadWriteLock(files, lockPath))) return false;
   }
   return false;
 }
 
-async function reclaimDeadWriteLock(lockPath: string): Promise<boolean> {
-  const owner = await readWriteLock(lockPath);
+async function reclaimDeadWriteLock(
+  files: NodeHostFileSystem,
+  lockPath: string,
+): Promise<boolean> {
+  const owner = await readWriteLock(files, lockPath);
   if (!owner || owner.hostname !== os.hostname()) return false;
   try {
     process.kill(owner.pid, 0);
@@ -674,10 +711,10 @@ async function reclaimDeadWriteLock(lockPath: string): Promise<boolean> {
   } catch (lockError) {
     if (!hasCode(lockError, "ESRCH")) return false;
   }
-  const current = await readWriteLock(lockPath);
+  const current = await readWriteLock(files, lockPath);
   if (!current || current.ownerNonce !== owner.ownerNonce) return false;
   try {
-    await fs.unlink(lockPath);
+    await files.unlink(lockPath);
     return true;
   } catch (lockError) {
     return hasCode(lockError, "ENOENT");
@@ -685,11 +722,14 @@ async function reclaimDeadWriteLock(lockPath: string): Promise<boolean> {
 }
 
 async function readWriteLock(
+  files: NodeHostFileSystem,
   lockPath: string,
 ): Promise<WriteLockOwner | undefined> {
   let value: unknown;
   try {
-    value = JSON.parse(await fs.readFile(lockPath, "utf8")) as unknown;
+    value = JSON.parse(
+      (await files.readFile(lockPath)).toString("utf8"),
+    ) as unknown;
   } catch {
     return undefined;
   }
@@ -714,12 +754,13 @@ async function readWriteLock(
 }
 
 async function releaseWriteLock(
+  files: NodeHostFileSystem,
   lockPath: string,
   ownerNonce: string,
 ): Promise<void> {
-  const current = await readWriteLock(lockPath);
+  const current = await readWriteLock(files, lockPath);
   if (!current || current.ownerNonce !== ownerNonce) return;
-  await fs.unlink(lockPath).catch((lockError: unknown) => {
+  await files.unlink(lockPath).catch((lockError: unknown) => {
     if (!hasCode(lockError, "ENOENT")) throw lockError;
   });
 }
@@ -734,6 +775,7 @@ interface NodeHostWriteDurabilityEvidence {
 }
 
 async function atomicWrite(
+  files: NodeHostFileSystem,
   destination: string,
   content: string,
   baseline: {
@@ -753,39 +795,24 @@ async function atomicWrite(
     directory,
     `.${path.basename(destination)}.agentlink-${randomUUID()}.tmp`,
   );
-  let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(
-      temporary,
-      constants.O_WRONLY |
-        constants.O_CREAT |
-        constants.O_EXCL |
-        constants.O_NOFOLLOW,
-      0o600,
+    await files.createFile(temporary, Buffer.from(content, "utf8"), {
+      mode: 0o600,
+    });
+    const current = await verifyStagedWriteBaseline(
+      files,
+      destination,
+      baseline,
     );
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    const current = await verifyStagedWriteBaseline(destination, baseline);
     if (!current.ok) return current;
-    await fs.rename(temporary, destination);
-    await fs.chmod(destination, 0o600).catch(() => undefined);
-    const directoryHandle = await fs.open(directory, constants.O_RDONLY);
-    try {
-      await directoryHandle.sync();
-    } finally {
-      await directoryHandle.close();
-    }
-    const finalStat = await fs.lstat(destination).catch(() => undefined);
-    if (
-      !finalStat?.isFile() ||
-      finalStat.isSymbolicLink() ||
-      finalStat.nlink > 1
-    ) {
+    await files.rename(temporary, destination);
+    await files.chmod(destination, 0o600).catch(() => undefined);
+    await files.syncDirectory(directory);
+    const finalStat = await files.lstat(destination).catch(() => undefined);
+    if (finalStat?.kind !== "file" || finalStat.nlink > 1) {
       return { ok: false, error: "post_write_verification_failed" };
     }
-    const finalBytes = await fs.readFile(destination).catch(() => undefined);
+    const finalBytes = await files.readFile(destination).catch(() => undefined);
     if (!finalBytes || finalBytes.toString("utf8") !== content) {
       return { ok: false, error: "post_write_verification_failed" };
     }
@@ -805,12 +832,12 @@ async function atomicWrite(
   } catch {
     return { ok: false, error: "write_failed" };
   } finally {
-    await handle?.close().catch(() => undefined);
-    await fs.unlink(temporary).catch(() => undefined);
+    await files.unlink(temporary).catch(() => undefined);
   }
 }
 
 async function verifyStagedWriteBaseline(
+  files: NodeHostFileSystem,
   destination: string,
   baseline: {
     readonly expectedAbsent: boolean;
@@ -819,19 +846,19 @@ async function verifyStagedWriteBaseline(
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly error: string }
 > {
-  const stat = await fs.lstat(destination).catch(() => undefined);
+  const stat = await files.lstat(destination).catch(() => undefined);
   if (!stat) {
     return baseline.expectedAbsent
       ? { ok: true }
       : { ok: false, error: "expected_file_missing" };
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+  if (stat.kind !== "file" || stat.nlink > 1) {
     return { ok: false, error: "not_a_private_regular_file" };
   }
   if (baseline.expectedAbsent) {
     return { ok: false, error: "expected_file_absent" };
   }
-  const bytes = await fs.readFile(destination).catch(() => undefined);
+  const bytes = await files.readFile(destination).catch(() => undefined);
   if (!bytes) return { ok: false, error: "file_unreadable" };
   return contentHash(bytes) === baseline.expectedContentHash
     ? { ok: true }

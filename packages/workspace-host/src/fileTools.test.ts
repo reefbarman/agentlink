@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
+
 import {
   createWorkspaceFileTools,
   type WorkspaceFileApprovalDisplay,
 } from "./fileTools.js";
+import type {
+  WorkspaceExecutionBackend,
+  WorkspaceProcessLaunchRequest,
+} from "./workspaceExecutionBackend.js";
 
 const principal = { tenantId: "local", subjectId: "project" };
 const discovery = {
@@ -617,4 +623,178 @@ describe("workspace file tools", () => {
     expect(linked.isError).toBe(true);
     expect(String(linked.modelContent)).toContain("not_a_private_regular_file");
   });
+
+  it("delegates file access, search and git status to an injected execution backend", async () => {
+    const realRoot = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-backend-"),
+    );
+    // Exists only inside the backend; any direct host I/O would fail.
+    const projectRoot = "/agentlink-virtual-backend/project";
+    const ripgrep = "/backend/bin/rg";
+    try {
+      await fs.writeFile(path.join(realRoot, "notes.txt"), "alpha\nbeta\n");
+      const launches: WorkspaceProcessLaunchRequest[] = [];
+      const executionBackend: WorkspaceExecutionBackend = {
+        fileSystem: mappedFileSystem(projectRoot, realRoot, [
+          ripgrep,
+          "/usr/bin/git",
+        ]),
+        launchProcess(launch) {
+          launches.push(launch.request);
+          const exited = new Promise<{ exitCode: number }>((resolve) => {
+            setTimeout(() => {
+              launch.onOutput(
+                "stdout",
+                Buffer.from(
+                  launch.request.executable === ripgrep
+                    ? `${JSON.stringify({
+                        type: "match",
+                        data: {
+                          path: { text: `${projectRoot}/notes.txt` },
+                          line_number: 2,
+                          lines: { text: "beta\n" },
+                        },
+                      })}\n`
+                    : " M notes.txt\n",
+                ),
+              );
+              resolve({ exitCode: 0 });
+            }, 0);
+          });
+          return {
+            pid: 7,
+            started: Promise.resolve(),
+            exited,
+            signal: () => true,
+          };
+        },
+      };
+      const files = createWorkspaceFileTools({
+        projectRoot,
+        ripgrepExecutable: ripgrep,
+        executionBackend,
+        processOwnerId: "workspace:backend-test",
+      });
+      const tools = await files.resolveTools(discovery);
+      const tool = (name: string) =>
+        tools.find((candidate) => candidate.definition.name === name)!;
+
+      const contextResult = await tool("get_context").execute(
+        { path: "notes.txt" },
+        context(),
+      );
+      expect(JSON.parse(String(contextResult.modelContent))).toMatchObject({
+        path: "notes.txt",
+        contentHash: hash("alpha\nbeta\n"),
+        text: "1 | alpha\n2 | beta\n3 | ",
+        git: { status: "available", value: "M notes.txt" },
+      });
+
+      const search = await tool("search_files").execute(
+        { path: ".", regex: "beta" },
+        context(),
+      );
+      expect(JSON.parse(String(search.modelContent))).toMatchObject({
+        matches: [{ path: "notes.txt", line: 2, text: "beta" }],
+        count: 1,
+      });
+
+      const authorization = await files.authorizeToolCall({
+        principal,
+        sessionId: "session",
+        turnId: "turn",
+        model,
+        toolCallId: "call",
+        toolName: "write_file",
+        input: {
+          path: "nested/new.txt",
+          content: "created\n",
+          expectedAbsent: true,
+        },
+        effect: "write",
+      });
+      expect(authorization).toMatchObject({ decision: "require_user" });
+      const created = await tool("write_file").execute(
+        { path: "nested/new.txt", content: "created\n", expectedAbsent: true },
+        context(),
+      );
+      expect(created.isError).toBeFalsy();
+      await expect(
+        fs.readFile(path.join(realRoot, "nested", "new.txt"), "utf8"),
+      ).resolves.toBe("created\n");
+      const stale = await tool("write_file").execute(
+        {
+          path: "notes.txt",
+          content: "changed\n",
+          expectedContentHash: hash("stale"),
+        },
+        context(),
+      );
+      expect(String(stale.modelContent)).toContain("content_hash_mismatch");
+
+      const identity = {
+        ownerId: "workspace:backend-test",
+        sessionId: "session",
+        turnId: "turn",
+        cwd: projectRoot,
+      };
+      expect(launches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            ...identity,
+            executable: "/usr/bin/git",
+            environment: { PATH: "/usr/bin:/bin", GIT_OPTIONAL_LOCKS: "0" },
+          }),
+          expect.objectContaining({
+            ...identity,
+            executable: ripgrep,
+            environment: { PATH: "/usr/bin:/bin" },
+            args: expect.arrayContaining(["--", projectRoot]),
+          }),
+        ]),
+      );
+      expect(launches).toHaveLength(2);
+    } finally {
+      await fs.rm(realRoot, { recursive: true, force: true });
+    }
+  });
 });
+
+/** Maps a virtual project root onto a real directory, like a remote backend. */
+function mappedFileSystem(
+  virtualRoot: string,
+  realRoot: string,
+  executables: readonly string[],
+): WorkspaceExecutionBackend["fileSystem"] {
+  const local = createNodeHostLocalFileSystem();
+  const toReal = (target: string): string => {
+    if (target === virtualRoot) return realRoot;
+    if (target.startsWith(`${virtualRoot}/`)) {
+      return path.join(realRoot, target.slice(virtualRoot.length + 1));
+    }
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  };
+  const toVirtual = (target: string): string =>
+    target === realRoot
+      ? virtualRoot
+      : target.startsWith(`${realRoot}/`)
+        ? path.join(virtualRoot, target.slice(realRoot.length + 1))
+        : target;
+  return {
+    realpath: async (target) => toVirtual(await local.realpath(toReal(target))),
+    stat: async (target) => await local.stat(toReal(target)),
+    lstat: async (target) => await local.lstat(toReal(target)),
+    readFile: async (target) => await local.readFile(toReal(target)),
+    readDirectory: async (target) => await local.readDirectory(toReal(target)),
+    mkdir: async (target, options) =>
+      await local.mkdir(toReal(target), options),
+    createFile: async (target, content, options) =>
+      await local.createFile(toReal(target), content, options),
+    link: async (from, to) => await local.link(toReal(from), toReal(to)),
+    rename: async (from, to) => await local.rename(toReal(from), toReal(to)),
+    unlink: async (target) => await local.unlink(toReal(target)),
+    chmod: async (target, mode) => await local.chmod(toReal(target), mode),
+    syncDirectory: async (target) => await local.syncDirectory(toReal(target)),
+    canExecute: async (target) => executables.includes(target),
+  };
+}

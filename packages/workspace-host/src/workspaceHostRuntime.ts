@@ -13,6 +13,7 @@ import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
   createFileNodeHostPersistence,
   createNodeHostAgent,
+  createNodeHostLocalFileSystem,
 } from "@agentlink/node-host";
 import { randomBytes } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
@@ -106,6 +107,15 @@ export interface CreateWorkspaceHostOptions {
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
+  /**
+   * Where project file access, search, git status and `execute_command`
+   * processes run. Defaults to this machine. Supplying one with commands
+   * enabled requires an explicit `commands.resolveEnvironment` so the host
+   * process environment is never forwarded implicitly. Project identity,
+   * ownership, language services, MCP servers and artifacts still run on
+   * the host; a backend is not an isolation boundary by itself.
+   */
+  readonly executionBackend?: WorkspaceExecutionBackend;
   readonly files?: {
     readonly enabled: true;
     readonly approvalPolicy?: WorkspaceFileApprovalPolicy;
@@ -115,12 +125,7 @@ export interface CreateWorkspaceHostOptions {
   readonly commands?: {
     readonly enabled: true;
     readonly shellExecutable?: string;
-    /**
-     * Process launcher for `execute_command`. Defaults to local spawning.
-     * Supplying one requires an explicit `resolveEnvironment` so the host
-     * process environment is never forwarded implicitly.
-     */
-    readonly executionBackend?: WorkspaceExecutionBackend;
+    /** Required when a top-level `executionBackend` is supplied. */
     readonly resolveEnvironment?: () =>
       | NodeJS.ProcessEnv
       | Promise<NodeJS.ProcessEnv>;
@@ -259,7 +264,8 @@ export async function createWorkspaceHost(
     validateWorkspacePromptIdentity(options.promptIdentity);
   }
   if (
-    options.commands?.executionBackend &&
+    options.executionBackend &&
+    options.commands &&
     !options.commands.resolveEnvironment
   ) {
     throw new Error(
@@ -326,12 +332,14 @@ export async function createWorkspaceHost(
     limits: options.requestLimits,
   });
   const mutations = new WorkspaceMutationCoordinator();
+  const hostFileSystem =
+    options.executionBackend?.fileSystem ?? createNodeHostLocalFileSystem();
   let backgroundSupervisor: WorkspaceBackgroundSupervisor | undefined;
   const supervisor = options.commands
     ? await WorkspaceCommandSupervisor.create({
         stateDirectory: path.join(projectDataRoot, "commands"),
         ownerId: commandOwnerId,
-        executionBackend: options.commands.executionBackend,
+        executionBackend: options.executionBackend,
       })
     : undefined;
   const commandTools =
@@ -404,6 +412,7 @@ export async function createWorkspaceHost(
             project.root,
             parentScopes,
             request.scopes,
+            hostFileSystem,
           );
         },
         runTurn: async (sessionId, text, runOptions) => {
@@ -516,6 +525,7 @@ export async function createWorkspaceHost(
         project.root,
         parentScopes,
         childScopes,
+        hostFileSystem,
       ))
         ? childScopes
         : [];
@@ -535,9 +545,12 @@ export async function createWorkspaceHost(
     relativePath: string,
   ): Promise<boolean> => {
     const scopes = await resolveHostFileScopes(request);
-    return await workspaceFileScopesContain(project.root, scopes, [
-      { path: relativePath, kind: "file", access: "read" },
-    ]);
+    return await workspaceFileScopesContain(
+      project.root,
+      scopes,
+      [{ path: relativePath, kind: "file", access: "read" }],
+      hostFileSystem,
+    );
   };
   const languageTools = languageService
     ? createManagedTypeScriptTools({
@@ -552,6 +565,8 @@ export async function createWorkspaceHost(
         approvalPolicy: options.files.approvalPolicy,
         resolveScopes: resolveHostFileScopes,
         ripgrepExecutable: options.files.ripgrepExecutable,
+        executionBackend: options.executionBackend,
+        processOwnerId: commandOwnerId,
         enrichContext: languageService
           ? async (request, relativePath, signal) => {
               const filePath = path.join(project.root, relativePath);
@@ -628,9 +643,12 @@ export async function createWorkspaceHost(
                   access: "read_write" as const,
                 },
               ];
-          return await workspaceFileScopesContain(project.root, parentScopes, [
-            { path: relativePath, kind: "file", access: "read_write" },
-          ]);
+          return await workspaceFileScopesContain(
+            project.root,
+            parentScopes,
+            [{ path: relativePath, kind: "file", access: "read_write" }],
+            hostFileSystem,
+          );
         },
         mutations,
       })

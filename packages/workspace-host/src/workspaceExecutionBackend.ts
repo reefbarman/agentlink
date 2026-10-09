@@ -1,17 +1,26 @@
+import {
+  createNodeHostLocalFileSystem,
+  type NodeHostFileSystem,
+} from "@agentlink/node-host";
 import { spawn } from "node:child_process";
 
 /**
- * Process execution seam for workspace commands. The trusted host prepares,
- * authorises, records, and redacts every launch; the backend only starts the
- * exact prepared process and reports its output and exit. A remote worker
- * implementation must treat every field as host-resolved, never model-supplied.
+ * Execution seam for workspace commands and file tools. The trusted host
+ * prepares, authorises, records, and redacts every operation; the backend only
+ * performs it. A remote worker implementation must treat every field as
+ * host-resolved, never model-supplied.
  *
- * This seam covers `execute_command` only. File tools, search, language
- * services, and stdio MCP still execute in the host process.
+ * Covered: `execute_command` processes, file reads/writes/listing, the
+ * ripgrep-backed `search_files`, and the git status probe in `get_context`.
+ * Not covered: project identity and ownership, language services, stdio MCP,
+ * and instruction/artifact catalogs, which still execute in the host process.
  */
 export interface WorkspaceProcessLaunchRequest {
   readonly schemaVersion: 1;
-  /** Stable operation identity; equal to the supervisor command ID. */
+  /**
+   * Stable operation identity: the supervisor command ID for commands, and a
+   * fresh ID for each file-tool search or git probe.
+   */
   readonly operationId: string;
   readonly ownerId: string;
   readonly sessionId: string;
@@ -52,8 +61,18 @@ export interface WorkspaceProcessLaunch {
   readonly onOutput: (stream: "stdout" | "stderr", bytes: Buffer) => void;
 }
 
-export interface WorkspaceExecutionBackend {
+export interface WorkspaceProcessLauncher {
   launchProcess(launch: WorkspaceProcessLaunch): WorkspaceProcessHandle;
+}
+
+/**
+ * Primitive filesystem operations for workspace file tools. Paths use the
+ * host's canonical absolute namespace; see `NodeHostFileSystem`.
+ */
+export type WorkspaceFileSystem = NodeHostFileSystem;
+
+export interface WorkspaceExecutionBackend extends WorkspaceProcessLauncher {
+  readonly fileSystem: WorkspaceFileSystem;
 }
 
 /** Error carrying a launch failure code such as `ENOENT`. */
@@ -64,9 +83,10 @@ export class WorkspaceProcessLaunchError extends Error {
   }
 }
 
-/** Default backend: spawn directly on this machine, unsandboxed. */
+/** Default backend: spawn and access files directly on this machine, unsandboxed. */
 export function createLocalWorkspaceExecutionBackend(): WorkspaceExecutionBackend {
   return {
+    fileSystem: createNodeHostLocalFileSystem(),
     launchProcess({ request, onOutput }) {
       const child = spawn(request.executable, [...request.args], {
         cwd: request.cwd,

@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   createLocalWorkspaceExecutionBackend,
   WorkspaceProcessLaunchError,
-  type WorkspaceExecutionBackend,
+  type WorkspaceProcessLauncher,
   type WorkspaceProcessExit,
   type WorkspaceProcessHandle,
 } from "./workspaceExecutionBackend.js";
@@ -94,7 +94,7 @@ export interface CreateWorkspaceCommandSupervisorOptions {
   readonly now?: () => number;
   readonly createCommandId?: () => string;
   /** Process launcher. Defaults to unsandboxed local spawning. */
-  readonly executionBackend?: WorkspaceExecutionBackend;
+  readonly executionBackend?: WorkspaceProcessLauncher;
 }
 
 interface RetainedChunk {
@@ -139,7 +139,7 @@ export class WorkspaceCommandSupervisor {
   private readonly terminationGraceMs: number;
   private readonly now: () => number;
   private readonly createCommandId: () => string;
-  private readonly executionBackend: WorkspaceExecutionBackend;
+  private readonly executionBackend: WorkspaceProcessLauncher;
   private persistTail: Promise<void> = Promise.resolve();
   private persistTimer: NodeJS.Timeout | undefined;
   private persistError: Error | undefined;
