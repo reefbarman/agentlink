@@ -1,0 +1,64 @@
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 15-24,27,42-45,60-62,65-74,77-79,85-89,91-96,112-120,126,129,135-163,165,168,170-174,176-197,199-238,247,249-253,320,335,345
+  h_e08a86bb3a33a2 14,75,90,97-111,239
+apps/server/src/assistantServer.ts
+  h_e08a86bb3a33a2 136-143,497-503
+apps/server/src/index.ts
+  h_e08a86bb3a33a2 10,14,17-25,35,41
+  s_ed1437bde8f1ab::t_766686cd734a74 16
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 1-134
+apps/server/deploy/server.macos.example.json
+  h_e08a86bb3a33a2 6
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 17,28-41,156-169,233
+apps/server/src/localCertificateAuthority.test.ts
+  h_e08a86bb3a33a2 1-331
+apps/server/src/atomicFile.ts
+  h_e08a86bb3a33a2 1-39
+apps/server/README.md
+  h_e08a86bb3a33a2 15,26,29,45-73
+  h_e08a86bb3a33a2 126
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 283-378
+apps/server/package.json
+  h_e08a86bb3a33a2 19-20,23
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 4,9-11,17-19,36,51-54,62-63,66,72,87-90,92-98,100,153-177
+  s_ed1437bde8f1ab::t_994b9575aeecff 8,16,20,178-181
+apps/server/src/fileLock.ts
+  h_e08a86bb3a33a2 1-77
+apps/server/src/localCertificateAuthority.ts
+  h_e08a86bb3a33a2 1-495
+apps/server/src/ServerAccessStore.ts
+  h_e08a86bb3a33a2 15-21,792-793,796,801,803-806,810
+  h_e08a86bb3a33a2 795,799
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 144-156,170-178
+  s_ed1437bde8f1ab::t_89c0d3976ddd8c 143,179-180
+apps/server/deploy/server.linux.example.json
+  h_e08a86bb3a33a2 6
+package-lock.json
+  s_ed1437bde8f1ab::t_011c501c8193f2 156-160,163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ed1437bde8f1ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74bc5f97-e44a-4f9d-a7c2-46f0de2db3e9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
