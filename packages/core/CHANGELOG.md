@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-10-09
+
+- Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.
+- Budget-exhausted background results include a completed-tool digest, sandboxed gh keyring failures get host-credential guidance, more config secrets are redacted, and compose telemetry records rejected children.
+
 ## 0.7.0 — 2026-10-09
 
 - In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.
