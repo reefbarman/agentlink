@@ -1,0 +1,28 @@
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 4283-4351,10538-10608
+  s_14d785deb995eb::t_4896b42d8778ac 10609-10610
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 3939,3948-3950,4016-4019,4027,7480-7482
+  s_14d785deb995eb::t_4e37d6d71a7dab 3940-3947,4020-4026
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f7752cea8c2ee2a76f7861ca15f5938627fac69f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_14d785deb995eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d450e3b4-283a-4e7d-84e3-76992a631023",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
