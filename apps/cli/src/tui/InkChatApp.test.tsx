@@ -11,8 +11,60 @@ import type { ReleaseUpdateState } from "../../../../src/updates/releaseUpdateTy
 import type { StandaloneSessionController } from "../sessionController.js";
 import { buildActivityShelfItems } from "./ActivityShelf.js";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
-import { render } from "ink-testing-library";
+import { render as renderInk } from "ink-testing-library";
+import { useFocusManager } from "ink";
 import { wordmarkLines } from "./Wordmark.js";
+
+/**
+ * Reports Ink's active focus ID. Rendered after the app so React runs its
+ * effect after the app's own effects in the same commit, including the
+ * composer's input-listener registration.
+ */
+function FocusProbe({
+  onActiveId,
+}: {
+  readonly onActiveId: (id: string | undefined) => void;
+}): null {
+  const { activeId } = useFocusManager();
+  React.useEffect(() => onActiveId(activeId), [activeId, onActiveId]);
+  return null;
+}
+
+/**
+ * Ink 8 applies autofocus in a separately scheduled render, and input written
+ * before the composer is focused is dropped. `composerReady()` waits for that
+ * focus instead of guessing a delay that a busy CI runner can exceed.
+ */
+function render(tree: React.ReactElement) {
+  let composerFocused = false;
+  const probe = (
+    <FocusProbe
+      onActiveId={(id) => {
+        composerFocused = id === "composer";
+      }}
+    />
+  );
+  const screen = renderInk(
+    <>
+      {tree}
+      {probe}
+    </>,
+  );
+  return {
+    ...screen,
+    rerender: (next: React.ReactElement) =>
+      screen.rerender(
+        <>
+          {next}
+          {probe}
+        </>,
+      ),
+    composerReady: () =>
+      vi.waitFor(() => {
+        if (!composerFocused) throw new Error("Composer is not focused yet");
+      }),
+  };
+}
 
 function controllerFixture(): StandaloneSessionController {
   const fixture = createRendererBakeoffFixture();
@@ -203,7 +255,7 @@ describe("Ink chat app", () => {
     expect(screen.lastFrame()).toContain("code · default model");
     expect(screen.lastFrame()).toContain("ready");
     expect(screen.lastFrame()).not.toContain("prompt writes");
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("Build the feature");
     await nextInputDispatch();
     screen.stdin.write("\r");
@@ -719,7 +771,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("first prompt");
     await nextInputDispatch();
     screen.stdin.write("\r");
@@ -754,7 +806,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("first");
     await nextInputDispatch();
     screen.stdin.write("\r");
@@ -824,7 +876,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("/he");
     await vi.waitFor(() =>
       expect(screen.lastFrame()).toContain("/help · Show TUI shortcuts"),
@@ -849,7 +901,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("/unknown");
     await vi.waitFor(() => expect(screen.lastFrame()).toContain("No matches"));
     screen.stdin.write("\r");
@@ -879,7 +931,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("Review @ind");
     await vi.waitFor(() =>
       expect(loadFileSuggestions).toHaveBeenCalledWith("ind"),
@@ -919,7 +971,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("Review @unsafe");
     await vi.waitFor(
       () => expect(screen.lastFrame()).toContain("project file"),
@@ -1089,7 +1141,7 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("ac");
     await nextInputDispatch();
     screen.stdin.write("\u001b[D");
@@ -1121,12 +1173,13 @@ describe("Ink chat app", () => {
     );
     const paste = `${"🙂漢字 café\n".repeat(600)}final line`;
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write(`\u001b[200~${paste}\u001b[201~`);
-    await nextInputDispatch();
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("🙂漢字 café"),
+    );
 
     const rawFrame = screen.lastFrame() ?? "";
-    expect(stripAnsi(rawFrame)).toContain("🙂漢字 café");
     expect(rawFrame).not.toContain("\u001b[200~");
     expect(rawFrame).not.toContain("\u001b[201~");
     screen.stdin.write("\r");
