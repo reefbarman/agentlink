@@ -1,0 +1,18 @@
+apps/server/deploy/container/smoke-test.sh
+  h_e08a86bb3a33a2 1-122
+apps/server/README.md
+  h_e08a86bb3a33a2 70
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 39-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5747ed381923709957cc79ded1e6b3c20322da08",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
