@@ -1,0 +1,25 @@
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 14-15,18-67,258,774,809,879,904,934,974,1144,1176,1178-1179
+  s_89a87f22377246::t_067a44c5eea0ba 68,1180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a4b1d8cab9540628fdc6b21f460a63ee31d7f6f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_89a87f22377246": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b6e1ec2-88a0-4392-b048-7931eed43790",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
