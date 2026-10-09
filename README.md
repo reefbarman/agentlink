@@ -81,7 +81,7 @@ code --install-extension agentlink-*.vsix --force
 
 ### Try the standalone Desktop preview
 
-Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. The installer downloads the newest DMG for your Mac (Apple Silicon or Intel) and opens it so you can drag **AgentLink** to Applications:
+Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. Desktop supports Apple Silicon only; Intel Macs are no longer supported. The installer downloads the newest Apple Silicon DMG and opens it so you can drag **AgentLink** to Applications:
 
 ![The AgentLink Desktop app showing an Ask Agent conversation with chat history in the sidebar](docs/assets/screenshots/desktop-ask-agent.png)
 

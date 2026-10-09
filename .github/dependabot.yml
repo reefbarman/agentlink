@@ -26,9 +26,7 @@ updates:
       # across two Ink instances. Revisit when react-ink-textarea supports it.
       - dependency-name: "ink"
         update-types: ["version-update:semver-major"]
-      # LanceDB stopped publishing darwin-x64 binaries after 0.22.3, and we ship
-      # a darwin-x64 VSIX. apache-arrow is capped by LanceDB's peer range.
-      - dependency-name: "@lancedb/*"
+      # LanceDB 0.40 still caps apache-arrow at 18.1.0.
       - dependency-name: "apache-arrow"
     groups:
       # Matched first so provider and protocol SDKs always land together, including majors.

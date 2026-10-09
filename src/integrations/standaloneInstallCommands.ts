@@ -12,12 +12,11 @@ export function registerStandaloneInstallCommands(): vscode.Disposable[] {
     if (
       vscode.env.remoteName ||
       process.platform !== "darwin" ||
-      !["arm64", "x64"].includes(process.arch) ||
-      (product === "cli" && process.arch !== "arm64")
+      process.arch !== "arm64"
     ) {
       await vscode.window.showInformationMessage(
         product === "desktop"
-          ? "Desktop installation requires a local macOS VS Code window (Apple Silicon or Intel)."
+          ? "Desktop installation requires a local macOS Apple Silicon VS Code window. Intel Macs are no longer supported."
           : "CLI installation requires a local macOS Apple Silicon VS Code window.",
       );
       return;

@@ -14,7 +14,7 @@ const PRODUCTS = {
       ["alpine-arm64", "alpine-arm64"],
       ["alpine-x64", "alpine-x64"],
       ["darwin-arm64", "darwin-arm64"],
-      ["darwin-x64", "darwin-x64"],
+
       ["linux-arm64", "linux-arm64"],
       ["linux-x64", "linux-x64"],
       ["win32-arm64", "win32-arm64"],
@@ -25,10 +25,7 @@ const PRODUCTS = {
     manifest: "apps/desktop/package.json",
     tagPrefix: "desktop-v",
     channel: "preview",
-    targets: [
-      ["darwin-arm64", "mac-arm64"],
-      ["darwin-x64", "mac-x64"],
-    ],
+    targets: [["darwin-arm64", "mac-arm64"]],
   },
   cli: {
     manifest: "apps/cli/package.json",

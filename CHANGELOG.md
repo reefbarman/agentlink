@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Upgrade LanceDB to 0.40.0. New VS Code and Desktop releases no longer support Intel Macs; macOS builds require Apple Silicon. Apache Arrow remains at 18.1.0, within LanceDB's supported range.
+
 ## 1.30.0
 
 - Fixed built-in foreground chats stopping immediately when Meridian or another provider reports a truncated response. AgentLink now preserves partial output and makes up to two continuation attempts without executing truncated tool calls or changing model settings. Persistent truncation is shown as paused; shared VS Code/browser warning cards no longer count terminal warnings as retries or infer recovery from bookkeeping rows alone.

@@ -76,8 +76,7 @@ jobs:
         include:
           - target: darwin-arm64
             runner: macos-15
-          - target: darwin-x64
-            runner: macos-15-intel
+
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -159,14 +158,14 @@ jobs:
       - name: Verify release asset set
         run: |
           VERSION=${DESKTOP_VERSION#desktop-v}
-          for ARCH in arm64 x64; do
+          for ARCH in arm64; do
             test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.dmg"
             test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.dmg.blockmap"
             test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.zip"
             test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.zip.blockmap"
           done
           ACTUAL_COUNT=$(find dist -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) | wc -l | tr -d ' ')
-          test "$ACTUAL_COUNT" -eq 8
+          test "$ACTUAL_COUNT" -eq 4
 
       - name: Generate release update metadata
         run: node scripts/generate-release-update.mjs --product desktop --dir dist
@@ -180,7 +179,7 @@ jobs:
           TARGET=$(git rev-parse HEAD)
           {
             node scripts/release-coordinator.mjs notes --unit desktop --version "$VERSION" && printf '\n' || true
-            printf '%s\n\n' 'Standalone AgentLink Desktop preview for macOS. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop`, or download the DMG matching your Mac: `arm64` for Apple Silicon or `x64` for Intel.'
+            printf '%s\n\n' 'Standalone AgentLink Desktop preview for macOS Apple Silicon. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop`, or download the `arm64` DMG. Intel Macs are no longer supported.'
             printf '%s\n' "This preview is unsigned and not notarized. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with \`xattr -dr com.apple.quarantine AgentLink.app\` after extraction."
           } > notes.md
           node scripts/release-publish.mjs \

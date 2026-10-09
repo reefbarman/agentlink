@@ -103,7 +103,8 @@ case "$SURFACE" in
     fi
     TARGET=$(vscode_target)
     case "$TARGET" in
-      darwin-arm64|darwin-x64|linux-arm64|linux-x64|alpine-arm64|alpine-x64|win32-arm64|win32-x64) ;;
+      darwin-x64) die "AgentLink no longer supports Intel Macs." ;;
+      darwin-arm64|linux-arm64|linux-x64|alpine-arm64|alpine-x64|win32-arm64|win32-x64) ;;
       *) die "Unsupported AgentLink VSIX target: $TARGET" ;;
     esac
     TAG_PREFIX="v"
@@ -113,7 +114,7 @@ case "$SURFACE" in
   desktop)
     [ "$OS" = "Darwin" ] || die "The Desktop preview is available for macOS only."
     ARCH="${ARCH_OVERRIDE:-$(mac_arch)}"
-    case "$ARCH" in arm64|x64) ;; *) die "Unsupported Desktop architecture: $ARCH" ;; esac
+    case "$ARCH" in arm64) ;; x64) die "AgentLink Desktop no longer supports Intel Macs." ;; *) die "Unsupported Desktop architecture: $ARCH" ;; esac
     TAG_PREFIX="desktop-v"
     ASSET_PATTERN="AgentLink-Desktop-${VERSION_PATTERN}-mac-${ARCH}\\.dmg"
     LABEL="Desktop preview (macOS $ARCH)"

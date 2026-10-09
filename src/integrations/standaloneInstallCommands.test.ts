@@ -95,11 +95,17 @@ describe("standalone install commands", () => {
     expect(vscode.window.createTerminal).not.toHaveBeenCalled();
   });
 
-  it("refuses Intel CLI installs but permits desktop discovery", async () => {
+  it("refuses Intel CLI and desktop installs before discovery", async () => {
     vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+    vi.spyOn(vscode.window, "showInformationMessage").mockResolvedValue(
+      undefined,
+    );
     await handlers.get("agentlink.installCli")!();
     expect(findStandaloneRelease).not.toHaveBeenCalled();
     await handlers.get("agentlink.installDesktopApp")!();
-    expect(findStandaloneRelease).toHaveBeenCalledWith("desktop", "x64");
+    expect(findStandaloneRelease).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Intel Macs are no longer supported"),
+    );
   });
 });

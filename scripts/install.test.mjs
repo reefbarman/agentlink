@@ -38,10 +38,7 @@ const RELEASES = [
     "agentlink-1.24.0-linux-x64.vsix",
     "SHA256SUMS",
   ]),
-  release("desktop-v0.2.0", [
-    "AgentLink-Desktop-0.2.0-mac-arm64.dmg",
-    "AgentLink-Desktop-0.2.0-mac-x64.dmg",
-  ]),
+  release("desktop-v0.2.0", ["AgentLink-Desktop-0.2.0-mac-arm64.dmg"]),
   release("cli-v0.1.0", [
     "agentlink-cli-darwin-arm64-v0.1.0.tar.gz",
     "agentlink-cli-darwin-arm64-v0.1.0.tar.gz.sha256",
@@ -84,9 +81,9 @@ test("install.sh selects each surface by its own tag series", () => {
   assert.equal(cli.status, 0, cli.stderr);
   assert.match(cli.stdout, /Selected cli-v0\.3\.0/);
 
-  const desktop = runInstaller(["--surface", "desktop", "--arch", "x64"]);
+  const desktop = runInstaller(["--surface", "desktop", "--arch", "arm64"]);
   assert.equal(desktop.status, 0, desktop.stderr);
-  assert.match(desktop.stdout, /AgentLink-Desktop-0\.2\.0-mac-x64\.dmg/);
+  assert.match(desktop.stdout, /AgentLink-Desktop-0\.2\.0-mac-arm64\.dmg/);
   assert.match(desktop.stdout, /skipping verification/);
 });
 
@@ -109,6 +106,13 @@ test("install.sh refuses unsupported platforms and arguments", () => {
   });
   assert.notEqual(intelCli.status, 0);
   assert.match(intelCli.stderr, /Apple Silicon only/);
+
+  const intelDesktop = runInstaller(["--surface", "desktop", "--arch", "x64"]);
+  assert.notEqual(intelDesktop.status, 0);
+  assert.match(intelDesktop.stderr, /no longer supports Intel Macs/);
+  const intelVscode = runInstaller([], { AGENTLINK_VSCE_TARGET: "darwin-x64" });
+  assert.notEqual(intelVscode.status, 0);
+  assert.match(intelVscode.stderr, /no longer supports Intel Macs/);
 
   const linuxDesktop = runInstaller(["--surface", "desktop"], {
     AGENTLINK_INSTALL_OS: "Linux",

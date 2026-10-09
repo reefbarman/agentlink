@@ -21,7 +21,6 @@ const vscodeFiles = [
   "agentlink-1.2.3-alpine-arm64.vsix",
   "agentlink-1.2.3-alpine-x64.vsix",
   "agentlink-1.2.3-darwin-arm64.vsix",
-  "agentlink-1.2.3-darwin-x64.vsix",
   "agentlink-1.2.3-linux-arm64.vsix",
   "agentlink-1.2.3-linux-x64.vsix",
   "agentlink-1.2.3-win32-arm64.vsix",
@@ -53,7 +52,6 @@ test("generates stable VS Code metadata with sorted targets", () => {
       "alpine-arm64": "agentlink-1.2.3-alpine-arm64.vsix",
       "alpine-x64": "agentlink-1.2.3-alpine-x64.vsix",
       "darwin-arm64": "agentlink-1.2.3-darwin-arm64.vsix",
-      "darwin-x64": "agentlink-1.2.3-darwin-x64.vsix",
       "linux-arm64": "agentlink-1.2.3-linux-arm64.vsix",
       "linux-x64": "agentlink-1.2.3-linux-x64.vsix",
       "win32-arm64": "agentlink-1.2.3-win32-arm64.vsix",
@@ -71,15 +69,11 @@ test("advertises Desktop DMGs as primary assets, not ZIPs or blockmaps", () => {
       "AgentLink-Desktop-0.4.0-mac-arm64.dmg",
       "AgentLink-Desktop-0.4.0-mac-arm64.dmg.blockmap",
       "AgentLink-Desktop-0.4.0-mac-arm64.zip",
-      "AgentLink-Desktop-0.4.0-mac-x64.dmg",
-      "AgentLink-Desktop-0.4.0-mac-x64.dmg.blockmap",
-      "AgentLink-Desktop-0.4.0-mac-x64.zip",
       "SHA256SUMS",
     ],
   });
   assert.deepEqual(metadata.targets, {
     "darwin-arm64": "AgentLink-Desktop-0.4.0-mac-arm64.dmg",
-    "darwin-x64": "AgentLink-Desktop-0.4.0-mac-x64.dmg",
   });
   assert.deepEqual(metadata.engines, {});
   assert.equal(metadata.channel, "preview");
@@ -128,7 +122,6 @@ test("rejects missing, unexpected, or invalid product assets and manifests", () 
         version: "0.4.0",
         files: [
           "AgentLink-Desktop-0.4.0-mac-arm64.dmg",
-          "AgentLink-Desktop-0.4.0-mac-x64.dmg",
           "AgentLink-Desktop-0.3.0-mac-x64.dmg",
         ],
       }),
@@ -165,9 +158,7 @@ test("CLI derives identity from the requested product manifest and reruns identi
     mkdirSync(dir);
     for (const name of [
       "AgentLink-Desktop-0.4.0-mac-arm64.dmg",
-      "AgentLink-Desktop-0.4.0-mac-x64.dmg",
       "AgentLink-Desktop-0.4.0-mac-arm64.zip",
-      "AgentLink-Desktop-0.4.0-mac-x64.zip",
     ]) {
       writeFileSync(path.join(dir, name), "fixture");
     }

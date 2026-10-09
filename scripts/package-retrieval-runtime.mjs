@@ -6,7 +6,7 @@ import path from "node:path";
 const ROOT_PACKAGES = ["@lancedb/lancedb", "apache-arrow"];
 export const LANCEDB_NATIVE_PACKAGES = {
   "darwin-arm64": "@lancedb/lancedb-darwin-arm64",
-  "darwin-x64": "@lancedb/lancedb-darwin-x64",
+
   "linux-arm64": "@lancedb/lancedb-linux-arm64-gnu",
   "linux-x64": "@lancedb/lancedb-linux-x64-gnu",
   "alpine-arm64": "@lancedb/lancedb-linux-arm64-musl",

@@ -66,6 +66,18 @@ test("maps host and VSCE targets to one native package", () => {
     "@lancedb/lancedb-linux-arm64-musl",
   );
   assert.throws(
+    () => resolveRetrievalRuntimeTarget({ target: "darwin-x64" }),
+    /Unsupported retrieval runtime target/,
+  );
+  assert.throws(
+    () =>
+      resolveRetrievalRuntimeTarget({
+        platform: "darwin",
+        architecture: "x64",
+      }),
+    /Unsupported retrieval runtime host/,
+  );
+  assert.throws(
     () => resolveRetrievalRuntimeTarget({ target: "web" }),
     /Unsupported retrieval runtime target/,
   );
