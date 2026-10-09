@@ -1,0 +1,44 @@
+CHANGELOG.md
+  s_022f94f57d50cd::t_577e9af46dbd59 17-18
+packages/node-host/README.md
+  s_022f94f57d50cd::t_a8847d5720d0fa 117
+packages/node-host/src/codexOAuthCallback.test.ts
+  s_12c3192884e0d6::t_31bdd7d0ed7b96 1-303
+packages/node-host/src/codexOAuthManager.ts
+  s_12c3192884e0d6::t_1b415440cf9d33 264,270,394-395,418-421,426-429,431,1190-1191,1195,1211-1213,1216-1237,1240-1298,1300-1303,1307-1314,1317-1328,1330-1333,1336-1337,1340,1342-1386,1389-1407,1419,1421-1429,1432,1434,1436-1438,1440,1442-1493,1495-1504
+packages/node-host/src/keychainSecretStorage.test.ts
+  s_022f94f57d50cd::t_b82a0dd21a68dc 9-12,16,23-26,48,79-122
+packages/node-host/src/keychainSecretStorage.ts
+  s_022f94f57d50cd::t_1411d0d19c8b67 10-12,16-22,42-46
+resources/builtin-skills/documentation/references/release-notes.md
+  s_022f94f57d50cd::t_964a6350eb8bd9 17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b15be6cd1fd15b4b8abf0333971034925735fd5",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_022f94f57d50cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f44f64b1-8d3e-4da9-908c-b6078bcc56fa",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_12c3192884e0d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57652112-427d-4a55-932f-eb9914f6fa20",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
