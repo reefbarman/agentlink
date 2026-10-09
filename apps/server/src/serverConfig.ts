@@ -29,9 +29,31 @@ export interface AssistantServerConfig {
   >;
   readonly providers: readonly AssistantServerProviderConfig[];
   readonly projects: readonly AssistantServerProjectConfig[];
-  /** Absolute ripgrep binary for `search_files`; built-in search otherwise. */
+  /**
+   * Absolute ripgrep binary for `search_files`; built-in search otherwise.
+   * With a command worker, ripgrep runs there, so this is the worker's path.
+   */
   readonly ripgrepPath?: string;
+  /**
+   * Run `execute_command` (and ripgrep and git probes) on a separate command
+   * worker. Without it, commands are disabled: the server never runs them
+   * itself. Every command still needs the owner's approval.
+   */
+  readonly commandWorker?: AssistantServerCommandWorkerConfig;
 }
+
+export interface AssistantServerCommandWorkerConfig {
+  /** Loopback, or a sibling container's name on a private network. */
+  readonly host: string;
+  readonly port: number;
+  /** Shared token the worker also reads. */
+  readonly token: AssistantServerSecretSource;
+  /** Absolute shell on the worker that runs each command (`-c`). */
+  readonly shell: string;
+}
+
+/** Default shell for commands on the worker. */
+export const DEFAULT_COMMAND_WORKER_SHELL = "/bin/bash";
 
 /**
  * Either an operator-provided certificate and key, or a server-managed,
@@ -197,6 +219,7 @@ export function parseAssistantServerConfig(
     "providers",
     "projects",
     "ripgrepPath",
+    "commandWorker",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -337,6 +360,50 @@ export function parseAssistantServerConfig(
     ...(config.ripgrepPath === undefined
       ? {}
       : { ripgrepPath: resolvePath(config.ripgrepPath, "ripgrepPath") }),
+    ...(config.commandWorker === undefined
+      ? {}
+      : {
+          commandWorker: parseCommandWorker(
+            config.commandWorker,
+            baseDirectory,
+          ),
+        }),
+  };
+}
+
+function parseCommandWorker(
+  value: unknown,
+  baseDirectory: string,
+): AssistantServerCommandWorkerConfig {
+  const label = "commandWorker";
+  const item = record(value, label);
+  allowKeys(item, label, ["host", "port", "token", "shell"]);
+  const host = text(item.host, `${label}.host`);
+  // The protocol is plain TCP with a shared token, so it must stay on this
+  // machine or a private container network, like Meridian's HTTP.
+  const loopback =
+    host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (!loopback && !CONTAINER_HOST_PATTERN.test(host)) {
+    throw new Error(
+      `${label}.host must be loopback or a container name on a private network`,
+    );
+  }
+  const port = item.port;
+  if (!Number.isSafeInteger(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`${label}.port must be an integer from 1 to 65535`);
+  }
+  const shell =
+    item.shell === undefined
+      ? DEFAULT_COMMAND_WORKER_SHELL
+      : text(item.shell, `${label}.shell`);
+  if (!path.posix.isAbsolute(shell)) {
+    throw new Error(`${label}.shell must be an absolute path on the worker`);
+  }
+  return {
+    host,
+    port: Number(port),
+    token: secretSource(item.token, `${label}.token`, baseDirectory),
+    shell,
   };
 }
 

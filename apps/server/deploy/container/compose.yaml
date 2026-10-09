@@ -1,8 +1,11 @@
-# AgentLink assistant server under Docker Compose.
+# AgentLink assistant server and its command worker under Docker Compose.
 #
 # Put this file, server.json, and an optional .env in one directory, with
-# private data/ and projects/ directories owned by the host user:
-#   mkdir -m 700 data && mkdir -p projects/home
+# private data/ and secrets/ directories and a projects/ directory owned by
+# the host user:
+#   mkdir -m 700 data secrets && mkdir -p projects/home
+#   openssl rand -hex 32 > secrets/command-worker-token
+#   chmod 600 secrets/command-worker-token
 #   docker compose up -d
 #   docker compose logs assistant          # one-time setup credential
 #   docker compose exec assistant agentlink-server codex-login
@@ -12,6 +15,8 @@
 # .env settings (all optional):
 #   AGENTLINK_PUBLISH  host address and port to publish (default 0.0.0.0:8443)
 #   AGENTLINK_UID / AGENTLINK_GID  owner of data/ and projects/ (default 1000)
+#   AGENTLINK_WORKER_MEMORY / AGENTLINK_WORKER_CPUS / AGENTLINK_WORKER_PIDS
+#     command worker limits (default 2g, 2, 512)
 
 name: agentlink-assistant
 
@@ -33,10 +38,19 @@ services:
       # Docker publishes ports outside ufw. The server itself only answers
       # HTTPS for the hosts in publicOrigins, to signed-in devices.
       - "${AGENTLINK_PUBLISH:-0.0.0.0:8443}:8443"
+    networks:
+      - default
+      - command-worker
     volumes:
       - ./server.json:/etc/agentlink/server.json:ro
       - ./data:/var/lib/agentlink
       - ./projects:/srv/agentlink/projects
+    secrets:
+      - source: command_worker_token
+        target: command-worker-token
+    depends_on:
+      command-worker:
+        condition: service_started
     # Running turns are stopped and awaited on SIGTERM.
     stop_grace_period: 60s
     logging:
@@ -44,3 +58,49 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+  # Runs the commands the owner approves, and ripgrep and git for the file
+  # tools. It sees only projects/ (at the same path as the assistant) and the
+  # shared token: no server data, sign-ins, TLS keys, or provider secrets.
+  command-worker:
+    image: agentlink-command-worker:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    user: "${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${AGENTLINK_WORKER_MEMORY:-2g}
+    cpus: ${AGENTLINK_WORKER_CPUS:-2}
+    pids_limit: ${AGENTLINK_WORKER_PIDS:-512}
+    # Only the internal network: the assistant can reach the worker, and
+    # commands cannot reach the internet, the LAN, or Meridian. See
+    # compose.worker-egress.yaml to let commands use the internet.
+    networks:
+      - command-worker
+    expose:
+      - "7300"
+    volumes:
+      - ./projects:/srv/agentlink/projects
+    secrets:
+      - source: command_worker_token
+        target: command-worker-token
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  command-worker:
+    internal: true
+
+secrets:
+  command_worker_token:
+    file: ./secrets/command-worker-token

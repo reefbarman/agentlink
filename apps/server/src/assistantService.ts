@@ -1,5 +1,7 @@
+import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 import {
   createWorkspaceHost,
+  type CreateWorkspaceHostOptions,
   type WorkspaceHost,
 } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
@@ -17,6 +19,12 @@ import {
   hasCodexProvider,
 } from "./codexSignIn.js";
 import {
+  canExecuteOnCommandWorker,
+  createCommandWorkerLauncher,
+  pingCommandWorker,
+  type CommandWorkerClientOptions,
+} from "./commandWorkerClient.js";
+import {
   FileLockHeldError,
   acquireFileLock,
   releaseFileLock,
@@ -29,6 +37,7 @@ import {
 } from "./localCertificateAuthority.js";
 import {
   configuredModels,
+  prepareSecret,
   resolveWorkspaceProviders,
   usesLocalCa,
   type AssistantServerConfig,
@@ -81,7 +90,63 @@ export type AssistantServicePreflight = (
 ) & {
   /** Present when a codex provider is configured. */
   readonly codexSignIn?: string;
+  /** Present when a command worker is configured. */
+  readonly commandWorker?: string;
 };
+
+/**
+ * The only environment commands get on the worker. Nothing from the server
+ * process (provider keys, credential paths) is forwarded.
+ */
+export const COMMAND_WORKER_ENVIRONMENT: Readonly<Record<string, string>> = {
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  HOME: "/tmp",
+  LANG: "C.UTF-8",
+  TERM: "dumb",
+};
+
+async function commandWorkerClient(
+  config: AssistantServerConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<CommandWorkerClientOptions | undefined> {
+  if (!config.commandWorker) return undefined;
+  return {
+    host: config.commandWorker.host,
+    port: config.commandWorker.port,
+    readToken: await prepareSecret(
+      config.commandWorker.token,
+      "commandWorker.token",
+      env,
+    ),
+  };
+}
+
+/**
+ * Host options that run every process on the command worker, or disable
+ * commands when none is configured. Files stay local to this server.
+ */
+export function commandHostOptions(
+  config: Pick<AssistantServerConfig, "commandWorker">,
+  client: CommandWorkerClientOptions | undefined,
+): Pick<CreateWorkspaceHostOptions, "executionBackend" | "commands"> {
+  if (!client || !config.commandWorker) return {};
+  return {
+    executionBackend: {
+      // Project files are read and written here. Only "can this binary run"
+      // (ripgrep, git) is asked where processes actually run.
+      fileSystem: {
+        ...createNodeHostLocalFileSystem(),
+        canExecute: (target) => canExecuteOnCommandWorker(client, target),
+      },
+      ...createCommandWorkerLauncher(client),
+    },
+    commands: {
+      enabled: true,
+      shellExecutable: config.commandWorker.shell,
+      resolveEnvironment: () => ({ ...COMMAND_WORKER_ENVIRONMENT }),
+    },
+  };
+}
 
 /**
  * Check everything that can be checked without taking locks, listening, or
@@ -113,10 +178,25 @@ export async function preflightAssistantService(
       );
     }
   }
-  if (config.ripgrepPath) {
+  // With a worker, ripgrep runs there and cannot be checked from here.
+  if (config.ripgrepPath && !config.commandWorker) {
     await fs.access(config.ripgrepPath, fs.constants.X_OK).catch(() => {
       throw new Error(`ripgrepPath is not executable: ${config.ripgrepPath}`);
     });
+  }
+  const worker = await commandWorkerClient(config, env);
+  if (worker) {
+    // Reported, not fatal: the worker may start after the server.
+    const ping = await pingCommandWorker({
+      ...worker,
+      connectTimeoutMs: 3_000,
+    });
+    result = {
+      ...result,
+      commandWorker: ping.ok
+        ? `Command worker: reachable at ${worker.host}:${worker.port}`
+        : `Command worker: not reachable at ${worker.host}:${worker.port} (${ping.code}); commands and search fail until it is`,
+    };
   }
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
@@ -274,6 +354,8 @@ export async function startAssistantService(
     ? createServerCodexRuntime(config, log)
     : undefined;
   if (preflight.codexSignIn) log(preflight.codexSignIn);
+  if (preflight.commandWorker) log(preflight.commandWorker);
+  const worker = await commandWorkerClient(config, env);
   const providers = await resolveWorkspaceProviders(
     config.providers,
     env,
@@ -309,6 +391,7 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
+        ...commandHostOptions(config, worker),
         files: {
           enabled: true,
           ...(config.ripgrepPath

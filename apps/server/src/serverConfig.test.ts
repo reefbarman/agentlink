@@ -247,6 +247,40 @@ describe("parseAssistantServerConfig", () => {
       }),
       "listen.port",
     ],
+    [
+      "a command worker on a LAN address",
+      withChange((config) => {
+        config.commandWorker = {
+          host: "192.168.1.20",
+          port: 7300,
+          token: { file: "/run/secrets/command-worker-token" },
+        };
+      }),
+      "commandWorker.host must be loopback or a container name",
+    ],
+    [
+      "a command worker with an inline token",
+      withChange((config) => {
+        config.commandWorker = {
+          host: "command-worker",
+          port: 7300,
+          token: "inline",
+        };
+      }),
+      "commandWorker.token must be an object",
+    ],
+    [
+      "a relative command worker shell",
+      withChange((config) => {
+        config.commandWorker = {
+          host: "command-worker",
+          port: 7300,
+          token: { file: "/run/secrets/command-worker-token" },
+          shell: "bash",
+        };
+      }),
+      "commandWorker.shell must be an absolute path",
+    ],
   ])("rejects %s", (_name, config, message) => {
     expect(() => parseAssistantServerConfig(config, "/etc/agentlink")).toThrow(
       message,
@@ -268,6 +302,28 @@ describe("parseAssistantServerConfig", () => {
       baseURL: "http://meridian:3456/v1",
       allowInsecureHttp: true,
     });
+  });
+
+  it("parses a command worker with a default shell", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.commandWorker = {
+          host: "command-worker",
+          port: 7300,
+          token: { file: "secrets/command-worker-token" },
+        };
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.commandWorker).toEqual({
+      host: "command-worker",
+      port: 7300,
+      token: { file: "/etc/agentlink/secrets/command-worker-token" },
+      shell: "/bin/bash",
+    });
+    expect(
+      parseAssistantServerConfig(validConfig(), "/etc/agentlink").commandWorker,
+    ).toBeUndefined();
   });
 
   it("accepts a server-managed local CA", () => {

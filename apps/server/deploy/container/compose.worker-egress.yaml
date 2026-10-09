@@ -1,0 +1,16 @@
+# Let commands on the command worker reach the internet (for example for
+# package installs or `curl`). Without this overlay they cannot. Add it with
+#   COMPOSE_FILE=compose.yaml:compose.worker-egress.yaml
+# in .env (append :compose.meridian.yaml if you use Meridian too).
+#
+# The egress network is separate from the assistant's network, so commands
+# still cannot reach Meridian or the assistant's published port by name.
+
+services:
+  command-worker:
+    networks:
+      - command-worker
+      - worker-egress
+
+networks:
+  worker-egress: {}

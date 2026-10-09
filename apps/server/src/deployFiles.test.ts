@@ -65,11 +65,26 @@ describe("deployment files", () => {
       path.join(container, "Dockerfile"),
       "utf8",
     );
-    expect(dockerfile).toMatch(/^FROM node:22-/mu);
-    expect(dockerfile).toMatch(/^USER node$/mu);
-    expect(dockerfile).toMatch(/^ENTRYPOINT \["agentlink-server"\]$/mu);
-    expect(dockerfile).toContain(
+    const stages = dockerfile.split(/^(?=FROM )/mu).slice(1);
+    const stage = (name: string) =>
+      stages.find((text) => text.split("\n")[0]!.endsWith(` AS ${name}`))!;
+    // The assistant is the default (last) target and has no shell: no RUN,
+    // only Node and the bundle, whose shebang points at Node directly.
+    const assistant = stage("assistant");
+    expect(stages.at(-1)).toBe(assistant);
+    expect(assistant).toMatch(/^FROM gcr\.io\/distroless\/nodejs22-/mu);
+    expect(assistant).not.toMatch(/^RUN /mu);
+    expect(assistant).toMatch(/^USER 1000:1000$/mu);
+    expect(assistant).toMatch(/^ENTRYPOINT \["agentlink-server"\]$/mu);
+    expect(assistant).toContain(
       "AGENTLINK_SERVER_CONFIG=/etc/agentlink/server.json",
+    );
+    expect(stage("bundle")).toContain("#!/nodejs/bin/node");
+    const worker = stage("command-worker");
+    expect(worker).toMatch(/^FROM node:22-/mu);
+    expect(worker).toMatch(/^USER node$/mu);
+    expect(worker).toMatch(
+      /^ENTRYPOINT \["agentlink-server", "command-worker"\]$/mu,
     );
     // The build context admits only the bundle.
     const ignore = await fs.readFile(
@@ -97,6 +112,39 @@ describe("deployment files", () => {
     }
     expect(compose).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
     expect(compose).not.toMatch(/privileged:\s*true|network_mode:\s*host/u);
+
+    // The worker: hardened, unpublished, on an internal network only, and
+    // with no access to the assistant's data directory or its secrets.
+    const workerService = compose.slice(
+      compose.indexOf("\n  command-worker:\n"),
+      compose.indexOf("\nnetworks:\n"),
+    );
+    for (const line of [
+      "read_only: true",
+      "init: true",
+      "pull_policy: never",
+      "- no-new-privileges:true",
+      "pids_limit:",
+      "mem_limit:",
+      "- ./projects:/srv/agentlink/projects",
+      "target: command-worker-token",
+    ]) {
+      expect(workerService, line).toContain(line);
+    }
+    expect(workerService).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    expect(workerService).toMatch(/^ {4}networks:\n {6}- command-worker\n/mu);
+    expect(workerService).not.toMatch(/^\s+ports:/mu);
+    expect(workerService).not.toMatch(/\.\/data|server\.json|meridian/u);
+    expect(compose).toMatch(
+      /^networks:\n {2}command-worker:\n {4}internal: true$/mu,
+    );
+    const assistantService = compose.slice(
+      compose.indexOf("\n  assistant:\n"),
+      compose.indexOf("\n  command-worker:\n"),
+    );
+    expect(assistantService).toMatch(
+      /^ {4}networks:\n {6}- default\n {6}- command-worker$/mu,
+    );
   });
 
   it("runs Meridian unpublished and hardened, keyed by a shared secret", async () => {

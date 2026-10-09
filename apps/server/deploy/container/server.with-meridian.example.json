@@ -55,5 +55,11 @@
   "projects": [
     { "id": "home", "label": "Home", "root": "/srv/agentlink/projects/home" }
   ],
-  "ripgrepPath": "/usr/bin/rg"
+  "ripgrepPath": "/usr/bin/rg",
+  "commandWorker": {
+    "host": "command-worker",
+    "port": 7300,
+    "token": { "file": "/run/secrets/command-worker-token" },
+    "shell": "/bin/bash"
+  }
 }

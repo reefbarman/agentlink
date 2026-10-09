@@ -34,8 +34,9 @@ One JSON file. Relative paths resolve against its directory, and unknown keys ar
 | `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS; see [Meridian](#claude-models-meridian) for the container exception. |
 | `defaultModel`  | `{ providerId, modelId }`. The model must be declared by that provider.                                                                                                                                                                                     |
 | `modelRoles`    | Optional. `{ "review": { providerId, modelId } }` names the model a client gets when it creates a session with `{ "role": "review" }`, for example Claude through [Meridian](#claude-models-meridian). The model must be declared.                          |
-| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                                                                                                                                    |
-| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                                                                                                                                           |
+| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands run only when `commandWorker` is set.                                                                                                                   |
+| `commandWorker` | Optional. `{ host, port, token, shell? }`: the [command worker](#command-worker) that runs approved commands. `host` is loopback or a container name; `token` is a secret source; `shell` defaults to `/bin/bash`. Without it, commands are disabled.       |
+| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`. With a command worker, this is the worker's path (`/usr/bin/rg` in its image).                                                                                                                            |
 
 API keys are never inline. `{ "file": "/path" }` reads a file that must not be readable by group or others. `{ "credential": "name" }` reads `$CREDENTIALS_DIRECTORY/name`, which systemd provides through `LoadCredential=` or `LoadCredentialEncrypted=` (use `systemd-creds encrypt` to bind the key to the TPM). Keys are reread on each use, so rotation needs no restart.
 
@@ -47,15 +48,18 @@ Tokens are stored in `<dataRoot>/credentials/codex-sign-in.json` (directory `070
 
 ### Container (Docker)
 
-The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds a small image (Node 22, git, ripgrep, the bundle) that runs as a non-root user, and [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs it with a read-only root filesystem, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible to the server. The same image runs on Linux and on macOS with Docker Desktop.
+The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds two images from one bundle: the assistant on a distroless Node 22 base (no shell, no package manager, no git), and the [command worker](#command-worker) (Debian slim with bash, git, and ripgrep). [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs both as non-root users with read-only root filesystems, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible. The same images run on Linux and on macOS with Docker Desktop.
 
 ```sh
 # Build (from the repository root)
 npm run build:workspaces
 docker build -t agentlink-assistant:local -f apps/server/deploy/container/Dockerfile apps/server
+docker build --target command-worker -t agentlink-command-worker:local \
+  -f apps/server/deploy/container/Dockerfile apps/server
 
 # Deploy directory: compose.yaml, server.json (from deploy/container/server.example.json)
-mkdir -m 700 data && mkdir -p projects/home
+mkdir -m 700 data secrets && mkdir -p projects/home
+(umask 077 && openssl rand -hex 32 > secrets/command-worker-token)
 docker compose up -d
 docker compose logs assistant                                  # setup credential, CA fingerprint
 docker compose exec assistant agentlink-server codex-login     # ChatGPT sign-in
@@ -68,6 +72,17 @@ docker compose exec assistant agentlink-server recover
 - **Config.** In the container, `listen` is `0.0.0.0:8443`, `dataRoot` is `/var/lib/agentlink`, and project roots are under `/srv/agentlink/projects`. `publicOrigins` lists the addresses devices use on the LAN.
 - **Restarts.** `restart: unless-stopped` brings it back after a crash or reboot. Locks record the hostname and process start time, so a lock left by the previous run of the same container is not mistaken for a live one when the new process gets the same PID.
 - **Admin commands.** Use `docker compose exec`, which runs inside the service's container. A separate container on the same `data/` (`docker compose run`, or a recreated container after a crash) cannot check the holder's PID, so it honours a lock until its 15-second heartbeat is 60 seconds old; a recreated container may restart a few times before it acquires its locks.
+
+### Command worker
+
+The assistant never runs commands itself; its image has no shell. When `commandWorker` is configured, `execute_command`, git, and ripgrep run in the `command-worker` service, and each command still needs the owner's approval in the session (the server sends no allow rules).
+
+- **What it sees.** Only `projects/`, mounted at the same path as in the assistant, and the shared token. No server data, sign-ins, TLS keys, or provider secrets. Each command gets a fixed environment (`PATH`, `HOME=/tmp`, `LANG`, `TERM`), not the worker's.
+- **Network.** By default the worker is only on an internal network shared with the assistant: commands cannot reach the internet, the LAN, or Meridian. To let them (for `npm install`, `git fetch`), add the overlay: `COMPOSE_FILE=compose.yaml:compose.worker-egress.yaml` in `.env`.
+- **Limits.** 2 GB of memory, 2 CPUs, and 512 processes by default (`AGENTLINK_WORKER_MEMORY`, `AGENTLINK_WORKER_CPUS`, `AGENTLINK_WORKER_PIDS`), and at most 16 commands at once.
+- **Token.** The protocol is plain TCP authenticated by the token. Commands can read the token, so the worker refuses connections from its own container: only the assistant can launch anything. Run `agentlink-server command-worker` outside a container only with `--allow-local-peers`, on a host where that trade-off is acceptable.
+- **Process cleanup.** A command's background jobs are killed when it exits, and with `--reap-orphans` (set in the image) any process that escaped its group is killed whenever no command is running. A dropped server connection or a worker stop kills the command. `docker compose exec command-worker ...` sessions are killed by the same cleanup.
+- **Checks.** `docker compose exec assistant agentlink-server --check` reports whether the worker is reachable with the token. A server whose worker is down still starts; commands fail until it is back.
 
 ### Claude models (Meridian)
 
@@ -244,4 +259,4 @@ Errors: `404 agent_not_found` (unknown, or owned by another session), `409 agent
 
 The event log is in memory, so it only bridges reconnects within one server process. The durable session repository remains the source of truth.
 
-Not yet provided: passkeys, command execution, an installer, and the web app.
+Not yet provided: passkeys, an installer, and the web app.

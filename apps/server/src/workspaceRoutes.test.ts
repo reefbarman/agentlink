@@ -8,6 +8,8 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createAssistantServer } from "./assistantServer.js";
+import { commandHostOptions } from "./assistantService.js";
+import { startCommandWorker } from "./commandWorker.js";
 import {
   createTestCertificate,
   freePort,
@@ -80,12 +82,40 @@ async function startHarness(
   options: {
     authorizeProject?: AuthorizeAssistantProject;
     streamStallTimeoutMs?: number;
+    /** Run commands on an in-process command worker, as the server does. */
+    commandWorker?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
   cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
   const projectRoot = path.join(parent, "project");
   await fs.mkdir(projectRoot);
+  let commandOptions = {};
+  if (options.commandWorker) {
+    const worker = await startCommandWorker({
+      host: "127.0.0.1",
+      port: 0,
+      token: "route-test-worker-token",
+      roots: [await fs.realpath(projectRoot)],
+      allowLocalPeers: true,
+    });
+    cleanup.push(() => worker.close());
+    commandOptions = commandHostOptions(
+      {
+        commandWorker: {
+          host: "127.0.0.1",
+          port: worker.port,
+          token: { file: "/unused" },
+          shell: "/bin/sh",
+        },
+      },
+      {
+        host: "127.0.0.1",
+        port: worker.port,
+        readToken: async () => "route-test-worker-token",
+      },
+    );
+  }
   const fetch = vi.fn<typeof globalThis.fetch>();
   const claudeFetch = vi.fn<typeof globalThis.fetch>();
   let agentNotifier:
@@ -131,6 +161,7 @@ async function startHarness(
         fetch: claudeFetch,
       },
     ],
+    ...commandOptions,
     files: { enabled: true },
     background: {
       enabled: true,
@@ -1254,6 +1285,76 @@ describe("assistant workspace routes", () => {
       "cancelled",
     ]);
     expect(updates.at(-1)).toBe("cancelled");
+  });
+
+  it("runs a command on the worker only after the owner approves it", async () => {
+    process.env.AGENTLINK_ROUTE_TEST_SECRET = "server-only";
+    cleanup.push(async () => {
+      delete process.env.AGENTLINK_ROUTE_TEST_SECRET;
+    });
+    const harness = await startHarness({ commandWorker: true });
+    const { owner, request } = harness;
+    harness.fetch.mockImplementation(async (_url, init) =>
+      hasToolResult(init)
+        ? completion("ran it")
+        : toolCall("execute_command", {
+            command:
+              'touch ran.txt; echo "from-worker $HOME [$AGENTLINK_ROUTE_TEST_SECRET]"',
+          }),
+    );
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "run it" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    const snapshot = await request({ path: base, session: owner });
+    const pending = (
+      snapshot.body as {
+        session: {
+          pendingInteraction?: {
+            request: {
+              interactionId: string;
+              toolName: string;
+              displayContent: { kind: string; command: string };
+            };
+            interactionRevision: string;
+          };
+        };
+      }
+    ).session.pendingInteraction;
+    expect(pending?.request).toMatchObject({
+      toolName: "execute_command",
+      displayContent: { kind: "command_launch" },
+    });
+    // Nothing runs before the owner decides.
+    const marker = path.join(harness.projectRoot, "ran.txt");
+    await expect(fs.access(marker)).rejects.toThrow();
+
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/interaction`,
+        session: owner,
+        body: {
+          interactionId: pending!.request.interactionId,
+          interactionRevision: pending!.interactionRevision,
+          decision: "allow",
+        },
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    await harness.routes.whenIdle("home", sessionId);
+    await expect(fs.access(marker)).resolves.toBeUndefined();
+    const toolResults = harness.fetch.mock.calls
+      .map((call) => requestBody(call[1] as RequestInit).messages ?? [])
+      .flat()
+      .filter((message) => message.role === "tool")
+      .map((message) => JSON.stringify(message.content));
+    // Only the server's fixed environment reaches the command.
+    expect(toolResults.join("\n")).toContain("from-worker /tmp []");
   });
 
   it("maps project access explicitly", async () => {

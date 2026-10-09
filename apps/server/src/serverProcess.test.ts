@@ -423,4 +423,111 @@ describe("agentlink-server process", () => {
       "must not be accessible by others",
     );
   }, 30_000);
+
+  it("runs the command worker from the bundle and reports it in --check", async () => {
+    const root = path.join(workDir, "worker");
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    const tokenFile = path.join(root, "token");
+    await fs.writeFile(tokenFile, "bundle-worker-token\n", { mode: 0o600 });
+    const workerPort = await freePort();
+    const child = spawn(
+      process.execPath,
+      [
+        bundle,
+        "command-worker",
+        "--listen",
+        `127.0.0.1:${workerPort}`,
+        "--token-file",
+        tokenFile,
+        "--root",
+        path.join(root, "projects"),
+        "--allow-local-peers",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      output += chunk;
+    });
+    child.stdout.resume();
+    const exited = new Promise<number | null>((resolve) =>
+      child.on("exit", (code) => resolve(code)),
+    );
+    try {
+      await vi.waitFor(
+        () => {
+          if (!/command worker listening/u.test(output)) {
+            throw new Error(output);
+          }
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+      const certificate = createTestCertificate();
+      await fs.mkdir(path.join(root, "tls"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "tls", "server.crt"),
+        certificate.cert,
+      );
+      await fs.writeFile(
+        path.join(root, "tls", "server.key"),
+        certificate.key,
+        { mode: 0o600 },
+      );
+      const configPath = path.join(root, "server.json");
+      const config = (token: string) => ({
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port: 8443 },
+        publicOrigins: ["https://localhost:8443"],
+        tls: { certFile: "tls/server.crt", keyFile: "tls/server.key" },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: "http://127.0.0.1:9/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", root: "projects/home" }],
+        commandWorker: {
+          host: "127.0.0.1",
+          port: workerPort,
+          token: { file: token },
+        },
+      });
+      await fs.writeFile(configPath, JSON.stringify(config("token")));
+      const check = () =>
+        execFileAsync(process.execPath, [
+          bundle,
+          "--config",
+          configPath,
+          "--check",
+        ]);
+      await expect(check()).resolves.toMatchObject({
+        stdout: expect.stringContaining(
+          `Command worker: reachable at 127.0.0.1:${workerPort}`,
+        ),
+      });
+      const wrongToken = path.join(root, "wrong-token");
+      await fs.writeFile(wrongToken, "not-the-token\n", { mode: 0o600 });
+      await fs.writeFile(configPath, JSON.stringify(config("wrong-token")));
+      await expect(check()).resolves.toMatchObject({
+        stdout: expect.stringContaining("(unauthorized)"),
+      });
+    } finally {
+      child.kill("SIGTERM");
+    }
+    await expect(exited).resolves.toBe(0);
+    expect(output).toContain("rejected a connection with a bad token");
+  }, 60_000);
 });

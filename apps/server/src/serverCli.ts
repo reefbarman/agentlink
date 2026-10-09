@@ -5,6 +5,7 @@ import {
   startAssistantService,
   type AssistantService,
 } from "./assistantService.js";
+import { startCommandWorker } from "./commandWorker.js";
 import {
   localTlsHostsFromOrigins,
   readLocalCertificateAuthority,
@@ -20,6 +21,7 @@ import {
 } from "./ServerAccessStore.js";
 import {
   loadAssistantServerConfig,
+  prepareSecret,
   usesLocalCa,
   type AssistantServerConfig,
 } from "./serverConfig.js";
@@ -43,6 +45,9 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server export-ca --config <file> > agentlink-ca.pem
        agentlink-server codex-login --config <file>
        agentlink-server codex-logout --config <file>
+       agentlink-server command-worker --token-file <file> --root <dir>...
+                                       [--listen <host:port>]
+                                       [--allow-local-peers] [--reap-orphans]
 
 Runs the AgentLink assistant server over HTTPS.
 
@@ -69,7 +74,21 @@ Commands:
                    which does not load). Run it as the service account.
                    The running server uses the new sign-in immediately.
   codex-logout     Remove every stored ChatGPT sign-in.
+  command-worker   Run approved commands for a server whose configuration
+                   has "commandWorker" (normally in its own container).
+                   Needs no server configuration: --token-file is the
+                   shared token (chmod 600), each --root is a directory
+                   commands may run in, and --listen defaults to
+                   0.0.0.0:7300. Only reachable peers holding the token
+                   can run anything, so keep it on a private network.
+                   Connections from the worker's own machine are refused
+                   (commands could read the token) unless
+                   --allow-local-peers is given for a same-host server.
+                   --reap-orphans kills leftover processes whenever no
+                   command runs; use it only alone in a container.
 `;
+
+const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
 
 const COMMANDS = new Set([
   "recover",
@@ -83,6 +102,9 @@ export async function runAssistantServerCli(
   argv: readonly string[],
   io: AssistantServerCliIo,
 ): Promise<number> {
+  if (argv[0] === "command-worker") {
+    return await runCommandWorker(argv.slice(1), io);
+  }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
   let check = false;
@@ -135,6 +157,9 @@ export async function runAssistantServerCli(
       `Configuration OK: ${config.projects.length} project(s), listening on ${config.listen.host}:${config.listen.port} for ${config.publicOrigins.join(", ")}; ${tlsSummary}\n`,
     );
     if (preflight.codexSignIn) io.stdout(`${preflight.codexSignIn}\n`);
+    io.stdout(
+      `${preflight.commandWorker ?? "Commands: disabled (no commandWorker configured)"}\n`,
+    );
     return 0;
   }
 
@@ -273,6 +298,77 @@ async function runCodexLogout(
   await codex.ready();
   await codex.manager.clearCredentials();
   io.stdout("Removed every stored ChatGPT sign-in.\n");
+  return 0;
+}
+
+async function runCommandWorker(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  let listen = DEFAULT_COMMAND_WORKER_LISTEN;
+  let tokenFile: string | undefined;
+  let allowLocalPeers = false;
+  let reapOrphans = false;
+  const roots: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    const value = argv[index + 1];
+    if (argument === "--help" || argument === "-h") {
+      io.stdout(ASSISTANT_SERVER_USAGE);
+      return 0;
+    }
+    if (argument === "--allow-local-peers") {
+      allowLocalPeers = true;
+      continue;
+    }
+    if (argument === "--reap-orphans") {
+      reapOrphans = true;
+      continue;
+    }
+    if (
+      argument !== "--listen" &&
+      argument !== "--token-file" &&
+      argument !== "--root"
+    ) {
+      return usageError(io, `Unknown argument: ${argument}`);
+    }
+    if (!value) return usageError(io, `${argument} needs a value`);
+    index += 1;
+    if (argument === "--listen") listen = value;
+    else if (argument === "--token-file") tokenFile = value;
+    else roots.push(value);
+  }
+  if (!tokenFile) return usageError(io, "--token-file is required");
+  if (roots.length === 0) return usageError(io, "--root is required");
+  const separator = listen.lastIndexOf(":");
+  const host = listen.slice(0, separator);
+  const port = Number(listen.slice(separator + 1));
+  if (
+    separator <= 0 ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65535
+  ) {
+    return usageError(io, "--listen must be <host>:<port>");
+  }
+  const token = await (
+    await prepareSecret({ file: tokenFile }, "--token-file", io.env)
+  )();
+  const worker = await startCommandWorker({
+    host,
+    port,
+    token,
+    roots,
+    allowLocalPeers,
+    reapOrphans,
+    log: io.log,
+  });
+  io.log(
+    `AgentLink command worker listening on ${host}:${worker.port} for ${roots.join(", ")}`,
+  );
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; stopping running commands`);
+  await worker.close();
   return 0;
 }
 
