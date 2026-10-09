@@ -4346,7 +4346,7 @@ export async function handleExecuteCommand(
               retry_guidance: {
                 code: "native_shell_startup_timeout",
                 message:
-                  "The Native Agent shell did not become ready before the startup deadline; the command did not launch and that terminal was closed. Inspect the AgentLink output channel and the selected host terminal profile. In a normal VS Code terminal, check whether shell startup completes without prompts or hangs (for example in .zshrc/.bashrc or a toolchain initializer). Repair that blocker before retrying the same command in a new terminal. Reloading alone does not repair shell startup; do not repeatedly retry or silently bypass user startup files.",
+                  "The Native Agent shell did not become ready before the startup deadline; the command did not launch and that terminal was closed. The error includes the shell's last startup output when it printed any; an interactive prompt there (for example an Oh My Zsh update prompt, a version-manager install prompt, or a trust prompt) is the blocker to report to the user. Inspect the AgentLink output channel and the selected host terminal profile. In a normal VS Code terminal, check whether shell startup completes without prompts or hangs (for example in .zshrc/.bashrc or a toolchain initializer). Repair that blocker before retrying the same command in a new terminal. Reloading alone does not repair shell startup; do not repeatedly retry or silently bypass user startup files.",
                 automatic_retry: false,
                 options: [
                   {

@@ -901,6 +901,48 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     }
   });
 
+  it("reports the shell's last startup output when startup times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider(
+        { spawn: vi.fn(() => pty) },
+        { startupTimeoutMs: 25 },
+      );
+      const channel = launch(runtime);
+      const rejection = expect(channel.ready).rejects.toThrow(
+        /startup timed out after 0\.025s\. Last shell output[^\n]*\nUsing Node v22\n\[oh-my-zsh\] Would you like to update\? \[Y\/n\]$/,
+      );
+
+      pty.emitData(
+        "\x1b[1;32mUsing Node v22\x1b[0m\r\n\r\n[oh-my-zsh] Would you like to update? [Y/n] ",
+      );
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports silent shells when startup times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider(
+        { spawn: vi.fn(() => pty) },
+        { startupTimeoutMs: 25 },
+      );
+      const channel = launch(runtime);
+      const rejection = expect(channel.ready).rejects.toThrow(
+        "The shell printed no output before the deadline.",
+      );
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resizes, closes, and cleans only its owned persistent shell", async () => {
     const pty = new FakeNodePtyProcess();
     const runtime = new NodePtyNativeAgentRuntimeProvider({

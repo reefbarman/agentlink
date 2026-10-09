@@ -10,6 +10,7 @@ import type {
 import type { ResolvedHostShellProfile } from "../shellProfileResolver.js";
 import type { SandboxCommandIdentity } from "../sandbox/sandboxHelperProtocol.js";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
+import { cleanTerminalOutput } from "../../util/ansi.js";
 import { createShellIntegrationParser } from "../shellIntegration.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +18,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 const PROMPT_IDLE_READY_DELAY_MS = 25;
+/** Raw startup bytes retained so a startup timeout can name its blocker. */
+const STARTUP_OUTPUT_RAW_LIMIT = 8 * 1024;
+/** Cleaned startup text included in a startup timeout error. */
+const STARTUP_OUTPUT_REPORT_LIMIT = 600;
 
 export interface NativeAgentShellLaunch {
   profile: ResolvedHostShellProfile;
@@ -298,6 +303,8 @@ class PersistentNativeChannel {
   private externalCommandRunning = false;
   private closed = false;
   private cleaned = false;
+  private startupSettled = false;
+  private startupOutput = "";
 
   constructor(
     readonly channelId: string,
@@ -311,6 +318,11 @@ class PersistentNativeChannel {
   ) {
     this.pid = pty.pid ?? 0;
     this.ready = this.readyDeferred.promise;
+    const settleStartup = () => {
+      this.startupSettled = true;
+      this.startupOutput = "";
+    };
+    this.ready.then(settleStartup, settleStartup);
     this.parser = createShellIntegrationParser(launch.nonce);
     this.subscriptions.push(
       pty.onData((data) => this.handleData(data)),
@@ -391,6 +403,24 @@ class PersistentNativeChannel {
     this.commandStarted = false;
   }
 
+  /**
+   * Cleaned tail of what the shell printed before becoming ready. Startup
+   * blockers (update prompts, trust prompts, tool installers) usually name
+   * themselves here, so a timeout can report them instead of failing blind.
+   */
+  startupOutputTail(): string {
+    const cleaned = cleanTerminalOutput(this.startupOutput)
+      // oxlint-disable-next-line no-control-regex -- drop residual control bytes from shell output
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .join("\n");
+    return cleaned.length > STARTUP_OUTPUT_REPORT_LIMIT
+      ? `…${cleaned.slice(-STARTUP_OUTPUT_REPORT_LIMIT)}`
+      : cleaned;
+  }
+
   close(): boolean {
     if (this.closed) return false;
     this.closed = true;
@@ -408,6 +438,11 @@ class PersistentNativeChannel {
     const parsed = this.parser.push(data);
     for (const segment of parsed.segments) {
       if (segment.type === "data") {
+        if (!this.startupSettled) {
+          this.startupOutput = (this.startupOutput + segment.data).slice(
+            -STARTUP_OUTPUT_RAW_LIMIT,
+          );
+        }
         if (!this.active || this.commandStarted) this.onData(segment.data);
         if (
           this.launch.shell === "bash" &&
@@ -624,13 +659,15 @@ export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProv
       await Promise.race([
         channel.ready,
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error("Native Agent shell integration startup timed out"),
-              ),
-            this.startupTimeoutMs,
-          );
+          timer = setTimeout(() => {
+            const tail = channel.startupOutputTail();
+            const seconds = this.startupTimeoutMs / 1000;
+            const message = tail
+              ? `Native Agent shell integration startup timed out after ${seconds}s. Last shell output before the deadline (a prompt here usually means startup is waiting for input):\n${tail}`
+              : `Native Agent shell integration startup timed out after ${seconds}s. The shell printed no output before the deadline.`;
+            this.log?.(`[native-agent-terminal] ${message}`);
+            reject(new Error(message));
+          }, this.startupTimeoutMs);
           timer.unref();
         }),
       ]);
