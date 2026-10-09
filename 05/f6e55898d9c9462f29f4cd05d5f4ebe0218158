@@ -1,0 +1,16 @@
+package.json
+  h_e08a86bb3a33a2 1256-1257
+package-lock.json
+  h_e08a86bb3a33a2 53-54,12798-12800,12806-12808,12817,12823,13242-13244,13559-13561,13567
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
