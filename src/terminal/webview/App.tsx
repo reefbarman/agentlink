@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "preact/hooks";
 
 import {
   TerminalWebviewController,
@@ -24,6 +30,9 @@ const MIN_TERMINAL_LIST_WIDTH = 150;
 const MAX_TERMINAL_LIST_WIDTH = 420;
 const MIN_TERMINAL_CONTENT_WIDTH = 240;
 const TERMINAL_LIST_KEYBOARD_STEP = 16;
+const TASKS_MENU_WIDTH = 320;
+const TASKS_MENU_MAX_HEIGHT = 360;
+const TASKS_MENU_VIEWPORT_MARGIN = 8;
 
 function terminalListWidthBounds(totalWidth?: number): {
   minimum: number;
@@ -656,9 +665,61 @@ function TasksMenu({
   state: TerminalWebviewState;
 }) {
   const menu = state.tasksMenu;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<
+    { top: number; left: number; width: number; maxHeight: number } | undefined
+  >(undefined);
+
+  // Anchor the menu under the tasks button but keep it inside the webview
+  // viewport; right-aligning to the button alone overflows the left edge in
+  // narrow panels because other toolbar buttons sit to its right.
+  useLayoutEffect(() => {
+    if (!menu.open) {
+      setPosition(undefined);
+      return;
+    }
+    const update = () => {
+      const anchor = menuRef.current?.parentElement;
+      if (!anchor) return;
+      const margin = TASKS_MENU_VIEWPORT_MARGIN;
+      const rect = anchor.getBoundingClientRect();
+      const width = Math.min(TASKS_MENU_WIDTH, window.innerWidth - margin * 2);
+      const left = Math.max(
+        margin,
+        Math.min(rect.right - width, window.innerWidth - width - margin),
+      );
+      const top = rect.bottom + 4;
+      const maxHeight = Math.max(
+        80,
+        Math.min(TASKS_MENU_MAX_HEIGHT, window.innerHeight - top - margin),
+      );
+      setPosition({ top, left, width, maxHeight });
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [menu.open]);
+
   if (!menu.open) return null;
   return (
-    <div class="terminal-tasks-menu" role="menu" aria-label="Terminal tasks">
+    <div
+      ref={menuRef}
+      class="terminal-tasks-menu"
+      role="menu"
+      aria-label="Terminal tasks"
+      style={
+        position
+          ? {
+              position: "fixed",
+              top: `${position.top}px`,
+              left: `${position.left}px`,
+              right: "auto",
+              width: `${position.width}px`,
+              maxHeight: `${position.maxHeight}px`,
+            }
+          : undefined
+      }
+    >
       {menu.loading ? (
         <div class="terminal-tasks-message">Loading tasks…</div>
       ) : menu.tasks.length > 0 && menu.revision ? (
