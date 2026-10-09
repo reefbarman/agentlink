@@ -4280,6 +4280,75 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("persists ask_user recovery for a chat tab session that is not foreground", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const foreground = {
+      id: "foreground-session",
+      title: "Foreground",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+    const persistPendingQuestionRecovery = vi.fn(
+      async (..._args: unknown[]) => {},
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      persistPendingQuestionRecovery,
+      clearPendingQuestionRecovery: vi.fn(),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+    const questions = [
+      { id: "ok", type: "yes_no" as const, question: "Installed?" },
+    ];
+    const pendingQuestionRecovery = {
+      schemaVersion: 1 as const,
+      assistantContent: [
+        {
+          type: "tool_use" as const,
+          id: "toolu-tab",
+          name: "ask_user",
+          input: { questions },
+        },
+      ],
+      toolUseId: "toolu-tab",
+      toolName: "ask_user" as const,
+      toolInput: { questions },
+    };
+
+    void provider.handleToolQuestion(
+      "",
+      questions,
+      "tab-session",
+      undefined,
+      pendingQuestionRecovery,
+    );
+
+    expect(persistPendingQuestionRecovery).toHaveBeenCalledWith(
+      "tab-session",
+      expect.any(String),
+      "",
+      questions,
+      expect.objectContaining({ toolUseId: "toolu-tab" }),
+    );
+  });
+
   it("uses the recovery-preserving question handler in extension composition", () => {
     const extensionSource = fs.readFileSync("src/extension.ts", "utf8");
 
@@ -10464,6 +10533,79 @@ describe("chat tab host routing", () => {
       type: "agentSessionLoaded",
       sessionId: session.id,
     });
+  });
+
+  it("replays a restored pending ask_user card into a non-foreground editor pane", async () => {
+    const { provider } = await makeTabRoutingProvider();
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-source",
+      sessionId: "source-session",
+      surface: "editor" as const,
+      paneEpoch: 3,
+    };
+    const questions = [
+      { id: "ok", type: "yes_no" as const, question: "Installed?" },
+    ];
+    const session = {
+      id: address.sessionId,
+      runState: {
+        phase: "awaiting_question",
+        startedAt: 123,
+        question: {
+          schemaVersion: 1,
+          questionRequestId: "question-restored",
+          toolUseId: "toolu-tab",
+          toolName: "ask_user",
+          toolInput: { questions },
+          assistantContent: [],
+          context: "Reload check",
+          questions,
+        },
+      },
+    };
+    const connection = {
+      getAddress: vi.fn(() => address),
+      postMessage: vi.fn(),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn(() => session),
+      getForegroundSession: vi.fn(() => ({ id: "other-session" })),
+    };
+    (provider as unknown as { chatTabController: unknown }).chatTabController =
+      {
+        getTab: vi.fn(() => ({
+          id: address.tabId,
+          sessionId: address.sessionId,
+        })),
+      };
+    (provider as unknown as { chatTabPanelHost: unknown }).chatTabPanelHost = {
+      isRegisteredConnection: vi.fn(() => true),
+    };
+    const stubs = provider as unknown as Record<string, unknown>;
+    stubs.getChatWorkspaceViewSnapshot = vi.fn(() => undefined);
+    stubs.getModesForSession = vi.fn(async () => []);
+    stubs.getBrowserModels = vi.fn(async () => []);
+    stubs.getSlashCommandsForSession = vi.fn(async () => []);
+    stubs.getWebviewSessionSummaries = vi.fn(() => []);
+    stubs.buildSessionLoadedMessage = vi.fn(() => ({
+      type: "agentSessionLoaded",
+      sessionId: session.id,
+    }));
+    stubs.buildChatState = vi.fn(() => ({ sessionId: session.id }));
+
+    await provider.hydrateEditorPane(address.tabId, connection as never);
+
+    expect(connection.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentQuestionRequest",
+        id: "question-restored",
+        toolCallId: "toolu-tab",
+        context: "Reload check",
+        questions,
+        sessionId: session.id,
+      }),
+    );
   });
 
   it("rejects an editor pane whose address changes during persisted hydration", async () => {

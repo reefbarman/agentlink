@@ -3936,15 +3936,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     question: PendingQuestionRecoveryState,
   ): void {
     this.showQuestionAttention(question.questionRequestId, session.id, true);
-    if (session.id !== this.sessionManager?.getForegroundSession()?.id) return;
-    this.ensureProjectedForegroundSession(session);
-    this.applyProjectedAction({
-      type: "SET_QUESTION",
-      id: question.questionRequestId,
-      toolCallId: question.toolUseId,
-      context: question.context,
-      questions: question.questions,
-    });
+    if (session.id === this.sessionManager?.getForegroundSession()?.id) {
+      this.ensureProjectedForegroundSession(session);
+      this.applyProjectedAction({
+        type: "SET_QUESTION",
+        id: question.questionRequestId,
+        toolCallId: question.toolUseId,
+        context: question.context,
+        questions: question.questions,
+      });
+    }
+    // Publish for every session, not just the foreground one: editor chat
+    // tabs hydrate pending cards from the per-session UI event snapshot.
     this.uiPublisher.publishQuestionRequest(
       session.id,
       question.questionRequestId,
@@ -4010,15 +4013,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ...(toolCallId ? { toolCallId } : {}),
           ...(backgroundTask ? { backgroundTask } : {}),
         });
-        if (!backgroundTask && pendingQuestionRecovery) {
-          void this.sessionManager?.persistPendingQuestionRecovery(
-            sessionId,
-            id,
-            context,
-            questions,
-            { ...pendingQuestionRecovery, humanQuestionBinding: binding },
-          );
-        }
+      }
+      // Persist recovery for any interactive session, including chat tabs that
+      // are not the foreground session, so a reload restores the question card
+      // instead of treating the pending tool turn as interrupted.
+      if (!backgroundTask && pendingQuestionRecovery) {
+        void this.sessionManager?.persistPendingQuestionRecovery(
+          sessionId,
+          id,
+          context,
+          questions,
+          { ...pendingQuestionRecovery, humanQuestionBinding: binding },
+        );
       }
       this.uiPublisher.publishQuestionRequest(
         sessionId,
@@ -7471,6 +7477,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "stateUpdate",
       state: this.buildChatState(session),
     });
+    if (session.runState?.phase === "awaiting_question") {
+      this.restorePendingQuestionRecovery(session, session.runState.question);
+    }
     for (const envelope of this.uiEventHub.getSnapshot(session.id)) {
       connection.postMessage({ ...envelope.event, sessionId: session.id });
     }
