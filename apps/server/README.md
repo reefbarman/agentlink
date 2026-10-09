@@ -25,16 +25,16 @@ agentlink-server codex-logout --config /etc/agentlink/server.json
 
 One JSON file. Relative paths resolve against its directory, and unknown keys are rejected so a typo cannot silently drop a setting. Examples: [`deploy/server.linux.example.json`](deploy/server.linux.example.json) and [`deploy/server.macos.example.json`](deploy/server.macos.example.json).
 
-| Key             | Meaning                                                                                                                                                                                |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), and the local CA (`tls/`). Created `0700`.                                                                            |
-| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                                                                  |
-| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                               |
-| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                            |
-| `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS. |
-| `defaultModel`  | `{ providerId, modelId }`.                                                                                                                                                             |
-| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                                                               |
-| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                                                                      |
+| Key             | Meaning                                                                                                                                                                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), and the local CA (`tls/`). Created `0700`.                                                                                                                                                 |
+| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                                                                                                                                       |
+| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                                                                                                    |
+| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                                                                                                 |
+| `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS; see [Meridian](#claude-models-meridian) for the container exception. |
+| `defaultModel`  | `{ providerId, modelId }`.                                                                                                                                                                                                                                  |
+| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                                                                                                                                    |
+| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                                                                                                                                           |
 
 API keys are never inline. `{ "file": "/path" }` reads a file that must not be readable by group or others. `{ "credential": "name" }` reads `$CREDENTIALS_DIRECTORY/name`, which systemd provides through `LoadCredential=` or `LoadCredentialEncrypted=` (use `systemd-creds encrypt` to bind the key to the TPM). Keys are reread on each use, so rotation needs no restart.
 
@@ -67,6 +67,56 @@ docker compose exec assistant agentlink-server recover
 - **Config.** In the container, `listen` is `0.0.0.0:8443`, `dataRoot` is `/var/lib/agentlink`, and project roots are under `/srv/agentlink/projects`. `publicOrigins` lists the addresses devices use on the LAN.
 - **Restarts.** `restart: unless-stopped` brings it back after a crash or reboot. Locks record the hostname and process start time, so a lock left by the previous run of the same container is not mistaken for a live one when the new process gets the same PID.
 - **Admin commands.** Use `docker compose exec`, which runs inside the service's container. A separate container on the same `data/` (`docker compose run`, or a recreated container after a crash) cannot check the holder's PID, so it honours a lock until its 15-second heartbeat is 60 seconds old; a recreated container may restart a few times before it acquires its locks.
+
+### Claude models (Meridian)
+
+[Meridian](https://github.com/rynfar/meridian) serves Claude models through your own Claude sign-in as an OpenAI-compatible endpoint. [`deploy/container/compose.meridian.yaml`](deploy/container/compose.meridian.yaml) runs it as a second service beside the assistant:
+
+- **Not published.** Meridian has no `ports:`; only containers in this compose project can connect, as `http://meridian:3456`. The host's LAN address does not answer on 3456.
+- **Keyed.** Every request needs the shared key in `secrets/meridian-api-key`. Compose mounts it into both containers at `/run/secrets/meridian-api-key`; Meridian loads it into `MERIDIAN_API_KEY` inside its own process, so it is not in the container configuration.
+- **Hardened like the assistant.** Runs as uid 1000 with a read-only root filesystem, no capabilities, and `no-new-privileges`. Its sign-in, settings, plugins, and session state live in `meridian/` (Meridian's home directory).
+- **Plain HTTP on purpose.** Traffic stays on the private Docker network. The server accepts `http://` to a provider only for loopback, or for a single-label container name (like `meridian`) with `"allowInsecureHttp": true`. LAN addresses and dotted names must use HTTPS, so a key never crosses the network in the clear.
+
+```sh
+# In the deploy directory, once
+docker build -t meridian:local https://github.com/rynfar/meridian.git#meridian-v1.80.0
+mkdir -m 700 secrets meridian
+(umask 077 && openssl rand -hex 32 > secrets/meridian-api-key)
+echo "COMPOSE_FILE=compose.yaml:compose.meridian.yaml" >> .env
+docker compose up -d
+
+# Sign in to Claude: open the printed link, sign in, paste the code back
+docker compose exec meridian node dist/cli.js profile add claude --headless
+
+# Optional: AgentLink's Meridian plugin (from an AgentLink checkout)
+node integrations/meridian-plugin-agentlink/install.mjs meridian/.config/meridian/plugins
+docker compose restart meridian
+```
+
+Then add the provider to `server.json` (full example: [`deploy/container/server.with-meridian.example.json`](deploy/container/server.with-meridian.example.json)) and `docker compose restart assistant`:
+
+```json
+{
+  "type": "openai-compatible",
+  "id": "claude",
+  "baseURL": "http://meridian:3456/v1",
+  "allowInsecureHttp": true,
+  "apiKey": { "file": "/run/secrets/meridian-api-key" },
+  "meridianSessionAffinity": true,
+  "models": [
+    {
+      "id": "claude-opus-5-5",
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "supportsToolUse": true,
+      "supportsThinking": true,
+      "promptProfile": "reasoning"
+    }
+  ]
+}
+```
+
+`meridianSessionAffinity` lets Meridian resume each conversation's Claude session. Use the context window Meridian's `/v1/models` reports for your plan; 200k is safe for every plan. Requests use your Claude subscription's limits. To rotate the key, replace the file and `docker compose up -d --force-recreate`.
 
 ### Ubuntu (systemd)
 

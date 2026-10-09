@@ -1,0 +1,72 @@
+# Meridian (Claude models through your own Claude sign-in) beside the
+# assistant. Use it as an overlay on compose.yaml, for example with
+#   COMPOSE_FILE=compose.yaml:compose.meridian.yaml
+# in .env, so plain `docker compose ...` commands include it.
+#
+# Meridian is never published on the host or the LAN: the assistant reaches
+# it as http://meridian:3456 on this project's private network, and every
+# request carries the shared key in secrets/meridian-api-key.
+#
+# One-time setup (see apps/server/README.md):
+#   docker build -t meridian:local \
+#     https://github.com/rynfar/meridian.git#meridian-v1.80.0
+#   mkdir -m 700 secrets meridian
+#   openssl rand -hex 32 > secrets/meridian-api-key && chmod 600 secrets/meridian-api-key
+#   docker compose up -d
+#   docker compose exec meridian node dist/cli.js profile add claude --headless
+
+services:
+  assistant:
+    secrets:
+      - source: meridian_api_key
+        target: meridian-api-key
+    depends_on:
+      meridian:
+        condition: service_started
+
+  meridian:
+    image: meridian:local
+    pull_policy: never
+    restart: unless-stopped
+    user: "${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Meridian reads its key from the environment; load it from the secret
+    # file inside the container so it never appears in the container config.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        export MERIDIAN_API_KEY="$$(cat /run/secrets/meridian-api-key)" &&
+        exec ./bin/docker-entrypoint.sh ./bin/claude-proxy-supervisor.sh
+    environment:
+      MERIDIAN_HOST: 0.0.0.0
+      MERIDIAN_PORT: "3456"
+      MERIDIAN_PASSTHROUGH: "1"
+      MERIDIAN_DEFAULT_AGENT: passthrough
+      # Stable owner identity for Meridian's session locks across restarts.
+      MERIDIAN_HOST_ID: agentlink-meridian
+    secrets:
+      - source: meridian_api_key
+        target: meridian-api-key
+    # Claude sign-in, Meridian settings, plugins, and SDK session state.
+    volumes:
+      - ./meridian:/home/claude
+    # No `ports:`. Nothing outside this compose project can connect.
+    expose:
+      - "3456"
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  meridian_api_key:
+    file: ./secrets/meridian-api-key

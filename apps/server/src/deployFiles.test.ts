@@ -99,6 +99,42 @@ describe("deployment files", () => {
     expect(compose).not.toMatch(/privileged:\s*true|network_mode:\s*host/u);
   });
 
+  it("runs Meridian unpublished and hardened, keyed by a shared secret", async () => {
+    const overlay = await fs.readFile(
+      path.join(deploy, "container", "compose.meridian.yaml"),
+      "utf8",
+    );
+    const meridian = overlay.slice(overlay.indexOf("\n  meridian:\n"));
+    const service = meridian.slice(0, meridian.indexOf("\nsecrets:\n"));
+    // Never reachable from the host or LAN, only from this project.
+    expect(service).not.toMatch(/^\s+ports:/mu);
+    expect(service).not.toMatch(/network_mode|privileged/u);
+    for (const line of [
+      "read_only: true",
+      "pull_policy: never",
+      "- no-new-privileges:true",
+      "MERIDIAN_DEFAULT_AGENT: passthrough",
+      "- ./meridian:/home/claude",
+    ]) {
+      expect(service, line).toContain(line);
+    }
+    expect(service).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    // The key is read from the secret inside the container, never inlined.
+    expect(service).toContain(
+      'export MERIDIAN_API_KEY="$$(cat /run/secrets/meridian-api-key)"',
+    );
+    expect(overlay).not.toMatch(/MERIDIAN_API_KEY:/u);
+    expect(overlay).toMatch(
+      /^secrets:\n {2}meridian_api_key:\n {4}file: \.\/secrets\/meridian-api-key$/mu,
+    );
+    // The assistant gets the same secret for its provider apiKey file.
+    const assistant = overlay.slice(
+      overlay.indexOf("\n  assistant:\n"),
+      overlay.indexOf("\n  meridian:\n"),
+    );
+    expect(assistant).toContain("target: meridian-api-key");
+  });
+
   it("ships a launchd daemon that runs as a service user", async () => {
     const file = path.join(deploy, "launchd", "local.agentlink.server.plist");
     const plist = await fs.readFile(file, "utf8");

@@ -105,6 +105,8 @@ export type AssistantServerProviderConfig =
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u;
 const CREDENTIAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u;
+/** A single DNS label (no dots), excluding `localhost` (handled as loopback). */
+const CONTAINER_HOST_PATTERN = /^(?!localhost$)[a-z][a-z0-9-]{0,62}$/u;
 const MAX_SECRET_BYTES = 16 * 1024;
 
 export async function loadAssistantServerConfig(
@@ -332,7 +334,11 @@ function parseProvider(
     type: "openai-compatible",
     id: identifier(item.id, `${label}.id`),
     ...optionalDisplayName(item, label),
-    baseURL: providerBaseUrl(item.baseURL, `${label}.baseURL`),
+    baseURL: providerBaseUrl(
+      item.baseURL,
+      `${label}.baseURL`,
+      item.allowInsecureHttp === true,
+    ),
     ...(item.profile === undefined
       ? {}
       : { profile: item.profile as "generic" | "openrouter" }),
@@ -438,7 +444,18 @@ function secretSource(
   );
 }
 
-function providerBaseUrl(value: unknown, label: string): string {
+/**
+ * HTTPS anywhere; plain HTTP to loopback; and, with `allowInsecureHttp`,
+ * plain HTTP to a single-label host name, which is how a sibling container
+ * on a private Docker network is addressed (`http://meridian:3456`). LAN
+ * addresses and dotted names stay HTTPS-only so a key never crosses the
+ * network in the clear.
+ */
+function providerBaseUrl(
+  value: unknown,
+  label: string,
+  allowInsecureHttp: boolean,
+): string {
   let url: URL;
   try {
     url = new URL(text(value, label));
@@ -449,8 +466,19 @@ function providerBaseUrl(value: unknown, label: string): string {
     url.hostname === "localhost" ||
     url.hostname === "127.0.0.1" ||
     url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new Error(`${label} must use HTTPS or loopback HTTP`);
+  const containerName = CONTAINER_HOST_PATTERN.test(url.hostname);
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && (loopback || containerName))
+  ) {
+    throw new Error(
+      `${label} must use HTTPS, loopback HTTP, or HTTP to a container name with allowInsecureHttp`,
+    );
+  }
+  if (url.protocol === "http:" && containerName && !allowInsecureHttp) {
+    throw new Error(
+      `${label} uses plain HTTP to a container; set allowInsecureHttp: true to confirm it stays on a private network`,
+    );
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new Error(

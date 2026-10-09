@@ -87,7 +87,26 @@ describe("parseAssistantServerConfig", () => {
         (config.providers as Array<Record<string, unknown>>)[0]!.baseURL =
           "http://models.example.com/v1";
       }),
-      "HTTPS or loopback HTTP",
+      "must use HTTPS, loopback HTTP",
+    ],
+    [
+      "plain HTTP to a LAN address even with allowInsecureHttp",
+      withChange((config) => {
+        const provider = (
+          config.providers as Array<Record<string, unknown>>
+        )[0]!;
+        provider.baseURL = "http://192.168.1.20:3456/v1";
+        provider.allowInsecureHttp = true;
+      }),
+      "must use HTTPS, loopback HTTP",
+    ],
+    [
+      "plain HTTP to a container name without allowInsecureHttp",
+      withChange((config) => {
+        (config.providers as Array<Record<string, unknown>>)[0]!.baseURL =
+          "http://meridian:3456/v1";
+      }),
+      "set allowInsecureHttp: true",
     ],
     [
       "both apiKey and noAuth",
@@ -181,6 +200,23 @@ describe("parseAssistantServerConfig", () => {
     );
   });
 
+  it("accepts plain HTTP to a sibling container with allowInsecureHttp", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        const provider = (
+          value.providers as Array<Record<string, unknown>>
+        )[0]!;
+        provider.baseURL = "http://meridian:3456/v1";
+        provider.allowInsecureHttp = true;
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.providers[0]).toMatchObject({
+      baseURL: "http://meridian:3456/v1",
+      allowInsecureHttp: true,
+    });
+  });
+
   it("accepts a server-managed local CA", () => {
     expect(
       parseAssistantServerConfig(
@@ -198,6 +234,7 @@ describe("parseAssistantServerConfig", () => {
       "server.linux.example.json",
       "server.macos.example.json",
       "container/server.example.json",
+      "container/server.with-meridian.example.json",
     ]) {
       await expect(
         loadAssistantServerConfig(path.join(deploy, name)),

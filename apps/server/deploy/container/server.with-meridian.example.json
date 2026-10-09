@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "dataRoot": "/var/lib/agentlink",
+  "listen": { "host": "0.0.0.0", "port": 8443 },
+  "publicOrigins": [
+    "https://agentlink-assistant.local:8443",
+    "https://192.168.1.20:8443"
+  ],
+  "tls": { "localCa": true },
+  "defaultModel": { "providerId": "codex", "modelId": "gpt-6.1-sol" },
+  "providers": [
+    { "type": "codex", "modelIds": ["gpt-6.1-sol"] },
+    {
+      "type": "openai-compatible",
+      "id": "claude",
+      "displayName": "Claude (Meridian)",
+      "baseURL": "http://meridian:3456/v1",
+      "allowInsecureHttp": true,
+      "apiKey": { "file": "/run/secrets/meridian-api-key" },
+      "meridianSessionAffinity": true,
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "displayName": "Claude Opus 5.5",
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "supportsToolUse": true,
+          "supportsThinking": true,
+          "promptProfile": "reasoning"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "displayName": "Claude Sonnet 5.5",
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "supportsToolUse": true,
+          "supportsThinking": true,
+          "promptProfile": "reasoning"
+        },
+        {
+          "id": "claude-fable-5-1",
+          "displayName": "Claude Fable 5.1",
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "supportsToolUse": true,
+          "supportsThinking": true,
+          "promptProfile": "reasoning"
+        }
+      ]
+    }
+  ],
+  "projects": [
+    { "id": "home", "label": "Home", "root": "/srv/agentlink/projects/home" }
+  ],
+  "ripgrepPath": "/usr/bin/rg"
+}
