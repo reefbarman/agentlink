@@ -140,6 +140,11 @@ export interface CreateWorkspaceHostOptions {
   readonly background?: {
     readonly enabled: true;
     readonly maxActiveChildren?: number;
+    /**
+     * Named models a parent can request with `model_role` when it spawns a
+     * child, for example `review`. Children otherwise use the parent's model.
+     */
+    readonly modelRoles?: Readonly<Record<string, AgentModelReference>>;
     readonly onApprovalAvailable?: (request: {
       readonly parentSessionId: string;
       readonly childSessionId: string;
@@ -449,6 +454,9 @@ export async function createWorkspaceHost(
         supervisor: backgroundSupervisor,
         isForegroundSession: (sessionId) =>
           backgroundSupervisor.getRecordForSession(sessionId) === undefined,
+        ...(options.background?.modelRoles
+          ? { modelRoles: options.background.modelRoles }
+          : {}),
       })
     : undefined;
   const sharedMcpOptions = options.sharedMcp;
@@ -745,12 +753,14 @@ export async function createWorkspaceHost(
                       reason: "MCP tool policy or configuration changed",
                     };
                   }
-                  if (policy === "allow") {
-                    return { decision: "allow" as const };
-                  }
                   const child = backgroundSupervisor?.getRecordForSession(
                     request.sessionId,
                   );
+                  // A background child never inherits a global allow: its
+                  // MCP calls are external effects the foreground approves.
+                  if (policy === "allow" && !child) {
+                    return { decision: "allow" as const };
+                  }
                   if (
                     !child &&
                     (await options.sharedMcp?.hasSessionGrant?.(
@@ -836,7 +846,11 @@ export async function createWorkspaceHost(
         options.background
           ? backgroundSupervisor?.getRecordForSession(request.session.sessionId)
             ? "You are a one-level background child. Work only within your assigned file scopes. You cannot delegate. Commands, MCP calls, and writes may pause for foreground human approval."
-            : "You may delegate up to two one-level background writers with explicit disjoint write paths, then observe, steer, wait for, or stop them."
+            : `You may delegate up to two one-level background children with explicit read paths and disjoint write paths (none for a read-only reviewer), then observe, steer, wait for, or stop them.${
+                options.background.modelRoles?.review
+                  ? ' For a review, spawn a read-only child with model_role "review".'
+                  : ""
+              }`
           : "Background writers are not enabled.",
         artifactInstructions,
         options.instructions,

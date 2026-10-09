@@ -299,9 +299,8 @@ export class WorkspaceBackgroundSupervisor {
         MAX_MESSAGE_BYTES,
         "message",
       );
-      if (request.writeScopes.length === 0) {
-        throw new Error("background_write_scope_required");
-      }
+      // No write scopes makes a read-only child (for example a reviewer):
+      // `assertWriteAllowed` refuses every write it attempts.
       const scopes = await this.resolveScopes(
         request.readScopes,
         request.writeScopes,

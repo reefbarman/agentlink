@@ -1,5 +1,6 @@
 import {
   defineTool,
+  type AgentModelReference,
   type AgentPrincipal,
   type HostTool,
   type HostToolExecutionContext,
@@ -15,6 +16,11 @@ import {
 export interface CreateWorkspaceBackgroundToolsOptions {
   readonly supervisor: WorkspaceBackgroundSupervisor;
   readonly isForegroundSession: (sessionId: string) => boolean;
+  /**
+   * Named models a parent may ask for with `model_role` (for example
+   * `review`) instead of an exact provider and model.
+   */
+  readonly modelRoles?: Readonly<Record<string, AgentModelReference>>;
 }
 
 export interface WorkspaceBackgroundTools<
@@ -46,10 +52,17 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
   discovery: HostToolResolveRequest<TPrincipal>,
   options: CreateWorkspaceBackgroundToolsOptions,
 ): HostTool<TPrincipal> {
+  const roles = Object.keys(options.modelRoles ?? {}).sort();
   return defineTool({
     name: "spawn_background_agent",
-    description:
-      "Start one native write-capable child session with explicit project-relative read and write scopes. At most two children may be active, write scopes must not overlap, and children cannot delegate.",
+    description: [
+      "Start one native child session with explicit project-relative read and write scopes. Leave write_paths empty for a read-only child such as a reviewer. At most two children may be active, write scopes must not overlap, and children cannot delegate.",
+      roles.length > 0
+        ? `Set model_role to run the child on a configured model (${roles.join(", ")}); use "review" for reviews when available.`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" "),
     inputSchema: {
       type: "object",
       properties: {
@@ -57,6 +70,9 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
         message: { type: "string", minLength: 1, maxLength: 65_536 },
         read_paths: pathScopeArraySchema(),
         write_paths: pathScopeArraySchema(),
+        ...(roles.length > 0
+          ? { model_role: { type: "string", enum: roles } }
+          : {}),
         provider_id: { type: "string", minLength: 1 },
         model_id: { type: "string", minLength: 1 },
         reasoning_effort: {
@@ -76,9 +92,25 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
       if ((providerId === undefined) !== (modelId === undefined)) {
         return toolError("provider_id_and_model_id_must_be_supplied_together");
       }
-      const readScopes = parseScopes(input.read_paths);
-      const writeScopes = parseScopes(input.write_paths);
+      const role = optionalString(input.model_role);
+      if (role !== undefined && providerId !== undefined) {
+        return toolError("model_role_conflicts_with_provider_id_and_model_id");
+      }
+      const roleModel =
+        role !== undefined && Object.hasOwn(options.modelRoles ?? {}, role)
+          ? options.modelRoles![role]
+          : undefined;
+      if (role !== undefined && !roleModel) {
+        return toolError("model_role_not_configured");
+      }
+      const model = roleModel
+        ? { providerId: roleModel.providerId, modelId: roleModel.modelId }
+        : providerId && modelId
+          ? { providerId, modelId }
+          : undefined;
       try {
+        const readScopes = parseScopes(input.read_paths);
+        const writeScopes = parseScopes(input.write_paths);
         const record = await options.supervisor.spawn({
           callerSessionId: discovery.sessionId,
           callerTurnId: discovery.turnId,
@@ -86,7 +118,7 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           message: String(input.message),
           readScopes,
           writeScopes,
-          ...(providerId && modelId ? { model: { providerId, modelId } } : {}),
+          ...(model ? { model } : {}),
           ...(typeof input.reasoning_effort === "string"
             ? {
                 reasoningEffort:

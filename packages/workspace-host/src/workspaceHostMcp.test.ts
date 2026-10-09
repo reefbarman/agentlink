@@ -336,4 +336,85 @@ describe("workspace host MCP composition", () => {
       await fs.rm(test.parent, { recursive: true, force: true });
     }
   });
+
+  it("asks before a background child's globally allowed shared MCP call", async () => {
+    mocks.calls.length = 0;
+    const test = await fixture();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const lastUser = [...(body.messages ?? [])]
+        .reverse()
+        .find((message) => message.role === "user")?.content;
+      const toolResults = (body.messages ?? []).filter(
+        (message) => message.role === "tool",
+      ).length;
+      if (lastUser === "child lookup") {
+        return toolResults === 0
+          ? toolCall("records__lookup", { query: "child" })
+          : completion("child done");
+      }
+      if (toolResults === 0) {
+        return toolCall("records__lookup", { query: "parent" });
+      }
+      if (toolResults === 1) {
+        return toolCall("spawn_background_agent", {
+          task: "Look something up",
+          message: "child lookup",
+          read_paths: [{ path: ".", kind: "directory" }],
+          write_paths: [],
+        });
+      }
+      return completion("parent done");
+    });
+    const host = await createWorkspaceHost({
+      projectRoot: test.projectRoot,
+      dataRoot: test.dataRoot,
+      ownerId: "shared-mcp-child-test",
+      providers: test.providers(fetch),
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: { enabled: true },
+      sharedMcp: {
+        resolveConfigs: async () => [
+          {
+            name: "records",
+            type: "streamable-http",
+            url: "https://mcp.example.test/rpc",
+            allowedTools: ["lookup"],
+          },
+        ],
+        baseEnvironment: () => ({}),
+        fetch: test.transportFetch,
+        nativeFetch: test.transportFetch,
+        clientVersion: "test",
+        authorizeAdmission: async () => true,
+        authorizeLaunch: async () => true,
+        authorizeNetwork: async () => true,
+      },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      // The foreground uses the global allow without a prompt.
+      await expect(host.runTurn(sessionId, "delegate")).resolves.toMatchObject({
+        status: "completed",
+        text: "parent done",
+      });
+      expect(mocks.calls).toEqual([
+        { name: "lookup", input: { query: "parent" } },
+      ]);
+      // The read-only child's identical call waits for the foreground.
+      await vi.waitFor(() => {
+        expect(host.listBackgroundApprovals(sessionId)).toHaveLength(1);
+      });
+      expect(host.listBackgroundApprovals(sessionId)[0]).toMatchObject({
+        approval: { displayContent: { kind: "shared_mcp_tool_call" } },
+      });
+      expect(mocks.calls).toHaveLength(1);
+    } finally {
+      await host.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
 });

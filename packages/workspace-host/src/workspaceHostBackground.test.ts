@@ -172,4 +172,134 @@ describe("workspace host background composition", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("runs a read-only reviewer on the configured review model", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-review-"),
+    );
+    const projectRoot = path.join(root, "project");
+    const filePath = path.join(projectRoot, "math.js");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(filePath, "export const add = (a, b) => a - b;\n");
+    const parentFetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{
+          function?: {
+            name?: string;
+            parameters?: { properties?: Record<string, unknown> };
+          };
+        }>;
+      };
+      const spawn = body.tools?.find(
+        (tool) => tool.function?.name === "spawn_background_agent",
+      );
+      expect(spawn?.function?.parameters?.properties?.model_role).toEqual({
+        type: "string",
+        enum: ["review"],
+      });
+      if (!body.messages?.some((message) => message.role === "tool")) {
+        return toolCall("spawn_background_agent", {
+          task: "Review math.js",
+          message: "review math.js",
+          read_paths: [{ path: "math.js", kind: "file" }],
+          write_paths: [],
+          model_role: "review",
+        });
+      }
+      return completion("parent done");
+    });
+    const reviewRequests: Array<{ model: string; tools: string[] }> = [];
+    const reviewFetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model: string;
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      reviewRequests.push({
+        model: body.model,
+        tools:
+          body.tools?.flatMap((tool) =>
+            tool.function?.name ? [tool.function.name] : [],
+          ) ?? [],
+      });
+      const toolResults =
+        body.messages?.filter((message) => message.role === "tool") ?? [];
+      if (toolResults.length === 0) {
+        return toolCall("write_file", {
+          path: "math.js",
+          content: "export const add = (a, b) => a + b;\n",
+          expectedContentHash: createHash("sha256")
+            .update("export const add = (a, b) => a - b;\n")
+            .digest("hex"),
+        });
+      }
+      return completion("add subtracts instead of adding");
+    });
+    const model = (id: string) => ({
+      id,
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+      supportsToolUse: true,
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-review",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [model("fixture-model")],
+          fetch: parentFetch,
+        },
+        {
+          type: "openai-compatible",
+          id: "claude",
+          baseURL: "https://claude.invalid/v1",
+          noAuth: true,
+          models: [model("review-model")],
+          fetch: reviewFetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: {
+        enabled: true,
+        modelRoles: {
+          review: { providerId: "claude", modelId: "review-model" },
+        },
+      },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await expect(
+        host.runTurn(sessionId, "get a review"),
+      ).resolves.toMatchObject({ status: "completed" });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          resultText: "add subtracts instead of adding",
+          model: { providerId: "claude", modelId: "review-model" },
+          scopes: [{ path: "math.js", kind: "file", access: "read" }],
+        });
+      });
+      // The reviewer ran only on the review model and could not write,
+      // and its write did not wait for an approval either.
+      expect(reviewRequests.length).toBeGreaterThanOrEqual(2);
+      expect(reviewRequests.every((r) => r.model === "review-model")).toBe(
+        true,
+      );
+      expect(reviewRequests[0]!.tools).not.toContain("spawn_background_agent");
+      expect(host.listBackgroundApprovals(sessionId)).toEqual([]);
+      expect(await fs.readFile(filePath, "utf8")).toBe(
+        "export const add = (a, b) => a - b;\n",
+      );
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

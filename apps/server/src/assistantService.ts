@@ -293,6 +293,12 @@ export async function startAssistantService(
 
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
+  // Bound once the routes exist; children cannot start before then.
+  let notifyAgentApproval: (request: {
+    readonly projectId: string;
+    readonly parentSessionId: string;
+    readonly childSessionId: string;
+  }) => void = () => undefined;
   try {
     for (const project of config.projects) {
       const host = await createWorkspaceHost({
@@ -307,6 +313,19 @@ export async function startAssistantService(
           ...(config.ripgrepPath
             ? { ripgrepExecutable: config.ripgrepPath }
             : {}),
+        },
+        // Children are one level deep, use the parent's model unless a role
+        // (for example `review`) is requested, and pause for the owner's
+        // approval like the parent does.
+        background: {
+          enabled: true,
+          ...(config.modelRoles ? { modelRoles: config.modelRoles } : {}),
+          onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
+            notifyAgentApproval({
+              projectId: project.id,
+              parentSessionId,
+              childSessionId,
+            }),
         },
       });
       hosts.push({ id: project.id, host });
@@ -329,6 +348,7 @@ export async function startAssistantService(
         ...(config.modelRoles ? { roles: config.modelRoles } : {}),
       },
     });
+    notifyAgentApproval = (request) => routes.notifyAgentApproval(request);
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
       tls,

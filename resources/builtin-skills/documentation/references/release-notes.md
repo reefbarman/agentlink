@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Standalone CLI and SDK: `spawn_background_agent` accepts no write paths, starting a read-only child (for example a reviewer) that cannot write. Hosts can set `background.modelRoles` so the agent picks a configured model with `model_role` (for example `review`) instead of naming a provider and model. Previously every child needed at least one write path.
+- Fixed standalone CLI background children calling shared MCP tools that a server's `allowedTools` or `toolPolicy: "allow"` permits without asking the foreground. Every child MCP call now waits for foreground approval, as documented; the foreground session still uses the global allow.
 - SDK: `WorkspaceHost.resumeInteraction(...)` accepts `expected: { interactionId, interactionRevision }`. When set, a decision for any other pending request fails with `stale_interaction` instead of applying to it. Existing calls without it behave as before.
 - SDK: `@agentlink/core` exports `projectEmbeddedAgentTurnEvent(...)` and `projectEmbeddedAgentSessionSnapshot(...)`, the same host-safe projections the embedded web handler uses. Hosts that run turns themselves can publish events later without exposing provenance, usage or transcripts.
 - SDK: `createOpenAICompatibleProvider(...)` now accepts `meridianSessionAffinity`, matching the connection setting, so embedded hosts can send each session ID as `x-session-affinity` to Meridian. Previously the factory silently dropped it.

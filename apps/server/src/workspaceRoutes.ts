@@ -33,6 +33,10 @@ const DEFAULT_STREAM_STALL_TIMEOUT_MS = 30_000;
 const ROUTE_PATTERN =
   /^\/api\/projects\/([^/]+)(?:\/sessions(?:\/([^/]+)(?:\/(turns|interaction|cancel|events|model))?)?)?$/u;
 const MODELS_ROUTE_PATTERN = /^\/api\/projects\/([^/]+)\/models$/u;
+const AGENTS_ROUTE_PATTERN =
+  /^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/agents(?:\/([^/]+)\/(steer|stop|approval))?$/u;
+const MAX_STEERING_BYTES = 64 * 1024;
+const MAX_STOP_REASON_LENGTH = 4_096;
 const MODEL_ROLE_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u;
 
 /**
@@ -49,6 +53,10 @@ export type AssistantWorkspaceHost = Pick<
   | "resumeInteraction"
   | "cancel"
   | "isBackgroundSession"
+  | "listBackgroundAgents"
+  | "steerBackgroundAgent"
+  | "stopBackgroundAgent"
+  | "respondToBackgroundApproval"
 >;
 
 export interface AssistantProjectMount {
@@ -100,6 +108,15 @@ export interface AssistantWorkspaceRoutes {
     auth: AssistantServerAuth,
   ) => Promise<boolean>;
   readonly events: SessionEventHub;
+  /**
+   * Tell clients of the parent session that a background child is waiting
+   * for approval. Wire to the host's `background.onApprovalAvailable`.
+   */
+  notifyAgentApproval(request: {
+    readonly projectId: string;
+    readonly parentSessionId: string;
+    readonly childSessionId: string;
+  }): void;
   /** Resolves once no server-owned task is running for the session. */
   whenIdle(projectId: string, sessionId: string): Promise<void>;
   /** Abort running tasks and wait for them to settle. */
@@ -232,6 +249,10 @@ export function createAssistantWorkspaceRoutes(
     mount: AssistantProjectMount,
     sessionId: string,
   ) => {
+    // Background children are reached only through their parent's agents.
+    if (mount.host.isBackgroundSession(sessionId)) {
+      throw new HttpError(404, "session_not_found");
+    }
     try {
       return await mount.host.readSession(sessionId);
     } catch (error) {
@@ -354,6 +375,21 @@ export function createAssistantWorkspaceRoutes(
       return true;
     }
 
+    const agentsMatch = AGENTS_ROUTE_PATTERN.exec(url.pathname);
+    if (agentsMatch) {
+      await handleAgents(
+        request,
+        response,
+        auth,
+        method,
+        decodeURIComponent(agentsMatch[1]!),
+        agentsMatch[2]!,
+        agentsMatch[3],
+        agentsMatch[4] as "steer" | "stop" | "approval" | undefined,
+      );
+      return true;
+    }
+
     const match = ROUTE_PATTERN.exec(url.pathname);
     if (!match) return false;
     const projectId = decodeURIComponent(match[1]!);
@@ -455,7 +491,7 @@ export function createAssistantWorkspaceRoutes(
       }
       assertStartable(key);
       if (mount.host.isBackgroundSession(sessionId)) {
-        throw new HttpError(409, "background_session");
+        throw new HttpError(404, "session_not_found");
       }
       const snapshot = projectEmbeddedAgentSessionSnapshot(
         await readSnapshot(mount, sessionId),
@@ -531,7 +567,7 @@ export function createAssistantWorkspaceRoutes(
       if (!model) throw new HttpError(400, "model_required");
       assertStartable(key);
       if (mount.host.isBackgroundSession(sessionId)) {
-        throw new HttpError(409, "background_session");
+        throw new HttpError(404, "session_not_found");
       }
       const snapshot = projectEmbeddedAgentSessionSnapshot(
         await readSnapshot(mount, sessionId),
@@ -577,6 +613,152 @@ export function createAssistantWorkspaceRoutes(
     }
     sendJson(response, 202, { cancelled: true });
     return true;
+  };
+
+  /**
+   * Background children of one foreground session. The parent session is
+   * the unit of access: a child is only reachable through the parent that
+   * owns it, and the host re-checks that ownership.
+   */
+  const handleAgents = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    auth: AssistantServerAuth,
+    method: string,
+    projectId: string,
+    sessionId: string,
+    childSessionId: string | undefined,
+    operation: "steer" | "stop" | "approval" | undefined,
+  ) => {
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      throw new HttpError(404, "session_not_found");
+    }
+    if (
+      childSessionId !== undefined &&
+      !SESSION_ID_PATTERN.test(childSessionId)
+    ) {
+      throw new HttpError(404, "agent_not_found");
+    }
+    const key = sessionKey(projectId, sessionId);
+    const actor = {
+      subjectId: auth.principal.subjectId,
+      deviceId: auth.session.deviceId,
+    };
+    const callAgent = async <T>(run: () => Promise<T>): Promise<T> => {
+      try {
+        return await run();
+      } catch (error) {
+        throw agentError(error);
+      }
+    };
+
+    if (operation === undefined) {
+      if (method !== "GET") throw new HttpError(405, "method_not_allowed");
+      const mount = await authorize(auth, projectId, "read");
+      await readSnapshot(mount, sessionId);
+      const agents = await callAgent(async () =>
+        mount.host.listBackgroundAgents(sessionId),
+      );
+      sendJson(response, 200, { agents });
+      return;
+    }
+    if (method !== "POST") throw new HttpError(405, "method_not_allowed");
+    const target = {
+      callerSessionId: sessionId,
+      childSessionId: childSessionId!,
+    };
+
+    if (operation === "steer") {
+      const mount = await authorize(auth, projectId, "write");
+      const body = await readJsonBody(request, 128 * 1024, auth.signal);
+      const message = stringField(body, "message");
+      // The supervisor bounds steering by UTF-8 bytes.
+      if (
+        !message.trim() ||
+        Buffer.byteLength(message, "utf8") > MAX_STEERING_BYTES
+      ) {
+        throw new HttpError(400, "message_invalid");
+      }
+      if (closing) throw new HttpError(503, "server_closing");
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth, false);
+      const result = await callAgent(() =>
+        mount.host.steerBackgroundAgent({ ...target, message }),
+      );
+      hub.publish(key, {
+        kind: "agent",
+        state: "steered",
+        childSessionId: target.childSessionId,
+        actor,
+      });
+      sendJson(response, 202, result);
+      return;
+    }
+
+    if (operation === "stop") {
+      const mount = await authorize(auth, projectId, "write");
+      let reason: string | undefined;
+      if (hasRequestBody(request)) {
+        const body = await readJsonBody(request, undefined, auth.signal);
+        const value = body.reason;
+        if (value !== undefined) {
+          if (
+            typeof value !== "string" ||
+            !value.trim() ||
+            value.length > MAX_STOP_REASON_LENGTH
+          ) {
+            throw new HttpError(400, "reason_invalid");
+          }
+          reason = value;
+        }
+      }
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth, false);
+      const agent = await callAgent(() =>
+        mount.host.stopBackgroundAgent({
+          ...target,
+          reason: reason ?? "cancelled_by_owner",
+        }),
+      );
+      hub.publish(key, {
+        kind: "agent",
+        state: "stopped",
+        childSessionId: target.childSessionId,
+        actor,
+      });
+      sendJson(response, 200, { agent });
+      return;
+    }
+
+    // operation === "approval": same bar as a foreground approval.
+    const mount = await authorize(auth, projectId, "approve");
+    if (!auth.recentlyAuthenticated) {
+      throw new HttpError(401, "reauthentication_required");
+    }
+    const body = await readJsonBody(request, undefined, auth.signal);
+    const interactionId = stringField(body, "interactionId");
+    const decision = stringField(body, "decision");
+    if (decision !== "allow" && decision !== "deny") {
+      throw new HttpError(400, "decision_invalid");
+    }
+    if (closing) throw new HttpError(503, "server_closing");
+    await readSnapshot(mount, sessionId);
+    await assertStillAuthorized(auth, true);
+    // The supervisor binds the decision to this exact pending interaction.
+    const agent = await callAgent(() =>
+      mount.host.respondToBackgroundApproval({
+        ...target,
+        interactionId,
+        decision,
+      }),
+    );
+    hub.publish(key, {
+      kind: "agent",
+      state: "approval_answered",
+      childSessionId: target.childSessionId,
+      actor,
+    });
+    sendJson(response, 200, { agent });
   };
 
   const streamEvents = (
@@ -707,6 +889,14 @@ export function createAssistantWorkspaceRoutes(
   return {
     handleRequest,
     events: hub,
+    notifyAgentApproval({ projectId, parentSessionId, childSessionId }) {
+      if (!projects.has(projectId)) return;
+      hub.publish(sessionKey(projectId, parentSessionId), {
+        kind: "agent",
+        state: "approval_required",
+        childSessionId,
+      });
+    },
     async whenIdle(projectId, sessionId) {
       await tasks.get(sessionKey(projectId, sessionId))?.done;
     },
@@ -719,6 +909,32 @@ export function createAssistantWorkspaceRoutes(
       await Promise.all(running.map((task) => task.done));
     },
   };
+}
+
+/**
+ * Map a background supervisor failure to a public error. The supervisor
+ * reports failures as `background_*` messages, not error codes.
+ */
+function agentError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : undefined;
+  switch (message) {
+    case "background_child_not_found":
+    case "background_child_not_owned":
+      return new HttpError(404, "agent_not_found");
+    case "background_child_not_running":
+      return new HttpError(409, "agent_not_running");
+    case "background_approval_not_current":
+      return new HttpError(409, "stale_interaction");
+    case "background_steering_queue_full":
+      return new HttpError(409, "steering_queue_full");
+    case "background_grandchildren_not_supported":
+    case "background_child_requires_supervisor_control":
+      return new HttpError(404, "session_not_found");
+    case "Background writers are not enabled":
+      return new HttpError(404, "agents_not_enabled");
+    default:
+      return error;
+  }
 }
 
 /** True when the request declares a body (non-zero length or chunked). */

@@ -207,7 +207,7 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 `createAssistantWorkspaceRoutes({ projects, authorizeProject, models })` mounts one or more workspace hosts. Pass its `handleRequest` to the server and its `close` as `onClose`.
 
 - **Explicit project access.** `authorizeProject({ principal, projectId, access })` maps the server principal to `read`, `write`, or `approve` on each mounted project. It is required; `ownerProjectAccess(store)` grants everything to the bootstrapped owner and nothing to anyone else. The host still runs as its own project principal.
-- **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, model, running task, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, and `GET .../events`.
+- **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, model, running task, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, `GET .../events`, and the [background agent](#background-agents) routes under `.../agents`.
 - **Server-owned turns.** A turn or resume runs on the server, not the request: closing the browser does not cancel it. One task runs per session at a time (`409 session_busy`). A cancelled or failed turn leaves the session `interrupted`, which accepts the next turn. Server shutdown aborts running tasks and waits for them.
 - **Approvals.** `POST .../interaction` needs `approve` access and reauthentication within the window. The decision names the exact `interactionId` and `interactionRevision` the owner saw. A mismatch returns `409 stale_interaction`, and the host binds the same pair into the engine's atomic resume, so a decision cannot reach a replacement request. Revocation and reauthentication are rechecked immediately before the resume starts, and a revoked session stops reading a stalled request body.
 - **Event stream.** `GET .../events` is Server-Sent Events. Events carry `id: <epoch>:<sequence>`. Reconnect with `?epoch=&after=` (or `Last-Event-ID`) to replay retained events. A `reset` control event means the cursor cannot be served (server restarted or the event aged out) and the client should re-read the snapshot. The stream closes on revocation and rechecks the session every heartbeat. A backpressured reader is caught up from the retained log once it drains; one that stays stalled for 30 seconds is dropped and can reconnect.
@@ -221,8 +221,27 @@ Each session has its own model, chosen from the models `server.json` declares. N
 - `POST .../sessions/:sid/model` (write access) changes the model between turns with the same body. It returns `409 session_busy` while a turn runs and `409 interaction_pending` while an approval waits.
 - Session reads and lists include `model`: the session's own choice, or `defaultModel` if it has none.
 
-A review is an ordinary session on the review model. The server does not yet run reviews as background agents of another session.
+A review can also be an ordinary session on the review model.
+
+### Background agents
+
+A session's agent can start up to two one-level child agents with `spawn_background_agent`, for example to review its work on Claude while it continues. Children are background sessions of the same project:
+
+- **Scoped.** Each child gets explicit project-relative read paths and, optionally, write paths. A child with no write paths is read-only and cannot write at all, which is what a reviewer gets. Sibling write paths must not overlap.
+- **Model.** A child uses its parent session's model unless the agent passes `model_role` (one of `modelRoles`, so `"review"` when configured) or a provider and model that the server has configured. The prompt tells the agent to spawn reviews read-only with `model_role: "review"`.
+- **Owner approval.** A child's writes pause for the owner exactly like the parent's. Children cannot delegate, and they are reachable only through their parent: `GET` or `POST` on a child's own session path returns `404 session_not_found`.
+
+Routes, under `/api/projects/:id/sessions/:sid/agents`:
+
+| Route                           | Access                     | Body                          | Result                                                                                                                                     |
+| ------------------------------- | -------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET .../agents`                | `read`                     |                               | `{ agents }`: each child's lifecycle, phase, scopes, model, current tool, bounded partial output, result text, and any pending `approval`. |
+| `POST .../agents/:cid/steer`    | `write`                    | `{ message }` (up to 64 KiB)  | `202 { status: "queued" }`. Applied at the child's next completed turn; it does not interrupt a request or tool.                           |
+| `POST .../agents/:cid/stop`     | `write`                    | optional `{ reason }`         | `200 { agent }`, cancelled, with partial output kept.                                                                                      |
+| `POST .../agents/:cid/approval` | `approve`, reauthenticated | `{ interactionId, decision }` | `200 { agent }`. The decision applies only to that exact pending request; anything else is `409 stale_interaction`.                        |
+
+Errors: `404 agent_not_found` (unknown, or owned by another session), `409 agent_not_running`, `409 steering_queue_full`. The parent's event stream carries `{ kind: "agent", state, childSessionId }` events for `approval_required`, `approval_answered`, `steered`, and `stopped`; re-read `GET .../agents` when one arrives. Completion is not pushed yet, so poll the list while a child runs. Server shutdown stops running children, and children that were running when the server stopped are reported `interrupted` after restart; nothing is replayed.
 
 The event log is in memory, so it only bridges reconnects within one server process. The durable session repository remains the source of truth.
 
-Not yet provided: passkeys, command execution and background-agent routes, an installer, and the web app.
+Not yet provided: passkeys, command execution, an installer, and the web app.

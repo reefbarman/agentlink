@@ -88,6 +88,11 @@ async function startHarness(
   await fs.mkdir(projectRoot);
   const fetch = vi.fn<typeof globalThis.fetch>();
   const claudeFetch = vi.fn<typeof globalThis.fetch>();
+  let notifyAgentApproval: (request: {
+    projectId: string;
+    parentSessionId: string;
+    childSessionId: string;
+  }) => void = () => undefined;
   const host: WorkspaceHost = await createWorkspaceHost({
     projectRoot,
     dataRoot: path.join(parent, "workspace-data"),
@@ -126,6 +131,18 @@ async function startHarness(
       },
     ],
     files: { enabled: true },
+    background: {
+      enabled: true,
+      modelRoles: {
+        review: { providerId: "claude", modelId: "claude-review" },
+      },
+      onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
+        notifyAgentApproval({
+          projectId: "home",
+          parentSessionId,
+          childSessionId,
+        }),
+    },
   });
   cleanup.push(() => host.close());
 
@@ -153,6 +170,7 @@ async function startHarness(
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
   });
+  notifyAgentApproval = (request) => routes.notifyAgentApproval(request);
   const server = await createAssistantServer({
     dataRoot: path.join(parent, "server-data"),
     tls: certificate,
@@ -314,6 +332,32 @@ async function readPending(harness: Harness, base: string) {
       };
     }
   ).session.pendingInteraction;
+}
+
+function requestBody(init: RequestInit | undefined) {
+  return JSON.parse(String(init?.body)) as {
+    model: string;
+    messages?: Array<{ role?: string; content?: unknown }>;
+  };
+}
+
+function hasToolResult(init: RequestInit | undefined): boolean {
+  return (
+    requestBody(init).messages?.some((message) => message.role === "tool") ??
+    false
+  );
+}
+
+function lastUser(init: RequestInit | undefined): unknown {
+  return [...(requestBody(init).messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "user")?.content;
+}
+
+function sentModels(mock: { mock: { calls: unknown[][] } }): string[] {
+  return mock.mock.calls.map(
+    (call) => requestBody(call[1] as RequestInit).model,
+  );
 }
 
 const delay = (ms: number) =>
@@ -828,6 +872,353 @@ describe("assistant workspace routes", () => {
       status: 403,
       body: { error: "project_access_denied" },
     });
+  });
+
+  it("runs a read-only review agent on the review model", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    await fs.writeFile(
+      path.join(harness.projectRoot, "notes.md"),
+      "add = (a, b) => a - b\n",
+    );
+    harness.fetch.mockImplementation(async (_url, init) =>
+      hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Review notes.md",
+            message: "review notes.md",
+            read_paths: [{ path: "notes.md", kind: "file" }],
+            write_paths: [],
+            model_role: "review",
+          }),
+    );
+    harness.claudeFetch.mockImplementation(async () =>
+      completion("add subtracts"),
+    );
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "get a review" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+
+    let agent!: { childSessionId: string };
+    await vi.waitFor(async () => {
+      const listed = await request({ path: `${base}/agents`, session: owner });
+      expect(listed).toMatchObject({
+        status: 200,
+        body: {
+          agents: [
+            {
+              lifecycle: "completed",
+              resultText: "add subtracts",
+              model: { providerId: "claude", modelId: "claude-review" },
+              scopes: [{ path: "notes.md", access: "read" }],
+            },
+          ],
+        },
+      });
+      agent = (listed.body as { agents: [{ childSessionId: string }] })
+        .agents[0];
+    });
+    expect(sentModels(harness.claudeFetch)).toEqual(
+      expect.arrayContaining(["claude-review"]),
+    );
+    expect(new Set(sentModels(harness.claudeFetch))).toEqual(
+      new Set(["claude-review"]),
+    );
+
+    // A child is reachable only through its parent's agents.
+    const child = `/api/projects/home/sessions/${agent.childSessionId}`;
+    await expect(
+      request({ path: child, session: owner }),
+    ).resolves.toMatchObject({
+      status: 404,
+      body: { error: "session_not_found" },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: `${child}/turns`,
+        session: owner,
+        body: { text: "bypass" },
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+    await expect(
+      request({ path: `${child}/agents`, session: owner }),
+    ).resolves.toMatchObject({ status: 404 });
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/agents/${agent.childSessionId}/steer`,
+        session: owner,
+        body: { message: "more" },
+      }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "agent_not_running" },
+    });
+  });
+
+  it("approves a child's write only after reauthentication", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    harness.fetch.mockImplementation(async (_url, init) => {
+      if (lastUser(init) === "write child.txt") {
+        return hasToolResult(init)
+          ? completion("child done")
+          : toolCall("write_file", {
+              path: "child.txt",
+              content: "from child\n",
+              expectedAbsent: true,
+            });
+      }
+      return hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Write child.txt",
+            message: "write child.txt",
+            read_paths: [],
+            write_paths: [{ path: "child.txt", kind: "file" }],
+          });
+    });
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    const live = await harness.events(owner, sessionId);
+    await live.waitFor((event) => event.event === "ready");
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "delegate" },
+    });
+    const notified = await live.waitFor(
+      (event) =>
+        event.event === "session" &&
+        (event.data as { event: { kind: string; state?: string } }).event
+          .kind === "agent",
+    );
+    expect(notified.data).toMatchObject({
+      event: { kind: "agent", state: "approval_required" },
+    });
+    live.close();
+
+    const listed = await request({ path: `${base}/agents`, session: owner });
+    const [agent] = (
+      listed.body as {
+        agents: [
+          {
+            childSessionId: string;
+            lifecycle: string;
+            approval: { interactionId: string; toolName: string };
+          },
+        ];
+      }
+    ).agents;
+    expect(agent).toMatchObject({
+      lifecycle: "awaiting_approval",
+      approval: { toolName: "write_file" },
+    });
+    const approve = (body: Record<string, unknown>) =>
+      request({
+        method: "POST",
+        path: `${base}/agents/${agent.childSessionId}/approval`,
+        session: owner,
+        body,
+      });
+
+    harness.clock.value += 6 * 60 * 1000;
+    await expect(
+      approve({
+        interactionId: agent.approval.interactionId,
+        decision: "allow",
+      }),
+    ).resolves.toMatchObject({
+      status: 401,
+      body: { error: "reauthentication_required" },
+    });
+    await request({
+      method: "POST",
+      path: "/api/auth/reauthenticate",
+      session: owner,
+      body: { passphrase: PASSPHRASE },
+    });
+    await expect(
+      approve({ interactionId: "not-the-pending-one", decision: "allow" }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "stale_interaction" },
+    });
+    await expect(
+      approve({ interactionId: agent.approval.interactionId, decision: "ok" }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "decision_invalid" },
+    });
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
+    ).rejects.toThrow();
+    await expect(
+      approve({
+        interactionId: agent.approval.interactionId,
+        decision: "allow",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(async () => {
+      await expect(
+        request({ path: `${base}/agents`, session: owner }),
+      ).resolves.toMatchObject({
+        body: {
+          agents: [{ lifecycle: "completed", resultText: "child done" }],
+        },
+      });
+    });
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
+    ).resolves.toBe("from child\n");
+  });
+
+  it("steers and stops a running agent, scoped to its parent", async () => {
+    let allowWrite = true;
+    const harness = await startHarness({
+      authorizeProject: ({ access }) =>
+        access === "read" || (access === "write" && allowWrite),
+    });
+    const { owner, request } = harness;
+    harness.fetch.mockImplementation(async (_url, init) =>
+      hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Slow review",
+            message: "slow review",
+            read_paths: [{ path: ".", kind: "directory" }],
+            write_paths: [],
+            model_role: "review",
+          }),
+    );
+    // The child's provider request hangs until it is aborted.
+    harness.claudeFetch.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+    );
+    const sessionId = await createSession(harness);
+    const other = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "start a slow review" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    await vi.waitFor(() => expect(harness.claudeFetch).toHaveBeenCalled());
+    const listed = await request({ path: `${base}/agents`, session: owner });
+    const { childSessionId } = (
+      listed.body as { agents: [{ childSessionId: string }] }
+    ).agents[0];
+    const agentPath = (parent: string, op: string) =>
+      `/api/projects/home/sessions/${parent}/agents/${childSessionId}/${op}`;
+
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(sessionId, "steer"),
+        session: owner,
+        body: { message: "   " },
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "message_invalid" },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(sessionId, "steer"),
+        session: owner,
+        body: { message: "also check tests" },
+      }),
+    ).resolves.toMatchObject({ status: 202, body: { status: "queued" } });
+    // Another session cannot reach this child.
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(other, "stop"),
+        session: owner,
+      }),
+    ).resolves.toMatchObject({
+      status: 404,
+      body: { error: "agent_not_found" },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/agents/unknown-child/stop`,
+        session: owner,
+      }),
+    ).resolves.toMatchObject({
+      status: 404,
+      body: { error: "agent_not_found" },
+    });
+
+    allowWrite = false;
+    await expect(
+      request({ path: `${base}/agents`, session: owner }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { agents: [{ lifecycle: "running", steeringQueued: 1 }] },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(sessionId, "stop"),
+        session: owner,
+      }),
+    ).resolves.toMatchObject({
+      status: 403,
+      body: { error: "project_access_denied" },
+    });
+    allowWrite = true;
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(sessionId, "stop"),
+        session: owner,
+        body: { reason: "no longer needed" },
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: {
+        agent: {
+          lifecycle: "cancelled",
+          terminalReason: "no longer needed",
+        },
+      },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: agentPath(sessionId, "steer"),
+        session: owner,
+        body: { message: "again" },
+      }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "agent_not_running" },
+    });
+    const log = harness.routes.events.read(`home\u0000${sessionId}`, 0);
+    if (log.reset) throw new Error("expected the retained event log");
+    const published = log.events.flatMap(({ event }) =>
+      event.kind === "agent" ? [event.state] : [],
+    );
+    expect(published).toEqual(["steered", "stopped"]);
   });
 
   it("maps project access explicitly", async () => {

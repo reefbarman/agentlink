@@ -30,6 +30,20 @@ export type AssistantSessionEvent =
       readonly state: "failed";
       readonly taskId: string;
       readonly error: string;
+    }
+  | {
+      /**
+       * A background child of this session changed in a way a client should
+       * react to. Read `GET .../agents` for its current state.
+       */
+      readonly kind: "agent";
+      readonly state:
+        | "approval_required"
+        | "approval_answered"
+        | "steered"
+        | "stopped";
+      readonly childSessionId: string;
+      readonly actor?: AssistantTaskActor;
     };
 
 export interface SequencedSessionEvent {
