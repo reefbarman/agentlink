@@ -1,0 +1,53 @@
+apps/server/src/ServerAccessStore.test.ts
+  h_e08a86bb3a33a2 4,126,128,136-190,192-238,240-241
+  s_2fe6a5b5254981::t_0ed4713abd87cb 191
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 12,550-603
+  s_2fe6a5b5254981::t_1ebe6699fcfe0f 604-605
+apps/server/src/ServerAccessStore.ts
+  h_e08a86bb3a33a2 11-12,17-19,51-52,151-156,173,319-372,447-449,559-646,801-805
+  s_b5a56aa90b56e0::t_62b543e51fb383 373-375,647-649
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 3,7-10,26,35-40,48,51,57,72,94-125
+  s_2fe6a5b5254981::t_318ab7c0c93cf5 126-128
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 39-43,143
+apps/server/README.md
+  h_e08a86bb3a33a2 14,48-60,67-68
+  s_2fe6a5b5254981::t_d271945cd83580 96
+apps/server/src/assistantServer.ts
+  h_e08a86bb3a33a2 312-326,543
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 252-272
+apps/server/src/index.ts
+  h_e08a86bb3a33a2 9,64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "423d92e3c9a59aaa7e2443b8bcfde94c322ce727",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2fe6a5b5254981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b555c37-2ab1-4650-9857-7d048d342a48",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b5a56aa90b56e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc5a0594-2974-498c-a9eb-784c7607eddc",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
