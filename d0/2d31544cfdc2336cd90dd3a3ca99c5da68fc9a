@@ -1,0 +1,37 @@
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 108-109,339-340,447-453,456-457,469,472-478,480
+  s_cce5b8025a744e::t_77fe02c6bc8eca 337-338,341,454-455,458,470-471,479,481
+apps/server/deploy/container/server.with-meridian.example.json
+  h_e08a86bb3a33a2 1-56
+apps/server/deploy/container/compose.meridian.yaml
+  h_e08a86bb3a33a2 1-72
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 90,93-109,203-212,214-217,237
+  s_cce5b8025a744e::t_c7048625be41f6 91-92,213,218-219
+apps/server/README.md
+  h_e08a86bb3a33a2 29,34,71-110
+  s_cce5b8025a744e::t_ebbb6b04a1b7c1 28,30-33,35-37,111-120
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 102-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d02d31544cfdc2336cd90dd3a3ca99c5da68fc9a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_cce5b8025a744e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90f47e01-cb49-4b38-ad36-f0d995641b3a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
