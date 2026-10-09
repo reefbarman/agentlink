@@ -261,12 +261,13 @@ function isInvalidGrantError(error: unknown): boolean {
 async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
+  redirectUri: string,
 ): Promise<CodexCredentials> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: OAUTH_CONFIG.clientId,
     code,
-    redirect_uri: OAUTH_CONFIG.redirectUri,
+    redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   });
 
@@ -390,6 +391,8 @@ export class CodexOAuthFlowError extends Error {
       | "missing_code"
       | "state_mismatch"
       | "port_in_use"
+      | "listen_failed"
+      | "cancelled"
       | "timeout",
   ) {
     super(message);
@@ -412,17 +415,20 @@ export class CodexOAuthManager {
     Promise<CodexOAuthAccountRecord>
   >();
   private log: (msg: string) => void;
-  private pendingAuth: {
-    codeVerifier: string;
-    state: string;
-    server?: http.Server;
-  } | null = null;
+  private pendingAuth: PendingAuthorization | null = null;
+  private readonly callbackPort: number;
+  /** Set while a settled listener is still releasing its port. */
+  private listenerReleased: Promise<void> | null = null;
 
   /** Fired after sign-in, sign-out, account switch, or account mutation. */
   onAuthStateChanged?: () => void;
 
-  constructor(log?: (msg: string) => void) {
+  constructor(
+    log?: (msg: string) => void,
+    options: CodexOAuthManagerOptions = {},
+  ) {
     this.log = log ?? console.log;
+    this.callbackPort = options.callbackPort ?? OAUTH_CONFIG.callbackPort;
   }
 
   /** Compatibility adapter for hosts that still use VS Code SecretStorage. */
@@ -1181,11 +1187,12 @@ export class CodexOAuthManager {
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateState();
 
-    this.pendingAuth = { codeVerifier, state };
+    const redirectUri = `http://localhost:${this.callbackPort}/auth/callback`;
+    this.pendingAuth = { codeVerifier, state, redirectUri };
 
     const params = new URLSearchParams({
       client_id: OAUTH_CONFIG.clientId,
-      redirect_uri: OAUTH_CONFIG.redirectUri,
+      redirect_uri: redirectUri,
       scope: OAUTH_CONFIG.scopes,
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
@@ -1201,137 +1208,203 @@ export class CodexOAuthManager {
   /**
    * Start a local HTTP server to receive the OAuth callback.
    * Resolves exchanged credentials only; caller decides how to store them.
+   * Binding starts synchronously, as before, so callers may open the browser
+   * right after calling this. Prefer `listenForCallback()` when the caller
+   * must know the listener is ready (or the port is busy) first.
    */
   async waitForCallback(): Promise<CodexCredentials> {
-    if (!this.pendingAuth) {
-      throw new Error(
-        "No pending authorization flow — call startAuthorizationFlow() first",
+    const { callback } = await this.listenForCallback();
+    return await callback;
+  }
+
+  /**
+   * Start the loopback-only callback listener and resolve once it accepts
+   * connections. The returned `callback` settles with exchanged credentials,
+   * or rejects on OAuth error, timeout or `cancelAuthorizationFlow()`.
+   *
+   * Binds 127.0.0.1 (required) and ::1 (when the host has IPv6 loopback), so
+   * the `localhost` redirect works for either resolution without exposing the
+   * port to other machines. Requests that do not carry this flow's `state`
+   * are rejected without ending the flow. A later call for the same flow
+   * replaces this listener and cancels its `callback`.
+   */
+  listenForCallback(): Promise<{ callback: Promise<CodexCredentials> }> {
+    const pending = this.pendingAuth;
+    if (!pending) {
+      return Promise.reject(
+        new Error(
+          "No pending authorization flow — call startAuthorizationFlow() first",
+        ),
       );
     }
+    // Everything up to the first await below runs synchronously, so this
+    // attempt is registered (and cancellable) before any other caller runs.
+    // A repeated listen for the same flow replaces the previous listener;
+    // settling it clears the pending flow, so keep this flow current.
+    if (pending.abort) {
+      pending.abort(
+        new CodexOAuthFlowError("Callback listener replaced", "cancelled"),
+      );
+      this.pendingAuth = pending;
+    }
+    // Server.close() frees the port asynchronously. Only when an earlier
+    // listener is still releasing do we wait (bounded) before binding.
+    const release = this.listenerReleased;
 
-    this.closePendingServer();
+    const port = this.callbackPort;
+    const servers: http.Server[] = [];
+    let settled = false;
+    let exchanging = false;
+    let timeout: NodeJS.Timeout | undefined;
+    let resolveCallback!: (credentials: CodexCredentials) => void;
+    let rejectCallback!: (error: unknown) => void;
+    const callback = new Promise<CodexCredentials>((resolve, reject) => {
+      resolveCallback = resolve;
+      rejectCallback = reject;
+    });
+    // Callers observe the rejection by awaiting `callback`; this only stops
+    // an early listen failure being reported as unhandled.
+    void callback.catch(() => undefined);
 
-    return new Promise<CodexCredentials>((resolve, reject) => {
-      let settled = false;
-      let timeout: NodeJS.Timeout | undefined;
-      const finish = (result: {
-        credentials?: CodexCredentials;
-        error?: unknown;
-      }) => {
-        if (settled) return;
-        settled = true;
-        if (timeout) {
-          clearTimeout(timeout);
-          timeout = undefined;
-        }
-        this.closePendingServer();
-        this.pendingAuth = null;
-        if (result.credentials) {
-          resolve(result.credentials);
+    const finish = (result: {
+      credentials?: CodexCredentials;
+      error?: unknown;
+    }) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      // Include any earlier release this attempt was still waiting on, so a
+      // later listen cannot skip past it when this attempt is replaced first.
+      const closing = release
+        ? Promise.all([release, closeServers(servers)]).then(() => undefined)
+        : closeServers(servers);
+      this.listenerReleased = closing;
+      void closing.then(() => {
+        if (this.listenerReleased === closing) this.listenerReleased = null;
+      });
+      if (pending.abort === abort) pending.abort = undefined;
+      if (this.pendingAuth === pending) this.pendingAuth = null;
+      if (result.credentials) resolveCallback(result.credentials);
+      else rejectCallback(result.error);
+    };
+    const abort = (error: CodexOAuthFlowError) => finish({ error });
+    pending.abort = abort;
+
+    const handler: http.RequestListener = async (req, res) => {
+      try {
+        if (settled) {
+          res.writeHead(503);
+          res.end("Authentication flow is no longer active");
           return;
         }
-        reject(result.error);
-      };
-
-      const server = http.createServer(async (req, res) => {
-        try {
-          if (settled) {
-            res.writeHead(503);
-            res.end("Authentication flow is no longer active");
-            return;
-          }
-
-          const url = new URL(
-            req.url ?? "",
-            `http://localhost:${OAUTH_CONFIG.callbackPort}`,
-          );
-
-          if (url.pathname !== "/auth/callback") {
-            res.writeHead(404);
-            res.end("Not Found");
-            return;
-          }
-
-          const code = url.searchParams.get("code");
-          const state = url.searchParams.get("state");
-          const error = url.searchParams.get("error");
-
-          if (error) {
-            res.writeHead(400);
-            res.end(`Authentication failed: ${error}`);
-            finish({
-              error: new CodexOAuthFlowError(
-                `OAuth error: ${error}`,
-                "oauth_error",
-              ),
-            });
-            return;
-          }
-
-          if (!code || !state) {
-            res.writeHead(400);
-            res.end("Missing code or state parameter");
-            finish({
-              error: new CodexOAuthFlowError(
-                "Missing code or state parameter",
-                "missing_code",
-              ),
-            });
-            return;
-          }
-
-          if (state !== this.pendingAuth?.state) {
-            res.writeHead(400);
-            res.end("State mismatch — possible CSRF attack");
-            finish({
-              error: new CodexOAuthFlowError(
-                "State mismatch",
-                "state_mismatch",
-              ),
-            });
-            return;
-          }
-
-          try {
-            const credentials = await exchangeCodeForTokens(
-              code,
-              this.pendingAuth.codeVerifier,
-            );
-
-            res.writeHead(200, {
-              "Content-Type": "text/html; charset=utf-8",
-            });
-            res.end(successHtml());
-            finish({ credentials });
-          } catch (exchangeErr) {
-            res.writeHead(500);
-            res.end("Token exchange failed");
-            finish({ error: exchangeErr });
-          }
-        } catch (err) {
-          res.writeHead(500);
-          res.end("Internal server error");
-          finish({ error: err });
+        const url = new URL(req.url ?? "", `http://localhost:${port}`);
+        if (url.pathname !== "/auth/callback") {
+          res.writeHead(404);
+          res.end("Not Found");
+          return;
         }
-      });
 
-      if (this.pendingAuth) {
-        this.pendingAuth.server = server;
-      }
+        const state = url.searchParams.get("state");
+        if (!state || !constantTimeEquals(state, pending.state)) {
+          // Not this flow's redirect: reject it but keep waiting, so stray or
+          // forged requests cannot cancel a legitimate sign-in.
+          res.writeHead(400);
+          res.end("Invalid or missing state parameter");
+          this.log("[codex-oauth] Ignored callback with invalid state");
+          return;
+        }
 
-      server.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE") {
+        const error = url.searchParams.get("error");
+        if (error) {
+          res.writeHead(400);
+          res.end(`Authentication failed: ${error}`);
           finish({
             error: new CodexOAuthFlowError(
-              `Port ${OAUTH_CONFIG.callbackPort} is already in use. Please close any other applications using this port (e.g. Roo Code, Codex CLI) and try again.`,
-              "port_in_use",
+              `OAuth error: ${error}`,
+              "oauth_error",
             ),
           });
-        } else {
-          finish({ error: err });
+          return;
         }
+
+        const code = url.searchParams.get("code");
+        if (!code) {
+          res.writeHead(400);
+          res.end("Missing code parameter");
+          finish({
+            error: new CodexOAuthFlowError(
+              "Missing code parameter",
+              "missing_code",
+            ),
+          });
+          return;
+        }
+
+        if (exchanging) {
+          res.writeHead(409);
+          res.end("Authentication is already being completed");
+          return;
+        }
+        exchanging = true;
+        try {
+          const credentials = await exchangeCodeForTokens(
+            code,
+            pending.codeVerifier,
+            pending.redirectUri,
+          );
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(successHtml());
+          finish({ credentials });
+        } catch (exchangeErr) {
+          res.writeHead(500);
+          res.end("Token exchange failed");
+          finish({ error: exchangeErr });
+        }
+      } catch (err) {
+        if (!res.headersSent) res.writeHead(500);
+        res.end("Internal server error");
+        finish({ error: err });
+      }
+    };
+
+    // Servers are tracked from creation so a cancel during binding closes
+    // them too; one that finishes binding after settlement closes itself.
+    const listen = (host: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const server = http.createServer(handler);
+        servers.push(server);
+        const onListenError = (err: Error) => reject(err);
+        server.once("error", onListenError);
+        // Closed (cancelled) before it finished binding: Node then never
+        // emits "listening", so settle here; settlement is checked after.
+        server.once("close", () => resolve());
+        server.listen({ port, host, exclusive: true }, () => {
+          server.off("error", onListenError);
+          server.on("error", (err) => finish({ error: err }));
+          if (settled) void closeServers([server]);
+          resolve();
+        });
       });
 
+    const bind = async (): Promise<void> => {
+      if (release) await release;
+      if (settled) return;
+      // Start both binds before awaiting either.
+      const [ipv4, ipv6] = await Promise.allSettled([
+        listen("127.0.0.1"),
+        listen("::1"),
+      ]);
+      if (settled) return;
+      if (ipv4.status === "rejected") throw listenError(ipv4.reason, port);
+      if (ipv6.status === "rejected") {
+        const code = (ipv6.reason as NodeJS.ErrnoException).code;
+        // No IPv6 loopback on this host: 127.0.0.1 alone serves the
+        // redirect. Anything else (notably another process holding
+        // [::1]:port, which a browser may try first) is a hard failure.
+        if (code !== "EADDRNOTAVAIL" && code !== "EAFNOSUPPORT") {
+          throw listenError(ipv6.reason, port);
+        }
+      }
       timeout = setTimeout(
         () => {
           finish({
@@ -1343,28 +1416,92 @@ export class CodexOAuthManager {
         },
         5 * 60 * 1000,
       );
+    };
 
-      server.listen(OAUTH_CONFIG.callbackPort);
-    });
+    return bind().then(
+      // If cancelled or replaced meanwhile, `callback` is already rejected
+      // with that reason, which the caller observes when awaiting it.
+      () => ({ callback }),
+      (error: unknown) => {
+        finish({ error });
+        throw error;
+      },
+    );
   }
 
-  /** Cancel any in-progress authorization flow. */
+  /** Cancel any in-progress authorization flow and settle its callback. */
   cancelAuthorizationFlow(): void {
-    this.closePendingServer();
+    const pending = this.pendingAuth;
     this.pendingAuth = null;
+    pending?.abort?.(
+      new CodexOAuthFlowError("Authentication was cancelled", "cancelled"),
+    );
   }
+}
 
-  private closePendingServer(): void {
-    if (!this.pendingAuth?.server) {
-      return;
-    }
-    try {
-      this.pendingAuth.server.close();
-    } catch {
-      /* ignore */
-    }
-    this.pendingAuth.server = undefined;
+export interface CodexOAuthManagerOptions {
+  /**
+   * Override the loopback callback port. For tests only: the registered
+   * OpenAI client accepts only the default port 1455 redirect.
+   */
+  callbackPort?: number;
+}
+
+interface PendingAuthorization {
+  codeVerifier: string;
+  state: string;
+  redirectUri: string;
+  /** Settles the active callback listener, if one is running. */
+  abort?: (error: CodexOAuthFlowError) => void;
+}
+
+const LISTENER_RELEASE_WAIT_MS = 2_000;
+
+/**
+ * Stop accepting connections. Idle keep-alive sockets are dropped; a response
+ * already being written (such as the success page) is allowed to finish. The
+ * returned promise resolves when the ports are released, or after a short
+ * bound if a client holds a connection open.
+ */
+function closeServers(servers: http.Server[]): Promise<void> {
+  const closed = servers.map(
+    (server) =>
+      new Promise<void>((resolve) => {
+        try {
+          server.close(() => resolve());
+          server.closeIdleConnections();
+        } catch {
+          resolve();
+        }
+      }),
+  );
+  let bound: NodeJS.Timeout | undefined;
+  return Promise.race([
+    Promise.all(closed).then(() => undefined),
+    new Promise<void>((resolve) => {
+      bound = setTimeout(resolve, LISTENER_RELEASE_WAIT_MS);
+      bound.unref();
+    }),
+  ]).finally(() => clearTimeout(bound));
+}
+
+function listenError(err: unknown, port: number): CodexOAuthFlowError {
+  if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
+    return new CodexOAuthFlowError(
+      `Port ${port} is already in use. Please close any other applications using this port (e.g. Roo Code, Codex CLI) and try again.`,
+      "port_in_use",
+    );
   }
+  return new CodexOAuthFlowError(
+    `Could not start the sign-in callback listener on port ${port}: ${(err as Error).message}`,
+    "listen_failed",
+  );
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function successHtml(): string {
