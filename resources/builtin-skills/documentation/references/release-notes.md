@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- SDK: `WorkspaceHost.resumeInteraction(...)` accepts `expected: { interactionId, interactionRevision }`. When set, a decision for any other pending request fails with `stale_interaction` instead of applying to it. Existing calls without it behave as before.
+- SDK: `@agentlink/core` exports `projectEmbeddedAgentTurnEvent(...)` and `projectEmbeddedAgentSessionSnapshot(...)`, the same host-safe projections the embedded web handler uses. Hosts that run turns themselves can publish events later without exposing provenance, usage or transcripts.
 - SDK: `createOpenAICompatibleProvider(...)` now accepts `meridianSessionAffinity`, matching the connection setting, so embedded hosts can send each session ID as `x-session-affinity` to Meridian. Previously the factory silently dropped it.
 - Upgrade the standalone CLI to Ink 8 and replace the unsupported textarea dependency with a local controlled multiline editor, preserving completion, history and bracketed paste.
 - Require VS Code 1.140.0 or newer and update the extension API types to match.

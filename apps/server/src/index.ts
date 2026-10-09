@@ -8,6 +8,25 @@ export {
   AttemptLimiter,
   type AttemptLimiterOptions,
 } from "./AttemptLimiter.js";
+export { HttpError } from "./httpJson.js";
+export {
+  SessionEventHub,
+  type AssistantSessionEvent,
+  type AssistantTaskActor,
+  type AssistantTaskOperation,
+  type SequencedSessionEvent,
+  type SessionEventSubscription,
+} from "./SessionEventHub.js";
+export {
+  createAssistantWorkspaceRoutes,
+  ownerProjectAccess,
+  type AssistantProjectAccess,
+  type AssistantProjectMount,
+  type AssistantWorkspaceHost,
+  type AssistantWorkspaceRoutes,
+  type AuthorizeAssistantProject,
+  type CreateAssistantWorkspaceRoutesOptions,
+} from "./workspaceRoutes.js";
 export {
   CSRF_HEADER,
   SESSION_COOKIE_NAME,

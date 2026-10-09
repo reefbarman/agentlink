@@ -240,10 +240,7 @@ export interface WorkspaceHost {
   resumeInteraction(
     sessionId: string,
     decision: "allow" | "deny",
-    options?: {
-      readonly signal?: AbortSignal;
-      readonly onEvent?: (event: AgentTurnEvent) => void;
-    },
+    options?: WorkspaceResumeInteractionOptions,
   ): Promise<AgentTurnResult>;
   runTurn(
     sessionId: string,
@@ -1164,6 +1161,21 @@ function serializeMcpToolExecution(
   };
 }
 
+export interface WorkspaceResumeInteractionOptions {
+  readonly signal?: AbortSignal;
+  readonly onEvent?: (event: AgentTurnEvent) => void;
+  /**
+   * The exact interaction the decision answers. When set, the resume fails
+   * with code `stale_interaction` unless it is still the pending interaction,
+   * and the engine's resume is bound to it (and its session revision), so a
+   * decision can never apply to a replacement request.
+   */
+  readonly expected?: {
+    readonly interactionId: string;
+    readonly interactionRevision: string;
+  };
+}
+
 async function resumeWorkspaceInteraction(
   engine: AgentEngine,
   principal: AgentPrincipal,
@@ -1172,10 +1184,7 @@ async function resumeWorkspaceInteraction(
   revalidatePendingInteraction: (
     sessionId: string,
   ) => Promise<{ readonly ok: true } | { readonly ok: false; reason: string }>,
-  runOptions: {
-    readonly signal?: AbortSignal;
-    readonly onEvent?: (event: AgentTurnEvent) => void;
-  },
+  runOptions: WorkspaceResumeInteractionOptions,
   conversationState: ResponsesConversationState,
 ): Promise<AgentTurnResult> {
   const pending = await engine.sessions.inspect({ principal, sessionId });
@@ -1184,6 +1193,19 @@ async function resumeWorkspaceInteraction(
   }
   if (pending.summary.runState.phase !== "suspended") {
     throw new Error(`Session ${sessionId} is not suspended`);
+  }
+  const expected = runOptions.expected;
+  if (
+    expected &&
+    (pending.pendingInteraction.request.interactionId !==
+      expected.interactionId ||
+      pending.pendingInteraction.interactionRevision !==
+        expected.interactionRevision)
+  ) {
+    throw Object.assign(
+      new Error(`Session ${sessionId} has a different pending interaction`),
+      { code: "stale_interaction" },
+    );
   }
   if (decision === "allow") {
     const current = await revalidatePendingInteraction(sessionId);

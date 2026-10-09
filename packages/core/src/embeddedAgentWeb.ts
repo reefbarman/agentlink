@@ -632,6 +632,29 @@ function sessionSnapshot<TPrincipal extends AgentPrincipal>(
   };
 }
 
+/**
+ * Host-safe public projection of an engine turn event, as streamed by the
+ * embedded web handler. Drops provenance detail, usage, and execution
+ * internals. For hosts that run turns themselves and publish them later.
+ */
+export function projectEmbeddedAgentTurnEvent(
+  event: AgentTurnEvent,
+): EmbeddedAgentTurnEvent {
+  return projectTurnEvent(event);
+}
+
+/**
+ * Host-safe session snapshot (phase, revision, pending interaction) as
+ * returned by the embedded web handler. Never includes the transcript.
+ */
+export function projectEmbeddedAgentSessionSnapshot<
+  TPrincipal extends AgentPrincipal,
+>(
+  inspection: AgentSessionInspection<TPrincipal>,
+): EmbeddedAgentSessionSnapshot {
+  return sessionSnapshot(inspection);
+}
+
 export function parseEmbeddedAgentRequest(
   value: unknown,
   options: ParseEmbeddedAgentRequestOptions = {},

@@ -159,6 +159,9 @@ export class ServerAccessStore {
   private readonly lastPersistedSeen = new Map<string, number>();
   private writes: Promise<void> = Promise.resolve();
   private closed = false;
+  private readonly revocationListeners = new Set<
+    (sessionIds: readonly string[]) => void
+  >();
 
   private constructor(
     private readonly filePath: string,
@@ -200,6 +203,19 @@ export class ServerAccessStore {
 
   get ownerConfigured(): boolean {
     return this.state.owner !== undefined;
+  }
+
+  /** The single owner's ID, once bootstrapped. */
+  get ownerId(): string | undefined {
+    return this.state.owner?.ownerId;
+  }
+
+  /** Observe durable session revocations. Returns an unsubscribe function. */
+  onSessionsRevoked(
+    listener: (sessionIds: readonly string[]) => void,
+  ): () => void {
+    this.revocationListeners.add(listener);
+    return () => this.revocationListeners.delete(listener);
   }
 
   /** Wait for pending writes and release the data-root lock. Idempotent. */
@@ -288,8 +304,15 @@ export class ServerAccessStore {
     return await this.issueSessionForNewDevice(label);
   }
 
+  /**
+   * Validate a session token. By default this records client activity and
+   * extends the idle window; pass `recordActivity: false` for server-side
+   * rechecks (stream heartbeats, pre-execution checks) that must not keep an
+   * unattended session alive.
+   */
   async authenticate(
     token: string | undefined,
+    options: { readonly recordActivity?: boolean } = {},
   ): Promise<ServerAuthenticationResult> {
     if (!token || !SESSION_TOKEN_PATTERN.test(token)) {
       return { ok: false, reason: "malformed" };
@@ -311,6 +334,9 @@ export class ServerAccessStore {
       now - session.lastSeenAt >= this.options.sessionIdleTtlMs
     ) {
       return { ok: false, reason: "expired" };
+    }
+    if (options.recordActivity === false) {
+      return { ok: true, session: this.toPublicSession(session, device) };
     }
     session.lastSeenAt = now;
     const persistedAt = this.lastPersistedSeen.get(session.sessionId) ?? 0;
@@ -368,10 +394,15 @@ export class ServerAccessStore {
     }
     const now = this.options.now();
     device.revokedAt = now;
+    const revoked: string[] = [];
     for (const session of this.state.sessions) {
-      if (session.deviceId === deviceId) session.revokedAt ??= now;
+      if (session.deviceId === deviceId && session.revokedAt === undefined) {
+        session.revokedAt = now;
+        revoked.push(session.sessionId);
+      }
     }
     await this.persist();
+    this.notifyRevoked(revoked);
     return true;
   }
 
@@ -382,7 +413,19 @@ export class ServerAccessStore {
     if (!session || session.revokedAt !== undefined) return false;
     session.revokedAt = this.options.now();
     await this.persist();
+    this.notifyRevoked([sessionId]);
     return true;
+  }
+
+  private notifyRevoked(sessionIds: readonly string[]): void {
+    if (sessionIds.length === 0) return;
+    for (const listener of this.revocationListeners) {
+      try {
+        listener(sessionIds);
+      } catch {
+        // A listener failure must not undo or hide a committed revocation.
+      }
+    }
   }
 
   private async issueSessionForNewDevice(

@@ -88,6 +88,8 @@ const CORE_MODULES = [
     identityExports: [
       "createEmbeddedAgentWebHandler",
       "parseEmbeddedAgentRequest",
+      "projectEmbeddedAgentSessionSnapshot",
+      "projectEmbeddedAgentTurnEvent",
     ],
     loadEsm: () => import("@agentlink/core/embedded-agent-web"),
   },

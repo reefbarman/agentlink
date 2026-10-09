@@ -599,8 +599,22 @@ describe("createWorkspaceHost", () => {
     ).resolves.toMatchObject({
       status: "suspended",
     });
+    const pending = (await host.readSession(sessionId)).pendingInteraction!;
     await expect(
-      host.resumeInteraction(sessionId, "deny"),
+      host.resumeInteraction(sessionId, "deny", {
+        expected: {
+          interactionId: pending.request.interactionId,
+          interactionRevision: "not-the-current-revision",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "stale_interaction" });
+    await expect(
+      host.resumeInteraction(sessionId, "deny", {
+        expected: {
+          interactionId: pending.request.interactionId,
+          interactionRevision: pending.interactionRevision,
+        },
+      }),
     ).resolves.toMatchObject({
       status: "completed",
       text: "kept unchanged",

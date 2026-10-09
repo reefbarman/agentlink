@@ -12,6 +12,8 @@ import {
 import {
   createEmbeddedAgentWebHandler,
   parseEmbeddedAgentRequest,
+  projectEmbeddedAgentSessionSnapshot,
+  projectEmbeddedAgentTurnEvent,
 } from "./embeddedAgentWeb.js";
 import type { AgentTurnEvent, AgentTurnResult } from "./turnContracts.js";
 
@@ -194,6 +196,38 @@ async function frames(response: Response): Promise<EmbeddedAgentStreamFrame[]> {
   }
   return result;
 }
+
+describe("embedded agent projections", () => {
+  it("projects host-safe events and snapshots for hosts that run turns themselves", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      sessionId: "session-1",
+      turnId: "turn-1",
+      sequence: 4,
+      emittedAt: 10,
+    };
+    expect(
+      projectEmbeddedAgentTurnEvent({
+        ...base,
+        type: "usage.updated",
+        model: { providerId: "fixture", modelId: "model" },
+        usage: { inputTokens: 1, outputTokens: 2 },
+      } as AgentTurnEvent),
+    ).toEqual({ ...base, type: "usage.updated" });
+    expect(
+      projectEmbeddedAgentTurnEvent({
+        ...base,
+        type: "text.delta",
+        text: "hi",
+      }),
+    ).toEqual({ ...base, type: "text.delta", text: "hi" });
+    expect(projectEmbeddedAgentSessionSnapshot(inspection())).toEqual({
+      sessionId: "session-1",
+      revision: "3",
+      phase: "idle",
+    });
+  });
+});
 
 describe("embedded agent Web handler", () => {
   it("enforces JSON, authentication, origin policy, and rate policy", async () => {

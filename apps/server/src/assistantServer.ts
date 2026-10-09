@@ -9,6 +9,14 @@ import type { Duplex } from "node:stream";
 
 import { AttemptLimiter } from "./AttemptLimiter.js";
 import {
+  HttpError,
+  optionalStringField,
+  readJsonBody,
+  sendEmpty,
+  sendJson,
+  stringField,
+} from "./httpJson.js";
+import {
   CSRF_HEADER,
   checkRequestEnvelope,
   clearedSessionCookie,
@@ -29,7 +37,7 @@ import {
 } from "./ServerAccessStore.js";
 
 const DEFAULT_REAUTHENTICATION_WINDOW_MS = 5 * 60 * 1000;
-const MAX_JSON_BODY_BYTES = 16 * 1024;
+
 const SERVER_TENANT_ID = "agentlink-server";
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "strict-transport-security": "max-age=31536000",
@@ -52,7 +60,30 @@ export interface AssistantServerAuth {
   readonly session: ServerAccessSession;
   /** True when the passphrase was proven within the reauthentication window. */
   readonly recentlyAuthenticated: boolean;
+  /**
+   * Aborts when this request or connection closes, or immediately when its
+   * session or device is revoked. Long-lived streams must stop on it. Do not
+   * use it to cancel server-owned work: it fires on every normal close.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * Re-check the session now (revocation, expiry, and the current
+   * reauthentication state) without recording client activity, so it never
+   * extends the session's idle window. Use it for long-lived streams and
+   * immediately before executing a sensitive action.
+   */
+  revalidate(): Promise<AssistantServerAuthCheck>;
 }
+
+export interface AssistantServerAuthCheck {
+  readonly valid: boolean;
+  readonly recentlyAuthenticated: boolean;
+}
+
+type AuthSummary = Pick<
+  AssistantServerAuth,
+  "principal" | "session" | "recentlyAuthenticated"
+>;
 
 export interface CreateAssistantServerOptions {
   readonly dataRoot: string;
@@ -88,6 +119,12 @@ export interface CreateAssistantServerOptions {
     head: Buffer,
     auth: AssistantServerAuth,
   ) => void;
+  /**
+   * Stops application work (for example server-owned agent turns). Called by
+   * `close()` after the listener stops accepting connections and before open
+   * connections and the access store close.
+   */
+  readonly onClose?: () => void | Promise<void>;
   readonly now?: () => number;
   readonly passphraseCost?: PassphraseCost;
   readonly reauthenticationWindowMs?: number;
@@ -97,15 +134,6 @@ export interface AssistantServer {
   readonly store: ServerAccessStore;
   start(): Promise<{ readonly port: number }>;
   close(): Promise<void>;
-}
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super(code);
-  }
 }
 
 export async function createAssistantServer(
@@ -130,13 +158,60 @@ export async function createAssistantServer(
     passphraseCost: options.passphraseCost,
   });
   const limiter = new AttemptLimiter({ now });
+  const liveRequests = new Map<string, Set<AbortController>>();
+  store.onSessionsRevoked((sessionIds) => {
+    for (const sessionId of sessionIds) {
+      for (const controller of liveRequests.get(sessionId) ?? []) {
+        controller.abort(new Error("session_revoked"));
+      }
+    }
+  });
 
-  const toAuth = (session: ServerAccessSession): AssistantServerAuth => ({
+  const toAuth = (session: ServerAccessSession): AuthSummary => ({
     principal: { tenantId: SERVER_TENANT_ID, subjectId: session.ownerId },
     session,
     recentlyAuthenticated:
       now() - session.authenticatedAt < reauthenticationWindowMs,
   });
+
+  /** Bind an authenticated session to one request or upgraded connection. */
+  const bindAuth = (
+    session: ServerAccessSession,
+    token: string,
+    lifetime: { once(event: "close", listener: () => void): unknown },
+  ): AssistantServerAuth => {
+    const controller = new AbortController();
+    const live = liveRequests.get(session.sessionId) ?? new Set();
+    live.add(controller);
+    liveRequests.set(session.sessionId, live);
+    lifetime.once("close", () => {
+      live.delete(controller);
+      if (live.size === 0) liveRequests.delete(session.sessionId);
+      controller.abort(new Error("request_closed"));
+    });
+    return {
+      ...toAuth(session),
+      signal: controller.signal,
+      async revalidate() {
+        const invalid = { valid: false, recentlyAuthenticated: false };
+        if (controller.signal.aborted) return invalid;
+        const result = await store.authenticate(token, {
+          recordActivity: false,
+        });
+        if (
+          controller.signal.aborted ||
+          !result.ok ||
+          result.session.sessionId !== session.sessionId
+        ) {
+          return invalid;
+        }
+        return {
+          valid: true,
+          recentlyAuthenticated: toAuth(result.session).recentlyAuthenticated,
+        };
+      },
+    };
+  };
 
   const authenticateRequest = async (request: IncomingMessage) => {
     const token = readSessionCookie(singleHeader(request.headers.cookie));
@@ -243,7 +318,7 @@ export async function createAssistantServer(
       throw new HttpError(401, "authentication_required");
     }
     const { token } = authenticated;
-    const auth = toAuth(authenticated.result.session);
+    const auth = bindAuth(authenticated.result.session, token, response);
     if (
       isUnsafeMethod(method) &&
       !verifyCsrfToken(token, singleHeader(request.headers[CSRF_HEADER]))
@@ -355,7 +430,7 @@ export async function createAssistantServer(
       request,
       socket,
       head,
-      toAuth(authenticated.result.session),
+      bindAuth(authenticated.result.session, authenticated.token, socket),
     );
   };
 
@@ -416,19 +491,21 @@ export async function createAssistantServer(
       };
     },
     async close() {
-      if (server.listening) {
+      const closed = server.listening
+        ? new Promise<void>((resolve) => server.close(() => resolve()))
+        : undefined;
+      // Stop server-owned work while its streams and the store still exist.
+      await options.onClose?.();
+      if (closed) {
         server.closeAllConnections();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await closed;
       }
       await store.close();
     },
   };
 }
 
-function describeSession(
-  session: ServerAccessSession,
-  auth: AssistantServerAuth,
-) {
+function describeSession(session: ServerAccessSession, auth: AuthSummary) {
   return {
     ownerId: session.ownerId,
     sessionId: session.sessionId,
@@ -460,69 +537,6 @@ function accessStatus(code: string): number {
     default:
       return 500;
   }
-}
-
-async function readJsonBody(
-  request: IncomingMessage,
-): Promise<Record<string, unknown>> {
-  const contentType = singleHeader(request.headers["content-type"]) ?? "";
-  if (!/^application\/json(\s*;|$)/iu.test(contentType)) {
-    throw new HttpError(415, "json_required");
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_JSON_BODY_BYTES) {
-      throw new HttpError(413, "body_too_large");
-    }
-    chunks.push(chunk as Buffer);
-  }
-  try {
-    const parsed = JSON.parse(
-      Buffer.concat(chunks).toString("utf8"),
-    ) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // Fall through to the shared error.
-  }
-  throw new HttpError(400, "invalid_json");
-}
-
-function stringField(body: Record<string, unknown>, name: string): string {
-  const value = body[name];
-  if (typeof value !== "string") throw new HttpError(400, `${name}_required`);
-  return value;
-}
-
-function optionalStringField(
-  body: Record<string, unknown>,
-  name: string,
-): string | undefined {
-  const value = body[name];
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") throw new HttpError(400, `${name}_invalid`);
-  return value;
-}
-
-function sendJson(
-  response: ServerResponse,
-  status: number,
-  body: unknown,
-): void {
-  const payload = JSON.stringify(body);
-  response.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-  });
-  response.end(payload);
-}
-
-function sendEmpty(response: ServerResponse, status: number): void {
-  response.writeHead(status);
-  response.end();
 }
 
 function rejectUpgrade(socket: Duplex, status: number): void {
