@@ -1,0 +1,29 @@
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_e08a86bb3a33a2 13,21-24,306-307,321-325,406-421,441-445,662-670
+  s_136cf72a6d3b3b::t_8a0f83733b7ed4 422-423
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 4349
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_e08a86bb3a33a2 904-945
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7feb0101598581e0c80821b02a51b84184171ac5",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_136cf72a6d3b3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf346197-bb36-4fe6-8a5d-b0e9838e8e8b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
