@@ -1,7 +1,11 @@
 import type { IncomingHttpHeaders } from "node:http";
 
+/**
+ * `SameSite=Strict`, so browsers never attach it to a cross-site request.
+ * Together with the Host, Origin, and `Sec-Fetch-Site` checks below this is
+ * the server's CSRF defence; there is no separate token.
+ */
 export const SESSION_COOKIE_NAME = "__Host-agentlink_session";
-export const CSRF_HEADER = "x-agentlink-csrf";
 
 /**
  * Identity and proxy headers a reverse proxy or client could use to claim a

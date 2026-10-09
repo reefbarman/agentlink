@@ -7,10 +7,10 @@
 #   openssl rand -hex 32 > secrets/command-worker-token
 #   chmod 600 secrets/command-worker-token
 #   docker compose up -d
-#   docker compose logs assistant          # one-time setup credential
+#   docker compose logs assistant          # CA fingerprint
 #   docker compose exec assistant agentlink-server codex-login
 #   docker compose exec assistant agentlink-server export-ca > agentlink-ca.pem
-#   docker compose exec assistant agentlink-server recover
+#   docker compose exec assistant agentlink-server pair   # sign in a device
 #
 # .env settings (all optional):
 #   AGENTLINK_PUBLISH  host address and port to publish (default 0.0.0.0:8443)

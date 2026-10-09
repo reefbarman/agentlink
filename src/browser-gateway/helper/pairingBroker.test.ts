@@ -56,6 +56,16 @@ describe("PairingBroker", () => {
     expect(status?.status).toBe("expired");
   });
 
+  it("accepts a code typed in groups", () => {
+    const broker = new PairingBroker({ now: () => 1_000 });
+    const pairing = broker.create();
+    const grouped = `${pairing.code.slice(0, 3)} ${pairing.code.slice(3)}`;
+    expect(broker.attempt(grouped, "10.0.0.5")).toMatchObject({
+      ok: true,
+      pairingId: pairing.pairingId,
+    });
+  });
+
   it("rejects malformed codes without exposing active codes", () => {
     const broker = new PairingBroker();
     broker.create();

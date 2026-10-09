@@ -8,7 +8,7 @@
 #   install -m 0644 agentlink-server.service /etc/systemd/system/
 #   systemd-analyze verify /etc/systemd/system/agentlink-server.service
 #   systemctl daemon-reload && systemctl enable --now agentlink-server
-#   journalctl -u agentlink-server   # shows the one-time setup credential
+#   sudo -u agentlink /usr/bin/node /opt/agentlink/server/agentlink-server.js pair --config /etc/agentlink/server.json
 #
 # Adjust ExecStart if node is not /usr/bin/node (Node 22.19 or newer).
 

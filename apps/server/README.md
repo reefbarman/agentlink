@@ -1,6 +1,6 @@
 # @agentlink/server
 
-Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, a first web app, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. Jobs and notifications come in later slices.
+Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, the shared Ask Agent web app, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. Jobs and notifications come in later slices.
 
 Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.js APIs (Node 22.19+), and its test suite runs on both.
 
@@ -11,7 +11,7 @@ Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.j
 ```sh
 agentlink-server --config /etc/agentlink/server.json --check   # validate and exit
 agentlink-server --config /etc/agentlink/server.json           # serve until SIGTERM/SIGINT
-agentlink-server recover --config /etc/agentlink/server.json   # print a recovery code
+agentlink-server pair --config /etc/agentlink/server.json      # print a sign-in code and QR
 agentlink-server export-ca --config /etc/agentlink/server.json > agentlink-ca.pem
 agentlink-server codex-login --config /etc/agentlink/server.json # sign in with ChatGPT
 agentlink-server codex-logout --config /etc/agentlink/server.json
@@ -19,18 +19,26 @@ agentlink-server codex-logout --config /etc/agentlink/server.json
 
 `--config` can be omitted when `AGENTLINK_SERVER_CONFIG` names the file; the container image sets it.
 
-`--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. On first start without an owner, the server writes a single-use setup credential to stderr (the journal under systemd, the log file under launchd); see [Access layer](#access-layer). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
+`--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. While no device is signed in, the server logs a reminder to run `agentlink-server pair`; see [Signing in](#signing-in). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
 
 ### Web app
 
-Open the first `publicOrigins` URL in a browser. The server serves a small mobile-friendly app from the same origin:
+Open the first `publicOrigins` URL in a browser. The server serves the same Ask Agent interface as AgentLink's browser remote gateway, from the same origin, talking to the first configured project:
 
-- **First start:** enter the setup credential from the log (`docker compose logs assistant`), choose a passphrase (12+ characters), and name the device.
-- **More devices:** on a signed-in device open **Devices → Create pairing code** and enter the code on the new device within 5 minutes. If every device is lost, use **Recovery code** with a code from `agentlink-server recover` and the passphrase.
-- **Chats:** pick a project, choose a model, and start a chat. Replies stream live; the work keeps running if you close the tab, and reopening the chat (on any device) replays a turn in progress. Change the model between turns from the chat header.
-- **Approvals:** a chat works on its own by default: file edits and foreground commands in the project run without asking. It still asks before writing protected files (`.env*`, `.git`, `.agentlink`, `.claude`, and instruction files such as `AGENTS.md`), before background commands, and for anything a background agent wants to run. A chat can instead ask for everything through the [approval mode](#approval-mode) route. Approvals appear above the composer; allow or deny asks for the passphrase again when it was last confirmed more than 5 minutes ago.
+- **Signing in:** see [Signing in](#signing-in). A browser that is not signed in is sent to `/pair`.
+- **Chats:** the Ask Agent chat list, transcript, composer, model picker, and tool rendering, with the server's configured models. The work keeps running if you close the tab, and reopening it (on any device) picks up a turn in progress.
+- **Approvals:** a chat works on its own by default: file edits and foreground commands in the project run without asking. It still asks before writing protected files (`.env*`, `.git`, `.agentlink`, `.claude`, and instruction files such as `AGENTS.md`), before background commands, and for anything a background agent wants to run. Approvals appear as cards above the composer and need no second sign-in. A chat can instead ask for everything through the [approval mode](#approval-mode) route.
+- **Devices:** `/devices` lists signed-in devices, revokes them, and creates pairing codes for new ones.
 
-The app is embedded in the server bundle at build time (`apps/server/web/`, built by `esbuild.mjs`) and served from fixed paths (`/`, `/app.js`, `/app.css`, `/icon.svg`, `/manifest.webmanifest`) without a session, since those files hold no data. The Host, Origin, and forged-header checks still apply, and every `/api/` path still needs a session. Model output is only ever inserted as text. Chat history comes from a display-only transcript in the session snapshot: user and assistant text plus tool names, the last 200 entries, each capped at 20,000 characters. Thinking, tool inputs and results, and attachments are never sent. Not yet supported: Markdown rendering, attachments, chat titles, and notifications.
+The UI is the browser gateway bundle (`src/browser-gateway/webview/` in the repository), built by `esbuild.mjs` into the server bundle and served from fixed paths (`/browser-gateway.js`, `/browser-gateway.css`, and hashed, immutable `/browser-gateway-chunks/*`) without a session, since those files hold no data. The page itself (`/`) needs a session and gets a per-response script nonce. The Host, Origin, and forged-header checks still apply, and every `/api/` path needs a session. `askAgentBridge.ts` answers the UI's Ask Agent API from the server's own workspace host; the UI's per-browser settings are stored in `<dataRoot>/settings/ask-agent-state.json`. Not yet supported: more than one project in the UI, attachments, and notifications.
+
+### Signing in
+
+There are no passwords. Every device signs in with a single-use 6-digit pairing code:
+
+- **First device (or after losing all of them):** on the server machine, as the service account, run `agentlink-server pair` (in the container: `docker compose exec assistant agentlink-server pair`). It prints the code, a sign-in link with the code filled in, and a QR code of that link for a phone camera. Open the link, or the server address, and enter the code within 10 minutes. The code goes to that terminal only, never to the service log. Running `pair` again replaces the code, and it works whether or not the server is running.
+- **More devices:** on a signed-in device open `/devices` → **Pair another device**. It shows a code, link, and QR code valid for 5 minutes.
+- **Staying signed in:** a session lasts 30 days, or 7 days without use. Revoking a device on `/devices` signs it out everywhere at once.
 
 ### Configuration
 
@@ -72,10 +80,10 @@ docker build --target command-worker -t agentlink-command-worker:local \
 mkdir -m 700 data secrets && mkdir -p projects/home
 (umask 077 && openssl rand -hex 32 > secrets/command-worker-token)
 docker compose up -d
-docker compose logs assistant                                  # setup credential, CA fingerprint
+docker compose logs assistant                                  # CA fingerprint
 docker compose exec assistant agentlink-server codex-login     # ChatGPT sign-in
 docker compose exec assistant agentlink-server export-ca > agentlink-ca.pem
-docker compose exec assistant agentlink-server recover
+docker compose exec assistant agentlink-server pair            # sign in a device
 ```
 
 - **Smoke test.** After building the images, `apps/server/deploy/container/smoke-test.sh` starts the shipped `compose.yaml` and `server.example.json` as a throwaway project on `127.0.0.1:18443` (`AGENTLINK_SMOKE_PORT`). It checks the users, that the assistant has no shell, that `--check` reaches the worker, that the host policy and `export-ca` work, that the worker refuses connections from its own container, that commands reach npm only through the egress gateway (which refuses unlisted hosts, sibling containers, other ports, and IP addresses), and that a canary service on the host is unreachable from the worker, then removes everything. It is safe next to a running deployment and is what CI runs on Linux.
@@ -167,7 +175,7 @@ To run reviews on Claude while everything else uses the default model, add `"mod
 
 ### macOS (launchd)
 
-[`deploy/launchd/local.agentlink.server.plist`](deploy/launchd/local.agentlink.server.plist) is a LaunchDaemon that runs as a hidden `_agentlink` user with a `0077` umask and restarts on failure. Logs, including the setup credential, go to `/usr/local/var/log/agentlink/server.log`; keep that directory private to the service user. The plist header lists the install commands. API keys use `{ "file": ... }` with a `0600` file.
+[`deploy/launchd/local.agentlink.server.plist`](deploy/launchd/local.agentlink.server.plist) is a LaunchDaemon that runs as a hidden `_agentlink` user with a `0077` umask and restarts on failure. Logs go to `/usr/local/var/log/agentlink/server.log`; keep that directory private to the service user. The plist header lists the install commands. API keys use `{ "file": ... }` with a `0600` file.
 
 ### Device trust
 
@@ -204,48 +212,47 @@ Sessions, the owner, devices, and pairings survive restarts. A turn that was run
 
 ### Lost access
 
-If every signed-in browser is gone (cookies cleared, devices revoked or lost), run `recover` on the server machine as the service account. It works while the server is running:
+If every signed-in browser is gone (cookies cleared, devices revoked or lost), run `pair` on the server machine as the service account, exactly as for the first device:
 
 ```sh
+# Container
+docker compose exec assistant agentlink-server pair
 # Ubuntu
-sudo -u agentlink /usr/bin/node /opt/agentlink/server/agentlink-server.js recover --config /etc/agentlink/server.json
+sudo -u agentlink /usr/bin/node /opt/agentlink/server/agentlink-server.js pair --config /etc/agentlink/server.json
 # macOS
-sudo -u _agentlink /opt/homebrew/bin/node /usr/local/lib/agentlink/server/agentlink-server.js recover --config /usr/local/etc/agentlink/server.json
+sudo -u _agentlink /opt/homebrew/bin/node /usr/local/lib/agentlink/server/agentlink-server.js pair --config /usr/local/etc/agentlink/server.json
 ```
 
-It prints a single-use code, valid for 15 minutes, to the terminal only (never to the service log). Redeem it at `POST /api/auth/recover` with the owner passphrase. Running it again replaces the code. It refuses to run as any account other than the owner of the data root, before an owner exists, or when the access state is corrupt. A forgotten passphrase is not recoverable this way; stop the server and delete `server/access-state.json` to start over with a new setup credential.
+It refuses to run as any account other than the owner of the data root. Anyone who can run it already controls the server's data, so it needs nothing else.
 
 ## Access layer
 
 `createAssistantServer(options)` starts an HTTPS-only listener (TLS 1.2+, certificate and key required, no plain-HTTP mode) that owns authentication:
 
-- **Owner bootstrap.** While no owner exists, `start()` issues a 15-minute setup credential to `onSetupCredential`, which must only show it locally. `POST /api/auth/bootstrap` redeems it once with an owner passphrase (12+ characters) and returns a session.
-- **Device pairing.** A signed-in, recently reauthenticated owner creates a single-use code (`POST /api/auth/pairings`, 5 minutes). A new browser redeems it at `POST /api/auth/pairings/redeem`. There is no passphrase login for unknown browsers.
-- **Sessions.** `__Host-agentlink_session` cookie (`Secure; HttpOnly; SameSite=Strict; Path=/`), 30-day absolute and 7-day idle expiry. `GET /api/auth/session` returns the session and its CSRF token. `POST /api/auth/logout` ends it, and `DELETE /api/auth/devices/:id` revokes a device and all its sessions, including the last one; sign in again with [local recovery](#lost-access).
-- **Local recovery.** `agentlink-server recover` writes a hash of a 15-minute code to `<dataRoot>/recovery-request.json` (`0600`) without taking the store lock. `POST /api/auth/recover` needs that code and the owner passphrase, creates a new device and session, and deletes the file. The server ignores the file unless it is a regular file owned by its own account and private to it. A wrong passphrase does not consume the code, and attempts share the credential rate limiter.
-- **Reauthentication.** `POST /api/auth/reauthenticate` checks the scrypt-hashed passphrase. Sensitive routes need it within the last 5 minutes.
-- **Request guard.** Every request and upgrade is rejected when it carries `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `X-Remote-User`, `X-Auth-Request-*` or similar identity/proxy headers, when `Host` is not a configured public origin, when `Origin` is foreign, or when `Sec-Fetch-Site` is `cross-site`. Unsafe methods and upgrades require `Origin`. Authenticated unsafe requests also need `x-agentlink-csrf`.
-- **Rate limiting.** Setup, pairing, and passphrase guesses are limited per socket address and globally, and attempts still in flight count against the limit. Client headers never select the key.
+- **Owner.** One owner is created with the access state; every paired device signs in as that owner.
+- **Pairing.** Codes are 6 digits and single use. A signed-in device creates one (`POST /api/auth/pairings` or `POST /devices/pair`, 5 minutes, at most 5 outstanding). `agentlink-server pair` writes only a hash of a 10-minute code to `local-pairing.json` beside the access state (`0600`) without taking the store lock; the server ignores the file unless it is a small regular file owned by its own account and private to it. A browser redeems a code with the `/pair` form or `POST /api/auth/pairings/redeem` and becomes a new device. Ten wrong codes in a row withdraw every outstanding code, including the local one.
+- **Sessions.** `__Host-agentlink_session` cookie (`Secure; HttpOnly; SameSite=Strict; Path=/`), 30-day absolute and 7-day idle expiry. `GET /api/auth/session` returns the session. `POST /api/auth/logout` ends it, and `DELETE /api/auth/devices/:id` (or `POST /devices/:id/revoke`) revokes a device and all its sessions, including the last one; sign in again with [`pair`](#lost-access).
+- **Request guard.** Every request and upgrade is rejected when it carries `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `X-Remote-User`, `X-Auth-Request-*` or similar identity/proxy headers, when `Host` is not a configured public origin, when `Origin` is foreign, or when `Sec-Fetch-Site` is `cross-site`. Unsafe methods and upgrades require a same-origin `Origin`; with the `SameSite=Strict` cookie this is the cross-site request defence, so there is no separate CSRF token. Pages send `Referrer-Policy: same-origin` so browsers keep sending a real `Origin`.
+- **Rate limiting.** Pairing guesses are limited per socket address and globally, and attempts still in flight count against the limit. Client headers never select the key.
 
 `handleRequest` and `handleUpgrade` only ever see authenticated requests. Their `auth` context carries:
 
 - an explicit `{ tenantId: "agentlink-server", subjectId: ownerId }` principal, never derived from a project identity;
-- `recentlyAuthenticated`, as of when the request was authenticated;
 - `signal`, which aborts when the request closes or as soon as its session or device is revoked;
-- `revalidate()`, a check-only recheck of revocation, expiry, and current reauthentication. It does not count as client activity, so it never extends the idle window.
+- `revalidate()`, a check-only recheck of revocation and expiry. It does not count as client activity, so it never extends the idle window.
 
 `onClose` runs during `close()`, after the listener stops accepting connections and before open connections and the access store close. Use it to stop application work.
 
-State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). Only hashes of setup credentials, session tokens, and the passphrase are stored. A corrupt file stops startup rather than reopening bootstrap. Each write is fsynced, including the directory, before a response reports success. An exclusive `access-state.lock` lets only one live process own a data root; `close()` releases it, and a lock left by a dead process is replaced (under a `.reclaim` marker, so two starting processes cannot both take it).
+State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). Only hashes of session tokens and pairing codes are stored (outstanding codes from signed-in devices are kept in memory only). A corrupt file stops startup rather than being replaced. A file from an older version with a passphrase owner is migrated: the owner and devices are kept and the passphrase hash dropped. Each write is fsynced, including the directory, before a response reports success. An exclusive `access-state.lock` lets only one live process own a data root; `close()` releases it, and a lock left by a dead process is replaced (under a `.reclaim` marker, so two starting processes cannot both take it).
 
 ## Workspace sessions
 
 `createAssistantWorkspaceRoutes({ projects, authorizeProject, models })` mounts one or more workspace hosts. Pass its `handleRequest` to the server and its `close` as `onClose`.
 
-- **Explicit project access.** `authorizeProject({ principal, projectId, access })` maps the server principal to `read`, `write`, or `approve` on each mounted project. It is required; `ownerProjectAccess(store)` grants everything to the bootstrapped owner and nothing to anyone else. The host still runs as its own project principal.
+- **Explicit project access.** `authorizeProject({ principal, projectId, access })` maps the server principal to `read`, `write`, or `approve` on each mounted project. It is required; `ownerProjectAccess(store)` grants everything to the owner and nothing to anyone else. The host still runs as its own project principal.
 - **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, display transcript, model, running task with its start sequence and prompt, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, `GET .../events`, and the [background agent](#background-agents) routes under `.../agents`.
 - **Server-owned turns.** A turn or resume runs on the server, not the request: closing the browser does not cancel it. One task runs per session at a time (`409 session_busy`). A cancelled or failed turn leaves the session `interrupted`, which accepts the next turn. Server shutdown aborts running tasks and waits for them.
-- **Approvals.** `POST .../interaction` needs `approve` access and reauthentication within the window. The decision names the exact `interactionId` and `interactionRevision` the owner saw. A mismatch returns `409 stale_interaction`, and the host binds the same pair into the engine's atomic resume, so a decision cannot reach a replacement request. Revocation and reauthentication are rechecked immediately before the resume starts, and a revoked session stops reading a stalled request body.
+- **Approvals.** `POST .../interaction` needs `approve` access. The decision names the exact `interactionId` and `interactionRevision` the owner saw. A mismatch returns `409 stale_interaction`, and the host binds the same pair into the engine's atomic resume, so a decision cannot reach a replacement request. Revocation is rechecked immediately before the resume starts, and a revoked session stops reading a stalled request body.
 - **Event stream.** `GET .../events` is Server-Sent Events. Events carry `id: <epoch>:<sequence>`. Reconnect with `?epoch=&after=` (or `Last-Event-ID`) to replay retained events. A `reset` control event means the cursor cannot be served (the event aged out, or the server crashed since the cursor was issued) and the client should re-read the snapshot. The stream closes on revocation and rechecks the session every heartbeat. A backpressured reader is caught up from the retained log once it drains; one that stays stalled for 30 seconds is dropped and can reconnect.
 
 ### Model selection
@@ -261,7 +268,7 @@ Each session has its own model, chosen from the models `server.json` declares. N
 
 - Session reads, lists, and the create response include `approvalMode`: `"autonomous"` (the default) or `"ask"`.
 - `autonomous` lets the session's own file writes and foreground commands run without a card. Protected paths, background commands, and a background agent's commands and writes still ask, and forbidden command rules are still refused.
-- `POST .../sessions/:sid/approval-mode` (approve access) takes `{ "mode": "ask" | "autonomous" }`. Switching to `ask` takes effect for the next tool call. Switching to `autonomous` needs reauthentication within the window (`401 reauthentication_required`). Errors: `400 approval_mode_invalid`, `409 approval_mode_unavailable`.
+- `POST .../sessions/:sid/approval-mode` (approve access) takes `{ "mode": "ask" | "autonomous" }`. Switching to `ask` takes effect for the next tool call. Errors: `400 approval_mode_invalid`, `409 approval_mode_unavailable`.
 - Only `ask` sessions are stored, in `<dataRoot>/settings/approval-modes.json`. A missing file means every session is autonomous; an unreadable one stops the server from starting.
 
 A review can also be an ordinary session on the review model.
@@ -276,15 +283,15 @@ A session's agent can start up to two one-level child agents with `spawn_backgro
 
 Routes, under `/api/projects/:id/sessions/:sid/agents`:
 
-| Route                           | Access                     | Body                          | Result                                                                                                                                     |
-| ------------------------------- | -------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET .../agents`                | `read`                     |                               | `{ agents }`: each child's lifecycle, phase, scopes, model, current tool, bounded partial output, result text, and any pending `approval`. |
-| `POST .../agents/:cid/steer`    | `write`                    | `{ message }` (up to 64 KiB)  | `202 { status: "queued" }`. Applied at the child's next completed turn; it does not interrupt a request or tool.                           |
-| `POST .../agents/:cid/stop`     | `write`                    | optional `{ reason }`         | `200 { agent }`, cancelled, with partial output kept.                                                                                      |
-| `POST .../agents/:cid/approval` | `approve`, reauthenticated | `{ interactionId, decision }` | `200 { agent }`. The decision applies only to that exact pending request; anything else is `409 stale_interaction`.                        |
+| Route                           | Access    | Body                          | Result                                                                                                                                     |
+| ------------------------------- | --------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET .../agents`                | `read`    |                               | `{ agents }`: each child's lifecycle, phase, scopes, model, current tool, bounded partial output, result text, and any pending `approval`. |
+| `POST .../agents/:cid/steer`    | `write`   | `{ message }` (up to 64 KiB)  | `202 { status: "queued" }`. Applied at the child's next completed turn; it does not interrupt a request or tool.                           |
+| `POST .../agents/:cid/stop`     | `write`   | optional `{ reason }`         | `200 { agent }`, cancelled, with partial output kept.                                                                                      |
+| `POST .../agents/:cid/approval` | `approve` | `{ interactionId, decision }` | `200 { agent }`. The decision applies only to that exact pending request; anything else is `409 stale_interaction`.                        |
 
 Errors: `404 agent_not_found` (unknown, or owned by another session), `409 agent_not_running`, `409 steering_queue_full`. The parent's event stream carries `{ kind: "agent", state, childSessionId }` events for `approval_required`, `approval_answered`, `steered`, and `stopped`, plus `{ kind: "agent", state: "updated", childSessionId, lifecycle, phase, currentTool? }` whenever a child's lifecycle, phase, or current tool changes, including `completed`, `failed`, `cancelled`, and `awaiting_approval`. Updates carry state only, never output text, and do not fire for every streamed token. Re-read `GET .../agents` for the result or partial output; there is no need to poll while a child runs. Server shutdown stops running children, and children that were running when the server stopped are reported `interrupted` after restart; nothing is replayed.
 
 The event log survives restarts. Each session's events are appended to a file under `<dataRoot>/events` before any client sees them, keeping the newest 1,000 (files are compacted at twice that, between turns). Files and the state marker are synced to disk, so a power loss is detected like a crash. After a clean stop (SIGTERM, `docker compose restart`) the epoch is kept, so a client reconnecting with its cursor replays what it missed, including the final events of turns the shutdown stopped. After a crash, power loss, or a failed write, the next start uses a new epoch: the log may have lost events a client already saw, so old cursors get `reset` (`epoch_changed`) rather than a replay with a gap. A session whose file is missing or damaged keeps its numbering and resets its clients the same way. Either way, a turn that was running when the server stopped is closed in the log with `{ kind: "task", state: "failed", error: "server_restarted" }`, so a replaying client does not wait for it. The durable session repository remains the source of truth.
 
-Not yet provided: passkeys, an installer, and the web app.
+Not yet provided: passkeys, an installer, and notifications.

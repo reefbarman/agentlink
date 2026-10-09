@@ -7,6 +7,7 @@ export {
 export {
   preflightAssistantService,
   serverAccessDataRoot,
+  serverAskAgentStateFile,
   serverTlsDirectory,
   startAssistantService,
   type AssistantService,
@@ -69,7 +70,6 @@ export {
   type CreateAssistantWorkspaceRoutesOptions,
 } from "./workspaceRoutes.js";
 export {
-  CSRF_HEADER,
   SESSION_COOKIE_NAME,
   checkRequestEnvelope,
   createServerOriginPolicy,
@@ -79,11 +79,8 @@ export {
 export {
   ServerAccessError,
   ServerAccessStore,
-  csrfTokenForSession,
-  issueLocalRecoveryCredential,
-  verifyCsrfToken,
+  issueLocalPairingCode,
   type IssuedServerSession,
-  type PassphraseCost,
   type ServerAccessDevice,
   type ServerAccessErrorCode,
   type ServerAccessSession,

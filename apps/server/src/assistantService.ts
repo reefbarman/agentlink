@@ -9,6 +9,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createSecureContext } from "node:tls";
 
+import { renderBrowserGatewayIndexHtml } from "../../../src/browser-gateway/browserGatewayPages.js";
+import { createAskAgentBridge, type AskAgentBridge } from "./askAgentBridge.js";
 import {
   createAssistantServer,
   type AssistantServer,
@@ -83,6 +85,11 @@ export function serverEventLogDirectory(config: AssistantServerConfig): string {
 /** Per-session approval modes (which sessions ask for everything). */
 export function serverApprovalModesFile(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "settings", "approval-modes.json");
+}
+
+/** UI-only state of the chat app (session titles, hidden sessions). */
+export function serverAskAgentStateFile(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "settings", "ask-agent-state.json");
 }
 
 /** Where the server-managed local CA and server certificate live. */
@@ -430,6 +437,7 @@ export async function startAssistantService(
   });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
+  let bridge: AskAgentBridge | undefined;
   // Bound once the routes exist; children cannot start before then.
   let agentNotifier:
     | Pick<
@@ -501,24 +509,54 @@ export async function startAssistantService(
       approvalModes,
     });
     agentNotifier = routes;
+    // The chat app works in the first project; the HTTP API serves them all.
+    const chatProject = config.projects[0];
+    if (chatProject) {
+      bridge = await createAskAgentBridge({
+        projectId: chatProject.id,
+        operations: routes.operations,
+        events: routes.events,
+        models: {
+          available: configuredModels(config),
+          defaultModel: config.defaultModel,
+        },
+        stateFile: serverAskAgentStateFile(config),
+      });
+    }
+    const chat = bridge;
+    const assetVersion = randomUUID();
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
       tls,
       publicOrigins: config.publicOrigins,
       listen: config.listen,
-      handleRequest: routes.handleRequest,
-      onClose: () => routes.close(),
-      webAssets: bundledWebAssets(),
-      onSetupCredential: ({ token, expiresAt }) => {
-        log(
-          [
-            "No owner is configured yet.",
-            `Setup credential (single use, expires ${new Date(expiresAt).toISOString()}):`,
-            `  ${token}`,
-            `Open ${config.publicOrigins[0]} and enter it to create the owner.`,
-          ].join("\n"),
-        );
+      handleRequest: async (request, response, auth) =>
+        (chat ? await chat.handleRequest(request, response, auth) : false) ||
+        (await routes.handleRequest(request, response, auth)),
+      onClose: async () => {
+        await chat?.close();
+        await routes.close();
       },
+      webAssets: bundledWebAssets(),
+      ...(chat
+        ? {
+            renderAppPage: ({ nonce }: { readonly nonce: string }) =>
+              renderBrowserGatewayIndexHtml({
+                assetVersion,
+                applicationName: "AgentLink Assistant",
+                title: "AgentLink Assistant",
+                nonce,
+                config: {
+                  currentInstanceId: "",
+                  workspaceName: chatProject?.label ?? chatProject?.id ?? "",
+                  routeByInstance: false,
+                  askAgentOnly: true,
+                  initialTheme: chat.theme,
+                  dataPlaneMode: "off",
+                },
+              }),
+          }
+        : {}),
     });
     authorizeProject = ownerProjectAccess(server.store);
     const { port } = await server.start();
@@ -526,6 +564,11 @@ export async function startAssistantService(
     log(
       `AgentLink server listening on ${config.listen.host}:${port} for ${config.publicOrigins.join(", ")} (${hosts.length} project${hosts.length === 1 ? "" : "s"})`,
     );
+    if (!server.store.hasActiveDevices) {
+      log(
+        "No devices are paired yet. On this machine run `agentlink-server pair` to get a sign-in code.",
+      );
+    }
     const started = server;
     let closing: Promise<void> | undefined;
     return {
@@ -548,6 +591,7 @@ export async function startAssistantService(
   } catch (error) {
     recovery.stop();
     await server?.close().catch(() => undefined);
+    if (!server) await bridge?.close().catch(() => undefined);
     await recovery.settled();
     await closeHosts();
     await eventLog.close();

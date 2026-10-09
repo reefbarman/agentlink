@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   STATUS_CODES,
   type IncomingMessage,
@@ -7,6 +8,13 @@ import https from "node:https";
 import { createSecureContext } from "node:tls";
 import type { Duplex } from "node:stream";
 
+import {
+  deviceLabelFromUserAgent,
+  pairingLink,
+  renderDevicesPage,
+  renderNewPairingPage,
+  renderPairPage,
+} from "./accessPages.js";
 import { AttemptLimiter } from "./AttemptLimiter.js";
 import {
   HttpError,
@@ -17,11 +25,9 @@ import {
   stringField,
 } from "./httpJson.js";
 import {
-  CSRF_HEADER,
   checkRequestEnvelope,
   clearedSessionCookie,
   createServerOriginPolicy,
-  isUnsafeMethod,
   readSessionCookie,
   sessionCookie,
   singleHeader,
@@ -29,23 +35,25 @@ import {
 import {
   ServerAccessError,
   ServerAccessStore,
-  csrfTokenForSession,
-  verifyCsrfToken,
   type IssuedServerSession,
-  type PassphraseCost,
   type ServerAccessSession,
 } from "./ServerAccessStore.js";
 import { serveWebAsset, type WebAssets } from "./webAssets.js";
 
-const DEFAULT_REAUTHENTICATION_WINDOW_MS = 5 * 60 * 1000;
-
 const SERVER_TENANT_ID = "agentlink-server";
+const MAX_FORM_BODY_BYTES = 1_024;
+const API_CSP =
+  "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+/** Server-rendered sign-in and device pages: inline styles and SVG only. */
+const PAGE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "strict-transport-security": "max-age=31536000",
-  "content-security-policy":
-    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'",
+  "content-security-policy": API_CSP,
   "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
+  // Not `no-referrer`: under it browsers send `Origin: null` with form posts,
+  // which the Origin check must reject. Nothing is sent to other sites.
+  "referrer-policy": "same-origin",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
   "cache-control": "no-store",
@@ -59,8 +67,6 @@ export interface AssistantServerAuth {
     readonly subjectId: string;
   };
   readonly session: ServerAccessSession;
-  /** True when the passphrase was proven within the reauthentication window. */
-  readonly recentlyAuthenticated: boolean;
   /**
    * Aborts when this request or connection closes, or immediately when its
    * session or device is revoked. Long-lived streams must stop on it. Do not
@@ -68,23 +74,16 @@ export interface AssistantServerAuth {
    */
   readonly signal: AbortSignal;
   /**
-   * Re-check the session now (revocation, expiry, and the current
-   * reauthentication state) without recording client activity, so it never
-   * extends the session's idle window. Use it for long-lived streams and
-   * immediately before executing a sensitive action.
+   * Re-check the session now (revocation and expiry) without recording
+   * client activity, so it never extends the session's idle window. Use it
+   * for long-lived streams and immediately before a mutation takes effect.
    */
   revalidate(): Promise<AssistantServerAuthCheck>;
 }
 
 export interface AssistantServerAuthCheck {
   readonly valid: boolean;
-  readonly recentlyAuthenticated: boolean;
 }
-
-type AuthSummary = Pick<
-  AssistantServerAuth,
-  "principal" | "session" | "recentlyAuthenticated"
->;
 
 export interface CreateAssistantServerOptions {
   readonly dataRoot: string;
@@ -97,16 +96,9 @@ export interface CreateAssistantServerOptions {
   readonly publicOrigins: readonly string[];
   readonly listen: { readonly host: string; readonly port: number };
   /**
-   * Receives the one-time owner setup credential while no owner exists. It
-   * must only be shown locally (for example on the service console).
-   */
-  readonly onSetupCredential: (credential: {
-    readonly token: string;
-    readonly expiresAt: number;
-  }) => void | Promise<void>;
-  /**
-   * Authenticated application routes. Unsafe methods have already passed
-   * Origin and CSRF checks. Return false to fall through to 404.
+   * Authenticated application routes. Unsafe methods have already passed the
+   * Host, Origin, and fetch-site checks, and the session cookie is
+   * `SameSite=Strict`. Return false to fall through to 404.
    */
   readonly handleRequest?: (
     request: IncomingMessage,
@@ -131,9 +123,12 @@ export interface CreateAssistantServerOptions {
    * after the Host, Origin, and forged-header checks.
    */
   readonly webAssets?: WebAssets;
+  /**
+   * The signed-in app shell for `/`. Receives the per-response nonce its
+   * inline boot script must carry. Signed-out browsers go to `/pair`.
+   */
+  readonly renderAppPage?: (page: { readonly nonce: string }) => string;
   readonly now?: () => number;
-  readonly passphraseCost?: PassphraseCost;
-  readonly reauthenticationWindowMs?: number;
 }
 
 export interface AssistantServer {
@@ -164,12 +159,9 @@ export async function createAssistantServer(
   });
   const policy = createServerOriginPolicy(options.publicOrigins);
   const now = options.now ?? Date.now;
-  const reauthenticationWindowMs =
-    options.reauthenticationWindowMs ?? DEFAULT_REAUTHENTICATION_WINDOW_MS;
   const store = await ServerAccessStore.open({
     dataRoot: options.dataRoot,
     now,
-    passphraseCost: options.passphraseCost,
   });
   const limiter = new AttemptLimiter({ now });
   const liveRequests = new Map<string, Set<AbortController>>();
@@ -179,13 +171,6 @@ export async function createAssistantServer(
         controller.abort(new Error("session_revoked"));
       }
     }
-  });
-
-  const toAuth = (session: ServerAccessSession): AuthSummary => ({
-    principal: { tenantId: SERVER_TENANT_ID, subjectId: session.ownerId },
-    session,
-    recentlyAuthenticated:
-      now() - session.authenticatedAt < reauthenticationWindowMs,
   });
 
   /** Bind an authenticated session to one request or upgraded connection. */
@@ -204,24 +189,19 @@ export async function createAssistantServer(
       controller.abort(new Error("request_closed"));
     });
     return {
-      ...toAuth(session),
+      principal: { tenantId: SERVER_TENANT_ID, subjectId: session.ownerId },
+      session,
       signal: controller.signal,
       async revalidate() {
-        const invalid = { valid: false, recentlyAuthenticated: false };
-        if (controller.signal.aborted) return invalid;
+        if (controller.signal.aborted) return { valid: false };
         const result = await store.authenticate(token, {
           recordActivity: false,
         });
-        if (
-          controller.signal.aborted ||
-          !result.ok ||
-          result.session.sessionId !== session.sessionId
-        ) {
-          return invalid;
-        }
         return {
-          valid: true,
-          recentlyAuthenticated: toAuth(result.session).recentlyAuthenticated,
+          valid:
+            !controller.signal.aborted &&
+            result.ok &&
+            result.session.sessionId === session.sessionId,
         };
       },
     };
@@ -234,7 +214,7 @@ export async function createAssistantServer(
     return { token, result };
   };
 
-  const issueSession = (
+  const setSessionCookie = (
     response: ServerResponse,
     issued: IssuedServerSession,
   ) => {
@@ -242,17 +222,12 @@ export async function createAssistantServer(
       "set-cookie",
       sessionCookie(issued.token, (issued.session.expiresAt - now()) / 1000),
     );
-    sendJson(response, 201, {
-      ...describeSession(issued.session, toAuth(issued.session)),
-      csrfToken: csrfTokenForSession(issued.token),
-    });
   };
 
-  /** Credential-guessing routes share one limiter keyed by socket address. */
+  /** Pairing attempts share one limiter keyed by socket address. */
   const guardAttempt = async <T>(
     request: IncomingMessage,
     attempt: () => Promise<T>,
-    isGuessFailure: (error: unknown) => boolean,
   ): Promise<T> => {
     const reservation = limiter.reserve(
       request.socket.remoteAddress ?? "unknown",
@@ -263,11 +238,15 @@ export async function createAssistantServer(
       reservation.release();
       return result;
     } catch (error) {
-      if (isGuessFailure(error)) reservation.fail();
+      if (accessCode(error) === "invalid_pairing_code") reservation.fail();
       else reservation.release();
       throw error;
     }
   };
+
+  /** Same-origin link for a code, on the host this browser is using. */
+  const linkFor = (request: IncomingMessage, code: string) =>
+    pairingLink(`https://${request.headers.host!.toLowerCase()}`, code);
 
   const handle = async (
     request: IncomingMessage,
@@ -287,56 +266,60 @@ export async function createAssistantServer(
       return;
     }
     const method = (request.method ?? "GET").toUpperCase();
-    const pathname = new URL(request.url ?? "/", "https://server.invalid")
-      .pathname;
+    const url = new URL(request.url ?? "/", "https://server.invalid");
+    const pathname = url.pathname;
 
-    if (serveWebAsset(request, response, options.webAssets)) return;
-    if (method === "GET" && pathname === "/api/auth/state") {
-      sendJson(response, 200, { ownerConfigured: store.ownerConfigured });
+    if (pathname !== "/" && serveWebAsset(request, response, options.webAssets))
+      return;
+
+    if (pathname === "/pair" && (method === "GET" || method === "HEAD")) {
+      const signedIn = await authenticateRequest(request);
+      if (signedIn?.result.ok) {
+        redirect(response, "/");
+        return;
+      }
+      sendPage(
+        response,
+        200,
+        renderPairPage({ code: url.searchParams.get("code") ?? undefined }),
+      );
       return;
     }
-    if (method === "POST" && pathname === "/api/auth/bootstrap") {
-      const body = await readJsonBody(request);
-      const issued = await guardAttempt(
-        request,
-        () =>
-          store.bootstrapOwner({
-            setupToken: stringField(body, "setupToken"),
-            passphrase: stringField(body, "passphrase"),
-            deviceLabel: optionalStringField(body, "deviceLabel"),
+    if (pathname === "/pair" && method === "POST") {
+      const form = await readFormBody(request);
+      const code = form.get("code") ?? "";
+      try {
+        const issued = await guardAttempt(request, () =>
+          store.redeemPairing({
+            code,
+            deviceLabel: deviceLabelFromUserAgent(
+              singleHeader(request.headers["user-agent"]),
+            ),
           }),
-        (error) => accessCode(error) === "invalid_setup_credential",
-      );
-      issueSession(response, issued);
+        );
+        setSessionCookie(response, issued);
+        redirect(response, "/");
+      } catch (error) {
+        const failure = pairFailure(error);
+        if (!failure) throw error;
+        sendPage(
+          response,
+          failure.status,
+          renderPairPage({ errorMessage: failure.message }),
+        );
+      }
       return;
     }
     if (method === "POST" && pathname === "/api/auth/pairings/redeem") {
       const body = await readJsonBody(request);
-      const issued = await guardAttempt(
-        request,
-        () =>
-          store.redeemPairing({
-            code: stringField(body, "code"),
-            deviceLabel: optionalStringField(body, "deviceLabel"),
-          }),
-        (error) => accessCode(error) === "invalid_pairing_code",
+      const issued = await guardAttempt(request, () =>
+        store.redeemPairing({
+          code: stringField(body, "code"),
+          deviceLabel: optionalStringField(body, "deviceLabel"),
+        }),
       );
-      issueSession(response, issued);
-      return;
-    }
-    if (method === "POST" && pathname === "/api/auth/recover") {
-      const body = await readJsonBody(request);
-      const issued = await guardAttempt(
-        request,
-        () =>
-          store.redeemRecovery({
-            recoveryToken: stringField(body, "recoveryToken"),
-            passphrase: stringField(body, "passphrase"),
-            deviceLabel: optionalStringField(body, "deviceLabel"),
-          }),
-        (error) => accessCode(error) === "invalid_recovery_credential",
-      );
-      issueSession(response, issued);
+      setSessionCookie(response, issued);
+      sendJson(response, 201, describeSession(issued.session));
       return;
     }
 
@@ -345,45 +328,101 @@ export async function createAssistantServer(
       if (authenticated) {
         response.setHeader("set-cookie", clearedSessionCookie());
       }
+      // Browsers opening a page go to sign-in; API clients get a 401.
+      if (
+        (method === "GET" || method === "HEAD") &&
+        (pathname === "/" || pathname === "/devices")
+      ) {
+        request.resume();
+        redirect(response, "/pair");
+        return;
+      }
       throw new HttpError(401, "authentication_required");
     }
     const { token } = authenticated;
     const auth = bindAuth(authenticated.result.session, token, response);
-    if (
-      isUnsafeMethod(method) &&
-      !verifyCsrfToken(token, singleHeader(request.headers[CSRF_HEADER]))
-    ) {
-      throw new HttpError(403, "csrf_invalid");
-    }
-    const requireRecent = () => {
-      if (!auth.recentlyAuthenticated) {
-        throw new HttpError(401, "reauthentication_required");
-      }
-    };
 
-    if (method === "GET" && pathname === "/api/auth/session") {
-      sendJson(response, 200, {
-        ...describeSession(auth.session, auth),
-        csrfToken: csrfTokenForSession(token),
+    if ((method === "GET" || method === "HEAD") && pathname === "/") {
+      if (!options.renderAppPage) throw new HttpError(404, "not_found");
+      const nonce = randomBytes(16).toString("base64");
+      response.setHeader(
+        "content-security-policy",
+        [
+          "default-src 'self'",
+          `script-src 'self' 'nonce-${nonce}'`,
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data: blob:",
+          "font-src 'self' data:",
+          "connect-src 'self'",
+          "worker-src 'self' blob:",
+          "manifest-src 'self'",
+          "base-uri 'none'",
+          "object-src 'none'",
+          "frame-ancestors 'none'",
+          "form-action 'self'",
+        ].join("; "),
+      );
+      const html = options.renderAppPage({ nonce });
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(html),
       });
+      response.end(method === "HEAD" ? undefined : html);
       return;
     }
-    if (method === "POST" && pathname === "/api/auth/reauthenticate") {
-      const body = await readJsonBody(request);
-      const passphrase = stringField(body, "passphrase");
-      await guardAttempt(
-        request,
-        async () => {
-          if (
-            !(await store.reauthenticate(auth.session.sessionId, passphrase))
-          ) {
-            throw new HttpError(401, "invalid_passphrase");
-          }
-        },
-        (error) =>
-          error instanceof HttpError && error.code === "invalid_passphrase",
+    if ((method === "GET" || method === "HEAD") && pathname === "/devices") {
+      sendPage(
+        response,
+        200,
+        renderDevicesPage({
+          devices: store.listDevices(),
+          currentDeviceId: auth.session.deviceId,
+        }),
       );
-      sendEmpty(response, 204);
+      return;
+    }
+    if (method === "POST" && pathname === "/devices/pair") {
+      request.resume();
+      const pairing = createPairingOrNull(store);
+      if (!pairing) {
+        sendPage(
+          response,
+          409,
+          renderDevicesPage({
+            devices: store.listDevices(),
+            currentDeviceId: auth.session.deviceId,
+            errorMessage:
+              "Too many unused pairing codes. Wait a few minutes and try again.",
+          }),
+        );
+        return;
+      }
+      sendPage(
+        response,
+        200,
+        renderNewPairingPage({
+          ...pairing,
+          link: linkFor(request, pairing.code),
+          now: now(),
+        }),
+      );
+      return;
+    }
+    const revokeMatch = /^\/devices\/([0-9a-f-]{36})\/revoke$/u.exec(pathname);
+    if (method === "POST" && revokeMatch) {
+      request.resume();
+      await store.revokeDevice(revokeMatch[1]!);
+      if (revokeMatch[1] === auth.session.deviceId) {
+        response.setHeader("set-cookie", clearedSessionCookie());
+        redirect(response, "/pair");
+      } else {
+        redirect(response, "/devices");
+      }
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/auth/session") {
+      sendJson(response, 200, describeSession(auth.session));
       return;
     }
     if (method === "POST" && pathname === "/api/auth/logout") {
@@ -393,8 +432,11 @@ export async function createAssistantServer(
       return;
     }
     if (method === "POST" && pathname === "/api/auth/pairings") {
-      requireRecent();
-      sendJson(response, 201, store.createPairing());
+      const pairing = store.createPairing();
+      sendJson(response, 201, {
+        ...pairing,
+        link: linkFor(request, pairing.code),
+      });
       return;
     }
     if (method === "GET" && pathname === "/api/auth/devices") {
@@ -410,7 +452,6 @@ export async function createAssistantServer(
       pathname,
     );
     if (method === "DELETE" && deviceMatch) {
-      requireRecent();
       if (!(await store.revokeDevice(deviceMatch[1]!))) {
         throw new HttpError(404, "device_not_found");
       }
@@ -509,9 +550,6 @@ export async function createAssistantServer(
       });
     },
     async start() {
-      if (!store.ownerConfigured) {
-        await options.onSetupCredential(await store.issueSetupCredential());
-      }
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(options.listen.port, options.listen.host, () => {
@@ -542,15 +580,79 @@ export async function createAssistantServer(
   };
 }
 
-function describeSession(session: ServerAccessSession, auth: AuthSummary) {
+function createPairingOrNull(
+  store: ServerAccessStore,
+): { code: string; expiresAt: number } | undefined {
+  try {
+    return store.createPairing();
+  } catch (error) {
+    if (accessCode(error) === "pairing_limit_reached") return undefined;
+    throw error;
+  }
+}
+
+function pairFailure(
+  error: unknown,
+): { readonly status: number; readonly message: string } | undefined {
+  if (error instanceof HttpError && error.code === "rate_limited") {
+    return {
+      status: 429,
+      message: "Too many attempts. Wait a minute and try again.",
+    };
+  }
+  switch (accessCode(error)) {
+    case "invalid_pairing_code":
+      return {
+        status: 401,
+        message:
+          "That code did not work. Check it, or get a new one: codes are single use and expire after a few minutes.",
+      };
+    case "invalid_label":
+      return { status: 400, message: "This browser could not be named." };
+    default:
+      return undefined;
+  }
+}
+
+/** Read a small `application/x-www-form-urlencoded` body. */
+async function readFormBody(
+  request: IncomingMessage,
+): Promise<URLSearchParams> {
+  const contentType = singleHeader(request.headers["content-type"]) ?? "";
+  if (!/^application\/x-www-form-urlencoded(\s*;|$)/iu.test(contentType)) {
+    throw new HttpError(415, "form_required");
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_FORM_BODY_BYTES) throw new HttpError(413, "body_too_large");
+    chunks.push(chunk as Buffer);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+}
+
+function sendPage(response: ServerResponse, status: number, html: string) {
+  response.setHeader("content-security-policy", PAGE_CSP);
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html),
+  });
+  response.end(html);
+}
+
+function redirect(response: ServerResponse, location: string): void {
+  response.writeHead(303, { location, "content-length": 0 });
+  response.end();
+}
+
+function describeSession(session: ServerAccessSession) {
   return {
     ownerId: session.ownerId,
     sessionId: session.sessionId,
     deviceId: session.deviceId,
     deviceLabel: session.deviceLabel,
     expiresAt: session.expiresAt,
-    authenticatedAt: session.authenticatedAt,
-    recentlyAuthenticated: auth.recentlyAuthenticated,
   };
 }
 
@@ -560,15 +662,10 @@ function accessCode(error: unknown): string | undefined {
 
 function accessStatus(code: string): number {
   switch (code) {
-    case "invalid_setup_credential":
     case "invalid_pairing_code":
-    case "invalid_recovery_credential":
       return 401;
-    case "owner_exists":
-    case "owner_missing":
     case "pairing_limit_reached":
       return 409;
-    case "weak_passphrase":
     case "invalid_label":
       return 400;
     default:

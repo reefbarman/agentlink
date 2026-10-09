@@ -20,7 +20,6 @@ import {
 } from "./testSupport.js";
 
 const execFileAsync = promisify(execFile);
-const PASSPHRASE = "correct horse battery staple";
 const serverRoot = path.join(import.meta.dirname, "..");
 
 let workDir: string;
@@ -153,17 +152,29 @@ describe("agentlink-server process", () => {
       ]);
       expect(stdout).toContain("Configuration OK: 1 project(s)");
 
-      // First run: bootstrap the owner from the locally printed credential.
+      // First run: the server says how to pair; `pair` prints a code.
       const first = startProcess(configPath);
-      const [, setupToken] = await first.waitFor(
-        /Setup credential[^\n]*:\n\s+(\S+)/u,
-      );
       await first.waitFor(/listening on 127\.0\.0\.1/u);
+      await first.waitFor(/agentlink-server pair/u);
+      const pair = async () => {
+        const { stdout } = await execFileAsync(process.execPath, [
+          bundle,
+          "pair",
+          "--config",
+          configPath,
+        ]);
+        const match = /Pairing code:\s+([0-9]{3}) ([0-9]{3})/u.exec(stdout);
+        expect(match, stdout).not.toBeNull();
+        const code = `${match![1]}${match![2]}`;
+        expect(stdout).toContain(`${origin}/pair?code=${code}`);
+        return code;
+      };
       const request = (input: {
         method?: string;
         path: string;
         body?: unknown;
-        session?: { cookie: string; csrf: string };
+        form?: Record<string, string>;
+        session?: { cookie: string };
       }) =>
         httpsRequest({
           port,
@@ -171,41 +182,41 @@ describe("agentlink-server process", () => {
           method: input.method,
           path: input.path,
           body: input.body,
+          form: input.form,
           headers: {
             ...(input.method && input.method !== "GET" ? { origin } : {}),
-            ...(input.session
-              ? {
-                  cookie: input.session.cookie,
-                  "x-agentlink-csrf": input.session.csrf,
-                }
-              : {}),
+            ...(input.session ? { cookie: input.session.cookie } : {}),
           },
         });
-      // The bundle embeds the web app and serves it without a session.
-      const shell = await request({ path: "/" });
-      expect(shell.status).toBe(200);
-      expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
-      expect(String(shell.body)).toContain('src="/app.js"');
+      // The bundle embeds the shared chat app; its files need no session.
       for (const asset of [
-        "/app.js",
-        "/app.css",
-        "/icon.svg",
-        "/manifest.webmanifest",
+        "/browser-gateway.js",
+        "/browser-gateway.css",
+        "/codicon.css",
+        "/site.webmanifest",
+        "/agentlink-icon.svg",
       ]) {
         const served = await request({ path: asset });
         expect(served.status, asset).toBe(200);
         expect(String(served.headers["content-length"]), asset).not.toBe("0");
       }
-      const bootstrap = await request({
-        method: "POST",
-        path: "/api/auth/bootstrap",
-        body: { setupToken, passphrase: PASSPHRASE },
+      await expect(request({ path: "/" })).resolves.toMatchObject({
+        status: 303,
+        headers: { location: "/pair" },
       });
-      expect(bootstrap.status).toBe(201);
-      const owner = {
-        cookie: sessionCookieFrom(bootstrap),
-        csrf: (bootstrap.body as { csrfToken: string }).csrfToken,
-      };
+      const firstCode = await pair();
+      const paired = await request({
+        method: "POST",
+        path: "/pair",
+        form: { code: firstCode },
+      });
+      expect(paired).toMatchObject({ status: 303, headers: { location: "/" } });
+      const owner = { cookie: sessionCookieFrom(paired) };
+      const shell = await request({ path: "/", session: owner });
+      expect(shell.status).toBe(200);
+      expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
+      expect(String(shell.body)).toContain("/browser-gateway.js");
+      expect(String(shell.body)).toContain("askAgentOnly: true");
       const created = await request({
         method: "POST",
         path: "/api/projects/home/sessions",
@@ -258,7 +269,7 @@ describe("agentlink-server process", () => {
       expect(second.output()).toContain(
         `Session ${sessionId} in project "home" is still leased`,
       );
-      expect(second.output()).not.toContain("Setup credential");
+      expect(second.output()).not.toContain("No devices are paired yet");
 
       // The crash may have lost events a client saw, so the epoch changes
       // and an old cursor resets. The log itself survived: replay from the
@@ -315,24 +326,15 @@ describe("agentlink-server process", () => {
       });
       const beforeStop = await cursor();
 
-      // Local recovery works while the server runs, and the code goes only
-      // to the command's own output, never to the service log.
-      const recovered = await execFileAsync(process.execPath, [
-        bundle,
-        "recover",
-        "--config",
-        configPath,
-      ]);
-      const recoveryToken = /recovery code[^\n]*:\n\s*\n\s+(\S+)/u.exec(
-        recovered.stdout,
-      )?.[1];
-      expect(recoveryToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
-      expect(second.output()).not.toContain(recoveryToken);
+      // Local pairing works while the server runs, and the code goes only to
+      // the command's own output, never to the service log.
+      const secondCode = await pair();
+      expect(second.output()).not.toContain(secondCode);
       await expect(
         request({
           method: "POST",
-          path: "/api/auth/recover",
-          body: { recoveryToken, passphrase: PASSPHRASE },
+          path: "/api/auth/pairings/redeem",
+          body: { code: secondCode, deviceLabel: "Phone" },
         }),
       ).resolves.toMatchObject({ status: 201 });
 
@@ -445,7 +447,7 @@ describe("agentlink-server process", () => {
 
       // A client that trusts only the exported CA verifies the server.
       await expect(
-        httpsRequest({ port, ca: exported.stdout, path: "/api/auth/state" }),
+        httpsRequest({ port, ca: exported.stdout, path: "/pair" }),
       ).resolves.toMatchObject({ status: 200 });
 
       const rechecked = await execFileAsync(process.execPath, [
@@ -467,7 +469,7 @@ describe("agentlink-server process", () => {
       expect(restarted.output()).not.toContain("Created a local certificate");
       const exported = await exportCa();
       await expect(
-        httpsRequest({ port, ca: exported.stdout, path: "/api/auth/state" }),
+        httpsRequest({ port, ca: exported.stdout, path: "/pair" }),
       ).resolves.toMatchObject({ status: 200 });
     } finally {
       restarted.child.kill("SIGTERM");

@@ -12,8 +12,9 @@
     plutil -lint /Library/LaunchDaemons/local.agentlink.server.plist
     launchctl bootstrap system /Library/LaunchDaemons/local.agentlink.server.plist
 
-  The one-time setup credential is written to the log file below, which must
-  stay readable only by the service user and administrators.
+  Sign in a device with (as root):
+    sudo -u _agentlink /opt/homebrew/bin/node /usr/local/lib/agentlink/server/agentlink-server.js pair --config /usr/local/etc/agentlink/server.json
+  Keep the log directory below readable only by the service user and administrators.
   Adjust the node path if it is not /opt/homebrew/bin/node (Node 22.19+).
 -->
 <plist version="1.0">

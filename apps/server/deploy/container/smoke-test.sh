@@ -79,9 +79,18 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 compose logs assistant | grep -q "listening on" || fail "assistant did not start"
-compose logs assistant | grep -q "Setup credential" ||
-  fail "assistant did not print a setup credential"
-pass "assistant started and printed a setup credential"
+compose logs assistant | grep -q "No devices are paired yet" ||
+  fail "assistant did not print the pairing reminder"
+pass "assistant started and asked for a device to be paired"
+
+pair_output="$(compose exec -T assistant agentlink-server pair 2>&1)" ||
+  fail "pair failed: $pair_output"
+grep -Eq "Pairing code: +[0-9]{3} [0-9]{3}" <<<"$pair_output" ||
+  fail "pair did not print a code: $pair_output"
+if compose logs assistant | grep -q "Pairing code"; then
+  fail "the pairing code reached the service log"
+fi
+pass "pair printed a code to the terminal only"
 
 check=""
 for _ in $(seq 1 30); do

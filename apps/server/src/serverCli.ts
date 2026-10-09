@@ -20,8 +20,11 @@ import {
   describeCodexSignIn,
   hasCodexProvider,
 } from "./codexSignIn.js";
+import { encode } from "uqr";
+
+import { pairingLink } from "./accessPages.js";
 import {
-  issueLocalRecoveryCredential,
+  issueLocalPairingCode,
   ServerAccessError,
 } from "./ServerAccessStore.js";
 import {
@@ -46,7 +49,7 @@ export interface AssistantServerCliIo {
 }
 
 export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [--check]
-       agentlink-server recover --config <file>
+       agentlink-server pair --config <file>
        agentlink-server export-ca --config <file> > agentlink-ca.pem
        agentlink-server codex-login --config <file>
        agentlink-server codex-logout --config <file>
@@ -67,10 +70,14 @@ Options:
   --help           Show this help.
 
 Commands:
-  recover          Print a single-use recovery code (15 minutes) for
-                   signing in again when every browser session is lost.
-                   Run it on the server machine as the service account.
-                   It works whether or not the server is running.
+  pair             Print a single-use 6-digit pairing code (10 minutes),
+                   a sign-in link, and a QR code for signing in a browser
+                   or phone: the first one, or any device once every
+                   signed-in device is lost. Signed-in devices can pair
+                   others from /devices. Run it on the server machine as
+                   the service account; it works whether or not the
+                   server is running, and running it again replaces the
+                   code.
   export-ca        With "tls": { "localCa": true }, print the server's
                    local CA certificate (PEM) to install on devices. Its
                    SHA-256 fingerprint goes to stderr so you can compare
@@ -109,12 +116,7 @@ Commands:
 const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
 const DEFAULT_EGRESS_GATEWAY_LISTEN = "0.0.0.0:3128";
 
-const COMMANDS = new Set([
-  "recover",
-  "export-ca",
-  "codex-login",
-  "codex-logout",
-]);
+const COMMANDS = new Set(["pair", "export-ca", "codex-login", "codex-logout"]);
 
 /** Returns the process exit code. */
 export async function runAssistantServerCli(
@@ -152,9 +154,7 @@ export async function runAssistantServerCli(
   if (!configPath) return usageError(io, "--config is required");
 
   const config = await loadAssistantServerConfig(configPath);
-  if (command === "recover") {
-    return await runRecover(serverAccessDataRoot(config), io);
-  }
+  if (command === "pair") return await runPair(config, io);
   if (command === "export-ca") return await runExportCa(config, io);
   if (command === "codex-login" || command === "codex-logout") {
     if (!hasCodexProvider(config)) {
@@ -198,35 +198,43 @@ export async function runAssistantServerCli(
   return 0;
 }
 
-async function runRecover(
-  dataRoot: string,
+async function runPair(
+  config: AssistantServerConfig,
   io: AssistantServerCliIo,
 ): Promise<number> {
-  let issued: { token: string; expiresAt: number };
+  const dataRoot = serverAccessDataRoot(config);
+  let issued: { code: string; expiresAt: number };
   try {
-    issued = await issueLocalRecoveryCredential({ dataRoot });
+    issued = await issueLocalPairingCode({ dataRoot });
   } catch (error) {
-    if (!(error instanceof ServerAccessError)) throw error;
-    const problems: Partial<Record<string, string>> = {
-      owner_missing:
-        "No owner exists yet. Use the setup credential the server prints when it starts.",
-      recovery_wrong_user: `Run this as the account that owns ${dataRoot} (the service account), for example with sudo -u.`,
-      access_state_corrupt: `The access state in ${dataRoot} is unreadable. Recovery is refused rather than guessing.`,
-    };
-    io.log(`agentlink-server: ${problems[error.code] ?? error.code}`);
-    return 1;
+    if (
+      error instanceof ServerAccessError &&
+      error.code === "local_pairing_wrong_user"
+    ) {
+      io.log(
+        `agentlink-server: run this as the account that owns ${dataRoot} (the service account), for example with sudo -u.`,
+      );
+      return 1;
+    }
+    throw error;
   }
+  const link = pairingLink(config.publicOrigins[0]!, issued.code);
   // The code goes to this terminal only, never to the service log.
   io.stdout(
     [
-      "AgentLink recovery code (single use, expires " +
-        `${new Date(issued.expiresAt).toISOString()}):`,
+      "Sign in to the AgentLink assistant",
       "",
-      `  ${issued.token}`,
+      `  Pairing code:  ${issued.code.slice(0, 3)} ${issued.code.slice(3)}`,
+      `  Sign-in link:  ${link}`,
       "",
-      "Redeem it from the browser you want to sign in with, together with",
-      "the owner passphrase (POST /api/auth/recover). Running this command",
-      "again replaces the code.",
+      "Scan this with your phone's camera, or open the link (or the server",
+      "address) on the device you want to sign in and enter the code:",
+      "",
+      terminalQrCode(link),
+      "",
+      `Single use; expires ${new Date(issued.expiresAt).toLocaleTimeString()}. Running`,
+      "this again replaces the code. To add more devices later, open",
+      `${config.publicOrigins[0]}/devices on a signed-in one.`,
       "",
     ].join("\n"),
   );
@@ -444,6 +452,28 @@ async function runEgressGateway(
   io.log(`Received ${signal}; closing tunnels`);
   await gateway.close();
   return 0;
+}
+
+/**
+ * A QR code for a terminal: two modules per character cell (upper half
+ * block, foreground for the top module and background for the bottom), with
+ * explicit colours so it scans on dark and light themes alike.
+ */
+export function terminalQrCode(text: string): string {
+  const { data, size } = encode(text, { border: 2 });
+  const dark = (row: number, column: number) =>
+    row < size && data[row]![column] === true;
+  const lines: string[] = [];
+  for (let row = 0; row < size; row += 2) {
+    let line = "";
+    for (let column = 0; column < size; column += 1) {
+      const top = dark(row, column) ? 30 : 97;
+      const bottom = dark(row + 1, column) ? 40 : 107;
+      line += `\x1b[${top};${bottom}m\u2580`;
+    }
+    lines.push(`  ${line}\x1b[0m`);
+  }
+  return lines.join("\n");
 }
 
 function parseListen(

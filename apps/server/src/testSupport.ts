@@ -58,9 +58,17 @@ export function httpsRequest(input: {
   readonly path: string;
   readonly headers?: Record<string, string>;
   readonly body?: unknown;
+  /** Sent as `application/x-www-form-urlencoded`, like an HTML form. */
+  readonly form?: Readonly<Record<string, string>>;
 }): Promise<TestResponse> {
-  const payload =
-    input.body === undefined ? undefined : JSON.stringify(input.body);
+  const payload = input.form
+    ? new URLSearchParams(input.form).toString()
+    : input.body === undefined
+      ? undefined
+      : JSON.stringify(input.body);
+  const contentType = input.form
+    ? "application/x-www-form-urlencoded"
+    : "application/json";
   return new Promise((resolve, reject) => {
     const request = https.request(
       {
@@ -75,7 +83,7 @@ export function httpsRequest(input: {
           host: `localhost:${input.port}`,
           ...(payload !== undefined
             ? {
-                "content-type": "application/json",
+                "content-type": contentType,
                 "content-length": String(Buffer.byteLength(payload)),
               }
             : {}),

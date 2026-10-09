@@ -1,12 +1,9 @@
 import {
   createHash,
-  createHmac,
   randomBytes,
   randomInt,
   randomUUID,
-  scrypt,
   timingSafeEqual,
-  type ScryptOptions,
 } from "node:crypto";
 import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
@@ -21,42 +18,29 @@ import {
 
 const STATE_FILE = "access-state.json";
 const LOCK_FILE = "access-state.lock";
-const RECOVERY_FILE = "recovery-request.json";
-const DEFAULT_RECOVERY_TTL_MS = 15 * 60 * 1000;
-const MAX_RECOVERY_FILE_BYTES = 4_096;
+const LOCAL_PAIRING_FILE = "local-pairing.json";
+const DEFAULT_LOCAL_PAIRING_TTL_MS = 10 * 60 * 1000;
+const MAX_LOCAL_PAIRING_FILE_BYTES = 4_096;
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_IDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_SETUP_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
 const LAST_SEEN_PERSIST_INTERVAL_MS = 60 * 1000;
 const MAX_ACTIVE_PAIRINGS = 5;
-const MIN_PASSPHRASE_LENGTH = 12;
-const MAX_PASSPHRASE_LENGTH = 1_024;
+/**
+ * Wrong codes tolerated across all clients before every outstanding code is
+ * withdrawn. With six digits this keeps the chance of a guess landing far
+ * below one in ten thousand, whatever the per-address rate limit allows.
+ */
+export const MAX_FAILED_PAIRING_ATTEMPTS = 10;
 const MAX_LABEL_LENGTH = 80;
-const PAIRING_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const PAIRING_CODE_LENGTH = 10;
+export const PAIRING_CODE_PATTERN = /^[0-9]{6}$/u;
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const CSRF_CONTEXT = "agentlink-server-csrf-v1";
-
-/** scrypt work factor. Tests may lower it; production uses the default. */
-export interface PassphraseCost {
-  readonly N: number;
-  readonly r: number;
-  readonly p: number;
-}
-
-const DEFAULT_PASSPHRASE_COST: PassphraseCost = { N: 2 ** 15, r: 8, p: 1 };
 
 export type ServerAccessErrorCode =
-  | "owner_exists"
-  | "owner_missing"
-  | "invalid_setup_credential"
-  | "weak_passphrase"
   | "invalid_pairing_code"
   | "pairing_limit_reached"
   | "invalid_label"
-  | "invalid_recovery_credential"
-  | "recovery_wrong_user"
+  | "local_pairing_wrong_user"
   | "access_state_locked"
   | "access_state_closed"
   | "access_state_corrupt";
@@ -75,8 +59,6 @@ export interface ServerAccessSession {
   readonly deviceLabel: string;
   readonly createdAt: number;
   readonly expiresAt: number;
-  /** Last time the owner proved the passphrase or credential for this session. */
-  readonly authenticatedAt: number;
 }
 
 export interface IssuedServerSession {
@@ -103,25 +85,14 @@ export interface ServerAccessStoreOptions {
   /** Private directory owned by the service account. */
   readonly dataRoot: string;
   readonly now?: () => number;
-  readonly passphraseCost?: PassphraseCost;
   readonly sessionTtlMs?: number;
   readonly sessionIdleTtlMs?: number;
-  readonly setupTtlMs?: number;
   readonly pairingTtlMs?: number;
-}
-
-interface StoredPassphrase {
-  readonly salt: string;
-  readonly hash: string;
-  readonly N: number;
-  readonly r: number;
-  readonly p: number;
 }
 
 interface StoredOwner {
   readonly ownerId: string;
   readonly createdAt: number;
-  readonly passphrase: StoredPassphrase;
 }
 
 interface StoredDevice {
@@ -138,26 +109,18 @@ interface StoredSession {
   readonly createdAt: number;
   readonly expiresAt: number;
   lastSeenAt: number;
-  authenticatedAt: number;
-  revokedAt?: number;
-}
-
-interface StoredSetup {
-  readonly tokenHash: string;
-  readonly expiresAt: number;
 }
 
 interface AccessState {
   schemaVersion: 1;
-  owner?: StoredOwner;
-  setup?: StoredSetup;
+  owner: StoredOwner;
   devices: StoredDevice[];
   sessions: StoredSession[];
 }
 
-interface StoredRecoveryRequest {
+interface StoredLocalPairing {
   readonly schemaVersion: 1;
-  readonly tokenHash: string;
+  readonly codeHash: string;
   readonly expiresAt: number;
 }
 
@@ -168,16 +131,21 @@ interface PendingPairing {
 
 /**
  * Durable owner, device, and session records for the standalone server.
- * Stores only hashes of bearer secrets. An exclusive lock file makes one
- * store instance own a data root, so two servers cannot hold diverging
- * revocation state. Call `close` to release it.
+ * There is one owner, created on first start. Devices sign in with a
+ * single-use six-digit pairing code: the first from `agentlink-server pair`
+ * on the server machine, later ones from any signed-in device. Stores only
+ * hashes of bearer secrets. An exclusive lock file makes one store instance
+ * own a data root, so two servers cannot hold diverging revocation state.
+ * Call `close` to release it.
  */
 export class ServerAccessStore {
   private readonly pairings: PendingPairing[] = [];
   private readonly lastPersistedSeen = new Map<string, number>();
   private writes: Promise<void> = Promise.resolve();
   private closed = false;
-  private recoveries: Promise<unknown> = Promise.resolve();
+  private failedPairingAttempts = 0;
+  /** Redemptions run one at a time so a code can never be used twice. */
+  private redemptions: Promise<unknown> = Promise.resolve();
   private readonly revocationListeners = new Set<
     (sessionIds: readonly string[]) => void
   >();
@@ -203,30 +171,40 @@ export class ServerAccessStore {
     const filePath = path.join(options.dataRoot, STATE_FILE);
     const lockPath = path.join(options.dataRoot, LOCK_FILE);
     const lockToken = await acquireLock(lockPath);
-    let state: AccessState;
+    const now = options.now ?? Date.now;
+    let store: ServerAccessStore;
     try {
-      state = await readState(filePath);
+      const loaded = await readState(filePath);
+      store = new ServerAccessStore(
+        filePath,
+        lockPath,
+        lockToken,
+        loaded.state,
+        {
+          now,
+          sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
+          sessionIdleTtlMs:
+            options.sessionIdleTtlMs ?? DEFAULT_SESSION_IDLE_TTL_MS,
+          pairingTtlMs: options.pairingTtlMs ?? DEFAULT_PAIRING_TTL_MS,
+        },
+      );
+      // A new owner, or a state file from before pairing-only sign-in.
+      if (loaded.changed) await store.persist();
     } catch (error) {
       await releaseLock(lockPath, lockToken);
       throw error;
     }
-    return new ServerAccessStore(filePath, lockPath, lockToken, state, {
-      now: options.now ?? Date.now,
-      passphraseCost: options.passphraseCost ?? DEFAULT_PASSPHRASE_COST,
-      sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
-      sessionIdleTtlMs: options.sessionIdleTtlMs ?? DEFAULT_SESSION_IDLE_TTL_MS,
-      setupTtlMs: options.setupTtlMs ?? DEFAULT_SETUP_TTL_MS,
-      pairingTtlMs: options.pairingTtlMs ?? DEFAULT_PAIRING_TTL_MS,
-    });
+    return store;
   }
 
-  get ownerConfigured(): boolean {
-    return this.state.owner !== undefined;
+  /** The single owner's ID. */
+  get ownerId(): string {
+    return this.state.owner.ownerId;
   }
 
-  /** The single owner's ID, once bootstrapped. */
-  get ownerId(): string | undefined {
-    return this.state.owner?.ownerId;
+  /** True while at least one device that has not been revoked exists. */
+  get hasActiveDevices(): boolean {
+    return this.state.devices.some((device) => device.revokedAt === undefined);
   }
 
   /** Observe durable session revocations. Returns an unsubscribe function. */
@@ -245,139 +223,95 @@ export class ServerAccessStore {
     await releaseLock(this.lockPath, this.lockToken);
   }
 
-  /**
-   * Issue the one-time local setup credential. Replaces any earlier one.
-   * Only valid before an owner exists.
-   */
-  async issueSetupCredential(): Promise<{ token: string; expiresAt: number }> {
-    if (this.state.owner) throw new ServerAccessError("owner_exists");
-    const token = randomBytes(32).toString("base64url");
-    const expiresAt = this.options.now() + this.options.setupTtlMs;
-    this.state.setup = { tokenHash: hashSecret(token), expiresAt };
-    await this.persist();
-    return { token, expiresAt };
-  }
-
-  async bootstrapOwner(input: {
-    readonly setupToken: string;
-    readonly passphrase: string;
-    readonly deviceLabel?: string;
-  }): Promise<IssuedServerSession> {
-    if (this.state.owner) throw new ServerAccessError("owner_exists");
-    const setup = this.state.setup;
-    if (
-      !setup ||
-      setup.expiresAt <= this.options.now() ||
-      !hashesEqual(hashSecret(input.setupToken), setup.tokenHash)
-    ) {
-      throw new ServerAccessError("invalid_setup_credential");
-    }
-    validatePassphrase(input.passphrase);
-    const label = normalizeLabel(input.deviceLabel);
-    const passphrase = await hashPassphrase(
-      input.passphrase,
-      this.options.passphraseCost,
-    );
-    // Re-check after the async hash so two concurrent requests cannot both win.
-    if (this.state.owner || this.state.setup !== setup) {
-      throw new ServerAccessError("invalid_setup_credential");
-    }
-    this.state.owner = {
-      ownerId: randomUUID(),
-      createdAt: this.options.now(),
-      passphrase,
-    };
-    delete this.state.setup;
-    return await this.issueSessionForNewDevice(label);
-  }
-
   /** Create a single-use pairing code for another browser or device. */
   createPairing(): { code: string; expiresAt: number } {
-    if (!this.state.owner) throw new ServerAccessError("owner_missing");
     this.prunePairings();
     if (this.pairings.length >= MAX_ACTIVE_PAIRINGS) {
       throw new ServerAccessError("pairing_limit_reached");
     }
-    let raw = "";
-    for (let index = 0; index < PAIRING_CODE_LENGTH; index += 1) {
-      raw += PAIRING_ALPHABET[randomInt(PAIRING_ALPHABET.length)];
-    }
+    const code = newPairingCode();
     const expiresAt = this.options.now() + this.options.pairingTtlMs;
-    this.pairings.push({ codeHash: hashSecret(raw), expiresAt });
-    return { code: `${raw.slice(0, 5)}-${raw.slice(5)}`, expiresAt };
-  }
-
-  async redeemPairing(input: {
-    readonly code: string;
-    readonly deviceLabel?: string;
-  }): Promise<IssuedServerSession> {
-    if (!this.state.owner) throw new ServerAccessError("owner_missing");
-    this.prunePairings();
-    const label = normalizeLabel(input.deviceLabel);
-    const codeHash = hashSecret(normalizePairingCode(input.code));
-    const index = this.pairings.findIndex((pairing) =>
-      hashesEqual(pairing.codeHash, codeHash),
-    );
-    if (index < 0) throw new ServerAccessError("invalid_pairing_code");
-    this.pairings.splice(index, 1);
-    return await this.issueSessionForNewDevice(label);
+    this.pairings.push({ codeHash: hashSecret(code), expiresAt });
+    return { code, expiresAt };
   }
 
   /**
-   * Redeem a local recovery credential written by
-   * `issueLocalRecoveryCredential`. The owner passphrase is also required,
-   * so a leaked recovery code alone cannot sign anyone in. Success consumes
-   * the credential and creates a new device and session; a wrong passphrase
-   * leaves it valid until it expires. Redemptions run one at a time.
+   * Redeem a pairing code from `createPairing` or `agentlink-server pair`.
+   * Success consumes it and signs in a new device.
    */
-  redeemRecovery(input: {
-    readonly recoveryToken: string;
-    readonly passphrase: string;
+  redeemPairing(input: {
+    readonly code: string;
     readonly deviceLabel?: string;
   }): Promise<IssuedServerSession> {
-    const run = this.recoveries.then(() => this.redeemRecoveryNow(input));
-    this.recoveries = run.catch(() => undefined);
+    const run = this.redemptions.then(() => this.redeemPairingNow(input));
+    this.redemptions = run.catch(() => undefined);
     return run;
   }
 
-  private async redeemRecoveryNow(input: {
-    readonly recoveryToken: string;
-    readonly passphrase: string;
+  private async redeemPairingNow(input: {
+    readonly code: string;
     readonly deviceLabel?: string;
   }): Promise<IssuedServerSession> {
-    const owner = this.state.owner;
-    if (!owner) throw new ServerAccessError("owner_missing");
+    if (this.closed) throw new ServerAccessError("access_state_closed");
+    // A withdrawal that could not finish keeps every code blocked.
+    if (this.failedPairingAttempts >= MAX_FAILED_PAIRING_ATTEMPTS) {
+      return await this.rejectPairing();
+    }
+    this.prunePairings();
     const label = normalizeLabel(input.deviceLabel);
-    const recoveryPath = path.join(path.dirname(this.filePath), RECOVERY_FILE);
-    const request = await readRecoveryRequest(recoveryPath);
-    if (!request) throw new ServerAccessError("invalid_recovery_credential");
-    if (request.expiresAt <= this.options.now()) {
-      await fs.unlink(recoveryPath).catch(() => undefined);
-      throw new ServerAccessError("invalid_recovery_credential");
+    const code = normalizePairingCode(input.code);
+    if (!PAIRING_CODE_PATTERN.test(code)) {
+      return await this.rejectPairing();
     }
-    const tokenHash = hashSecret(
-      typeof input.recoveryToken === "string" ? input.recoveryToken : "",
+    const codeHash = hashSecret(code);
+    const index = this.pairings.findIndex((pairing) =>
+      hashesEqual(pairing.codeHash, codeHash),
     );
-    if (!hashesEqual(tokenHash, request.tokenHash)) {
-      throw new ServerAccessError("invalid_recovery_credential");
+    if (index >= 0) {
+      this.pairings.splice(index, 1);
+      this.failedPairingAttempts = 0;
+      return await this.issueSessionForNewDevice(label);
     }
+    const localPath = this.localPairingPath();
+    const local = await readLocalPairing(localPath);
     if (
-      typeof input.passphrase !== "string" ||
-      input.passphrase.length > MAX_PASSPHRASE_LENGTH ||
-      !(await verifyPassphrase(input.passphrase, owner.passphrase))
+      local &&
+      local.expiresAt > this.options.now() &&
+      hashesEqual(local.codeHash, codeHash)
     ) {
-      throw new ServerAccessError("invalid_recovery_credential");
+      // Consume before signing in, and fail closed if that is impossible.
+      await fs.unlink(localPath);
+      await syncDirectory(path.dirname(localPath));
+      this.failedPairingAttempts = 0;
+      return await this.issueSessionForNewDevice(label);
     }
-    // The local command may have replaced the credential during the slow
-    // passphrase check. Consume only the one that was verified, and fail
-    // closed if it cannot be removed, so it can never be used twice.
-    const current = await readRecoveryRequest(recoveryPath);
-    if (!current || current.tokenHash !== request.tokenHash) {
-      throw new ServerAccessError("invalid_recovery_credential");
+    return await this.rejectPairing();
+  }
+
+  /**
+   * Count a wrong code; too many withdraw every outstanding code. If the
+   * local code cannot be removed, the counter stays at the limit so no code
+   * is accepted until a later attempt removes it.
+   */
+  private async rejectPairing(): Promise<never> {
+    this.failedPairingAttempts += 1;
+    if (this.failedPairingAttempts >= MAX_FAILED_PAIRING_ATTEMPTS) {
+      this.pairings.length = 0;
+      await this.withdrawLocalPairing();
+      this.failedPairingAttempts = 0;
     }
-    await fs.unlink(recoveryPath);
-    await syncDirectory(path.dirname(recoveryPath));
-    return await this.issueSessionForNewDevice(label);
+    throw new ServerAccessError("invalid_pairing_code");
+  }
+
+  private async withdrawLocalPairing(): Promise<void> {
+    const localPath = this.localPairingPath();
+    try {
+      await fs.unlink(localPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    await syncDirectory(path.dirname(localPath));
   }
 
   /**
@@ -401,7 +335,7 @@ export class ServerAccessStore {
     const device = this.state.devices.find(
       (candidate) => candidate.deviceId === session.deviceId,
     );
-    if (session.revokedAt !== undefined || !device || device.revokedAt) {
+    if (!device || device.revokedAt !== undefined) {
       return { ok: false, reason: "revoked" };
     }
     const now = this.options.now();
@@ -423,66 +357,44 @@ export class ServerAccessStore {
     return { ok: true, session: this.toPublicSession(session, device) };
   }
 
-  /** Verify the owner passphrase and refresh the session's authentication time. */
-  async reauthenticate(
-    sessionId: string,
-    passphrase: string,
-  ): Promise<boolean> {
-    const owner = this.state.owner;
-    const session = this.state.sessions.find(
-      (candidate) => candidate.sessionId === sessionId,
-    );
-    if (!owner || !session || session.revokedAt !== undefined) return false;
-    if (
-      typeof passphrase !== "string" ||
-      passphrase.length > MAX_PASSPHRASE_LENGTH
-    ) {
-      return false;
-    }
-    if (!(await verifyPassphrase(passphrase, owner.passphrase))) return false;
-    if (session.revokedAt !== undefined) return false;
-    session.authenticatedAt = this.options.now();
-    await this.persist();
-    return true;
-  }
-
   listDevices(): readonly ServerAccessDevice[] {
     return this.state.devices.map((device) => ({ ...device }));
   }
 
   /**
    * Revoke a device and every session it holds. Revoking the last active
-   * device is allowed; the owner then signs in again with a local recovery
-   * credential (`agentlink-server recover`).
+   * device is allowed; the owner pairs again with `agentlink-server pair`.
    */
   async revokeDevice(deviceId: string): Promise<boolean> {
     const device = this.state.devices.find(
       (candidate) => candidate.deviceId === deviceId,
     );
     if (!device || device.revokedAt !== undefined) return false;
-    const now = this.options.now();
-    device.revokedAt = now;
-    const revoked: string[] = [];
-    for (const session of this.state.sessions) {
-      if (session.deviceId === deviceId && session.revokedAt === undefined) {
-        session.revokedAt = now;
-        revoked.push(session.sessionId);
-      }
-    }
+    device.revokedAt = this.options.now();
+    const revoked = this.state.sessions
+      .filter((session) => session.deviceId === deviceId)
+      .map((session) => session.sessionId);
+    this.state.sessions = this.state.sessions.filter(
+      (session) => session.deviceId !== deviceId,
+    );
     await this.persist();
     this.notifyRevoked(revoked);
     return true;
   }
 
   async revokeSession(sessionId: string): Promise<boolean> {
-    const session = this.state.sessions.find(
-      (candidate) => candidate.sessionId === sessionId,
+    const before = this.state.sessions.length;
+    this.state.sessions = this.state.sessions.filter(
+      (session) => session.sessionId !== sessionId,
     );
-    if (!session || session.revokedAt !== undefined) return false;
-    session.revokedAt = this.options.now();
+    if (this.state.sessions.length === before) return false;
     await this.persist();
     this.notifyRevoked([sessionId]);
     return true;
+  }
+
+  private localPairingPath(): string {
+    return path.join(path.dirname(this.filePath), LOCAL_PAIRING_FILE);
   }
 
   private notifyRevoked(sessionIds: readonly string[]): void {
@@ -513,7 +425,6 @@ export class ServerAccessStore {
       createdAt: now,
       expiresAt: now + this.options.sessionTtlMs,
       lastSeenAt: now,
-      authenticatedAt: now,
     };
     this.state.devices.push(device);
     this.state.sessions.push(session);
@@ -527,13 +438,12 @@ export class ServerAccessStore {
     device: StoredDevice,
   ): ServerAccessSession {
     return {
-      ownerId: this.state.owner!.ownerId,
+      ownerId: this.state.owner.ownerId,
       sessionId: session.sessionId,
       deviceId: device.deviceId,
       deviceLabel: device.label,
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
-      authenticatedAt: session.authenticatedAt,
     };
   }
 
@@ -552,7 +462,6 @@ export class ServerAccessStore {
     // Drop sessions that can never authenticate again; keep devices for history.
     this.state.sessions = this.state.sessions.filter(
       (session) =>
-        session.revokedAt === undefined &&
         now < session.expiresAt &&
         now - session.lastSeenAt < this.options.sessionIdleTtlMs,
     );
@@ -564,57 +473,49 @@ export class ServerAccessStore {
 }
 
 /**
- * Issue a local recovery credential for an existing owner. Run by the
- * `agentlink-server recover` command on the server machine, as the account
- * that owns the data root; it works whether or not the server is running.
- * Only a hash is written, to a private file next to the access state. A new
- * credential replaces any earlier one.
+ * Issue a pairing code on the server machine for the first (or a lost)
+ * device. Run by `agentlink-server pair` as the account that owns the data
+ * root; it works whether or not the server is running. Only a hash is
+ * written, to a private file next to the access state. A new code replaces
+ * any earlier one.
  */
-export async function issueLocalRecoveryCredential(options: {
+export async function issueLocalPairingCode(options: {
   readonly dataRoot: string;
   readonly now?: () => number;
   readonly ttlMs?: number;
-}): Promise<{ token: string; expiresAt: number }> {
+}): Promise<{ code: string; expiresAt: number }> {
   if (!path.isAbsolute(options.dataRoot)) {
-    throw new Error("Local recovery requires an absolute data root");
+    throw new Error("Local pairing requires an absolute data root");
   }
-  let root: Stats;
-  try {
-    root = await fs.stat(options.dataRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new ServerAccessError("owner_missing");
-    }
-    throw error;
-  }
+  await fs.mkdir(options.dataRoot, { recursive: true, mode: 0o700 });
+  const root: Stats = await fs.stat(options.dataRoot);
   const uid = process.getuid?.();
   if (uid !== undefined && root.uid !== uid) {
-    throw new ServerAccessError("recovery_wrong_user");
+    throw new ServerAccessError("local_pairing_wrong_user");
   }
-  const state = await readState(path.join(options.dataRoot, STATE_FILE));
-  if (!state.owner) throw new ServerAccessError("owner_missing");
-  const token = randomBytes(32).toString("base64url");
+  const code = newPairingCode();
   const expiresAt =
-    (options.now ?? Date.now)() + (options.ttlMs ?? DEFAULT_RECOVERY_TTL_MS);
-  const request: StoredRecoveryRequest = {
+    (options.now ?? Date.now)() +
+    (options.ttlMs ?? DEFAULT_LOCAL_PAIRING_TTL_MS);
+  const request: StoredLocalPairing = {
     schemaVersion: 1,
-    tokenHash: hashSecret(token),
+    codeHash: hashSecret(code),
     expiresAt,
   };
   await writeState(
-    path.join(options.dataRoot, RECOVERY_FILE),
+    path.join(options.dataRoot, LOCAL_PAIRING_FILE),
     `${JSON.stringify(request, null, 2)}\n`,
   );
-  return { token, expiresAt };
+  return { code, expiresAt };
 }
 
 /**
- * Read the recovery request, accepting only a small regular file that is
- * private to this account. Anything else is treated as no credential.
+ * Read the local pairing request, accepting only a small regular file that
+ * is private to this account. Anything else is treated as no code.
  */
-async function readRecoveryRequest(
+async function readLocalPairing(
   filePath: string,
-): Promise<StoredRecoveryRequest | undefined> {
+): Promise<StoredLocalPairing | undefined> {
   let handle: FileHandle;
   try {
     handle = await fs.open(
@@ -631,22 +532,22 @@ async function readRecoveryRequest(
       !stat.isFile() ||
       (stat.mode & 0o077) !== 0 ||
       (uid !== undefined && stat.uid !== uid) ||
-      stat.size > MAX_RECOVERY_FILE_BYTES
+      stat.size > MAX_LOCAL_PAIRING_FILE_BYTES
     ) {
       return undefined;
     }
     const parsed = JSON.parse(
       await handle.readFile("utf8"),
-    ) as Partial<StoredRecoveryRequest>;
+    ) as Partial<StoredLocalPairing>;
     if (
       parsed?.schemaVersion !== 1 ||
-      typeof parsed.tokenHash !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(parsed.tokenHash) ||
+      typeof parsed.codeHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(parsed.codeHash) ||
       typeof parsed.expiresAt !== "number"
     ) {
       return undefined;
     }
-    return parsed as StoredRecoveryRequest;
+    return parsed as StoredLocalPairing;
   } catch {
     return undefined;
   } finally {
@@ -654,21 +555,8 @@ async function readRecoveryRequest(
   }
 }
 
-/** CSRF token bound to one session token; nothing extra is stored. */
-export function csrfTokenForSession(sessionToken: string): string {
-  return createHmac("sha256", sessionToken)
-    .update(CSRF_CONTEXT)
-    .digest("base64url");
-}
-
-export function verifyCsrfToken(
-  sessionToken: string,
-  supplied: string | undefined,
-): boolean {
-  if (typeof supplied !== "string") return false;
-  const expected = Buffer.from(csrfTokenForSession(sessionToken));
-  const actual = Buffer.from(supplied);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+function newPairingCode(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
 function hashSecret(value: string): string {
@@ -686,9 +574,7 @@ function hashesEqual(left: string, right: string): boolean {
 }
 
 function normalizePairingCode(code: string): string {
-  return typeof code === "string"
-    ? code.toUpperCase().replace(/[\s-]/gu, "")
-    : "";
+  return typeof code === "string" ? code.replace(/[\s-]/gu, "") : "";
 }
 
 function normalizeLabel(label: string | undefined): string {
@@ -704,88 +590,78 @@ function normalizeLabel(label: string | undefined): string {
   return trimmed;
 }
 
-function validatePassphrase(passphrase: string): void {
-  if (
-    typeof passphrase !== "string" ||
-    [...passphrase].length < MIN_PASSPHRASE_LENGTH ||
-    passphrase.length > MAX_PASSPHRASE_LENGTH
-  ) {
-    throw new ServerAccessError("weak_passphrase");
-  }
-}
-
-function scryptAsync(
-  passphrase: string,
-  salt: Buffer,
-  cost: PassphraseCost,
-): Promise<Buffer> {
-  const options: ScryptOptions = {
-    N: cost.N,
-    r: cost.r,
-    p: cost.p,
-    maxmem: 256 * cost.N * cost.r + 1024 * 1024,
-  };
-  return new Promise((resolve, reject) => {
-    scrypt(passphrase.normalize("NFC"), salt, 32, options, (error, key) =>
-      error ? reject(error) : resolve(key),
-    );
-  });
-}
-
-async function hashPassphrase(
-  passphrase: string,
-  cost: PassphraseCost,
-): Promise<StoredPassphrase> {
-  const salt = randomBytes(16);
-  const hash = await scryptAsync(passphrase, salt, cost);
-  return {
-    salt: salt.toString("base64"),
-    hash: hash.toString("base64"),
-    ...cost,
-  };
-}
-
-async function verifyPassphrase(
-  passphrase: string,
-  stored: StoredPassphrase,
-): Promise<boolean> {
-  const expected = Buffer.from(stored.hash, "base64");
-  const actual = await scryptAsync(
-    passphrase,
-    Buffer.from(stored.salt, "base64"),
-    stored,
-  );
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
-async function readState(filePath: string): Promise<AccessState> {
+/**
+ * Read the access state, creating the owner on first start. Earlier
+ * versions also stored an owner passphrase and a setup credential; both are
+ * dropped (sign-in is by pairing code only) while devices stay signed in.
+ */
+async function readState(
+  filePath: string,
+): Promise<{ readonly state: AccessState; readonly changed: boolean }> {
   let raw: string;
   try {
     raw = await fs.readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { schemaVersion: 1, devices: [], sessions: [] };
+      return {
+        state: {
+          schemaVersion: 1,
+          owner: { ownerId: randomUUID(), createdAt: Date.now() },
+          devices: [],
+          sessions: [],
+        },
+        changed: true,
+      };
     }
     throw error;
   }
-  // Fail closed: a damaged file must never look like "no owner yet", which
-  // would reopen bootstrap to whoever reaches the listener first.
+  // Fail closed: a damaged file must never look like a fresh install, which
+  // would sign every device out and change the owner's identity.
+  let parsed: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(raw) as Partial<AccessState>;
-    if (
-      parsed?.schemaVersion !== 1 ||
-      !Array.isArray(parsed.devices) ||
-      !Array.isArray(parsed.sessions) ||
-      (parsed.owner !== undefined &&
-        (typeof parsed.owner.ownerId !== "string" ||
-          typeof parsed.owner.passphrase?.hash !== "string"))
-    ) {
-      throw new Error("invalid");
-    }
-    return parsed as AccessState;
+    parsed = JSON.parse(raw) as Record<string, unknown>;
   } catch {
     throw new ServerAccessError("access_state_corrupt");
   }
+  const owner = parsed?.owner as Partial<StoredOwner> | undefined;
+  if (
+    parsed?.schemaVersion !== 1 ||
+    !Array.isArray(parsed.devices) ||
+    !Array.isArray(parsed.sessions) ||
+    (owner !== undefined &&
+      (typeof owner !== "object" ||
+        owner === null ||
+        typeof owner.ownerId !== "string"))
+  ) {
+    throw new ServerAccessError("access_state_corrupt");
+  }
+  const legacy =
+    owner === undefined ||
+    "passphrase" in owner ||
+    "setup" in parsed ||
+    (parsed.sessions as Array<Record<string, unknown>>).some(
+      (session) => "authenticatedAt" in session || "revokedAt" in session,
+    );
+  const state: AccessState = {
+    schemaVersion: 1,
+    owner: {
+      ownerId: owner?.ownerId ?? randomUUID(),
+      createdAt:
+        typeof owner?.createdAt === "number" ? owner.createdAt : Date.now(),
+    },
+    devices: parsed.devices as StoredDevice[],
+    sessions: (parsed.sessions as Array<StoredSession & { revokedAt?: number }>)
+      .filter((session) => session.revokedAt === undefined)
+      .map((session) => ({
+        sessionId: session.sessionId,
+        tokenHash: session.tokenHash,
+        deviceId: session.deviceId,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        lastSeenAt: session.lastSeenAt,
+      })),
+  };
+  return { state, changed: legacy };
 }
 
 /**

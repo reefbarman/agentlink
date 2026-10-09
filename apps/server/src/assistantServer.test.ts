@@ -9,7 +9,7 @@ import {
   type AssistantServerAuth,
   type CreateAssistantServerOptions,
 } from "./assistantServer.js";
-import { issueLocalRecoveryCredential } from "./ServerAccessStore.js";
+import { issueLocalPairingCode } from "./ServerAccessStore.js";
 import {
   createTestCertificate,
   freePort,
@@ -19,9 +19,6 @@ import {
   sessionCookieFrom,
   type TestResponse,
 } from "./testSupport.js";
-
-const PASSPHRASE = "correct horse battery staple";
-const CHEAP_COST = { N: 1024, r: 8, p: 1 };
 
 let certificate: { cert: string; key: string };
 beforeAll(() => {
@@ -38,7 +35,6 @@ interface Harness {
   readonly port: number;
   readonly origin: string;
   readonly dataRoot: string;
-  readonly setupToken: () => string;
   readonly clock: { value: number };
   readonly appCalls: AssistantServerAuth[];
   readonly upgradeCalls: AssistantServerAuth[];
@@ -47,6 +43,7 @@ interface Harness {
     path: string;
     headers?: Record<string, string>;
     body?: unknown;
+    form?: Record<string, string>;
   }): Promise<TestResponse>;
   restart(): Promise<Harness>;
 }
@@ -64,7 +61,6 @@ async function startHarness(
   const port = existing?.port ?? (await freePort());
   const clock = existing?.clock ?? { value: Date.now() };
   const origin = `https://localhost:${port}`;
-  let setupToken: string | undefined;
   const appCalls: AssistantServerAuth[] = [];
   const upgradeCalls: AssistantServerAuth[] = [];
   const server = await createAssistantServer({
@@ -73,10 +69,6 @@ async function startHarness(
     publicOrigins: [origin],
     listen: { host: "127.0.0.1", port },
     now: () => clock.value,
-    passphraseCost: CHEAP_COST,
-    onSetupCredential: (credential) => {
-      setupToken = credential.token;
-    },
     handleRequest: (request, response, auth) => {
       if (new URL(request.url!, origin).pathname !== "/api/app/echo") {
         return false;
@@ -92,6 +84,8 @@ async function startHarness(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
       );
     },
+    renderAppPage: ({ nonce }) =>
+      `<p>app</p><script nonce="${nonce}">boot()</script>`,
     ...overrides,
   });
   await server.start();
@@ -102,7 +96,7 @@ async function startHarness(
     await server.close();
   };
   cleanup.push(close);
-  const harness: Harness = {
+  return {
     server,
     port,
     origin,
@@ -110,60 +104,42 @@ async function startHarness(
     clock,
     appCalls,
     upgradeCalls,
-    setupToken: () => {
-      if (!setupToken) throw new Error("no setup credential issued");
-      return setupToken;
-    },
     request: (input) => httpsRequest({ port, ca: certificate.cert, ...input }),
     async restart() {
       await close();
       return await startHarness({ dataRoot, port, clock });
     },
   };
-  return harness;
 }
 
-async function bootstrap(harness: Harness) {
+/** Sign a device in with a code minted by the server. */
+async function pairDevice(harness: Harness, deviceLabel = "Laptop") {
+  const { code } = harness.server.store.createPairing();
   const response = await harness.request({
     method: "POST",
-    path: "/api/auth/bootstrap",
+    path: "/api/auth/pairings/redeem",
     headers: { origin: harness.origin },
-    body: {
-      setupToken: harness.setupToken(),
-      passphrase: PASSPHRASE,
-      deviceLabel: "Laptop",
-    },
+    body: { code, deviceLabel },
   });
   expect(response.status).toBe(201);
-  const body = response.body as { csrfToken: string; deviceId: string };
+  const body = response.body as { deviceId: string; ownerId: string };
   return {
     cookie: sessionCookieFrom(response),
-    csrf: body.csrfToken,
     deviceId: body.deviceId,
+    ownerId: body.ownerId,
     response,
   };
 }
 
-function authHeaders(
-  harness: Harness,
-  session: { cookie: string; csrf: string },
-) {
-  return {
-    origin: harness.origin,
-    cookie: session.cookie,
-    "x-agentlink-csrf": session.csrf,
-  };
+function authHeaders(harness: Harness, session: { cookie: string }) {
+  return { origin: harness.origin, cookie: session.cookie };
 }
 
 describe("assistant server access layer", () => {
   it("refuses to start without TLS or with a non-https origin", async () => {
     const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-cfg-"));
     cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
-    const base = {
-      dataRoot,
-      listen: { host: "127.0.0.1", port: 0 },
-      onSetupCredential: () => undefined,
-    };
+    const base = { dataRoot, listen: { host: "127.0.0.1", port: 0 } };
     await expect(
       createAssistantServer({
         ...base,
@@ -201,123 +177,149 @@ describe("assistant server access layer", () => {
     await server.close();
   });
 
-  it("counts concurrent passphrase guesses against the limit", async () => {
-    const harness = await startHarness();
-    const owner = await bootstrap(harness);
-    const statuses = await Promise.all(
-      Array.from({ length: 12 }, () =>
-        harness
-          .request({
-            method: "POST",
-            path: "/api/auth/reauthenticate",
-            headers: authHeaders(harness, owner),
-            body: { passphrase: "wrong passphrase value" },
-          })
-          .then((response) => response.status),
-      ),
-    );
-    expect(statuses.filter((status) => status === 401)).toHaveLength(5);
-    expect(statuses.filter((status) => status === 429)).toHaveLength(7);
-  });
-
   it("serves only TLS and sets security headers", async () => {
     const harness = await startHarness();
     await expect(plainHttpRequest(harness.port)).rejects.toThrow();
-    const state = await harness.request({ path: "/api/auth/state" });
-    expect(state).toMatchObject({
-      status: 200,
-      body: { ownerConfigured: false },
-    });
-    expect(state.headers).toMatchObject({
+    const pair = await harness.request({ path: "/pair" });
+    expect(pair.status).toBe(200);
+    expect(pair.headers).toMatchObject({
       "strict-transport-security": "max-age=31536000",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
+      "referrer-policy": "same-origin",
     });
-    expect(state.headers["content-security-policy"]).toContain(
-      "frame-ancestors 'none'",
-    );
+    const csp = pair.headers["content-security-policy"] as string;
+    expect(csp).toContain("frame-ancestors 'none'");
+    // The sign-in page runs no script at all.
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).not.toContain("script-src");
   });
 
-  it("bootstraps the owner once with the local setup credential", async () => {
+  it("sends signed-out browsers to /pair and API clients a 401", async () => {
     const harness = await startHarness();
-    const missingOrigin = await harness.request({
-      method: "POST",
-      path: "/api/auth/bootstrap",
-      body: { setupToken: harness.setupToken(), passphrase: PASSPHRASE },
+    for (const page of ["/", "/devices"]) {
+      await expect(harness.request({ path: page })).resolves.toMatchObject({
+        status: 303,
+        headers: { location: "/pair" },
+      });
+    }
+    await expect(
+      harness.request({ path: "/api/auth/session" }),
+    ).resolves.toMatchObject({
+      status: 401,
+      body: { error: "authentication_required" },
     });
-    expect(missingOrigin).toMatchObject({
+  });
+
+  it("pairs a browser through the /pair form with the code from `pair`", async () => {
+    const harness = await startHarness();
+    const { code } = await issueLocalPairingCode({
+      dataRoot: harness.dataRoot,
+      now: () => harness.clock.value,
+    });
+    // The sign-in link prefills the code.
+    const prefilled = await harness.request({ path: `/pair?code=${code}` });
+    expect(prefilled.body).toContain(`value="${code}"`);
+    // The field takes the code as `pair` prints it ("123 456").
+    expect(prefilled.body).toContain('maxlength="7"');
+    const hostile = await harness.request({
+      path: `/pair?code=${encodeURIComponent('"><script>x</script>')}`,
+    });
+    expect(hostile.body).not.toContain("<script>x");
+
+    // Browsers send Origin with form posts; without it the post is refused.
+    await expect(
+      harness.request({ method: "POST", path: "/pair", form: { code } }),
+    ).resolves.toMatchObject({
       status: 403,
       body: { error: "origin_required" },
     });
     const wrong = await harness.request({
       method: "POST",
-      path: "/api/auth/bootstrap",
+      path: "/pair",
       headers: { origin: harness.origin },
-      body: { setupToken: "not-the-token", passphrase: PASSPHRASE },
+      form: { code: code === "000000" ? "000001" : "000000" },
     });
-    expect(wrong).toMatchObject({
-      status: 401,
-      body: { error: "invalid_setup_credential" },
-    });
-    const weak = await harness.request({
-      method: "POST",
-      path: "/api/auth/bootstrap",
-      headers: { origin: harness.origin },
-      body: { setupToken: harness.setupToken(), passphrase: "short" },
-    });
-    expect(weak).toMatchObject({
-      status: 400,
-      body: { error: "weak_passphrase" },
-    });
+    expect(wrong.status).toBe(401);
+    expect(wrong.body).toContain("That code did not work");
+    expect(wrong.headers["set-cookie"]).toBeUndefined();
 
-    const owner = await bootstrap(harness);
-    const cookieHeader = owner.response.headers["set-cookie"]![0]!;
+    const signedIn = await harness.request({
+      method: "POST",
+      path: "/pair",
+      headers: {
+        origin: harness.origin,
+        "user-agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      },
+      form: { code: `${code.slice(0, 3)} ${code.slice(3)}` },
+    });
+    expect(signedIn).toMatchObject({
+      status: 303,
+      headers: { location: "/" },
+    });
+    const cookieHeader = signedIn.headers["set-cookie"]![0]!;
     expect(cookieHeader).toMatch(/^__Host-agentlink_session=[\w-]{43};/u);
     expect(cookieHeader).toContain("Secure");
     expect(cookieHeader).toContain("HttpOnly");
     expect(cookieHeader).toContain("SameSite=Strict");
     expect(cookieHeader).toContain("Path=/");
+    const cookie = sessionCookieFrom(signedIn);
 
-    const replay = await harness.request({
-      method: "POST",
-      path: "/api/auth/bootstrap",
-      headers: { origin: harness.origin },
-      body: { setupToken: harness.setupToken(), passphrase: PASSPHRASE },
-    });
-    expect(replay).toMatchObject({
-      status: 409,
-      body: { error: "owner_exists" },
-    });
-    const session = await harness.request({
-      path: "/api/auth/session",
-      headers: { cookie: owner.cookie },
-    });
-    expect(session).toMatchObject({
+    await expect(
+      harness.request({ path: "/api/auth/session", headers: { cookie } }),
+    ).resolves.toMatchObject({
       status: 200,
-      body: {
-        deviceLabel: "Laptop",
-        csrfToken: owner.csrf,
-        recentlyAuthenticated: true,
-      },
+      body: { deviceLabel: "Safari on iPhone" },
     });
-    // Setup credential, session token and passphrase never reach disk.
+    // A signed-in browser opening /pair goes straight to the app.
+    await expect(
+      harness.request({ path: "/pair", headers: { cookie } }),
+    ).resolves.toMatchObject({ status: 303, headers: { location: "/" } });
+    // The code was single use.
+    await expect(
+      harness.request({
+        method: "POST",
+        path: "/pair",
+        headers: { origin: harness.origin },
+        form: { code },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    // Neither the code nor the session token reaches disk.
     const stored = await fs.readFile(
       path.join(harness.dataRoot, "access-state.json"),
       "utf8",
     );
-    expect(stored).not.toContain(harness.setupToken());
-    expect(stored).not.toContain(owner.cookie.split("=")[1]);
-    expect(stored).not.toContain(PASSPHRASE);
+    expect(stored).not.toContain(cookie.split("=")[1]);
     expect(
       (await fs.stat(path.join(harness.dataRoot, "access-state.json"))).mode &
         0o777,
     ).toBe(0o600);
   });
 
+  it("renders the app shell with a fresh script nonce for signed-in browsers", async () => {
+    const harness = await startHarness();
+    const device = await pairDevice(harness);
+    const first = await harness.request({
+      path: "/",
+      headers: { cookie: device.cookie },
+    });
+    const second = await harness.request({
+      path: "/",
+      headers: { cookie: device.cookie },
+    });
+    expect(first.status).toBe(200);
+    expect(first.headers["content-type"]).toBe("text/html; charset=utf-8");
+    const nonce = /nonce="([^"]+)"/u.exec(first.body as string)![1]!;
+    const csp = first.headers["content-security-policy"] as string;
+    expect(csp).toContain(`script-src 'self' 'nonce-${nonce}'`);
+    expect(csp).not.toContain("'unsafe-inline' 'self' 'nonce");
+    expect(second.body).not.toContain(nonce);
+  });
+
   it("rejects forged proxy and identity headers and foreign hosts", async () => {
     const harness = await startHarness();
-    const owner = await bootstrap(harness);
+    const owner = await pairDevice(harness);
     const forged: Array<Record<string, string>> = [
       { "x-forwarded-for": "10.0.0.1" },
       { "x-forwarded-proto": "https" },
@@ -340,12 +342,6 @@ describe("assistant server access layer", () => {
     }
     await expect(
       harness.request({
-        path: "/api/app/echo",
-        headers: { "x-remote-user": "owner" },
-      }),
-    ).resolves.toMatchObject({ status: 400 });
-    await expect(
-      harness.request({
         path: "/api/auth/session",
         headers: { cookie: owner.cookie, host: "evil.example" },
       }),
@@ -356,26 +352,13 @@ describe("assistant server access layer", () => {
     expect(harness.appCalls).toHaveLength(0);
   });
 
-  it("requires same origin and the CSRF token for authenticated writes", async () => {
+  it("requires a same-origin request for authenticated writes", async () => {
     const harness = await startHarness();
-    const owner = await bootstrap(harness);
+    const owner = await pairDevice(harness);
     const attempts: Array<[Record<string, string>, number, string]> = [
-      [{ origin: harness.origin, cookie: owner.cookie }, 403, "csrf_invalid"],
+      [{ cookie: owner.cookie }, 403, "origin_required"],
       [
-        {
-          origin: harness.origin,
-          cookie: owner.cookie,
-          "x-agentlink-csrf": "forged",
-        },
-        403,
-        "csrf_invalid",
-      ],
-      [
-        {
-          origin: "https://evil.example",
-          cookie: owner.cookie,
-          "x-agentlink-csrf": owner.csrf,
-        },
+        { origin: "https://evil.example", cookie: owner.cookie },
         403,
         "origin_not_allowed",
       ],
@@ -384,7 +367,6 @@ describe("assistant server access layer", () => {
           origin: harness.origin,
           "sec-fetch-site": "cross-site",
           cookie: owner.cookie,
-          "x-agentlink-csrf": owner.csrf,
         },
         403,
         "cross_site_request",
@@ -418,92 +400,43 @@ describe("assistant server access layer", () => {
     ).resolves.toMatchObject({ status: 401 });
   });
 
-  it("requires recent reauthentication for sensitive actions", async () => {
-    const harness = await startHarness();
-    const owner = await bootstrap(harness);
-    harness.clock.value += 6 * 60 * 1000;
-    const stale = await harness.request({
-      method: "POST",
-      path: "/api/auth/pairings",
-      headers: authHeaders(harness, owner),
-    });
-    expect(stale).toMatchObject({
-      status: 401,
-      body: { error: "reauthentication_required" },
-    });
-    await expect(
-      harness.request({
-        method: "POST",
-        path: "/api/auth/reauthenticate",
-        headers: authHeaders(harness, owner),
-        body: { passphrase: "wrong passphrase value" },
-      }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "invalid_passphrase" },
-    });
-    await expect(
-      harness.request({
-        method: "POST",
-        path: "/api/auth/reauthenticate",
-        headers: authHeaders(harness, owner),
-        body: { passphrase: PASSPHRASE },
-      }),
-    ).resolves.toMatchObject({ status: 204 });
-    await expect(
-      harness.request({
-        method: "POST",
-        path: "/api/auth/pairings",
-        headers: authHeaders(harness, owner),
-      }),
-    ).resolves.toMatchObject({
-      status: 201,
-      body: { code: expect.stringMatching(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/u) },
-    });
-  });
-
-  it("pairs a second device with a single-use code and revokes it durably", async () => {
+  it("lets a signed-in device pair another and revoke it durably", async () => {
     let harness = await startHarness();
-    const owner = await bootstrap(harness);
-    const ownerId = (owner.response.body as { ownerId: string }).ownerId;
+    const owner = await pairDevice(harness);
     const pairing = await harness.request({
       method: "POST",
       path: "/api/auth/pairings",
       headers: authHeaders(harness, owner),
     });
-    const { code } = pairing.body as { code: string };
+    expect(pairing).toMatchObject({
+      status: 201,
+      body: { code: expect.stringMatching(/^[0-9]{6}$/u) },
+    });
+    const { code, link } = pairing.body as { code: string; link: string };
+    expect(link).toBe(`${harness.origin}/pair?code=${code}`);
     const phone = await harness.request({
       method: "POST",
       path: "/api/auth/pairings/redeem",
       headers: { origin: harness.origin },
-      body: { code: code.toLowerCase(), deviceLabel: "Phone" },
+      body: { code, deviceLabel: "Phone" },
     });
     expect(phone.status).toBe(201);
     const phoneSession = {
       cookie: sessionCookieFrom(phone),
-      csrf: (phone.body as { csrfToken: string }).csrfToken,
       deviceId: (phone.body as { deviceId: string }).deviceId,
     };
-    await expect(
-      harness.request({
-        method: "POST",
-        path: "/api/auth/pairings/redeem",
-        headers: { origin: harness.origin },
-        body: { code },
-      }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "invalid_pairing_code" },
-    });
     await expect(
       harness.request({
         path: "/api/app/echo",
         headers: { cookie: phoneSession.cookie },
       }),
-    ).resolves.toMatchObject({ status: 200, body: { subjectId: ownerId } });
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { subjectId: owner.ownerId },
+    });
     expect(harness.appCalls[0]!.principal).toEqual({
       tenantId: "agentlink-server",
-      subjectId: ownerId,
+      subjectId: owner.ownerId,
     });
 
     const revoked = await harness.request({
@@ -547,104 +480,112 @@ describe("assistant server access layer", () => {
     });
   });
 
-  it("signs in again with a local recovery code after revoking every device", async () => {
+  it("manages devices from the /devices pages", async () => {
     const harness = await startHarness();
-    const owner = await bootstrap(harness);
-    const ownerId = (owner.response.body as { ownerId: string }).ownerId;
+    const owner = await pairDevice(harness, "Laptop");
+    const phone = await pairDevice(harness, "Phone");
+
+    const list = await harness.request({
+      path: "/devices",
+      headers: { cookie: owner.cookie },
+    });
+    expect(list.status).toBe(200);
+    expect(list.body).toContain("Laptop");
+    expect(list.body).toContain("This device");
+    expect(list.body).toContain(`/devices/${phone.deviceId}/revoke`);
+
+    const minted = await harness.request({
+      method: "POST",
+      path: "/devices/pair",
+      headers: authHeaders(harness, owner),
+    });
+    expect(minted.status).toBe(200);
+    const page = minted.body as string;
+    const code = /\?code=([0-9]{6})/u.exec(page)![1]!;
+    expect(page).toContain("<svg");
+    expect(page).toContain(`${harness.origin}/pair?code=${code}`);
+    await expect(
+      harness.server.store.redeemPairing({ code }),
+    ).resolves.toMatchObject({ session: { deviceLabel: "Browser" } });
+
     await expect(
       harness.request({
-        method: "DELETE",
-        path: `/api/auth/devices/${owner.deviceId}`,
+        method: "POST",
+        path: `/devices/${phone.deviceId}/revoke`,
         headers: authHeaders(harness, owner),
       }),
-    ).resolves.toMatchObject({ status: 204 });
+    ).resolves.toMatchObject({
+      status: 303,
+      headers: { location: "/devices" },
+    });
     await expect(
       harness.request({
         path: "/api/auth/session",
-        headers: { cookie: owner.cookie },
+        headers: { cookie: phone.cookie },
       }),
     ).resolves.toMatchObject({ status: 401 });
 
-    const { token } = await issueLocalRecoveryCredential({
-      dataRoot: harness.dataRoot,
-      now: () => harness.clock.value,
+    // Revoking this device signs it out.
+    const self = await harness.request({
+      method: "POST",
+      path: `/devices/${owner.deviceId}/revoke`,
+      headers: authHeaders(harness, owner),
     });
-    const redeem = (body: Record<string, unknown>, origin = harness.origin) =>
-      harness.request({
-        method: "POST",
-        path: "/api/auth/recover",
-        headers: { origin },
-        body,
-      });
-    await expect(
-      redeem({ recoveryToken: token, passphrase: PASSPHRASE }, "https://evil"),
-    ).resolves.toMatchObject({ status: 403 });
-    await expect(
-      redeem({ recoveryToken: token, passphrase: "not the passphrase" }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "invalid_recovery_credential" },
+    expect(self).toMatchObject({
+      status: 303,
+      headers: { location: "/pair" },
     });
-    const recovered = await redeem({
-      recoveryToken: token,
-      passphrase: PASSPHRASE,
-      deviceLabel: "Recovered",
-    });
-    expect(recovered.status).toBe(201);
-    expect(recovered.body).toMatchObject({ ownerId, deviceLabel: "Recovered" });
-    await expect(
-      harness.request({
-        path: "/api/app/echo",
-        headers: { cookie: sessionCookieFrom(recovered) },
-      }),
-    ).resolves.toMatchObject({ status: 200, body: { subjectId: ownerId } });
-    await expect(
-      redeem({ recoveryToken: token, passphrase: PASSPHRASE }),
-    ).resolves.toMatchObject({ status: 401 });
+    expect(self.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
 
   it("expires pairing codes", async () => {
     const harness = await startHarness();
-    const owner = await bootstrap(harness);
-    const pairing = await harness.request({
-      method: "POST",
-      path: "/api/auth/pairings",
-      headers: authHeaders(harness, owner),
-    });
+    const { code } = harness.server.store.createPairing();
     harness.clock.value += 5 * 60 * 1000 + 1;
     await expect(
       harness.request({
         method: "POST",
         path: "/api/auth/pairings/redeem",
         headers: { origin: harness.origin },
-        body: { code: (pairing.body as { code: string }).code },
+        body: { code },
       }),
-    ).resolves.toMatchObject({ status: 401 });
+    ).resolves.toMatchObject({
+      status: 401,
+      body: { error: "invalid_pairing_code" },
+    });
   });
 
-  it("rate limits credential guessing even when the next guess is correct", async () => {
+  it("rate limits code guessing even when the next guess is correct", async () => {
     const harness = await startHarness();
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      await harness.request({
-        method: "POST",
-        path: "/api/auth/bootstrap",
-        headers: { origin: harness.origin },
-        body: { setupToken: `guess-${attempt}`, passphrase: PASSPHRASE },
-      });
-    }
+    const { code } = harness.server.store.createPairing();
+    const wrong = code === "000000" ? "000001" : "000000";
+    const statuses = await Promise.all(
+      Array.from({ length: 7 }, () =>
+        harness
+          .request({
+            method: "POST",
+            path: "/api/auth/pairings/redeem",
+            headers: { origin: harness.origin },
+            body: { code: wrong },
+          })
+          .then((response) => response.status),
+      ),
+    );
+    expect(statuses.filter((status) => status === 401)).toHaveLength(5);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(2);
     await expect(
       harness.request({
         method: "POST",
-        path: "/api/auth/bootstrap",
+        path: "/pair",
         headers: { origin: harness.origin },
-        body: { setupToken: harness.setupToken(), passphrase: PASSPHRASE },
+        form: { code },
       }),
-    ).resolves.toMatchObject({ status: 429, body: { error: "rate_limited" } });
+    ).resolves.toMatchObject({ status: 429 });
   });
 
   it("authenticates upgrades by cookie and exact origin", async () => {
     const harness = await startHarness();
-    const owner = await bootstrap(harness);
+    const owner = await pairDevice(harness);
     const upgrade = (headers: Record<string, string>) =>
       httpsUpgrade({ port: harness.port, ca: certificate.cert, headers });
     await expect(upgrade({ origin: harness.origin })).resolves.toBe(401);
@@ -689,53 +630,59 @@ describe("assistant server access layer", () => {
     const harness = await startHarness(undefined, {
       handleRequest,
       webAssets: new Map([
-        ["/", { contentType: "text/html; charset=utf-8", body: "<p>app</p>" }],
+        // An asset can never replace the signed-in app shell.
+        ["/", { contentType: "text/html; charset=utf-8", body: "shadow" }],
         [
           "/app.js",
           { contentType: "text/javascript; charset=utf-8", body: "1;" },
+        ],
+        [
+          "/chunk-abc.js",
+          {
+            contentType: "text/javascript; charset=utf-8",
+            body: "2;",
+            immutable: true,
+          },
         ],
         // A web asset can never shadow the API.
         ["/api/projects", { contentType: "text/plain", body: "shadowed" }],
       ]),
     });
-    const shell = await harness.request({ path: "/" });
-    expect(shell).toMatchObject({ status: 200, body: "<p>app</p>" });
-    expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(shell.headers["content-security-policy"]).toContain(
-      "default-src 'self'",
-    );
-    expect(shell.headers["x-content-type-options"]).toBe("nosniff");
-    expect(shell.headers["set-cookie"]).toBeUndefined();
+    await expect(harness.request({ path: "/" })).resolves.toMatchObject({
+      status: 303,
+    });
     await expect(
       harness.request({ path: "/app.js?v=1" }),
-    ).resolves.toMatchObject({ status: 200, body: "1;" });
+    ).resolves.toMatchObject({
+      status: 200,
+      body: "1;",
+      headers: { "cache-control": "no-store" },
+    });
+    await expect(
+      harness.request({ path: "/chunk-abc.js" }),
+    ).resolves.toMatchObject({
+      status: 200,
+      headers: { "cache-control": "public, max-age=31536000, immutable" },
+    });
     await expect(
       harness.request({ method: "HEAD", path: "/app.js" }),
     ).resolves.toMatchObject({ status: 200, body: undefined });
     // Unknown paths and the API still need a session.
     await expect(harness.request({ path: "/other.js" })).resolves.toMatchObject(
-      {
-        status: 401,
-        body: { error: "authentication_required" },
-      },
+      { status: 401, body: { error: "authentication_required" } },
     );
     await expect(
       harness.request({ path: "/api/projects" }),
     ).resolves.toMatchObject({ status: 401 });
-    // Unsafe methods are never served as assets.
-    await expect(
-      harness.request({
-        method: "POST",
-        path: "/",
-        headers: { origin: harness.origin },
-      }),
-    ).resolves.toMatchObject({ status: 401 });
     // The Host and forged-header checks still apply.
     await expect(
-      harness.request({ path: "/", headers: { host: "evil.example" } }),
+      harness.request({ path: "/app.js", headers: { host: "evil.example" } }),
     ).resolves.toMatchObject({ status: 421 });
     await expect(
-      harness.request({ path: "/", headers: { "x-forwarded-for": "1.2.3.4" } }),
+      harness.request({
+        path: "/app.js",
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      }),
     ).resolves.toMatchObject({ status: 400 });
     expect(handleRequest).not.toHaveBeenCalled();
   });

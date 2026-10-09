@@ -26,8 +26,6 @@ import {
   type AuthorizeAssistantProject,
 } from "./workspaceRoutes.js";
 
-const PASSPHRASE = "correct horse battery staple";
-
 let certificate: { cert: string; key: string };
 beforeAll(() => {
   certificate = createTestCertificate();
@@ -75,7 +73,6 @@ function completion(text: string): Response {
 
 interface Session {
   readonly cookie: string;
-  readonly csrf: string;
   readonly deviceId: string;
 }
 
@@ -208,7 +205,6 @@ async function startHarness(
   const port = await freePort();
   const origin = `https://localhost:${port}`;
   const clock = { value: Date.now() };
-  let setupToken = "";
   // Routes need the store for owner mapping; it exists once the server does.
   let authorizeProject: AuthorizeAssistantProject = () => false;
   const routes = createAssistantWorkspaceRoutes({
@@ -237,10 +233,6 @@ async function startHarness(
     publicOrigins: [origin],
     listen: { host: "127.0.0.1", port },
     now: () => clock.value,
-    passphraseCost: { N: 1024, r: 8, p: 1 },
-    onSetupCredential: (credential) => {
-      setupToken = credential.token;
-    },
     handleRequest: routes.handleRequest,
     // Server shutdown owns stopping server-owned turns.
     onClose: () => routes.close(),
@@ -256,10 +248,7 @@ async function startHarness(
   };
   cleanup.push(closeServer);
 
-  const authHeaders = (session: Session) => ({
-    cookie: session.cookie,
-    "x-agentlink-csrf": session.csrf,
-  });
+  const authHeaders = (session: Session) => ({ cookie: session.cookie });
 
   const request = (input: {
     method?: string;
@@ -282,10 +271,9 @@ async function startHarness(
     });
 
   const toSession = (response: Awaited<ReturnType<typeof request>>) => {
-    const body = response.body as { csrfToken: string; deviceId: string };
+    const body = response.body as { deviceId: string };
     return {
       cookie: sessionCookieFrom(response),
-      csrf: body.csrfToken,
       deviceId: body.deviceId,
     };
   };
@@ -293,8 +281,8 @@ async function startHarness(
   const owner = toSession(
     await request({
       method: "POST",
-      path: "/api/auth/bootstrap",
-      body: { setupToken, passphrase: PASSPHRASE, deviceLabel: "Laptop" },
+      path: "/api/auth/pairings/redeem",
+      body: { code: server.store.createPairing().code, deviceLabel: "Laptop" },
     }),
   );
 
@@ -456,7 +444,7 @@ function isTaskState(state: string, status?: string) {
 }
 
 describe("assistant workspace routes", () => {
-  it("streams a turn, resumes an approval after reauthentication, and reconnects", async () => {
+  it("streams a turn, resumes an approval, and reconnects", async () => {
     const harness = await startHarness();
     const { owner, request } = harness;
 
@@ -535,26 +523,8 @@ describe("assistant workspace routes", () => {
       body: { error: "interaction_pending" },
     });
 
+    // A paired device answers approvals without proving anything again.
     harness.clock.value += 6 * 60 * 1000;
-    await expect(
-      request({
-        method: "POST",
-        path: `${base}/interaction`,
-        session: owner,
-        body: decision,
-      }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "reauthentication_required" },
-    });
-    await expect(
-      request({
-        method: "POST",
-        path: "/api/auth/reauthenticate",
-        session: owner,
-        body: { passphrase: PASSPHRASE },
-      }),
-    ).resolves.toMatchObject({ status: 204 });
     await expect(
       request({
         method: "POST",
@@ -1074,7 +1044,7 @@ describe("assistant workspace routes", () => {
     });
   });
 
-  it("approves a child's write only after reauthentication", async () => {
+  it("approves a child's write only when the owner says so", async () => {
     // The parent is autonomous; its child still asks.
     const harness = await startHarness({ approvalModes: true });
     const { owner, request } = harness;
@@ -1142,22 +1112,6 @@ describe("assistant workspace routes", () => {
         body,
       });
 
-    harness.clock.value += 6 * 60 * 1000;
-    await expect(
-      approve({
-        interactionId: agent.approval.interactionId,
-        decision: "allow",
-      }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "reauthentication_required" },
-    });
-    await request({
-      method: "POST",
-      path: "/api/auth/reauthenticate",
-      session: owner,
-      body: { passphrase: PASSPHRASE },
-    });
     await expect(
       approve({ interactionId: "not-the-pending-one", decision: "allow" }),
     ).resolves.toMatchObject({
@@ -1483,8 +1437,7 @@ describe("assistant workspace routes", () => {
     });
     await harness.routes.whenIdle("home", sessionId);
 
-    // Asking needs no reauthentication and applies to the next tool call.
-    harness.clock.value += 6 * 60 * 1000;
+    // Switching applies to the next tool call.
     await expect(
       request({
         method: "POST",
@@ -1514,24 +1467,7 @@ describe("assistant workspace routes", () => {
       ),
     ).toBe("ask");
 
-    // Going back to autonomous widens authority: it needs a recent sign-in.
-    await expect(
-      request({
-        method: "POST",
-        path: `${base}/approval-mode`,
-        session: owner,
-        body: { mode: "autonomous" },
-      }),
-    ).resolves.toMatchObject({
-      status: 401,
-      body: { error: "reauthentication_required" },
-    });
-    await request({
-      method: "POST",
-      path: "/api/auth/reauthenticate",
-      session: owner,
-      body: { passphrase: PASSPHRASE },
-    });
+    // Any signed-in device can switch back to autonomous.
     await expect(
       request({
         method: "POST",
@@ -1670,28 +1606,8 @@ describe("assistant workspace routes", () => {
     const harness = await startHarness();
     const { base, decision } = await suspendForApproval(harness);
 
-    // The reauthentication window lapses while the body is in flight.
-    const lapsed = harness.stalled(
-      harness.owner,
-      `${base}/interaction`,
-      decision,
-    );
-    await delay(200);
-    harness.clock.value += 6 * 60 * 1000;
-    lapsed.finish();
-    await expect(lapsed.response).resolves.toMatchObject({
-      status: 401,
-      body: { error: "reauthentication_required" },
-    });
-
     // A paired device's stalled approval stops as soon as it is revoked,
     // without waiting for the client to finish sending.
-    await harness.request({
-      method: "POST",
-      path: "/api/auth/reauthenticate",
-      session: harness.owner,
-      body: { passphrase: PASSPHRASE },
-    });
     const { code } = (
       await harness.request({
         method: "POST",
@@ -1720,6 +1636,20 @@ describe("assistant workspace routes", () => {
 
     await expect(readPending(harness, base)).resolves.toMatchObject({
       interactionRevision: decision.interactionRevision,
+    });
+
+    // The session expires while the body is in flight.
+    const lapsed = harness.stalled(
+      harness.owner,
+      `${base}/interaction`,
+      decision,
+    );
+    await delay(200);
+    harness.clock.value += 8 * 24 * 60 * 60 * 1000;
+    lapsed.finish();
+    await expect(lapsed.response).resolves.toMatchObject({
+      status: 401,
+      body: { error: "authentication_required" },
     });
     await expect(
       fs.access(path.join(harness.projectRoot, "note.txt")),

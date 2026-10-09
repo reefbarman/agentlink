@@ -1,9 +1,8 @@
-import { randomInt, randomUUID, timingSafeEqual } from "crypto";
-
 import type {
   BrowserGatewayPairingStatusKind,
   BrowserGatewayPairingStatusResponse,
 } from "../protocol.js";
+import { randomInt, randomUUID, timingSafeEqual } from "crypto";
 
 export interface PairingCreateOptions {
   /** Optional label applied to the device when the code is consumed. */
@@ -127,7 +126,8 @@ export class PairingBroker {
       return { ok: false, reason: "rate_limited" };
     }
 
-    const trimmed = code.trim();
+    // Codes may be typed as shown, grouped like "123 456".
+    const trimmed = code.replace(/\s+/g, "");
     if (!/^\d{6}$/.test(trimmed)) {
       this.recordFailure(remoteAddress);
       return { ok: false, reason: "invalid_code" };

@@ -65,42 +65,141 @@ if (!customOutput) {
 }
 await mkdir(path.dirname(output), { recursive: true });
 
-// The web app is embedded in the server bundle (the container image only
-// receives this one file) and served from fixed paths; see webAssets.ts.
-const webRoot = path.join(root, "web");
-const webApp = await esbuild.build({
-  entryPoints: [path.join(webRoot, "src", "main.ts")],
+// The web app is the shared Ask Agent browser UI from the VS Code browser
+// gateway, built here with the same options. It is embedded in the server
+// bundle (the container image only receives this one file) and served from
+// the same fixed paths as the gateway helper; see webAssets.ts. The page
+// itself is rendered per request with its boot configuration.
+const repoRoot = path.resolve(root, "..", "..");
+const webOutdir = path.join(root, ".web-build");
+const CONTENT_TYPES = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".ttf": "font/ttf",
+  ".svg": "image/svg+xml; charset=utf-8",
+  ".png": "image/png",
+};
+const BINARY_EXTENSIONS = new Set([".ttf", ".png"]);
+const webviewOptions = {
+  absWorkingDir: repoRoot,
   bundle: true,
+  outdir: webOutdir,
   format: "esm",
   platform: "browser",
-  target: ["es2022", "safari16", "chrome110", "firefox110"],
+  target: "es2022",
+  sourcemap: false,
+  keepNames: true,
   minify: true,
   legalComments: "none",
+  assetNames: "[name]",
+  loader: { ".ttf": "file" },
+  jsx: "automatic",
+  jsxImportSource: "preact",
+  define: { __DEV_BUILD__: "false" },
   write: false,
-});
-const webFile = (name) => readFile(path.join(webRoot, name), "utf8");
-const webAssets = {
-  "/": {
-    contentType: "text/html; charset=utf-8",
-    body: await webFile("index.html"),
-  },
-  "/app.js": {
-    contentType: "text/javascript; charset=utf-8",
-    body: webApp.outputFiles[0].text,
-  },
-  "/app.css": {
-    contentType: "text/css; charset=utf-8",
-    body: await webFile("app.css"),
-  },
-  "/icon.svg": {
-    contentType: "image/svg+xml",
-    body: await webFile("icon.svg"),
-  },
-  "/manifest.webmanifest": {
-    contentType: "application/manifest+json",
-    body: await webFile("manifest.webmanifest"),
+};
+// The diff viewer's Monaco editor is a separate, optional bundle that this
+// server does not ship (it has no diff surface); keep the import external.
+const browserMonacoExternalPlugin = {
+  name: "browser-monaco-external",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/browserMonaco$/ }, (args) => {
+      if (!args.importer.endsWith("BrowserDiffViewer.tsx")) return undefined;
+      return { path: "/browser-gateway-monaco.js", external: true };
+    });
   },
 };
+const [gatewayApp, notificationsWorker] = await Promise.all([
+  esbuild.build({
+    ...webviewOptions,
+    entryPoints: ["src/browser-gateway/webview/index.tsx"],
+    entryNames: "browser-gateway",
+    chunkNames: "browser-gateway-chunks/[name]-[hash]",
+    splitting: true,
+    plugins: [browserMonacoExternalPlugin],
+  }),
+  esbuild.build({
+    ...webviewOptions,
+    entryPoints: [
+      "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
+    ],
+    entryNames: "browser-gateway-notifications",
+  }),
+]);
+const webAssets = {};
+const addAsset = (urlPath, contents, options = {}) => {
+  const extension = path.extname(urlPath);
+  const contentType = CONTENT_TYPES[extension];
+  if (!contentType) throw new Error(`No content type for web asset ${urlPath}`);
+  const binary = BINARY_EXTENSIONS.has(extension);
+  webAssets[urlPath] = {
+    contentType,
+    body: Buffer.from(contents).toString(binary ? "base64" : "utf8"),
+    ...(binary ? { encoding: "base64" } : {}),
+    ...(options.immutable ? { immutable: true } : {}),
+  };
+};
+for (const file of [
+  ...gatewayApp.outputFiles,
+  ...notificationsWorker.outputFiles,
+]) {
+  const urlPath = `/${path.relative(webOutdir, file.path).split(path.sep).join("/")}`;
+  addAsset(urlPath, file.contents, {
+    immutable: urlPath.startsWith("/browser-gateway-chunks/"),
+  });
+}
+const repoFile = (...segments) => readFile(path.join(repoRoot, ...segments));
+addAsset(
+  "/codicon.css",
+  await repoFile("node_modules", "@vscode", "codicons", "dist", "codicon.css"),
+);
+addAsset(
+  "/codicon.ttf",
+  await repoFile("node_modules", "@vscode", "codicons", "dist", "codicon.ttf"),
+);
+const icon = await repoFile("media", "icon.png");
+for (const iconPath of ["/agentlink-icon.png", "/apple-touch-icon.png"]) {
+  addAsset(iconPath, icon);
+}
+webAssets["/favicon.ico"] = { ...webAssets["/agentlink-icon.png"] };
+addAsset(
+  "/agentlink-icon.svg",
+  await repoFile("media", "agentlink-terminal.svg"),
+);
+webAssets["/site.webmanifest"] = {
+  contentType: "application/manifest+json",
+  body: JSON.stringify({
+    name: "AgentLink Assistant",
+    short_name: "AgentLink",
+    description: "Your self-hosted AgentLink assistant.",
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    background_color: "#1e1e1e",
+    theme_color: "#4EC9B0",
+    icons: [
+      {
+        src: "/agentlink-icon.svg",
+        sizes: "any",
+        type: "image/svg+xml",
+        purpose: "any",
+      },
+      {
+        src: "/agentlink-icon.png",
+        sizes: "256x256",
+        type: "image/png",
+        purpose: "any",
+      },
+    ],
+  }),
+};
+for (const required of [
+  "/browser-gateway.js",
+  "/browser-gateway.css",
+  "/browser-gateway-notifications.js",
+]) {
+  if (!webAssets[required]) throw new Error(`Web build is missing ${required}`);
+}
 
 const build = await esbuild.build({
   entryPoints: [path.join(root, "src", "main.ts")],

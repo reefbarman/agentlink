@@ -124,6 +124,64 @@ export interface CreateAssistantWorkspaceRoutesOptions {
   readonly approvalModes?: SessionApprovalModes;
 }
 
+/**
+ * Programmatic session operations with the same authorization, state checks,
+ * and event publication as the HTTP routes, for in-process surfaces such as
+ * the shared Ask Agent UI. Failures are `HttpError`s.
+ */
+export interface AssistantSessionOperations {
+  /** The event hub key for one project session. */
+  sessionKey(projectId: string, sessionId: string): string;
+  listSessions(
+    auth: AssistantServerAuth,
+    projectId: string,
+  ): Promise<
+    ReadonlyArray<{ readonly sessionId: string; readonly updatedAt: number }>
+  >;
+  readSession(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+  ): Promise<{
+    readonly messages: readonly unknown[];
+    readonly model: AgentModelReference;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+  }>;
+  createSession(
+    auth: AssistantServerAuth,
+    projectId: string,
+    model?: AgentModelReference,
+  ): Promise<{ readonly sessionId: string }>;
+  setModel(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    model: AgentModelReference,
+  ): Promise<void>;
+  startTurn(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    text: string,
+  ): Promise<{ readonly taskId: string }>;
+  answerInteraction(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    answer: {
+      readonly interactionId: string;
+      readonly interactionRevision: string;
+      readonly decision: "allow" | "deny";
+    },
+  ): Promise<{ readonly taskId: string }>;
+  cancel(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void>;
+}
+
 export interface AssistantWorkspaceRoutes {
   readonly handleRequest: (
     request: IncomingMessage,
@@ -131,6 +189,7 @@ export interface AssistantWorkspaceRoutes {
     auth: AssistantServerAuth,
   ) => Promise<boolean>;
   readonly events: SessionEventHub;
+  readonly operations: AssistantSessionOperations;
   /**
    * Tell clients of the parent session that a background child is waiting
    * for approval. Wire to the host's `background.onApprovalAvailable`.
@@ -374,18 +433,176 @@ export function createAssistantWorkspaceRoutes(
   /**
    * Final server-side check immediately before a mutation takes effect. The
    * request-time auth snapshot can be stale after a slow body or snapshot
-   * read: the session may since have been revoked, or (for approvals) the
-   * reauthentication window may have lapsed.
+   * read: the session or its device may since have been revoked.
    */
-  const assertStillAuthorized = async (
-    auth: AssistantServerAuth,
-    requireRecent: boolean,
-  ) => {
+  const assertStillAuthorized = async (auth: AssistantServerAuth) => {
     const current = await auth.revalidate();
     if (!current.valid) throw new HttpError(401, "authentication_required");
-    if (requireRecent && !current.recentlyAuthenticated) {
-      throw new HttpError(401, "reauthentication_required");
+  };
+
+  /** A foreground session that is idle and has no pending approval. */
+  const assertRunnable = async (
+    mount: AssistantProjectMount,
+    sessionId: string,
+  ) => {
+    if (mount.host.isBackgroundSession(sessionId)) {
+      throw new HttpError(404, "session_not_found");
     }
+    const snapshot = projectEmbeddedAgentSessionSnapshot(
+      await readSnapshot(mount, sessionId),
+    );
+    if (snapshot.pendingInteraction) {
+      throw new HttpError(409, "interaction_pending");
+    }
+    // Matches the engine: an interrupted (cancelled, failed, or recovered)
+    // turn leaves the session runnable.
+    if (snapshot.phase !== "idle" && snapshot.phase !== "interrupted") {
+      throw new HttpError(409, "session_busy");
+    }
+  };
+
+  const assertSessionId = (sessionId: string) => {
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      throw new HttpError(404, "session_not_found");
+    }
+  };
+
+  const assertAvailableModel = (model: AgentModelReference) => {
+    if (!isAvailable(model)) throw new HttpError(400, "model_not_available");
+  };
+
+  const operations: AssistantSessionOperations = {
+    sessionKey,
+    async listSessions(auth, projectId) {
+      const mount = await authorize(auth, projectId, "read");
+      return (await mount.host.listSessions())
+        .filter((session) => !mount.host.isBackgroundSession(session.sessionId))
+        .map((session) => ({
+          sessionId: session.sessionId,
+          updatedAt: session.updatedAt,
+        }));
+    },
+    async readSession(auth, projectId, sessionId) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "read");
+      const { record } = await readSnapshot(mount, sessionId);
+      return {
+        messages: record.messages,
+        model: effectiveModel(record.selectedModel),
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      };
+    },
+    async createSession(auth, projectId, model) {
+      const mount = await authorize(auth, projectId, "write");
+      if (model) assertAvailableModel(model);
+      if (closing) throw new HttpError(503, "server_closing");
+      await assertStillAuthorized(auth);
+      const created = await mount.host.createSession(
+        model ? { model: { ...model } } : undefined,
+      );
+      return { sessionId: created.sessionId };
+    },
+    async setModel(auth, projectId, sessionId, model) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "write");
+      assertAvailableModel(model);
+      const key = sessionKey(projectId, sessionId);
+      assertStartable(key);
+      await assertRunnable(mount, sessionId);
+      await assertStillAuthorized(auth);
+      assertStartable(key);
+      try {
+        await mount.host.setSessionModel(sessionId, {
+          providerId: model.providerId,
+          modelId: model.modelId,
+        });
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "session_not_found") {
+          throw new HttpError(404, "session_not_found");
+        }
+        if (
+          code === "session_busy" ||
+          code === "turn_lease_held" ||
+          code === "turn_lease_lost" ||
+          code === "session_revision_conflict"
+        ) {
+          throw new HttpError(409, "session_busy");
+        }
+        throw error;
+      }
+    },
+    async startTurn(auth, projectId, sessionId, text) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "write");
+      if (!text.trim() || text.length > MAX_TURN_TEXT_LENGTH) {
+        throw new HttpError(400, "text_invalid");
+      }
+      const key = sessionKey(projectId, sessionId);
+      assertStartable(key);
+      await assertRunnable(mount, sessionId);
+      await assertStillAuthorized(auth);
+      assertStartable(key);
+      const taskId = startTask(
+        projectId,
+        sessionId,
+        "turn",
+        auth,
+        (signal, onEvent) =>
+          mount.host.runTurn(sessionId, text, { signal, onEvent }),
+        text,
+      );
+      return { taskId };
+    },
+    async answerInteraction(auth, projectId, sessionId, answer) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "approve");
+      const { interactionId, interactionRevision, decision } = answer;
+      if (decision !== "allow" && decision !== "deny") {
+        throw new HttpError(400, "decision_invalid");
+      }
+      const key = sessionKey(projectId, sessionId);
+      assertStartable(key);
+      const pending = (await readSnapshot(mount, sessionId)).pendingInteraction;
+      // Bind the decision to the exact request the owner saw.
+      if (
+        !pending ||
+        pending.request.interactionId !== interactionId ||
+        pending.interactionRevision !== interactionRevision
+      ) {
+        throw new HttpError(409, "stale_interaction");
+      }
+      await assertStillAuthorized(auth);
+      assertStartable(key);
+      const taskId = startTask(
+        projectId,
+        sessionId,
+        "resume",
+        auth,
+        (signal, onEvent) =>
+          // The host re-checks this binding and passes it to the engine's
+          // atomic resume, so the decision cannot reach a replacement.
+          mount.host.resumeInteraction(sessionId, decision, {
+            signal,
+            onEvent,
+            expected: { interactionId, interactionRevision },
+          }),
+      );
+      return { taskId };
+    },
+    async cancel(auth, projectId, sessionId) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "write");
+      await assertStillAuthorized(auth);
+      const task = tasks.get(sessionKey(projectId, sessionId));
+      if (task) {
+        task.controller.abort(new Error("cancelled_by_owner"));
+      } else {
+        await readSnapshot(mount, sessionId);
+        await mount.host.cancel(sessionId, "cancelled_by_owner");
+      }
+    },
   };
 
   const handleRequest = async (
@@ -475,16 +692,12 @@ export function createAssistantWorkspaceRoutes(
         return true;
       }
       if (method === "POST") {
-        const mount = await authorize(auth, projectId, "write");
+        await authorize(auth, projectId, "write");
         // The body is optional: no body creates a default-model session.
         const model = hasRequestBody(request)
           ? requestedModel(await readJsonBody(request, undefined, auth.signal))
           : undefined;
-        if (closing) throw new HttpError(503, "server_closing");
-        await assertStillAuthorized(auth, false);
-        const created = await mount.host.createSession(
-          model ? { model } : undefined,
-        );
+        const created = await operations.createSession(auth, projectId, model);
         sendJson(response, 201, {
           sessionId: created.sessionId,
           model: effectiveModel(model),
@@ -542,40 +755,17 @@ export function createAssistantWorkspaceRoutes(
     if (method !== "POST") throw new HttpError(405, "method_not_allowed");
 
     if (operation === "turns") {
-      const mount = await authorize(auth, projectId, "write");
+      await authorize(auth, projectId, "write");
       const body = await readJsonBody(
         request,
         MAX_TURN_BODY_BYTES,
         auth.signal,
       );
       const text = stringField(body, "text");
-      if (!text.trim() || text.length > MAX_TURN_TEXT_LENGTH) {
-        throw new HttpError(400, "text_invalid");
-      }
-      assertStartable(key);
-      if (mount.host.isBackgroundSession(sessionId)) {
-        throw new HttpError(404, "session_not_found");
-      }
-      const snapshot = projectEmbeddedAgentSessionSnapshot(
-        await readSnapshot(mount, sessionId),
-      );
-      if (snapshot.pendingInteraction) {
-        throw new HttpError(409, "interaction_pending");
-      }
-      // Matches the engine: an interrupted (cancelled, failed, or recovered)
-      // turn leaves the session runnable.
-      if (snapshot.phase !== "idle" && snapshot.phase !== "interrupted") {
-        throw new HttpError(409, "session_busy");
-      }
-      await assertStillAuthorized(auth, false);
-      assertStartable(key);
-      const taskId = startTask(
+      const { taskId } = await operations.startTurn(
+        auth,
         projectId,
         sessionId,
-        "turn",
-        auth,
-        (signal, onEvent) =>
-          mount.host.runTurn(sessionId, text, { signal, onEvent }),
         text,
       );
       sendJson(response, 202, { taskId });
@@ -583,10 +773,7 @@ export function createAssistantWorkspaceRoutes(
     }
 
     if (operation === "interaction") {
-      const mount = await authorize(auth, projectId, "approve");
-      if (!auth.recentlyAuthenticated) {
-        throw new HttpError(401, "reauthentication_required");
-      }
+      await authorize(auth, projectId, "approve");
       const body = await readJsonBody(request, undefined, auth.signal);
       const interactionId = stringField(body, "interactionId");
       const interactionRevision = stringField(body, "interactionRevision");
@@ -594,73 +781,23 @@ export function createAssistantWorkspaceRoutes(
       if (decision !== "allow" && decision !== "deny") {
         throw new HttpError(400, "decision_invalid");
       }
-      assertStartable(key);
-      const pending = (await readSnapshot(mount, sessionId)).pendingInteraction;
-      // Bind the decision to the exact request the owner saw.
-      if (
-        !pending ||
-        pending.request.interactionId !== interactionId ||
-        pending.interactionRevision !== interactionRevision
-      ) {
-        throw new HttpError(409, "stale_interaction");
-      }
-      await assertStillAuthorized(auth, true);
-      assertStartable(key);
-      const taskId = startTask(
+      await assertStillAuthorized(auth);
+      const { taskId } = await operations.answerInteraction(
+        auth,
         projectId,
         sessionId,
-        "resume",
-        auth,
-        (signal, onEvent) =>
-          // The host re-checks this binding and passes it to the engine's
-          // atomic resume, so the decision cannot reach a replacement.
-          mount.host.resumeInteraction(sessionId, decision, {
-            signal,
-            onEvent,
-            expected: { interactionId, interactionRevision },
-          }),
+        { interactionId, interactionRevision, decision },
       );
       sendJson(response, 202, { taskId });
       return true;
     }
 
     if (operation === "model") {
-      const mount = await authorize(auth, projectId, "write");
+      await authorize(auth, projectId, "write");
       const body = await readJsonBody(request, undefined, auth.signal);
       const model = requestedModel(body);
       if (!model) throw new HttpError(400, "model_required");
-      assertStartable(key);
-      if (mount.host.isBackgroundSession(sessionId)) {
-        throw new HttpError(404, "session_not_found");
-      }
-      const snapshot = projectEmbeddedAgentSessionSnapshot(
-        await readSnapshot(mount, sessionId),
-      );
-      if (snapshot.pendingInteraction) {
-        throw new HttpError(409, "interaction_pending");
-      }
-      if (snapshot.phase !== "idle" && snapshot.phase !== "interrupted") {
-        throw new HttpError(409, "session_busy");
-      }
-      await assertStillAuthorized(auth, false);
-      assertStartable(key);
-      try {
-        await mount.host.setSessionModel(sessionId, model);
-      } catch (error) {
-        const code = errorCode(error);
-        if (code === "session_not_found") {
-          throw new HttpError(404, "session_not_found");
-        }
-        if (
-          code === "session_busy" ||
-          code === "turn_lease_held" ||
-          code === "turn_lease_lost" ||
-          code === "session_revision_conflict"
-        ) {
-          throw new HttpError(409, "session_busy");
-        }
-        throw error;
-      }
+      await operations.setModel(auth, projectId, sessionId, model);
       sendJson(response, 200, { model: effectiveModel(model) });
       return true;
     }
@@ -678,16 +815,11 @@ export function createAssistantWorkspaceRoutes(
       if (!options.approvalModes) {
         throw new HttpError(409, "approval_mode_unavailable");
       }
-      // Autonomy widens what the session may do without the owner.
-      const widening = mode === "autonomous";
-      if (widening && !auth.recentlyAuthenticated) {
-        throw new HttpError(401, "reauthentication_required");
-      }
       if (mount.host.isBackgroundSession(sessionId)) {
         throw new HttpError(404, "session_not_found");
       }
       await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth, widening);
+      await assertStillAuthorized(auth);
       await options.approvalModes.set(
         projectId,
         sessionId,
@@ -700,15 +832,7 @@ export function createAssistantWorkspaceRoutes(
     }
 
     // operation === "cancel"
-    const mount = await authorize(auth, projectId, "write");
-    await assertStillAuthorized(auth, false);
-    const task = tasks.get(key);
-    if (task) {
-      task.controller.abort(new Error("cancelled_by_owner"));
-    } else {
-      await readSnapshot(mount, sessionId);
-      await mount.host.cancel(sessionId, "cancelled_by_owner");
-    }
+    await operations.cancel(auth, projectId, sessionId);
     sendJson(response, 202, { cancelled: true });
     return true;
   };
@@ -779,7 +903,7 @@ export function createAssistantWorkspaceRoutes(
       }
       if (closing) throw new HttpError(503, "server_closing");
       await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth, false);
+      await assertStillAuthorized(auth);
       const result = await callAgent(() =>
         mount.host.steerBackgroundAgent({ ...target, message }),
       );
@@ -811,7 +935,7 @@ export function createAssistantWorkspaceRoutes(
         }
       }
       await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth, false);
+      await assertStillAuthorized(auth);
       const agent = await callAgent(() =>
         mount.host.stopBackgroundAgent({
           ...target,
@@ -830,9 +954,6 @@ export function createAssistantWorkspaceRoutes(
 
     // operation === "approval": same bar as a foreground approval.
     const mount = await authorize(auth, projectId, "approve");
-    if (!auth.recentlyAuthenticated) {
-      throw new HttpError(401, "reauthentication_required");
-    }
     const body = await readJsonBody(request, undefined, auth.signal);
     const interactionId = stringField(body, "interactionId");
     const decision = stringField(body, "decision");
@@ -841,7 +962,7 @@ export function createAssistantWorkspaceRoutes(
     }
     if (closing) throw new HttpError(503, "server_closing");
     await readSnapshot(mount, sessionId);
-    await assertStillAuthorized(auth, true);
+    await assertStillAuthorized(auth);
     // The supervisor binds the decision to this exact pending interaction.
     const agent = await callAgent(() =>
       mount.host.respondToBackgroundApproval({
@@ -987,6 +1108,7 @@ export function createAssistantWorkspaceRoutes(
   return {
     handleRequest,
     events: hub,
+    operations,
     notifyAgentApproval({ projectId, parentSessionId, childSessionId }) {
       if (!projects.has(projectId)) return;
       hub.publish(sessionKey(projectId, parentSessionId), {

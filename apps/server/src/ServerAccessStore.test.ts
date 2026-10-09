@@ -1,8 +1,7 @@
 import {
+  MAX_FAILED_PAIRING_ATTEMPTS,
   ServerAccessStore,
-  csrfTokenForSession,
-  issueLocalRecoveryCredential,
-  verifyCsrfToken,
+  issueLocalPairingCode,
 } from "./ServerAccessStore.js";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -10,7 +9,6 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const PASSPHRASE = "correct horse battery staple";
 const DAY = 24 * 60 * 60 * 1000;
 
 const roots: string[] = [];
@@ -27,25 +25,65 @@ async function openStore(clock: { value: number }, dataRoot?: string) {
   const store = await ServerAccessStore.open({
     dataRoot: root,
     now: () => clock.value,
-    passphraseCost: { N: 1024, r: 8, p: 1 },
   });
   return { store, root };
 }
 
-async function bootstrapped(clock: { value: number }) {
+/** A store with one device signed in through a pairing code. */
+async function paired(clock: { value: number }) {
   const { store, root } = await openStore(clock);
-  const { token } = await store.issueSetupCredential();
-  const issued = await store.bootstrapOwner({
-    setupToken: token,
-    passphrase: PASSPHRASE,
-  });
+  const { code } = store.createPairing();
+  const issued = await store.redeemPairing({ code, deviceLabel: "Laptop" });
   return { store, root, issued };
 }
 
 describe("server access store", () => {
-  it("fails closed on a corrupt state file instead of reopening bootstrap", async () => {
+  it("creates the owner on first open and keeps it across restarts", async () => {
     const clock = { value: Date.now() };
-    const { store, root } = await bootstrapped(clock);
+    const { store, root } = await openStore(clock);
+    const ownerId = store.ownerId;
+    expect(store.hasActiveDevices).toBe(false);
+    await store.close();
+    const reopened = await openStore(clock, root);
+    expect(reopened.store.ownerId).toBe(ownerId);
+    await reopened.store.close();
+  });
+
+  it("migrates passphrase-era state, dropping secrets but keeping devices", async () => {
+    const clock = { value: Date.now() };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "access-store-"));
+    roots.push(root);
+    const { store } = await openStore(clock, root);
+    const { code } = store.createPairing();
+    const issued = await store.redeemPairing({ code });
+    const ownerId = store.ownerId;
+    await store.close();
+
+    // Rewrite the file in the old shape: passphrase, setup, authenticatedAt.
+    const file = path.join(root, "access-state.json");
+    const state = JSON.parse(await fs.readFile(file, "utf8"));
+    state.owner.passphrase = { hash: "old", salt: "old" };
+    state.setup = { tokenHash: "old", expiresAt: 1 };
+    state.sessions[0].authenticatedAt = clock.value;
+    state.sessions.push({ ...state.sessions[0], revokedAt: clock.value });
+    await fs.writeFile(file, JSON.stringify(state));
+
+    const migrated = await openStore(clock, root);
+    expect(migrated.store.ownerId).toBe(ownerId);
+    await expect(
+      migrated.store.authenticate(issued.token),
+    ).resolves.toMatchObject({ ok: true });
+    const written = await fs.readFile(file, "utf8");
+    expect(written).not.toContain("passphrase");
+    expect(written).not.toContain("setup");
+    expect(written).not.toContain("authenticatedAt");
+    expect(JSON.parse(written).sessions).toHaveLength(1);
+    await migrated.store.close();
+  });
+
+  it("fails closed on a corrupt state file instead of starting fresh", async () => {
+    const clock = { value: Date.now() };
+    const { store, root } = await paired(clock);
     await store.close();
     await fs.writeFile(path.join(root, "access-state.json"), "{not json");
     await expect(openStore(clock, root)).rejects.toMatchObject({
@@ -60,27 +98,113 @@ describe("server access store", () => {
     });
   });
 
-  it("expires setup credentials and refuses to reissue after bootstrap", async () => {
+  it("redeems a pairing code once, then it is gone", async () => {
+    const clock = { value: Date.now() };
+    const { store, issued } = await paired(clock);
+    expect(issued.session.deviceLabel).toBe("Laptop");
+    expect(store.hasActiveDevices).toBe(true);
+    await expect(store.authenticate(issued.token)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    const { code } = store.createPairing();
+    // Spaces and dashes are accepted, as typed from "123 456".
+    const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
+    const results = await Promise.allSettled([
+      store.redeemPairing({ code: spaced }),
+      store.redeemPairing({ code }),
+    ]);
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    await expect(store.redeemPairing({ code })).rejects.toMatchObject({
+      code: "invalid_pairing_code",
+    });
+  });
+
+  it("expires pairing codes and limits how many are outstanding", async () => {
     const clock = { value: Date.now() };
     const { store } = await openStore(clock);
-    const { token } = await store.issueSetupCredential();
-    clock.value += 15 * 60 * 1000;
+    const { code } = store.createPairing();
+    clock.value += 5 * 60 * 1000;
+    await expect(store.redeemPairing({ code })).rejects.toMatchObject({
+      code: "invalid_pairing_code",
+    });
+    for (let index = 0; index < 5; index += 1) store.createPairing();
+    expect(() => store.createPairing()).toThrow(
+      expect.objectContaining({ code: "pairing_limit_reached" }),
+    );
+  });
+
+  it("withdraws every code after too many wrong guesses", async () => {
+    const clock = { value: Date.now() };
+    const { store, root } = await openStore(clock);
+    const { code } = store.createPairing();
+    const local = await issueLocalPairingCode({
+      dataRoot: root,
+      now: () => clock.value,
+    });
+    const wrong = code === "000000" ? "000001" : "000000";
+    for (let index = 0; index < MAX_FAILED_PAIRING_ATTEMPTS; index += 1) {
+      await expect(store.redeemPairing({ code: wrong })).rejects.toMatchObject({
+        code: "invalid_pairing_code",
+      });
+    }
+    await expect(store.redeemPairing({ code })).rejects.toMatchObject({
+      code: "invalid_pairing_code",
+    });
     await expect(
-      store.bootstrapOwner({ setupToken: token, passphrase: PASSPHRASE }),
-    ).rejects.toMatchObject({ code: "invalid_setup_credential" });
-    const fresh = await store.issueSetupCredential();
-    await store.bootstrapOwner({
-      setupToken: fresh.token,
-      passphrase: PASSPHRASE,
-    });
-    await expect(store.issueSetupCredential()).rejects.toMatchObject({
-      code: "owner_exists",
-    });
+      store.redeemPairing({ code: local.code }),
+    ).rejects.toMatchObject({ code: "invalid_pairing_code" });
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps every code blocked until the local code can be withdrawn",
+    async () => {
+      const clock = { value: Date.now() };
+      const { store, root } = await openStore(clock);
+      const local = await issueLocalPairingCode({
+        dataRoot: root,
+        now: () => clock.value,
+      });
+      const wrong = local.code === "000000" ? "000001" : "000000";
+      // A read-only directory makes removing the local code fail.
+      await fs.chmod(root, 0o500);
+      try {
+        for (let index = 1; index < MAX_FAILED_PAIRING_ATTEMPTS; index += 1) {
+          await expect(
+            store.redeemPairing({ code: wrong }),
+          ).rejects.toMatchObject({ code: "invalid_pairing_code" });
+        }
+        await expect(store.redeemPairing({ code: wrong })).rejects.toThrow();
+        // Even the right code is refused while the withdrawal is unfinished.
+        await expect(
+          store.redeemPairing({ code: local.code }),
+        ).rejects.toThrow();
+      } finally {
+        await fs.chmod(root, 0o700);
+      }
+      await expect(
+        store.redeemPairing({ code: local.code }),
+      ).rejects.toMatchObject({ code: "invalid_pairing_code" });
+      await expect(
+        fs.stat(path.join(root, "local-pairing.json")),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("rejects malformed device labels", async () => {
+    const clock = { value: Date.now() };
+    const { store } = await openStore(clock);
+    const { code } = store.createPairing();
+    await expect(
+      store.redeemPairing({ code, deviceLabel: "bad\nlabel" }),
+    ).rejects.toMatchObject({ code: "invalid_label" });
   });
 
   it("applies idle and absolute session expiry", async () => {
     const clock = { value: Date.now() };
-    const { store, issued } = await bootstrapped(clock);
+    const { store, issued } = await paired(clock);
     clock.value += 6 * DAY;
     await expect(store.authenticate(issued.token)).resolves.toMatchObject({
       ok: true,
@@ -91,23 +215,44 @@ describe("server access store", () => {
       reason: "expired",
     });
 
-    const second = await bootstrappedSessionKeptAlive(clock);
-    await expect(second.store.authenticate(second.token)).resolves.toEqual({
+    const second = await paired(clock);
+    for (let day = 0; day < 30; day += 1) {
+      clock.value += DAY;
+      await second.store.authenticate(second.issued.token);
+    }
+    await expect(
+      second.store.authenticate(second.issued.token),
+    ).resolves.toEqual({ ok: false, reason: "expired" });
+  });
+
+  it("revokes a device and every session it holds", async () => {
+    const clock = { value: Date.now() };
+    const { store, issued } = await paired(clock);
+    const revoked: string[] = [];
+    store.onSessionsRevoked((ids) => revoked.push(...ids));
+    await expect(store.revokeDevice(issued.session.deviceId)).resolves.toBe(
+      true,
+    );
+    expect(revoked).toEqual([issued.session.sessionId]);
+    expect(store.hasActiveDevices).toBe(false);
+    await expect(store.authenticate(issued.token)).resolves.toMatchObject({
       ok: false,
-      reason: "expired",
     });
+    await expect(store.revokeDevice(issued.session.deviceId)).resolves.toBe(
+      false,
+    );
   });
 
   it("lets only one store own a data root and replaces stale locks", async () => {
     const clock = { value: Date.now() };
-    const { store, root } = await bootstrapped(clock);
+    const { store, root } = await paired(clock);
     await expect(openStore(clock, root)).rejects.toMatchObject({
       code: "access_state_locked",
     });
     await store.close();
     await expect(store.revokeSession("anything")).resolves.toBe(false);
     const reopened = await openStore(clock, root);
-    expect(reopened.store.ownerConfigured).toBe(true);
+    expect(reopened.store.hasActiveDevices).toBe(true);
     await reopened.store.close();
 
     // A lock left by a process that no longer exists does not block startup.
@@ -116,146 +261,66 @@ describe("server access store", () => {
       JSON.stringify({ pid: 2 ** 22 + 12_345, token: "stale" }),
     );
     const recovered = await openStore(clock, root);
-    expect(recovered.store.ownerConfigured).toBe(true);
+    expect(recovered.store.hasActiveDevices).toBe(true);
     await recovered.store.close();
     await expect(
       fs.stat(path.join(root, "access-state.lock")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("recovers access locally after the last device is revoked", async () => {
+  it("pairs from a local code while the server holds the lock", async () => {
     const clock = { value: Date.now() };
-    const { store, root, issued } = await bootstrapped(clock);
-    await expect(store.revokeDevice(issued.session.deviceId)).resolves.toBe(
-      true,
-    );
-    // Revoked sessions are pruned from disk, so the token is simply unknown.
-    await expect(store.authenticate(issued.token)).resolves.toMatchObject({
-      ok: false,
-    });
-
-    // The local command works while the server holds the data-root lock.
-    const { token } = await issueLocalRecoveryCredential({
+    const { store, root } = await openStore(clock);
+    const { code } = await issueLocalPairingCode({
       dataRoot: root,
       now: () => clock.value,
     });
-    const requestPath = path.join(root, "recovery-request.json");
+    expect(code).toMatch(/^[0-9]{6}$/u);
+    const requestPath = path.join(root, "local-pairing.json");
     expect((await fs.stat(requestPath)).mode & 0o777).toBe(0o600);
-    expect(await fs.readFile(requestPath, "utf8")).not.toContain(token);
+    expect(await fs.readFile(requestPath, "utf8")).not.toContain(code);
 
-    await expect(
-      store.redeemRecovery({ recoveryToken: token, passphrase: "wrong" }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
-    await expect(
-      store.redeemRecovery({
-        recoveryToken: "x".repeat(43),
-        passphrase: PASSPHRASE,
-      }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
-
-    // A wrong passphrase does not burn the code; success consumes it.
-    const recovered = await store.redeemRecovery({
-      recoveryToken: token,
-      passphrase: PASSPHRASE,
-      deviceLabel: "Recovered laptop",
-    });
-    expect(recovered.session.deviceLabel).toBe("Recovered laptop");
-    await expect(store.authenticate(recovered.token)).resolves.toMatchObject({
+    const issued = await store.redeemPairing({ code, deviceLabel: "Phone" });
+    await expect(store.authenticate(issued.token)).resolves.toMatchObject({
       ok: true,
     });
     await expect(fs.stat(requestPath)).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(
-      store.redeemRecovery({ recoveryToken: token, passphrase: PASSPHRASE }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+    await expect(store.redeemPairing({ code })).rejects.toMatchObject({
+      code: "invalid_pairing_code",
+    });
   });
 
-  it("expires, replaces, and rejects tampered recovery credentials", async () => {
+  it("expires, replaces, and ignores tampered local codes", async () => {
     const clock = { value: Date.now() };
-    const { store, root } = await bootstrapped(clock);
+    const { store, root } = await openStore(clock);
     const issue = () =>
-      issueLocalRecoveryCredential({ dataRoot: root, now: () => clock.value });
-    const requestPath = path.join(root, "recovery-request.json");
+      issueLocalPairingCode({ dataRoot: root, now: () => clock.value });
+    const requestPath = path.join(root, "local-pairing.json");
 
     const expired = await issue();
-    clock.value += 15 * 60 * 1000;
+    clock.value += 10 * 60 * 1000;
     await expect(
-      store.redeemRecovery({
-        recoveryToken: expired.token,
-        passphrase: PASSPHRASE,
-      }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
-    await expect(fs.stat(requestPath)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      store.redeemPairing({ code: expired.code }),
+    ).rejects.toMatchObject({ code: "invalid_pairing_code" });
 
     const replaced = await issue();
     const current = await issue();
-    await expect(
-      store.redeemRecovery({
-        recoveryToken: replaced.token,
-        passphrase: PASSPHRASE,
-      }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+    if (replaced.code !== current.code) {
+      await expect(
+        store.redeemPairing({ code: replaced.code }),
+      ).rejects.toMatchObject({ code: "invalid_pairing_code" });
+    }
 
     // A request file readable by others is ignored, not trusted.
     await fs.chmod(requestPath, 0o644);
     await expect(
-      store.redeemRecovery({
-        recoveryToken: current.token,
-        passphrase: PASSPHRASE,
-      }),
-    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+      store.redeemPairing({ code: current.code }),
+    ).rejects.toMatchObject({ code: "invalid_pairing_code" });
     await fs.chmod(requestPath, 0o600);
-
-    // Two concurrent redemptions of one code: exactly one succeeds.
-    const results = await Promise.allSettled([
-      store.redeemRecovery({
-        recoveryToken: current.token,
-        passphrase: PASSPHRASE,
-      }),
-      store.redeemRecovery({
-        recoveryToken: current.token,
-        passphrase: PASSPHRASE,
-      }),
-    ]);
-    expect(
-      results.filter((result) => result.status === "fulfilled"),
-    ).toHaveLength(1);
-  });
-
-  it("refuses local recovery before an owner exists or on corrupt state", async () => {
-    const clock = { value: Date.now() };
-    const { store, root } = await openStore(clock);
     await expect(
-      issueLocalRecoveryCredential({ dataRoot: root }),
-    ).rejects.toMatchObject({ code: "owner_missing" });
-    await expect(
-      issueLocalRecoveryCredential({ dataRoot: path.join(root, "missing") }),
-    ).rejects.toMatchObject({ code: "owner_missing" });
-    await store.close();
-    await fs.writeFile(path.join(root, "access-state.json"), "{not json");
-    await expect(
-      issueLocalRecoveryCredential({ dataRoot: root }),
-    ).rejects.toMatchObject({ code: "access_state_corrupt" });
-  });
-
-  it("binds CSRF tokens to one session token", () => {
-    const first = "a".repeat(43);
-    const second = "b".repeat(43);
-    expect(verifyCsrfToken(first, csrfTokenForSession(first))).toBe(true);
-    expect(verifyCsrfToken(first, csrfTokenForSession(second))).toBe(false);
-    expect(verifyCsrfToken(first, undefined)).toBe(false);
+      store.redeemPairing({ code: current.code }),
+    ).resolves.toMatchObject({ session: { deviceLabel: "Browser" } });
   });
 });
-
-/** Keep a session active daily until it passes the 30-day absolute limit. */
-async function bootstrappedSessionKeptAlive(clock: { value: number }) {
-  const { store, issued } = await bootstrapped(clock);
-  for (let day = 0; day < 30; day += 1) {
-    clock.value += DAY;
-    await store.authenticate(issued.token);
-  }
-  return { store, token: issued.token };
-}
