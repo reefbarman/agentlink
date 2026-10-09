@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.30.0
+
 - Fixed built-in foreground chats stopping immediately when Meridian or another provider reports a truncated response. AgentLink now preserves partial output and makes up to two continuation attempts without executing truncated tool calls or changing model settings. Persistent truncation is shown as paused; shared VS Code/browser warning cards no longer count terminal warnings as retries or infer recovery from bookkeeping rows alone.
 - Fixed Approve for Me commands failing before launch with `sandbox_unavailable` after the sandbox runtime's proxy-wrapper layout changed. Credential binding now matches the reviewed HTTP CONNECT and SOCKS URL counts in the packaged runtime. Missing or extra proxy URLs still fail closed; sandbox confinement, network approvals, and native recovery policy are unchanged.
 - Fixed browser gateway streaming getting stuck after retained event history expired or was evicted. Reconnecting or switching tabs could repeatedly load an old snapshot followed by updates with a sequence gap, leaving transcripts, questions, and tab statuses stale and causing flickering. The gateway now requests a fresh snapshot when its cached snapshot can no longer reconstruct the missing updates, then resumes the live subscription.

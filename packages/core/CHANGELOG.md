@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-10-09
+
+- In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.
+- Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.
+- send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.
+- Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.
+- Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.
+- Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.
+- Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.
+- Bumps the oxfmt formatter and applies formatting-only changes.
+- Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.
+
 ## 0.6.1 — 2026-10-07
 
 - The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.
