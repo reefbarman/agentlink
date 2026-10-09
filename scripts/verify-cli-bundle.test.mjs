@@ -32,7 +32,7 @@ async function fixture(root) {
       platform: "darwin-arm64",
       bundle: "agentlink.js",
       assets: { ripgrep: { path: "rg", sha256: digest("ripgrep") } },
-      runtimeDependencies: { "@napi-rs/keyring": "2.0.0" },
+      runtimeDependencies: { "@napi-rs/keyring": "2.1.0" },
       externalImports: ["@napi-rs/keyring"],
     }),
     LICENSE: "agentlink license",
@@ -45,12 +45,12 @@ async function fixture(root) {
     }),
     "dist/node_modules/@napi-rs/keyring/package.json": JSON.stringify({
       name: "@napi-rs/keyring",
-      version: "2.0.0",
+      version: "2.1.0",
     }),
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json":
       JSON.stringify({
         name: "@napi-rs/keyring-darwin-arm64",
-        version: "2.0.0",
+        version: "2.1.0",
       }),
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node":
       "addon",

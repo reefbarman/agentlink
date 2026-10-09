@@ -115,7 +115,7 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
     runtime.bundle !== "agentlink.js" ||
     runtime.assets?.ripgrep?.path !== "rg" ||
     runtime.assets.ripgrep.sha256 !== manifest.upstreamSha256.ripgrep ||
-    runtime.runtimeDependencies?.["@napi-rs/keyring"] !== "2.0.0" ||
+    runtime.runtimeDependencies?.["@napi-rs/keyring"] !== "2.1.0" ||
     runtime.externalImports
       ?.filter((name) => !name.startsWith("node:") && !importBuiltin(name))
       .join(",") !== "@napi-rs/keyring"
@@ -141,9 +141,9 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   );
   if (
     keyring.name !== "@napi-rs/keyring" ||
-    keyring.version !== "2.0.0" ||
+    keyring.version !== "2.1.0" ||
     addon.name !== "@napi-rs/keyring-darwin-arm64" ||
-    addon.version !== "2.0.0"
+    addon.version !== "2.1.0"
   ) {
     throw new Error("Unexpected Keychain runtime package versions.");
   }

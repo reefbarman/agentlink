@@ -96,7 +96,7 @@ export async function bundleCli() {
     sourceManifest.platform !== "darwin-arm64" ||
     sourceManifest.bundle !== "agentlink.js" ||
     sourceManifest.assets?.ripgrep?.path !== "rg" ||
-    sourceManifest.runtimeDependencies?.["@napi-rs/keyring"] !== "2.0.0"
+    sourceManifest.runtimeDependencies?.["@napi-rs/keyring"] !== "2.1.0"
   ) {
     throw new Error(
       "Run node apps/cli/esbuild.mjs --package before bundling the CLI.",

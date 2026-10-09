@@ -221,7 +221,7 @@ await writeFile(
       bundle: "agentlink.js",
       externalImports,
       bundledDependencies: bundledDependencyInventory(bundledPackages),
-      runtimeDependencies: { "@napi-rs/keyring": "2.0.0" },
+      runtimeDependencies: { "@napi-rs/keyring": "2.1.0" },
       assets: packageBuild
         ? {
             ripgrep: {

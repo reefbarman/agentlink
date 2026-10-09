@@ -5959,7 +5959,27 @@ describe("AgentSessionManager activity tracing", () => {
       path.join(os.tmpdir(), "agentlink-manager-trace-"),
     );
     try {
-      const mgr = new AgentSessionManager(makeConfig(), workspace);
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        {
+          host: {
+            createCheckpointManager: vi.fn(() => ({
+              baseCommit: null,
+              initialize: vi.fn(async () => true),
+              createCheckpoint: vi.fn(async () => null),
+              previewRevert: vi.fn(async () => null),
+              revertToCheckpoint: vi.fn(async () => false),
+              getDiffBetween: vi.fn(async () => ""),
+            })),
+          },
+        },
+      );
       const session = await mgr.createSession("code");
       (session as any).messageCount = 0;
       (session as any).isAborted = false;

@@ -4,6 +4,7 @@ import {
 } from "./verify-cli-package.mjs";
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const files = [
@@ -20,7 +21,7 @@ const manifest = {
   os: ["darwin"],
   cpu: ["arm64"],
   engines: { node: ">=22.19.0" },
-  dependencies: { "@napi-rs/keyring": "2.0.0" },
+  dependencies: { "@napi-rs/keyring": "2.1.0" },
 };
 const runtimeManifest = {
   schemaVersion: 1,
@@ -28,7 +29,7 @@ const runtimeManifest = {
   bundle: "agentlink.js",
   externalImports: ["@napi-rs/keyring", "node:fs"],
   bundledDependencies: EXPECTED_BUNDLED_DEPENDENCIES,
-  runtimeDependencies: { "@napi-rs/keyring": "2.0.0" },
+  runtimeDependencies: { "@napi-rs/keyring": "2.1.0" },
   assets: {
     ripgrep: {
       path: "rg",
@@ -40,6 +41,20 @@ const runtimeManifest = {
     },
   },
 };
+
+test("runtime dependency checks match the CLI package manifest", () => {
+  const cliManifest = JSON.parse(
+    readFileSync(new URL("../apps/cli/package.json", import.meta.url), "utf8"),
+  );
+  assert.deepEqual(cliManifest.dependencies, manifest.dependencies);
+  assert.doesNotThrow(() =>
+    verifyCliPackage(
+      { ...manifest, dependencies: cliManifest.dependencies },
+      files,
+      runtimeManifest,
+    ),
+  );
+});
 
 test("accepts the standalone CLI package boundary", () => {
   assert.deepEqual(verifyCliPackage(manifest, files, runtimeManifest), {

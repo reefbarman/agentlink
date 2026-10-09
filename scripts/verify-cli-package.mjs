@@ -11,7 +11,7 @@ const EXPECTED_FILES = [
   "package/dist/runtime-manifest.json",
   "package/package.json",
 ];
-const EXPECTED_RUNTIME_DEPENDENCIES = { "@napi-rs/keyring": "2.0.0" };
+const EXPECTED_RUNTIME_DEPENDENCIES = { "@napi-rs/keyring": "2.1.0" };
 const EXPECTED_EXTERNAL_IMPORTS = ["@napi-rs/keyring"];
 export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "@alcalzone/ansi-tokenize": "0.3.0",
@@ -189,7 +189,7 @@ export function verifyCliPackage(manifest, files, runtimeManifest) {
     JSON.stringify(dependencies) !==
     JSON.stringify(EXPECTED_RUNTIME_DEPENDENCIES)
   ) {
-    errors.push("runtime dependencies must be exactly @napi-rs/keyring@2.0.0");
+    errors.push("runtime dependencies must be exactly @napi-rs/keyring@2.1.0");
   }
 
   const sortedFiles = [...files].sort();

@@ -3295,7 +3295,20 @@ describe("AgentSessionManager background agents", () => {
         undefined,
         undefined,
         { maxConcurrent: 3 },
-        { host: { config: configHost, acpBackgroundRunner } },
+        {
+          host: {
+            config: configHost,
+            acpBackgroundRunner,
+            createCheckpointManager: vi.fn(() => ({
+              baseCommit: null,
+              initialize: vi.fn(async () => true),
+              createCheckpoint: vi.fn(async () => null),
+              previewRevert: vi.fn(async () => null),
+              revertToCheckpoint: vi.fn(async () => false),
+              getDiffBetween: vi.fn(async () => ""),
+            })),
+          },
+        },
       );
       const parent = await mgr.createSession("code");
       mgr.setToolContext({
