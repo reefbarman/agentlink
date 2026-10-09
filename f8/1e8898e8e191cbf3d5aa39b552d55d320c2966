@@ -1,0 +1,30 @@
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 1263-1265,1304-1311,1738-1744,2498,2601-2607,2627,2636-2654,2659-2661
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/agent/webview/components/WarningRow.tsx
+  h_e08a86bb3a33a2 31-48,77-79,107-117,122,125-127,130-132,137-141,147
+  h_e08a86bb3a33a2 121,123-124,128-129,133-135,142-143
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_e08a86bb3a33a2 82,417-428,594-601,690,987
+  h_e08a86bb3a33a2 602-603
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 2932-3096,3139
+src/agent/webview/components/TranscriptMessageList.test.ts
+  h_e08a86bb3a33a2 1454-1600
+resources/builtin-skills/documentation/references/providers.md
+  h_e08a86bb3a33a2 192-199
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
