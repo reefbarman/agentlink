@@ -1,0 +1,59 @@
+scripts/package-retrieval-runtime.test.mjs
+  h_e08a86bb3a33a2 69-79
+  h_e08a86bb3a33a2 68
+package.json
+  h_e08a86bb3a33a2 1226
+scripts/package-retrieval-runtime.mjs
+  h_e08a86bb3a33a2 9
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 16
+src/integrations/standaloneInstallCommands.test.ts
+  h_e08a86bb3a33a2 98,100-102,106-108
+  h_e08a86bb3a33a2 109
+README.md
+  h_e08a86bb3a33a2 84
+scripts/generate-release-update.mjs
+  h_e08a86bb3a33a2 17,28
+src/integrations/standaloneInstallCommands.ts
+  h_e08a86bb3a33a2 15,19
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 28,42,48,71
+.github/dependabot.yml
+  h_e08a86bb3a33a2 29
+scripts/install.sh
+  h_e08a86bb3a33a2 106-107,117
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 197
+scripts/install.test.mjs
+  h_e08a86bb3a33a2 41,84,86,110-115
+  h_e08a86bb3a33a2 116
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 79,161,168,182
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+package-lock.json
+  s_b208ce4d555317::t_f0f20f377b515c 23,887-896,1369-1391,1415-1811,2483-2485,2497,2501,2504-2512,2515,2517-2521,2525-2527,2541-2543,2560-2562,2579-2581,2598-2600,2616-2694,2696-2697,2700-2725,2727-2729,3104-3112,3880-3945,4752-4762,5373-5385,5409-5421,5918,5987-5992,6313-6322,6503-6516,6535-6545,6550,6740-6749,7496,7515,7538-7548,8119,8237-8246,8574,8587-8593,8598,8608,8617-8640,8946-8952,9010,9168-9177,9493-9499,9533-9539,10405-10411,10513-10524,10856,11158-11210,11586-11592,11802-11825,12500-12539,12657-12666,14139
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b117cf1d1b47f92e360ab23247c9628f6897d95",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_b208ce4d555317": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a02f6df-0538-41bf-959d-57525d0d4878",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
