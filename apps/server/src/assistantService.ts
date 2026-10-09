@@ -112,6 +112,27 @@ export const COMMAND_WORKER_ENVIRONMENT: Readonly<Record<string, string>> = {
   TERM: "dumb",
 };
 
+/**
+ * The environment for one command: the fixed base, plus the egress gateway
+ * as both spellings of each proxy variable (curl reads only lowercase
+ * `http_proxy`; npm, pip and git read either).
+ */
+export function commandWorkerEnvironment(
+  egressProxy: string | undefined,
+): Record<string, string> {
+  return {
+    ...COMMAND_WORKER_ENVIRONMENT,
+    ...(egressProxy
+      ? {
+          HTTPS_PROXY: egressProxy,
+          https_proxy: egressProxy,
+          HTTP_PROXY: egressProxy,
+          http_proxy: egressProxy,
+        }
+      : {}),
+  };
+}
+
 async function commandWorkerClient(
   config: AssistantServerConfig,
   env: NodeJS.ProcessEnv,
@@ -150,7 +171,8 @@ export function commandHostOptions(
     commands: {
       enabled: true,
       shellExecutable: config.commandWorker.shell,
-      resolveEnvironment: () => ({ ...COMMAND_WORKER_ENVIRONMENT }),
+      resolveEnvironment: () =>
+        commandWorkerEnvironment(config.commandWorker?.egressProxy),
     },
   };
 }

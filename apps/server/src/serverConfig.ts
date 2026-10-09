@@ -50,6 +50,11 @@ export interface AssistantServerCommandWorkerConfig {
   readonly token: AssistantServerSecretSource;
   /** Absolute shell on the worker that runs each command (`-c`). */
   readonly shell: string;
+  /**
+   * `http://<host>:<port>` of the egress gateway, given to every command as
+   * its HTTP(S) proxy. Without it commands get no proxy settings.
+   */
+  readonly egressProxy?: string;
 }
 
 /** Default shell for commands on the worker. */
@@ -377,13 +382,11 @@ function parseCommandWorker(
 ): AssistantServerCommandWorkerConfig {
   const label = "commandWorker";
   const item = record(value, label);
-  allowKeys(item, label, ["host", "port", "token", "shell"]);
+  allowKeys(item, label, ["host", "port", "token", "shell", "egressProxy"]);
   const host = text(item.host, `${label}.host`);
   // The protocol is plain TCP with a shared token, so it must stay on this
   // machine or a private container network, like Meridian's HTTP.
-  const loopback =
-    host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (!loopback && !CONTAINER_HOST_PATTERN.test(host)) {
+  if (!isPrivateServiceHost(host)) {
     throw new Error(
       `${label}.host must be loopback or a container name on a private network`,
     );
@@ -404,7 +407,47 @@ function parseCommandWorker(
     port: Number(port),
     token: secretSource(item.token, `${label}.token`, baseDirectory),
     shell,
+    ...(item.egressProxy === undefined
+      ? {}
+      : { egressProxy: parseEgressProxy(item.egressProxy, label) }),
   };
+}
+
+function isPrivateServiceHost(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    CONTAINER_HOST_PATTERN.test(host)
+  );
+}
+
+/** A plain `http://host:port` proxy on loopback or a container network. */
+function parseEgressProxy(value: unknown, parent: string): string {
+  const label = `${parent}.egressProxy`;
+  const raw = text(value, label);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${label} must be a URL like http://egress-gateway:3128`);
+  }
+  const host = url.hostname.replace(/^\[(.*)\]$/u, "$1");
+  if (
+    url.protocol !== "http:" ||
+    !url.port ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    !isPrivateServiceHost(host)
+  ) {
+    throw new Error(
+      `${label} must be http://<host>:<port> with a loopback or container host, like http://egress-gateway:3128`,
+    );
+  }
+  return `http://${url.host}`;
 }
 
 function parseProvider(

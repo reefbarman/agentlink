@@ -17,6 +17,7 @@
     "host": "command-worker",
     "port": 7300,
     "token": { "file": "/run/secrets/command-worker-token" },
-    "shell": "/bin/bash"
+    "shell": "/bin/bash",
+    "egressProxy": "http://egress-gateway:3128"
   }
 }

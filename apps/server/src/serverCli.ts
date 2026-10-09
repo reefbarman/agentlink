@@ -7,6 +7,11 @@ import {
 } from "./assistantService.js";
 import { startCommandWorker } from "./commandWorker.js";
 import {
+  DEFAULT_EGRESS_ALLOWLIST,
+  parseEgressAllowlist,
+  startEgressGateway,
+} from "./egressGateway.js";
+import {
   localTlsHostsFromOrigins,
   readLocalCertificateAuthority,
 } from "./localCertificateAuthority.js";
@@ -48,6 +53,8 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server command-worker --token-file <file> --root <dir>...
                                        [--listen <host:port>]
                                        [--allow-local-peers] [--reap-orphans]
+       agentlink-server egress-gateway [--listen <host:port>]
+                                       [--allow <host>]... [--no-default-allow]
 
 Runs the AgentLink assistant server over HTTPS.
 
@@ -86,9 +93,21 @@ Commands:
                    --allow-local-peers is given for a same-host server.
                    --reap-orphans kills leftover processes whenever no
                    command runs; use it only alone in a container.
+  egress-gateway   HTTPS-only proxy that lets commands on the worker reach
+                   allowlisted hosts (set the server's
+                   "commandWorker.egressProxy" to it). --listen defaults to
+                   0.0.0.0:3128. The allowlist is a built-in set of package
+                   registries and GitHub hosts, plus each --allow and the
+                   comma- or space-separated AGENTLINK_EGRESS_ALLOW
+                   variable (host names or *.domain wildcards).
+                   --no-default-allow drops the built-in set. Anything else,
+                   plain HTTP, IP addresses, ports other than 443, and names
+                   that resolve to private addresses are refused with a 403
+                   naming the host.
 `;
 
 const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
+const DEFAULT_EGRESS_GATEWAY_LISTEN = "0.0.0.0:3128";
 
 const COMMANDS = new Set([
   "recover",
@@ -104,6 +123,9 @@ export async function runAssistantServerCli(
 ): Promise<number> {
   if (argv[0] === "command-worker") {
     return await runCommandWorker(argv.slice(1), io);
+  }
+  if (argv[0] === "egress-gateway") {
+    return await runEgressGateway(argv.slice(1), io);
   }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
@@ -340,17 +362,9 @@ async function runCommandWorker(
   }
   if (!tokenFile) return usageError(io, "--token-file is required");
   if (roots.length === 0) return usageError(io, "--root is required");
-  const separator = listen.lastIndexOf(":");
-  const host = listen.slice(0, separator);
-  const port = Number(listen.slice(separator + 1));
-  if (
-    separator <= 0 ||
-    !Number.isSafeInteger(port) ||
-    port < 1 ||
-    port > 65535
-  ) {
-    return usageError(io, "--listen must be <host>:<port>");
-  }
+  const address = parseListen(listen);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  const { host, port } = address;
   const token = await (
     await prepareSecret({ file: tokenFile }, "--token-file", io.env)
   )();
@@ -370,6 +384,83 @@ async function runCommandWorker(
   io.log(`Received ${signal}; stopping running commands`);
   await worker.close();
   return 0;
+}
+
+async function runEgressGateway(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  let listen = DEFAULT_EGRESS_GATEWAY_LISTEN;
+  let defaults = true;
+  const extra: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    const value = argv[index + 1];
+    if (argument === "--help" || argument === "-h") {
+      io.stdout(ASSISTANT_SERVER_USAGE);
+      return 0;
+    }
+    if (argument === "--no-default-allow") {
+      defaults = false;
+      continue;
+    }
+    if (argument !== "--listen" && argument !== "--allow") {
+      return usageError(io, `Unknown argument: ${argument}`);
+    }
+    if (!value) return usageError(io, `${argument} needs a value`);
+    index += 1;
+    if (argument === "--listen") listen = value;
+    else extra.push(value);
+  }
+  const address = parseListen(listen);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  const fromEnv = (io.env.AGENTLINK_EGRESS_ALLOW ?? "")
+    .split(/[\s,]+/u)
+    .filter(Boolean);
+  const allow = [
+    ...(defaults ? DEFAULT_EGRESS_ALLOWLIST : []),
+    ...extra,
+    ...fromEnv,
+  ];
+  let entries: readonly string[];
+  try {
+    entries = parseEgressAllowlist(allow).entries;
+  } catch (error) {
+    return usageError(io, error instanceof Error ? error.message : "--allow");
+  }
+  if (entries.length === 0) {
+    return usageError(io, "the allowlist is empty: add --allow <host>");
+  }
+  const gateway = await startEgressGateway({
+    host: address.host,
+    port: address.port,
+    allow: entries,
+    log: io.log,
+  });
+  io.log(
+    `AgentLink egress gateway listening on ${address.host}:${gateway.port}; allowing ${entries.join(", ")}`,
+  );
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; closing tunnels`);
+  await gateway.close();
+  return 0;
+}
+
+function parseListen(
+  listen: string,
+): { readonly host: string; readonly port: number } | undefined {
+  const separator = listen.lastIndexOf(":");
+  const host = listen.slice(0, separator);
+  const port = Number(listen.slice(separator + 1));
+  if (
+    separator <= 0 ||
+    !Number.isSafeInteger(port) ||
+    port < 0 ||
+    port > 65535
+  ) {
+    return undefined;
+  }
+  return { host, port };
 }
 
 function usageError(io: AssistantServerCliIo, problem: string): number {

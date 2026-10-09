@@ -326,6 +326,45 @@ describe("parseAssistantServerConfig", () => {
     ).toBeUndefined();
   });
 
+  it("accepts an egress proxy only on loopback or a container network", () => {
+    const withProxy = (egressProxy: unknown) =>
+      withChange((value) => {
+        value.commandWorker = {
+          host: "command-worker",
+          port: 7300,
+          token: { file: "/run/secrets/command-worker-token" },
+          egressProxy,
+        };
+      });
+    expect(
+      parseAssistantServerConfig(
+        withProxy("http://egress-gateway:3128/"),
+        "/etc/agentlink",
+      ).commandWorker?.egressProxy,
+    ).toBe("http://egress-gateway:3128");
+    expect(
+      parseAssistantServerConfig(
+        withProxy("http://127.0.0.1:3128"),
+        "/etc/agentlink",
+      ).commandWorker?.egressProxy,
+    ).toBe("http://127.0.0.1:3128");
+    for (const proxy of [
+      "https://egress-gateway:3128",
+      "http://egress-gateway",
+      "http://192.168.1.20:3128",
+      "http://proxy.example.com:3128",
+      "http://user:secret@egress-gateway:3128",
+      "http://egress-gateway:3128/path",
+      "egress-gateway:3128",
+      42,
+    ]) {
+      expect(
+        () => parseAssistantServerConfig(withProxy(proxy), "/etc/agentlink"),
+        String(proxy),
+      ).toThrow("commandWorker.egressProxy");
+    }
+  });
+
   it("accepts a server-managed local CA", () => {
     expect(
       parseAssistantServerConfig(

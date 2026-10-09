@@ -17,6 +17,9 @@
 #   AGENTLINK_UID / AGENTLINK_GID  owner of data/ and projects/ (default 1000)
 #   AGENTLINK_WORKER_MEMORY / AGENTLINK_WORKER_CPUS / AGENTLINK_WORKER_PIDS
 #     command worker limits (default 2g, 2, 512)
+#   AGENTLINK_EGRESS_ALLOW  extra hosts commands may reach over HTTPS,
+#     comma-separated (`api.example.com,*.example.org`); the built-in list
+#     covers npm, GitHub, PyPI and nodejs.org
 
 name: agentlink-assistant
 
@@ -79,8 +82,8 @@ services:
     cpus: ${AGENTLINK_WORKER_CPUS:-2}
     pids_limit: ${AGENTLINK_WORKER_PIDS:-512}
     # Only the internal network: the assistant can reach the worker, and
-    # commands cannot reach the internet, the LAN, or Meridian. See
-    # compose.worker-egress.yaml to let commands use the internet.
+    # commands cannot reach the internet, the LAN, or Meridian except
+    # through the egress gateway (the server sets HTTPS_PROXY for them).
     networks:
       - command-worker
     expose:
@@ -97,9 +100,47 @@ services:
         max-size: 10m
         max-file: "3"
 
+  # HTTPS-only proxy for commands. It opens tunnels to allowlisted host
+  # names that resolve to public addresses, and refuses everything else
+  # (the LAN, the host, Meridian, plain HTTP) with a 403 naming the host.
+  # It runs the assistant image but has no data, projects, or secrets.
+  egress-gateway:
+    image: agentlink-assistant:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    user: "${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    command: ["egress-gateway"]
+    environment:
+      AGENTLINK_EGRESS_ALLOW: ${AGENTLINK_EGRESS_ALLOW:-}
+    networks:
+      - command-worker
+      - egress
+    expose:
+      - "3128"
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
 networks:
   command-worker:
     internal: true
+    driver_opts:
+      # No address for the host on this bridge (Docker Engine 28+), so
+      # commands cannot reach host services such as sshd through it.
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  # Outbound only, for the egress gateway.
+  egress: {}
 
 secrets:
   command_worker_token:

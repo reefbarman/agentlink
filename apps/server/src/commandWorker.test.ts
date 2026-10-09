@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { commandHostOptions } from "./assistantService.js";
+import {
+  COMMAND_WORKER_ENVIRONMENT,
+  commandHostOptions,
+} from "./assistantService.js";
 import { startCommandWorker, type CommandWorker } from "./commandWorker.js";
 import {
   canExecuteOnCommandWorker,
@@ -209,6 +212,31 @@ describe("command worker", () => {
       executionBackend!.fileSystem.realpath(test.root),
     ).resolves.toBe(test.root);
     expect(commandHostOptions({}, undefined)).toEqual({});
+  });
+
+  it("gives commands the egress gateway as their proxy, and nothing else from the server", () => {
+    const options = (egressProxy?: string) =>
+      commandHostOptions(
+        {
+          commandWorker: {
+            host: "command-worker",
+            port: 7300,
+            token: { file: "/unused" },
+            shell: "/bin/bash",
+            ...(egressProxy ? { egressProxy } : {}),
+          },
+        },
+        { host: "command-worker", port: 7300, readToken: async () => TOKEN },
+      ).commands!;
+    const proxy = "http://egress-gateway:3128";
+    expect(options(proxy).resolveEnvironment!()).toEqual({
+      ...COMMAND_WORKER_ENVIRONMENT,
+      HTTPS_PROXY: proxy,
+      https_proxy: proxy,
+      HTTP_PROXY: proxy,
+      http_proxy: proxy,
+    });
+    expect(options().resolveEnvironment!()).toEqual(COMMAND_WORKER_ENVIRONMENT);
   });
 
   it("kills the process when the server connection drops", async () => {

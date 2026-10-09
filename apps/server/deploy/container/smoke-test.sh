@@ -119,4 +119,66 @@ if compose exec -T assistant /bin/sh -c true >/dev/null 2>&1; then
 fi
 pass "no shell in the running assistant"
 
+echo "# command egress"
+# Ask the gateway for a tunnel from the worker; prints "<status> <reason>".
+probe='
+const http = require("http");
+const req = http.request({ host: "egress-gateway", port: 3128, method: "CONNECT", path: process.argv[1] });
+req.on("connect", (res, socket) => { console.log(`${res.statusCode} ${res.statusMessage}`); socket.destroy(); });
+req.on("error", (error) => console.log(`error ${error.code}`));
+req.setTimeout(15000, () => { console.log("timeout"); req.destroy(); });
+req.end();
+'
+egress() { compose exec -T command-worker node -e "$probe" "$1"; }
+allowed=""
+for _ in $(seq 1 15); do
+  allowed="$(egress registry.npmjs.org:443)"
+  case "$allowed" in "200 "*) break ;; esac
+  sleep 1
+done
+case "$allowed" in "200 "*) ;; *) fail "gateway did not open a tunnel to npm: $allowed" ;; esac
+pass "gateway tunnels to an allowlisted registry"
+for target in example.com:443 assistant:8443 meridian:3456 registry.npmjs.org:80 1.1.1.1:443; do
+  result="$(egress "$target")"
+  case "$result" in "403 "*) ;; *) fail "gateway allowed $target: $result" ;; esac
+done
+case "$(egress example.com:443)" in *example.com*) ;; *) fail "the refusal does not name the host" ;; esac
+pass "gateway refuses unlisted hosts, sibling containers, other ports and IP addresses, naming the host"
+version="$(compose exec -T -e HOME=/tmp -e HTTPS_PROXY=http://egress-gateway:3128 \
+  -e npm_config_update_notifier=false \
+  command-worker npm view --cache /tmp/npm-cache esbuild@0.25.0 version)"
+[ "$version" = "0.25.0" ] || fail "npm through the gateway failed: $version"
+pass "npm reaches the registry through the gateway"
+direct="$(compose exec -T command-worker node -e '
+const s = require("net").connect({ host: "1.1.1.1", port: 443 });
+s.setTimeout(5000, () => { console.log("blocked"); s.destroy(); });
+s.on("connect", () => { console.log("connected"); s.destroy(); });
+s.on("error", () => console.log("blocked"));
+')"
+[ "$direct" = "blocked" ] || fail "the worker reached the internet without the gateway"
+pass "the worker has no direct route to the internet"
+
+# A canary on every host address: the worker must not reach it through its
+# network's bridge gateway (which would expose sshd and the like).
+canary_port="${AGENTLINK_SMOKE_CANARY_PORT:-18999}"
+python3 -m http.server --bind 0.0.0.0 "$canary_port" >/dev/null 2>&1 &
+canary=$!
+# Keep the script's exit status for cleanup, which reads $? first.
+trap 'rc=$?; kill "$canary" 2>/dev/null; (exit "$rc"); cleanup' EXIT
+for _ in $(seq 1 20); do
+  curl -s -o /dev/null "http://127.0.0.1:$canary_port/" && break
+  sleep 0.5
+done
+curl -s -o /dev/null "http://127.0.0.1:$canary_port/" || fail "host canary did not start"
+subnet="$(docker network inspect "${project}_command-worker" -f '{{(index .IPAM.Config 0).Subnet}}')"
+host_gateway="${subnet%.*}.1"
+reach="$(compose exec -T command-worker node -e '
+const s = require("net").connect({ host: process.argv[1], port: +process.argv[2] });
+s.setTimeout(4000, () => { console.log("blocked"); s.destroy(); });
+s.on("connect", () => { console.log("connected"); s.destroy(); });
+s.on("error", () => console.log("blocked"));
+' "$host_gateway" "$canary_port")"
+[ "$reach" = "blocked" ] || fail "the worker reached a host service via $host_gateway"
+pass "the worker cannot reach host services through its network gateway ($host_gateway)"
+
 echo "# all container smoke checks passed"

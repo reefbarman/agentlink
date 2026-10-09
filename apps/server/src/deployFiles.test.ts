@@ -117,7 +117,7 @@ describe("deployment files", () => {
     // with no access to the assistant's data directory or its secrets.
     const workerService = compose.slice(
       compose.indexOf("\n  command-worker:\n"),
-      compose.indexOf("\nnetworks:\n"),
+      compose.indexOf("\n  egress-gateway:\n"),
     );
     for (const line of [
       "read_only: true",
@@ -136,7 +136,7 @@ describe("deployment files", () => {
     expect(workerService).not.toMatch(/^\s+ports:/mu);
     expect(workerService).not.toMatch(/\.\/data|server\.json|meridian/u);
     expect(compose).toMatch(
-      /^networks:\n {2}command-worker:\n {4}internal: true$/mu,
+      /^networks:\n {2}command-worker:\n {4}internal: true\n {4}driver_opts:\n(?: {6}#.*\n)* {6}com\.docker\.network\.bridge\.gateway_mode_ipv4: isolated$/mu,
     );
     const assistantService = compose.slice(
       compose.indexOf("\n  assistant:\n"),
@@ -145,6 +145,41 @@ describe("deployment files", () => {
     expect(assistantService).toMatch(
       /^ {4}networks:\n {6}- default\n {6}- command-worker$/mu,
     );
+
+    // The egress gateway: the only way out for commands. Hardened, never
+    // published, and holding no data, projects, or secrets.
+    const gatewayService = compose.slice(
+      compose.indexOf("\n  egress-gateway:\n"),
+      compose.indexOf("\nnetworks:\n"),
+    );
+    for (const line of [
+      "image: agentlink-assistant:local",
+      "read_only: true",
+      "init: true",
+      "- no-new-privileges:true",
+      "pids_limit:",
+      "mem_limit:",
+      'command: ["egress-gateway"]',
+    ]) {
+      expect(gatewayService, line).toContain(line);
+    }
+    expect(gatewayService).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    expect(gatewayService).toMatch(
+      /^ {4}networks:\n {6}- command-worker\n {6}- egress\n/mu,
+    );
+    expect(gatewayService).not.toMatch(/^\s+(ports|volumes|secrets):/mu);
+    expect(compose).toMatch(/^ {2}egress: \{\}$/mu);
+    for (const file of [
+      "server.example.json",
+      "server.with-meridian.example.json",
+    ]) {
+      const example = JSON.parse(
+        await fs.readFile(path.join(container, file), "utf8"),
+      ) as { commandWorker?: { egressProxy?: string } };
+      expect(example.commandWorker?.egressProxy, file).toBe(
+        "http://egress-gateway:3128",
+      );
+    }
   });
 
   it("runs Meridian unpublished and hardened, keyed by a shared secret", async () => {
