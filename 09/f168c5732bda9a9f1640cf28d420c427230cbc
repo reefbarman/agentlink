@@ -1,0 +1,14 @@
+src/browser-gateway/webview/components/browserMonaco.ts
+  h_e08a86bb3a33a2 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09f168c5732bda9a9f1640cf28d420c427230cbc",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
