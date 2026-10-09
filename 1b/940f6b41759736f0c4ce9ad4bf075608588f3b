@@ -1,0 +1,40 @@
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 90,112-126,141-152,229,625-832
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 31,326-330
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 4,15,34-36,47,73-83,88,142-161,163-204,345-356,384,392-395,399,402-403,427,527-567,724-728
+  s_17069c45177d64::t_310ca3352c54db 162,398,400-401,404,729-730
+apps/server/README.md
+  h_e08a86bb3a33a2 35-36,89-90,92,94,99,124-125,207,210,215-224
+  h_e08a86bb3a33a2 100,225
+apps/server/deploy/container/server.with-meridian.example.json
+  h_e08a86bb3a33a2 11-13
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 22-29,44-85,196,247-265,267-272,274-290,334
+  s_17069c45177d64::t_f7bd601ded1c25 86,266
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 3,62-88,183-206
+  s_17069c45177d64::t_30e962ed7b73fb 207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b940f6b41759736f0c4ce9ad4bf075608588f3b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_17069c45177d64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "902166e1-d9fd-4c47-95a0-9071fa56077c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
