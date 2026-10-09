@@ -270,13 +270,24 @@ export class OwnerRelayStore {
     }
     this.pruneGeneration(state);
     const cursor = afterRelaySequence ?? 0;
+    // A reset must rebuild from a checkpoint plus a complete event suffix.
+    // Once pruning removes events newer than that checkpoint, replaying the
+    // remaining tail would trap clients in a sequence-gap/resubscribe loop.
+    // Return no baseline so the relay requests a fresh owner checkpoint.
+    const checkpoint =
+      state.checkpoint.relaySequence >= state.replayFloorSequence
+        ? state.checkpoint
+        : null;
+    const resetRecords = checkpoint
+      ? state.replay.map((entry) => entry.record)
+      : [];
     if (cursor > this.latestRelaySequence) {
       return {
         kind: "reset",
         reason: "helper_generation_changed",
         latestRelaySequence: this.latestRelaySequence,
-        checkpoint: state.checkpoint,
-        records: state.replay.map((entry) => entry.record),
+        checkpoint,
+        records: resetRecords,
       };
     }
 
@@ -285,8 +296,8 @@ export class OwnerRelayStore {
         kind: "reset",
         reason: "subscription_changed",
         latestRelaySequence: state.latestRelaySequence,
-        checkpoint: state.checkpoint,
-        records: state.replay.map((entry) => entry.record),
+        checkpoint,
+        records: resetRecords,
       };
     }
 
@@ -295,8 +306,8 @@ export class OwnerRelayStore {
         kind: "reset",
         reason: cursor === 0 ? "checkpoint_required" : "stale_replay_cursor",
         latestRelaySequence: state.latestRelaySequence,
-        checkpoint: state.checkpoint,
-        records: state.replay.map((entry) => entry.record),
+        checkpoint,
+        records: resetRecords,
       };
     }
 

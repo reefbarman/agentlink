@@ -11,7 +11,12 @@ import {
   type BrowserGatewayOwnerEvent,
 } from "../dataPlane/protocol.js";
 import type { HelperLifecycleCoordinator } from "./HelperLifecycleCoordinator.js";
-import { OwnerRelayStore } from "./OwnerRelayStore.js";
+import {
+  OwnerRelayStore,
+  type BrowserGatewayRelayCheckpointRecord,
+  type BrowserGatewayRelayEventRecord,
+} from "./OwnerRelayStore.js";
+import { RelayOwnerStore } from "../webview/relay/RelayOwnerStore.js";
 import { BrowserGatewayRelayRoutes } from "./relayRoutes.js";
 
 const helperGenerationId = "helper-1";
@@ -129,6 +134,7 @@ function parseSseEvent(
 
 function makeFixture(
   options: {
+    retainedReplayEventsPerOwnerGeneration?: number;
     onCommand?: ConstructorParameters<
       typeof BrowserGatewayRelayRoutes
     >[0]["onCommand"];
@@ -156,6 +162,8 @@ function makeFixture(
   const store = new OwnerRelayStore({
     helperGenerationId,
     now: () => 1_100,
+    retainedReplayEventsPerOwnerGeneration:
+      options.retainedReplayEventsPerOwnerGeneration,
   });
   store.ingestPublication({
     protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
@@ -361,6 +369,92 @@ describe("BrowserGatewayRelayRoutes", () => {
     expect(fixture.subscriberChanges).toEqual([1]);
     fixture.routes.close();
     expect(fixture.subscriberChanges).toEqual([1, 0]);
+  });
+
+  it("requests a fresh checkpoint after replay eviction and resumes streaming on the same subscription", async () => {
+    const fixture = makeFixture({ retainedReplayEventsPerOwnerGeneration: 1 });
+    const stream = new ResponseFixture();
+    const auth = { sessionKey: "device:1", deviceId: "device-1" };
+    const publish = (
+      installed: BrowserGatewayOwnerCheckpoint | null,
+      events: BrowserGatewayOwnerEvent[] = [],
+    ) => {
+      const firstSequence =
+        events[0]?.ownerSequence ?? installed!.checkpointSequence;
+      fixture.store.ingestPublication({
+        protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+        helperGenerationId,
+        ownerId,
+        ownerGenerationId,
+        batchId: `recovery-${firstSequence}`,
+        firstSequence,
+        lastSequence: events.at(-1)?.ownerSequence ?? firstSequence,
+        checkpoint: installed,
+        events,
+      });
+    };
+    publish(null, [event(1), event(2)]);
+
+    await fixture.routes.handle(
+      "events",
+      auth,
+      request({ method: "GET", url: "/api/relay/events" }),
+      stream.asServerResponse(),
+      new URL("http://127.0.0.1:47200/api/relay/events"),
+    );
+    const hello = parseSseEvent(stream.writes.join(""), "hello");
+    const accepted = new ResponseFixture();
+    await fixture.routes.handle(
+      "subscription",
+      auth,
+      request({
+        method: "POST",
+        url: "/api/relay/subscription",
+        headers: { origin: "http://127.0.0.1:47200" },
+        body: {
+          browserConnectionId: hello.browserConnectionId,
+          csrfNonce: hello.csrfNonce,
+          ownerId,
+          ownerGenerationId,
+        },
+      }),
+      accepted.asServerResponse(),
+      new URL("http://127.0.0.1:47200/api/relay/subscription"),
+    );
+    expect(accepted.headers.at(-1)?.status).toBe(202);
+    expect(fixture.checkpointRequests).toEqual([0]);
+    expect(stream.writes.join("")).not.toContain("event: checkpoint");
+    expect(stream.writes.join("")).not.toContain("event: owner.event");
+
+    publish(checkpoint(2));
+    publish(null, [event(3)]);
+    const subscriptionId = JSON.parse(accepted.writes.join("")).subscriptionId;
+    const recovered = parseSseEvent(stream.writes.join(""), "checkpoint");
+    const live = parseSseEvent(stream.writes.join(""), "owner.event");
+    expect(recovered).toMatchObject({
+      subscriptionId,
+      record: { ownerSequence: 2, checkpoint: { checkpointSequence: 2 } },
+    });
+    expect(live).toMatchObject({
+      subscriptionId,
+      record: { ownerSequence: 3 },
+    });
+    const browserStore = new RelayOwnerStore();
+    expect(
+      browserStore.applyCheckpoint(
+        helperGenerationId,
+        recovered.record as BrowserGatewayRelayCheckpointRecord,
+      ).status,
+    ).toBe("applied");
+    expect(
+      browserStore.applyEvent(
+        helperGenerationId,
+        live.record as BrowserGatewayRelayEventRecord,
+      ).status,
+    ).toBe("applied");
+    expect(fixture.checkpointRequests).toEqual([0]);
+    expect(stream.destroyed).toBe(false);
+    fixture.routes.close();
   });
 
   it("fans 30 ordered events out to four browser connections without compaction or stalls", async () => {

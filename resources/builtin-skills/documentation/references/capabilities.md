@@ -140,6 +140,8 @@ Read-only execution recognizes conservative local Git inspection commands includ
 
 ## Browser remote control
 
+Live browser updates recover automatically when a reconnect or tab switch outlasts the gateway's retained event history. The gateway requests a fresh session snapshot instead of repeatedly replaying an old snapshot with missing updates; transcript content, questions, and tab status resume on the existing subscription.
+
 Messages sent from a browser workspace tab appear once in the transcript at their committed turn, with a **Remote** badge. A temporary sending row is replaced when the owning session publishes the message, even if the session assigns it a different message ID. Pending question cards remain interactive when a live snapshot briefly omits the question, preserving selected options and typed answers until the question is cleared or the session ends.
 
 Browser Ask Agent inserts automatic recalled memory as explicitly low-authority, request-local conversation evidence before the active user message, matching the main agent's authority boundary. The insertion position stays fixed during a tool loop; changing recall does not rewrite system instructions. Memory evidence is not persisted into the canonical transcript. A new turn may replace or omit recall, so reuse of the full previous turn's cached context is not guaranteed.

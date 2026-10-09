@@ -187,6 +187,59 @@ describe("OwnerRelayStore", () => {
     });
   });
 
+  it.each(["count", "age", "bytes", "aggregate"] as const)(
+    "requires a fresh reset baseline after %s eviction without interrupting caught-up cursors",
+    (limit) => {
+      let now = 1_000;
+      const sizingStore = new OwnerRelayStore({
+        helperGenerationId,
+        now: () => now,
+      });
+      const checkpointBytes = Buffer.byteLength(
+        JSON.stringify(
+          sizingStore.ingestPublication(batch({ checkpoint: checkpoint(0) }))
+            .records[0],
+        ),
+      );
+      sizingStore.close();
+      const store = new OwnerRelayStore({
+        helperGenerationId,
+        now: () => now,
+        ...(limit === "count"
+          ? { retainedReplayEventsPerOwnerGeneration: 1 }
+          : limit === "age"
+            ? { retainedReplayAgeMs: 10 }
+            : limit === "bytes"
+              ? { retainedReplayBytesPerOwnerGeneration: 1 }
+              : { aggregateHelperReplayBytes: checkpointBytes + 1 }),
+      });
+      store.ingestPublication(
+        batch({ checkpoint: checkpoint(0), events: [event(1), event(2)] }),
+      );
+      if (limit === "age") now = 2_000;
+
+      for (const cursor of [null, 0, 1, 4, 100]) {
+        expect(store.replay(ownerId, ownerGenerationId, cursor)).toMatchObject({
+          kind: "reset",
+          checkpoint: null,
+          records: [],
+        });
+      }
+      // A browser that already applied those evicted events can still resume.
+      expect(store.replay(ownerId, ownerGenerationId, 3)).toMatchObject({
+        kind: "replay",
+        records: [],
+      });
+
+      store.ingestPublication(batch({ checkpoint: checkpoint(2) }));
+      expect(store.replay(ownerId, ownerGenerationId, null)).toMatchObject({
+        kind: "reset",
+        checkpoint: expect.objectContaining({ ownerSequence: 2 }),
+        records: [],
+      });
+    },
+  );
+
   it("invalidates only prior replay and detail state for the registered owner", () => {
     const store = new OwnerRelayStore({ helperGenerationId, now: () => 1_000 });
     const nextGeneration = "owner-generation-2";
