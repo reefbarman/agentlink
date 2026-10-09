@@ -169,6 +169,28 @@ export interface SandboxBehaviorAttestationServiceOptions {
   maxOutputBytes?: number;
   now?: () => number;
   createAttestationId?: () => string;
+  /**
+   * Local diagnostic sink for unexpected probe exceptions. Receives a bounded,
+   * credential-redacted summary; the public failure code is unchanged.
+   */
+  onUnexpectedProbeError?: (detail: string) => void;
+}
+
+const MAX_PROBE_ERROR_DETAIL_CHARS = 300;
+
+export function summarizeProbeError(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : `non-error rejection: ${String(error)}`;
+  const redacted = raw
+    .replace(/(\w+:\/\/)[^/\s:@]+:[^/\s@]+@/g, "$1[redacted]@")
+    .replace(/\bbearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return redacted.length > MAX_PROBE_ERROR_DETAIL_CHARS
+    ? `${redacted.slice(0, MAX_PROBE_ERROR_DETAIL_CHARS)}…`
+    : redacted;
 }
 
 interface AttestationFlight {
@@ -652,6 +674,11 @@ export class SandboxBehaviorAttestationService {
         result = failed("probe_cancelled");
       } else {
         result = failed("helper_protocol_failed");
+        try {
+          this.options.onUnexpectedProbeError?.(summarizeProbeError(error));
+        } catch {
+          // Diagnostics must never change the fail-closed outcome.
+        }
       }
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);

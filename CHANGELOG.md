@@ -5,6 +5,10 @@
 - Upgrade the standalone CLI to Ink 8 and replace the unsupported textarea dependency with a local controlled multiline editor, preserving completion, history and bracketed paste.
 - Require VS Code 1.140.0 or newer and update the extension API types to match.
 - Upgrade LanceDB to 0.40.0. New VS Code and Desktop releases no longer support Intel Macs; macOS builds require Apple Silicon. Apache Arrow remains at 18.1.0, within LanceDB's supported range.
+- Fixed regex `search_files` printing far more matches than `max_results` when matches sat on adjacent lines. Results now contain at most `max_results` match lines, offsets that fall inside a run of adjacent matches are honoured, and per-file match counts agree with the printed lines.
+- Fixed `write_file`, `apply_diff`, and review diffs failing with "Edit document changed while preparing diagnostics" when VS Code bumped the document version without changing its text, as seen with new-file placeholders and files on network mounts. Edits still stop if the text or unsaved state actually changes, or the document closes, during diagnostic preparation.
+- Sandbox attestation now writes a short, credential-redacted cause to the AgentLink output log when its probe throws unexpectedly, so `helper_protocol_failed` is diagnosable without a custom probe. The failure code and fail-closed behavior are unchanged.
+- VS Code now warns when it attaches to a browser gateway helper from an older AgentLink version (kept running because a browser session is still active) and offers **Restart Browser Gateway**. Previously the browser kept serving the old UI with no explanation.
 
 ## 1.30.0
 

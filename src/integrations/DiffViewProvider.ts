@@ -17,7 +17,9 @@ import {
 } from "../core/capabilities/editReview.js";
 import { classifyEditDurability } from "../core/editDurability.js";
 import {
+  captureDocumentState,
   commitAndVerifyEdit,
+  documentChangedSince,
   documentMatchesTarget,
 } from "./editDurability.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
@@ -415,13 +417,10 @@ export class DiffViewProvider {
         "Review editor does not match the target file. Inspect any retained buffer in VS Code before retrying.",
       );
     }
-    const documentVersion = document.version;
+    const documentState = captureDocumentState(document);
     this.diagnosticSnapshot = snapshotDiagnostics(this.absolutePath);
     await this.diagnosticSnapshot.settleBaseline(this.diagnosticDelay);
-    if (
-      !documentMatchesTarget(document, this.absolutePath) ||
-      document.version !== documentVersion
-    ) {
+    if (documentChangedSince(document, this.absolutePath, documentState)) {
       this.diagnosticSnapshot.dispose();
       this.diagnosticSnapshot = undefined;
       diffSnapshotHub.remove(this.requestId);

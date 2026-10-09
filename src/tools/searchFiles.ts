@@ -498,7 +498,22 @@ export async function handleSearchFiles(
           continue;
         }
 
+        // Emit match lines individually so adjacent matches merged into one
+        // ripgrep group still respect offset and max_results.
+        const groupLines: string[] = [];
+        let countable = 0;
         for (const line of result.lines) {
+          if (line.isMatch) {
+            if (skipped < offset) {
+              skipped += 1;
+              // Context collected so far belonged to a skipped match.
+              groupLines.length = 0;
+              continue;
+            }
+            if (matchCount + countable >= maxResults) break;
+            countable += 1;
+            skipped += 1;
+          }
           const prefix = line.isMatch ? ">" : " ";
           const visibleText =
             withheldMessage ??
@@ -512,20 +527,15 @@ export async function handleSearchFiles(
                   )
                   .join("\n")
               : line.text);
-          fileLines.push(
+          groupLines.push(
             `${prefix} ${line.line} | ${truncateLine(visibleText).trimEnd()}`,
           );
         }
-        fileLines.push("---");
-
-        // Count only the matches past the offset threshold
-        const countable = Math.max(
-          0,
-          groupMatches - Math.max(0, offset - skipped),
-        );
+        if (countable > 0) {
+          fileLines.push(...groupLines, "---");
+        }
         fileMatchCount += countable;
         matchCount += countable;
-        skipped += groupMatches;
       }
 
       if (fileLines.length > 0) {

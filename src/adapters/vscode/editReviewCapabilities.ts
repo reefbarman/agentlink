@@ -9,7 +9,9 @@ import {
   snapshotDiagnostics,
 } from "../../integrations/DiffViewProvider.js";
 import {
+  captureDocumentState,
   commitAndVerifyEdit,
+  documentChangedSince,
   documentMatchesTarget,
 } from "../../integrations/editDurability.js";
 import {
@@ -480,12 +482,9 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               }),
             );
 
-            const documentVersion = doc.version;
+            const documentState = captureDocumentState(doc);
             await snap.settleBaseline(params.diagnosticDelay);
-            if (
-              !documentMatchesTarget(doc, params.absolutePath) ||
-              doc.version !== documentVersion
-            ) {
+            if (documentChangedSince(doc, params.absolutePath, documentState)) {
               return {
                 error: "Edit document changed while preparing diagnostics",
                 path: params.relativePath,
@@ -659,11 +658,10 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     preserveFocus: true,
                   }),
                 );
-                const documentVersion = doc.version;
+                const documentState = captureDocumentState(doc);
                 await snap.settleBaseline(params.diagnosticDelay);
                 if (
-                  !documentMatchesTarget(doc, params.absolutePath) ||
-                  doc.version !== documentVersion
+                  documentChangedSince(doc, params.absolutePath, documentState)
                 ) {
                   return {
                     error: "Edit document changed while preparing diagnostics",

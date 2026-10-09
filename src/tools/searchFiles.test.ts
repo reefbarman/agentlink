@@ -608,6 +608,49 @@ describe("handleSearchFiles ripgrep args", () => {
 
     expect(result.data).toMatchObject({ total_matches: 300, truncated: true });
   });
+
+  it.each([
+    [0, 1, 10],
+    [5, 6, 15],
+  ])(
+    "bounds printed adjacent matches by max_results with offset %s",
+    async (offset, firstLine, lastLine) => {
+      const filePath = path.resolve("src/tools/searchFiles.ts");
+      const output = [
+        JSON.stringify({ type: "begin", data: { path: { text: filePath } } }),
+        ...Array.from({ length: 30 }, (_, index) =>
+          JSON.stringify({
+            type: "match",
+            data: {
+              path: { text: filePath },
+              lines: { text: `needle ${index + 1}` },
+              line_number: index + 1,
+              absolute_offset: index,
+            },
+          }),
+        ),
+        JSON.stringify({ type: "end", data: { path: { text: filePath } } }),
+      ].join("\n");
+      execRipgrepSearch.mockResolvedValue(output);
+
+      const result = await handleSearchFiles(
+        { path: ".", regex: "needle", context: 0, max_results: 10, offset },
+        { isPathTrusted: () => true } as never,
+        {} as never,
+        "session-regex-adjacent-limit",
+      );
+
+      const data = result.data as { results: string; total_matches: number };
+      const matchLines = data.results
+        .split("\n")
+        .filter((line) => line.startsWith(">"));
+      expect(data.total_matches).toBe(10);
+      expect(matchLines).toHaveLength(10);
+      expect(matchLines[0]).toContain(`> ${firstLine} |`);
+      expect(matchLines[9]).toContain(`> ${lastLine} |`);
+      expect(data.results).toContain("(10 matches)");
+    },
+  );
 });
 
 describe("sanitizeRegex", () => {

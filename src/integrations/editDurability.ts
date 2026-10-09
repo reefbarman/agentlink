@@ -388,6 +388,41 @@ export function documentMatchesTarget(
   );
 }
 
+export interface DocumentStateSnapshot {
+  version: number;
+  text: string;
+  isDirty: boolean;
+}
+
+export function captureDocumentState(
+  document: vscode.TextDocument,
+): DocumentStateSnapshot {
+  return {
+    version: document.version,
+    text: document.getText(),
+    isDirty: document.isDirty,
+  };
+}
+
+/**
+ * True when the target document was closed, retargeted, or its content or
+ * dirty state changed since the snapshot. A bare version bump with identical
+ * text (for example a reload of unchanged content from a network mount or a
+ * freshly written placeholder) is not treated as a change.
+ */
+export function documentChangedSince(
+  document: vscode.TextDocument,
+  absolutePath: string,
+  snapshot: DocumentStateSnapshot,
+): boolean {
+  if (!documentMatchesTarget(document, absolutePath)) return true;
+  if (document.version === snapshot.version) return false;
+  return (
+    document.isDirty !== snapshot.isDirty ||
+    document.getText() !== snapshot.text
+  );
+}
+
 async function observeDisk(absolutePath: string): Promise<EditDiskObservation> {
   try {
     const bytes = await fs.readFile(absolutePath);

@@ -4,8 +4,78 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  captureDocumentState,
+  commitAndVerifyEdit,
+  documentChangedSince,
+} from "./editDurability.js";
 
-import { commitAndVerifyEdit } from "./editDurability.js";
+describe("documentChangedSince", () => {
+  const target = path.join(os.tmpdir(), "agentlink-doc-state.ts");
+  const makeDoc = (overrides: Partial<Record<string, unknown>> = {}) => {
+    const doc = {
+      uri: vscode.Uri.file(target),
+      isClosed: false,
+      isDirty: false,
+      version: 1,
+      text: "same",
+      getText() {
+        return this.text;
+      },
+      ...overrides,
+    };
+    return doc;
+  };
+
+  it("ignores a version bump that leaves text and dirty state unchanged", () => {
+    const doc = makeDoc();
+    const snapshot = captureDocumentState(
+      doc as unknown as vscode.TextDocument,
+    );
+    doc.version = 3;
+    expect(
+      documentChangedSince(
+        doc as unknown as vscode.TextDocument,
+        target,
+        snapshot,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["text", (doc: ReturnType<typeof makeDoc>) => (doc.text = "edited")],
+    ["dirty state", (doc: ReturnType<typeof makeDoc>) => (doc.isDirty = true)],
+  ])("reports a version bump that changes %s", (_label, mutate) => {
+    const doc = makeDoc();
+    const snapshot = captureDocumentState(
+      doc as unknown as vscode.TextDocument,
+    );
+    doc.version = 2;
+    mutate(doc);
+    expect(
+      documentChangedSince(
+        doc as unknown as vscode.TextDocument,
+        target,
+        snapshot,
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a closed document even without a version change", () => {
+    const doc = makeDoc();
+    const snapshot = captureDocumentState(
+      doc as unknown as vscode.TextDocument,
+    );
+    doc.isClosed = true;
+    expect(
+      documentChangedSince(
+        doc as unknown as vscode.TextDocument,
+        target,
+        snapshot,
+      ),
+    ).toBe(true);
+  });
+});
 
 interface MutableDocument {
   uri: vscode.Uri;

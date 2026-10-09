@@ -296,6 +296,45 @@ describe("SandboxBehaviorAttestationService", () => {
     expect((await replacement).verified).toBe(true);
   });
 
+  it("reports a bounded, redacted cause for unexpected probe errors without changing the failure code", async () => {
+    const details: string[] = [];
+    const service = new SandboxBehaviorAttestationService({
+      probe: {
+        run: vi.fn(async () => {
+          throw new Error(
+            `sandbox runtime proxy contract drifted for HTTP proxy URLs: expected 8, found 10 http://user:secret-value@127.0.0.1:9 ${"x".repeat(500)}`,
+          );
+        }),
+      },
+      onUnexpectedProbeError: (detail) => details.push(detail),
+    });
+
+    const result = await service.attest(fingerprint());
+    expectFailure(result, "helper_protocol_failed");
+    expect(details).toHaveLength(1);
+    expect(details[0]).toContain(
+      "Error: sandbox runtime proxy contract drifted for HTTP proxy URLs: expected 8, found 10",
+    );
+    expect(details[0]).not.toContain("secret-value");
+    expect(details[0].length).toBeLessThanOrEqual(301);
+    expect(JSON.stringify(result)).not.toContain("drifted");
+
+    const throwingSink = new SandboxBehaviorAttestationService({
+      probe: {
+        run: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      },
+      onUnexpectedProbeError: () => {
+        throw new Error("sink failed");
+      },
+    });
+    expectFailure(
+      await throwingSink.attest(fingerprint()),
+      "helper_protocol_failed",
+    );
+  });
+
   it("latches failures and retry clears only failed state", async () => {
     const run = vi
       .fn<SandboxBehaviorProbeAdapter["run"]>()

@@ -159,6 +159,7 @@ import { BrowserGatewayOwnerRuntime } from "./browser-gateway/dataPlane/BrowserG
 import { diffSnapshotHub } from "./browser-gateway/DiffSnapshotHub.js";
 import {
   bootstrapBrowserGatewayHelper,
+  compareHelperReleaseVersions,
   resolveHealthyDiscoveredHelper,
 } from "./browser-gateway/helper/bootstrapHelper.js";
 import { readBrowserGatewayHelperDiscovery } from "./browser-gateway/browserGatewayHelperDiscovery.js";
@@ -1090,6 +1091,10 @@ export async function activate(
                 extensionRoot: context.extensionPath,
                 nodeExecutable: runtime.executable,
               }),
+              onUnexpectedProbeError: (detail) =>
+                log(
+                  `[sandbox-terminal] Behavioral attestation probe error: ${detail}`,
+                ),
             });
           const fingerprint = await createProductionSandboxRuntimeFingerprint({
             extensionRoot: context.extensionPath,
@@ -2482,6 +2487,7 @@ export async function activate(
 
   let browserGatewayActivationDisposed = false;
   let browserGatewayHelperBootstrapPromise: Promise<string> | null = null;
+  let browserGatewayOutdatedHelperNoticeShown = false;
   let browserGatewayBridgeStartPromise: Promise<number> | null = null;
   let browserGatewayRuntimeEnsurePromise: Promise<void> | null = null;
   let browserGatewayRestartInProgress = false;
@@ -2692,6 +2698,34 @@ export async function activate(
       log(
         `[browser-gateway-helper] ready (${result.source}) loopback=${discovered.url} external=${externalUrl} mdns=${discovered.mdnsUrl ?? "off"}`,
       );
+      // An active older helper is kept so open browser sessions are not cut
+      // off, but the user must be told it is serving a stale browser UI.
+      if (
+        result.source === "existing" &&
+        !browserGatewayOutdatedHelperNoticeShown &&
+        compareHelperReleaseVersions(
+          discovered.helperVersion,
+          helperVersion,
+        ) === -1
+      ) {
+        browserGatewayOutdatedHelperNoticeShown = true;
+        const runningHelperVersion = discovered.helperVersion;
+        log(
+          `[browser-gateway-helper] attached to outdated helper runningVersion=${runningHelperVersion} extensionVersion=${helperVersion}`,
+        );
+        void vscode.window
+          .showWarningMessage(
+            `The AgentLink browser gateway is still running version ${runningHelperVersion}, but this window has ${helperVersion}. The browser UI will stay on the old version until the gateway restarts. Restarting interrupts any open browser sessions.`,
+            "Restart Browser Gateway",
+          )
+          .then((choice) => {
+            if (choice === "Restart Browser Gateway") {
+              void vscode.commands.executeCommand(
+                "agentlink.restartBrowserGateway",
+              );
+            }
+          });
+      }
 
       browserGatewayHelperLeaseClient?.dispose();
       browserGatewayHelperLeaseClient = new BrowserGatewayHelperLeaseClient({

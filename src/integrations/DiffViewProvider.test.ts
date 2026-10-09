@@ -909,11 +909,12 @@ describe("DiffViewProvider durable save lifecycle", () => {
     );
     tempDirs.push(dir);
     const filePath = path.join(dir, "new.ts");
+    let text = "";
     const document = {
       uri: vscode.Uri.file(filePath),
       version: 1,
       lineCount: 1,
-      getText: () => "user edit",
+      getText: () => text,
     };
     const provider = new DiffViewProvider(1, "concurrent-review-edit");
     vi.spyOn(vscode.Uri, "parse").mockReturnValue({
@@ -928,6 +929,7 @@ describe("DiffViewProvider durable save lifecycle", () => {
     vi.spyOn(vscode.languages, "onDidChangeDiagnostics").mockImplementation(
       () => {
         document.version++;
+        text = "user edit";
         return { dispose: vi.fn() };
       },
     );
