@@ -43,7 +43,7 @@ describe("WorkspaceContinuityCatalog", () => {
 
     const reopened = new WorkspaceContinuityCatalog(storage);
     expect(
-      reopened.findExpansionCandidates({
+      reopened.findMigrationCandidates({
         workspaceIdentity: "expanded",
         workspaceFolderUris: [
           "file:///workspace/app",
@@ -52,7 +52,7 @@ describe("WorkspaceContinuityCatalog", () => {
       }),
     ).toEqual([expect.objectContaining({ workspaceIdentity: "single" })]);
     expect(
-      reopened.findExpansionCandidates({
+      reopened.findMigrationCandidates({
         workspaceIdentity: "untitled-expanded",
         workspaceFileUri: "untitled:workspace-configuration",
         workspaceFolderUris: [
@@ -62,19 +62,57 @@ describe("WorkspaceContinuityCatalog", () => {
       }),
     ).toEqual([expect.objectContaining({ workspaceIdentity: "single" })]);
     expect(
-      reopened.findExpansionCandidates({
+      reopened.findMigrationCandidates({
         workspaceIdentity: "single-again",
         workspaceFolderUris: ["file:///workspace/app"],
       }),
     ).toEqual([]);
     expect(
-      reopened.findExpansionCandidates({
+      reopened.findMigrationCandidates({
         workspaceIdentity: "other-workspace-file",
         workspaceFileUri: "file:///workspace/other.code-workspace",
         workspaceFolderUris: [
           "file:///workspace/app",
           "file:///workspace/docs",
         ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("returns untitled workspaces with the same folders as saved-workspace candidates", () => {
+    const storage = temporaryDirectory();
+    const catalog = new WorkspaceContinuityCatalog(storage);
+    const folders = ["file:///workspace/api", "file:///workspace/app"];
+    catalog.remember({
+      workspaceIdentity: "untitled",
+      workspaceFileUri: "untitled://Untitled-1/workspace.json",
+      workspaceFolderUris: folders,
+      historyDirectory: "/history/untitled",
+      anchorRootPath: "/workspace/api",
+      updatedAt: 1,
+    });
+    catalog.remember({
+      workspaceIdentity: "untitled-other-folders",
+      workspaceFileUri: "untitled://Untitled-2/workspace.json",
+      workspaceFolderUris: ["file:///workspace/api", "file:///workspace/docs"],
+      historyDirectory: "/history/untitled-other",
+      anchorRootPath: "/workspace/api",
+      updatedAt: 2,
+    });
+
+    const reopened = new WorkspaceContinuityCatalog(storage);
+    expect(
+      reopened.findMigrationCandidates({
+        workspaceIdentity: "saved",
+        workspaceFileUri: "file:///workspace/app.code-workspace",
+        workspaceFolderUris: folders,
+      }),
+    ).toEqual([expect.objectContaining({ workspaceIdentity: "untitled" })]);
+    expect(
+      reopened.findMigrationCandidates({
+        workspaceIdentity: "untitled-again",
+        workspaceFileUri: "untitled://Untitled-3/workspace.json",
+        workspaceFolderUris: folders,
       }),
     ).toEqual([]);
   });

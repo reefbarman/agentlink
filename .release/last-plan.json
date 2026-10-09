@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a5a141451a91b2a0356f0810af5c5206922eb8f3",
-  "createdAt": "2026-10-09T00:43:11.934Z",
+  "sourceSha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
+  "createdAt": "2026-10-09T11:23:14.307Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,1105 +10,248 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.29.1",
-      "baselineRef": "v1.29.1",
-      "reserved": "1.30.0",
+      "published": "1.30.0",
+      "baselineRef": "v1.30.0",
+      "reserved": "1.30.8",
       "commits": [
-        "60a0e82c81e332e307e0eb571850627247cf236d",
-        "1036fc2b487b41b992d566bda274663c060db77e",
-        "bc4457223fed6b3cb4bcb3bff1b8a512b1053298",
-        "d3786edee7d26a9c0ae7f572236c91a92c05aba8",
-        "f44807c31e811a2e5399863070be8446dcc812de",
-        "411650fb13ba9aa303e7732a318112037f6bcbf4",
-        "31c0a963829662f78b7b37e44385a39738a5196f",
-        "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-        "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-        "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-        "70b53aa889d80ef9958f6d6dcd2af19930f8506e",
-        "98d82dbda283af1945c7c43b6edb4c2ed437bea8",
-        "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec",
-        "4300be098233b996cc3ef5a488f18858458511ee",
-        "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228",
-        "72f8ee47bf285b05e69f9798e48cada13cec06e5",
-        "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d",
-        "851e6b78fe2277209da13779c5cb82b7e233b1a7",
-        "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-        "2950823c311c96a8628d19862340e93170f56a04",
-        "c76130303058959a716c75cfaaa71768bf988158",
-        "4ec5ee1dcb7c8961ff38ea8c31086d1dcc6bcdc6",
-        "f4617a6aa596a1a0c78922b04d71681bcd878918",
-        "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-        "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-        "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-        "0820c3c3303afc7410787dac07bb9785ecd138a1",
-        "9810afa85445851a42ac1e7c9be6615c89268038",
-        "09f168c5732bda9a9f1640cf28d420c427230cbc",
-        "8472adb3fc93e2e7bf4166aee443bb525b13080f",
-        "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-        "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-        "42a1f13f754702933e7c9a156289ffc9c3819379",
-        "81aab35bf43078ef921891a31f4ce34669630506"
+        "39a786755f9fd16bc59368d5d8c8001da8016d72",
+        "5f5e17d3854f62cb4f1834594835d84149e8074e",
+        "5f113c66bf469a69f030ce11d9592ba0a70f6da1",
+        "ba01165559855e54dc99b03bbded3fff99d44df4",
+        "1466f3085cddaa38911535b71e52be6c3c9cc7b2",
+        "f7752cea8c2ee2a76f7861ca15f5938627fac69f",
+        "515cf9529208deb0490dcedc01ab3b7871c6bed1",
+        "43c0e5f91bcb42b876c4ef42eb085982a7453840",
+        "41193a70f19afb6c60e9042cef1c66cec90ba875",
+        "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
+        "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
+        "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181"
       ],
-      "unknownPaths": [
-        "integrations/meridian-plugin-agentlink/LICENSE",
-        "integrations/meridian-plugin-agentlink/README.md",
-        "integrations/meridian-plugin-agentlink/index.js",
-        "integrations/meridian-plugin-agentlink/install.mjs",
-        "integrations/meridian-plugin-agentlink/package.json",
-        "integrations/meridian-plugin-agentlink/probe.mjs"
+      "unknownPaths": [],
+      "breakingCommits": [
+        "39a786755f9fd16bc59368d5d8c8001da8016d72",
+        "5f5e17d3854f62cb4f1834594835d84149e8074e"
       ],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "1.30.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "v1.30.0",
+      "bump": "breaking",
+      "status": "hold",
+      "reason": "breaking change detected; add a major intent or rework the change",
       "notes": [
         {
-          "sha": "60a0e82c81e332e307e0eb571850627247cf236d",
-          "subject": "feat(terminal): choose workspace directories inside the terminal panel",
-          "summary": "In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.",
+          "sha": "39a786755f9fd16bc59368d5d8c8001da8016d72",
+          "subject": "feat(retrieval): upgrade LanceDB and drop Intel Mac support",
+          "summary": "Upgrades LanceDB and drops Intel Mac (darwin-x64) support; installers and the VS Code install commands now require Apple Silicon.",
+          "breaking": true
+        },
+        {
+          "sha": "5f5e17d3854f62cb4f1834594835d84149e8074e",
+          "subject": "chore(vscode): require VS Code 1.140 and align API types",
+          "summary": "The VS Code extension now requires VS Code 1.140.0 or newer, so older editors can no longer install the current release.",
+          "breaking": true
+        },
+        {
+          "sha": "5f113c66bf469a69f030ce11d9592ba0a70f6da1",
+          "subject": "fix(terminal): report shell output when native shell startup times out",
+          "summary": "Native shell startup timeouts now report the shell's last output, such as an update prompt, in the error and output channel log.",
           "breaking": false
         },
         {
-          "sha": "1036fc2b487b41b992d566bda274663c060db77e",
-          "subject": "fix(webview): prevent MCP row overlap in narrow panels",
-          "summary": "MCP Manager server rows no longer overlap in narrow panels; names and statuses stay above wrapping badges and actions, following the Manager's own width.",
+          "sha": "ba01165559855e54dc99b03bbded3fff99d44df4",
+          "subject": "feat(cli): migrate multiline input to Ink 8",
+          "summary": "The CLI multiline composer moves to Ink 8 with a local editor supporting cursor movement, paste, and horizontal scrolling of long lines.",
           "breaking": false
         },
         {
-          "sha": "bc4457223fed6b3cb4bcb3bff1b8a512b1053298",
-          "subject": "fix(codex): focus web fetch previews on explicit start lines",
-          "summary": "Codex web_fetch previews with an explicit start_line now begin at the first returned numbered line at or after it, so provider headers don't consume the preview budget.",
+          "sha": "1466f3085cddaa38911535b71e52be6c3c9cc7b2",
+          "subject": "fix(terminal): keep tasks menu within the webview viewport",
+          "summary": "The terminal tasks menu now stays inside the webview viewport instead of overflowing the left edge in narrow panels.",
           "breaking": false
         },
         {
-          "sha": "d3786edee7d26a9c0ae7f572236c91a92c05aba8",
-          "subject": "fix(webview): keep MCP rows compact before wrapping",
-          "summary": "MCP Manager server rows stay compact and single-line when space allows, hiding secondary counts and badges before wrapping, with full status in tooltips and accessible labels.",
+          "sha": "f7752cea8c2ee2a76f7861ca15f5938627fac69f",
+          "subject": "fix(agent): restore pending ask_user cards for non-foreground chat tabs",
+          "summary": "Pending ask_user questions in non-foreground chat tabs are now persisted and restored on reload instead of being treated as interrupted.",
           "breaking": false
         },
         {
-          "sha": "f44807c31e811a2e5399863070be8446dcc812de",
-          "subject": "fix(tools): preflight index-writing git apply workflows",
-          "summary": "Command preflight now recognises git apply --cached/--index workflows that write protected Git metadata and offers reviewed native execution, including a reusable command template when inline files were supplied.",
+          "sha": "515cf9529208deb0490dcedc01ab3b7871c6bed1",
+          "subject": "fix: address triaged tool feedback",
+          "summary": "Fixes search_files match limits and offsets, ignores no-op document version bumps in edit review, logs sandbox probe errors, and warns when attaching to an outdated browser gateway helper.",
           "breaking": false
         },
         {
-          "sha": "411650fb13ba9aa303e7732a318112037f6bcbf4",
-          "subject": "feat(meridian): add AgentLink companion plugin and integration skill",
-          "summary": "Adds a standalone Meridian companion plugin and install script that keeps AgentLink's tools eagerly loaded for single-turn handoff, plus a maintenance skill and integration probe.",
+          "sha": "43c0e5f91bcb42b876c4ef42eb085982a7453840",
+          "subject": "fix(openai-compatible): count inline images at a fixed cost in usage fallback",
+          "summary": "Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.",
           "breaking": false
         },
         {
-          "sha": "31c0a963829662f78b7b37e44385a39738a5196f",
-          "subject": "fix(webview): wrap copyable code blocks so the copy button stays anchored",
-          "summary": "Copyable code blocks in chat are now wrapped so the copy button stays anchored at the bottom-right while wide code scrolls.",
+          "sha": "41193a70f19afb6c60e9042cef1c66cec90ba875",
+          "subject": "fix: address triaged tool feedback",
+          "summary": "Budget-exhausted background results include a completed-tool digest, sandboxed gh keyring failures get host-credential guidance, more config secrets are redacted, and compose telemetry records rejected children.",
           "breaking": false
         },
         {
-          "sha": "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-          "subject": "feat(updates): add user-triggered self-update for CLI, Desktop, and VS Code",
-          "summary": "Adds user-triggered self-update: VS Code gets Install Update and Reload for Update commands, Desktop gets install/restart actions, and the CLI gets `agentlink updates --install` and an /updates install option, all with checksum-verified downloads.",
+          "sha": "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
+          "subject": "fix(tools): refuse write_file rewrites that replace secrets with the redaction placeholder",
+          "summary": "write_file now refuses full rewrites of structured config files that would replace existing secret values with the [REDACTED] placeholder.",
           "breaking": false
         },
         {
-          "sha": "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-          "subject": "feat(prompts): add per-model prompt profile selection across surfaces",
-          "summary": "Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.",
+          "sha": "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
+          "subject": "chore(release): desktop-v0.10.0, cli-v0.11.0, sdk-v0.7.1",
+          "summary": "Release bookkeeping commit that updates version metadata, the lockfile, and changelogs without changing shipped behaviour.",
           "breaking": false
         },
         {
-          "sha": "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-          "subject": "fix(feedback): preserve complete reports and retrieve them by id",
-          "summary": "send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.",
-          "breaking": false
-        },
-        {
-          "sha": "70b53aa889d80ef9958f6d6dcd2af19930f8506e",
-          "subject": "fix(webview): polish the release update dialog and default desktop buttons",
-          "summary": "Redesigns the release update dialog with a version headline, tinted install-state notices, a primary install action and quieter footer, hides Install when self-update is blocked, and themes default desktop buttons.",
-          "breaking": false
-        },
-        {
-          "sha": "98d82dbda283af1945c7c43b6edb4c2ed437bea8",
-          "subject": "feat(desktop): allow locally signed builds to self-update to the release",
-          "summary": "Locally Team ID-signed Desktop builds can now self-update to the unsigned release after a confirmation explaining the Keychain and permission re-approval.",
-          "breaking": false
-        },
-        {
-          "sha": "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec",
-          "subject": "fix(desktop): move Check for updates into the More menu",
-          "summary": "Desktop's Check for updates action moved into the More menu; the title bar shows the update indicator only when a newer release is available.",
-          "breaking": false
-        },
-        {
-          "sha": "4300be098233b996cc3ef5a488f18858458511ee",
-          "subject": "fix(codex): treat provider cache-miss page errors as failed web fetches",
-          "summary": "Codex web_fetch now treats provider cache-miss and Internal Error page responses, including citation-prefixed Source headers, as failed reads so hosted fallback can recover.",
-          "breaking": false
-        },
-        {
-          "sha": "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228",
-          "subject": "fix(agent): align background result schemas and validation",
-          "summary": "Background agents' task result schema and runtime validation now share one contract, returning bounded field-specific diagnostics for rejected results.",
-          "breaking": false
-        },
-        {
-          "sha": "72f8ee47bf285b05e69f9798e48cada13cec06e5",
-          "subject": "fix(tools): surface skipped skill diagnostics",
-          "summary": "When load_skill rejects an exact SKILL.md path that discovery excluded, it now returns recorded validation diagnostics explaining why.",
-          "breaking": false
-        },
-        {
-          "sha": "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d",
-          "subject": "fix(tools): keep repo map file skeletons ahead of cache trees",
-          "summary": "get_repo_map now reserves budget for file skeletons and lists dependency/cache trees such as node_modules after project code.",
-          "breaking": false
-        },
-        {
-          "sha": "851e6b78fe2277209da13779c5cb82b7e233b1a7",
-          "subject": "feat(compose): allow read-only MCP tools as compose children",
-          "summary": "Compose scripts can now call read-only MCP tools through call_mcp_tool, and find_mcp_tools marks them read_only; approval policy is unchanged.",
-          "breaking": false
-        },
-        {
-          "sha": "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-          "subject": "fix: recover expired MCP sessions, index tiny files, exact-save bulk replace",
-          "summary": "Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.",
-          "breaking": false
-        },
-        {
-          "sha": "2950823c311c96a8628d19862340e93170f56a04",
-          "subject": "chore(deps): update AI SDKs and in-range dependencies",
-          "summary": "Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.",
-          "breaking": false
-        },
-        {
-          "sha": "c76130303058959a716c75cfaaa71768bf988158",
-          "subject": "chore(deps): bump pinned runtime dependencies",
-          "summary": "Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.",
-          "breaking": false
-        },
-        {
-          "sha": "4ec5ee1dcb7c8961ff38ea8c31086d1dcc6bcdc6",
-          "subject": "feat(telemetry): record provider transport and fallback in session outcomes",
-          "summary": "Session outcome telemetry now records provider transport (WebSocket/HTTP) and fallback counts for completed API turns.",
-          "breaking": false
-        },
-        {
-          "sha": "f4617a6aa596a1a0c78922b04d71681bcd878918",
-          "subject": "chore(deps): bump Node library majors",
-          "summary": "Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.",
-          "breaking": false
-        },
-        {
-          "sha": "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-          "subject": "chore(deps): bump UI library majors and keep the CLI on Ink 7",
-          "summary": "Upgrades UI libraries (preact 11, monaco 0.57, xterm 6, mermaid 12), themes the xterm scrollbar, and keeps the CLI on Ink 7.",
-          "breaking": false
-        },
-        {
-          "sha": "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-          "subject": "chore(deps): bump web-tree-sitter and stabilise tests under Preact 11",
-          "summary": "Bumps web-tree-sitter to 0.27 and adds test setup to stabilise tests under Preact 11.",
-          "breaking": false
-        },
-        {
-          "sha": "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-          "subject": "chore(deps): bump vitest 5 and jsdom 30",
-          "summary": "Upgrades vitest and jsdom dev tooling and renames the vitest config to .mts.",
-          "breaking": false
-        },
-        {
-          "sha": "0820c3c3303afc7410787dac07bb9785ecd138a1",
-          "subject": "chore(deps): bump oxfmt to 0.72 and apply its formatting",
-          "summary": "Bumps the oxfmt formatter and applies formatting-only changes.",
-          "breaking": false
-        },
-        {
-          "sha": "9810afa85445851a42ac1e7c9be6615c89268038",
-          "subject": "fix(terminal): match sandbox runtime proxy wrapper contract",
-          "summary": "Fixes the sandbox runtime helper's proxy wrapper checks to match sandbox-runtime 0.0.79, preventing repeated helper_protocol_failed errors.",
-          "breaking": false
-        },
-        {
-          "sha": "09f168c5732bda9a9f1640cf28d420c427230cbc",
-          "subject": "fix(browser-gateway): register Monaco services before creating diff editors",
-          "summary": "Fixes browser approval diff editors by registering all Monaco services before the first editor is created.",
-          "breaking": false
-        },
-        {
-          "sha": "8472adb3fc93e2e7bf4166aee443bb525b13080f",
-          "subject": "fix(browser-gateway): recover streaming after replay eviction",
-          "summary": "Browser live updates now recover with a fresh session snapshot when reconnecting outlasts the gateway's retained event history.",
-          "breaking": false
-        },
-        {
-          "sha": "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-          "subject": "chore(deps): update vega-lite and web-tree-sitter",
-          "summary": "Updates vega-lite to 6.5.0 and web-tree-sitter to 0.27.1.",
-          "breaking": false
-        },
-        {
-          "sha": "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-          "subject": "fix(agent): continue safely after provider response truncation",
-          "summary": "Foreground chats now automatically continue up to twice after a provider truncates a response, never executing truncated tool calls, and show a paused warning if truncation persists.",
-          "breaking": false
-        },
-        {
-          "sha": "42a1f13f754702933e7c9a156289ffc9c3819379",
-          "subject": "fix(core): build CommonJS prompt profile export",
-          "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
-          "breaking": false
-        },
-        {
-          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
-          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
-          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+          "sha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
+          "subject": "fix(agent): offer history migration when an untitled workspace is saved",
+          "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.8.1",
-      "baselineRef": "desktop-v0.8.1",
-      "reserved": "0.9.0",
-      "commits": [
-        "60a0e82c81e332e307e0eb571850627247cf236d",
-        "1036fc2b487b41b992d566bda274663c060db77e",
-        "bc4457223fed6b3cb4bcb3bff1b8a512b1053298",
-        "d3786edee7d26a9c0ae7f572236c91a92c05aba8",
-        "f44807c31e811a2e5399863070be8446dcc812de",
-        "411650fb13ba9aa303e7732a318112037f6bcbf4",
-        "31c0a963829662f78b7b37e44385a39738a5196f",
-        "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-        "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-        "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-        "70b53aa889d80ef9958f6d6dcd2af19930f8506e",
-        "98d82dbda283af1945c7c43b6edb4c2ed437bea8",
-        "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec",
-        "4300be098233b996cc3ef5a488f18858458511ee",
-        "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228",
-        "72f8ee47bf285b05e69f9798e48cada13cec06e5",
-        "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d",
-        "851e6b78fe2277209da13779c5cb82b7e233b1a7",
-        "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-        "2950823c311c96a8628d19862340e93170f56a04",
-        "c76130303058959a716c75cfaaa71768bf988158",
-        "4ec5ee1dcb7c8961ff38ea8c31086d1dcc6bcdc6",
-        "f4617a6aa596a1a0c78922b04d71681bcd878918",
-        "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-        "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-        "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-        "0820c3c3303afc7410787dac07bb9785ecd138a1",
-        "9810afa85445851a42ac1e7c9be6615c89268038",
-        "09f168c5732bda9a9f1640cf28d420c427230cbc",
-        "8472adb3fc93e2e7bf4166aee443bb525b13080f",
-        "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-        "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-        "42a1f13f754702933e7c9a156289ffc9c3819379",
-        "81aab35bf43078ef921891a31f4ce34669630506"
-      ],
-      "unknownPaths": [
-        "integrations/meridian-plugin-agentlink/LICENSE",
-        "integrations/meridian-plugin-agentlink/README.md",
-        "integrations/meridian-plugin-agentlink/index.js",
-        "integrations/meridian-plugin-agentlink/install.mjs",
-        "integrations/meridian-plugin-agentlink/package.json",
-        "integrations/meridian-plugin-agentlink/probe.mjs"
-      ],
+      "published": "0.10.0",
+      "baselineRef": "desktop-v0.10.0",
+      "reserved": "0.10.0",
+      "commits": ["33ba852d4ac9404b4cc80fc4d251e7ef8bc13181"],
+      "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.9.0",
-      "effectiveBump": "minor",
+      "version": "0.10.1",
+      "effectiveBump": "patch",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.9.0",
+      "tag": "desktop-v0.10.1",
       "notes": [
         {
-          "sha": "60a0e82c81e332e307e0eb571850627247cf236d",
-          "subject": "feat(terminal): choose workspace directories inside the terminal panel",
-          "summary": "In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.",
-          "breaking": false
-        },
-        {
-          "sha": "1036fc2b487b41b992d566bda274663c060db77e",
-          "subject": "fix(webview): prevent MCP row overlap in narrow panels",
-          "summary": "MCP Manager server rows no longer overlap in narrow panels; names and statuses stay above wrapping badges and actions, following the Manager's own width.",
-          "breaking": false
-        },
-        {
-          "sha": "bc4457223fed6b3cb4bcb3bff1b8a512b1053298",
-          "subject": "fix(codex): focus web fetch previews on explicit start lines",
-          "summary": "Codex web_fetch previews with an explicit start_line now begin at the first returned numbered line at or after it, so provider headers don't consume the preview budget.",
-          "breaking": false
-        },
-        {
-          "sha": "d3786edee7d26a9c0ae7f572236c91a92c05aba8",
-          "subject": "fix(webview): keep MCP rows compact before wrapping",
-          "summary": "MCP Manager server rows stay compact and single-line when space allows, hiding secondary counts and badges before wrapping, with full status in tooltips and accessible labels.",
-          "breaking": false
-        },
-        {
-          "sha": "f44807c31e811a2e5399863070be8446dcc812de",
-          "subject": "fix(tools): preflight index-writing git apply workflows",
-          "summary": "Command preflight now recognises git apply --cached/--index workflows that write protected Git metadata and offers reviewed native execution, including a reusable command template when inline files were supplied.",
-          "breaking": false
-        },
-        {
-          "sha": "411650fb13ba9aa303e7732a318112037f6bcbf4",
-          "subject": "feat(meridian): add AgentLink companion plugin and integration skill",
-          "summary": "Adds a standalone Meridian companion plugin and install script that keeps AgentLink's tools eagerly loaded for single-turn handoff, plus a maintenance skill and integration probe.",
-          "breaking": false
-        },
-        {
-          "sha": "31c0a963829662f78b7b37e44385a39738a5196f",
-          "subject": "fix(webview): wrap copyable code blocks so the copy button stays anchored",
-          "summary": "Copyable code blocks in chat are now wrapped so the copy button stays anchored at the bottom-right while wide code scrolls.",
-          "breaking": false
-        },
-        {
-          "sha": "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-          "subject": "feat(updates): add user-triggered self-update for CLI, Desktop, and VS Code",
-          "summary": "Adds user-triggered self-update: VS Code gets Install Update and Reload for Update commands, Desktop gets install/restart actions, and the CLI gets `agentlink updates --install` and an /updates install option, all with checksum-verified downloads.",
-          "breaking": false
-        },
-        {
-          "sha": "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-          "subject": "feat(prompts): add per-model prompt profile selection across surfaces",
-          "summary": "Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.",
-          "breaking": false
-        },
-        {
-          "sha": "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-          "subject": "fix(feedback): preserve complete reports and retrieve them by id",
-          "summary": "send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.",
-          "breaking": false
-        },
-        {
-          "sha": "70b53aa889d80ef9958f6d6dcd2af19930f8506e",
-          "subject": "fix(webview): polish the release update dialog and default desktop buttons",
-          "summary": "Redesigns the release update dialog with a version headline, tinted install-state notices, a primary install action and quieter footer, hides Install when self-update is blocked, and themes default desktop buttons.",
-          "breaking": false
-        },
-        {
-          "sha": "98d82dbda283af1945c7c43b6edb4c2ed437bea8",
-          "subject": "feat(desktop): allow locally signed builds to self-update to the release",
-          "summary": "Locally Team ID-signed Desktop builds can now self-update to the unsigned release after a confirmation explaining the Keychain and permission re-approval.",
-          "breaking": false
-        },
-        {
-          "sha": "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec",
-          "subject": "fix(desktop): move Check for updates into the More menu",
-          "summary": "Desktop's Check for updates action moved into the More menu; the title bar shows the update indicator only when a newer release is available.",
-          "breaking": false
-        },
-        {
-          "sha": "4300be098233b996cc3ef5a488f18858458511ee",
-          "subject": "fix(codex): treat provider cache-miss page errors as failed web fetches",
-          "summary": "Codex web_fetch now treats provider cache-miss and Internal Error page responses, including citation-prefixed Source headers, as failed reads so hosted fallback can recover.",
-          "breaking": false
-        },
-        {
-          "sha": "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228",
-          "subject": "fix(agent): align background result schemas and validation",
-          "summary": "Background agents' task result schema and runtime validation now share one contract, returning bounded field-specific diagnostics for rejected results.",
-          "breaking": false
-        },
-        {
-          "sha": "72f8ee47bf285b05e69f9798e48cada13cec06e5",
-          "subject": "fix(tools): surface skipped skill diagnostics",
-          "summary": "When load_skill rejects an exact SKILL.md path that discovery excluded, it now returns recorded validation diagnostics explaining why.",
-          "breaking": false
-        },
-        {
-          "sha": "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d",
-          "subject": "fix(tools): keep repo map file skeletons ahead of cache trees",
-          "summary": "get_repo_map now reserves budget for file skeletons and lists dependency/cache trees such as node_modules after project code.",
-          "breaking": false
-        },
-        {
-          "sha": "851e6b78fe2277209da13779c5cb82b7e233b1a7",
-          "subject": "feat(compose): allow read-only MCP tools as compose children",
-          "summary": "Compose scripts can now call read-only MCP tools through call_mcp_tool, and find_mcp_tools marks them read_only; approval policy is unchanged.",
-          "breaking": false
-        },
-        {
-          "sha": "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-          "subject": "fix: recover expired MCP sessions, index tiny files, exact-save bulk replace",
-          "summary": "Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.",
-          "breaking": false
-        },
-        {
-          "sha": "2950823c311c96a8628d19862340e93170f56a04",
-          "subject": "chore(deps): update AI SDKs and in-range dependencies",
-          "summary": "Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.",
-          "breaking": false
-        },
-        {
-          "sha": "c76130303058959a716c75cfaaa71768bf988158",
-          "subject": "chore(deps): bump pinned runtime dependencies",
-          "summary": "Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.",
-          "breaking": false
-        },
-        {
-          "sha": "4ec5ee1dcb7c8961ff38ea8c31086d1dcc6bcdc6",
-          "subject": "feat(telemetry): record provider transport and fallback in session outcomes",
-          "summary": "Session outcome telemetry now records provider transport (WebSocket/HTTP) and fallback counts for completed API turns.",
-          "breaking": false
-        },
-        {
-          "sha": "f4617a6aa596a1a0c78922b04d71681bcd878918",
-          "subject": "chore(deps): bump Node library majors",
-          "summary": "Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.",
-          "breaking": false
-        },
-        {
-          "sha": "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-          "subject": "chore(deps): bump UI library majors and keep the CLI on Ink 7",
-          "summary": "Upgrades UI libraries (preact 11, monaco 0.57, xterm 6, mermaid 12), themes the xterm scrollbar, and keeps the CLI on Ink 7.",
-          "breaking": false
-        },
-        {
-          "sha": "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-          "subject": "chore(deps): bump web-tree-sitter and stabilise tests under Preact 11",
-          "summary": "Bumps web-tree-sitter to 0.27 and adds test setup to stabilise tests under Preact 11.",
-          "breaking": false
-        },
-        {
-          "sha": "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-          "subject": "chore(deps): bump vitest 5 and jsdom 30",
-          "summary": "Upgrades vitest and jsdom dev tooling and renames the vitest config to .mts.",
-          "breaking": false
-        },
-        {
-          "sha": "0820c3c3303afc7410787dac07bb9785ecd138a1",
-          "subject": "chore(deps): bump oxfmt to 0.72 and apply its formatting",
-          "summary": "Bumps the oxfmt formatter and applies formatting-only changes.",
-          "breaking": false
-        },
-        {
-          "sha": "9810afa85445851a42ac1e7c9be6615c89268038",
-          "subject": "fix(terminal): match sandbox runtime proxy wrapper contract",
-          "summary": "Fixes the sandbox runtime helper's proxy wrapper checks to match sandbox-runtime 0.0.79, preventing repeated helper_protocol_failed errors.",
-          "breaking": false
-        },
-        {
-          "sha": "09f168c5732bda9a9f1640cf28d420c427230cbc",
-          "subject": "fix(browser-gateway): register Monaco services before creating diff editors",
-          "summary": "Fixes browser approval diff editors by registering all Monaco services before the first editor is created.",
-          "breaking": false
-        },
-        {
-          "sha": "8472adb3fc93e2e7bf4166aee443bb525b13080f",
-          "subject": "fix(browser-gateway): recover streaming after replay eviction",
-          "summary": "Browser live updates now recover with a fresh session snapshot when reconnecting outlasts the gateway's retained event history.",
-          "breaking": false
-        },
-        {
-          "sha": "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-          "subject": "chore(deps): update vega-lite and web-tree-sitter",
-          "summary": "Updates vega-lite to 6.5.0 and web-tree-sitter to 0.27.1.",
-          "breaking": false
-        },
-        {
-          "sha": "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-          "subject": "fix(agent): continue safely after provider response truncation",
-          "summary": "Foreground chats now automatically continue up to twice after a provider truncates a response, never executing truncated tool calls, and show a paused warning if truncation persists.",
-          "breaking": false
-        },
-        {
-          "sha": "42a1f13f754702933e7c9a156289ffc9c3819379",
-          "subject": "fix(core): build CommonJS prompt profile export",
-          "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
-          "breaking": false
-        },
-        {
-          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
-          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
-          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+          "sha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
+          "subject": "fix(agent): offer history migration when an untitled workspace is saved",
+          "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.10.0",
-      "baselineRef": "cli-v0.10.0",
+      "published": "0.11.0",
+      "baselineRef": "cli-v0.11.0",
       "reserved": "0.11.0",
-      "commits": [
-        "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
-        "60a0e82c81e332e307e0eb571850627247cf236d",
-        "411650fb13ba9aa303e7732a318112037f6bcbf4",
-        "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-        "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-        "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-        "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-        "2950823c311c96a8628d19862340e93170f56a04",
-        "c76130303058959a716c75cfaaa71768bf988158",
-        "f4617a6aa596a1a0c78922b04d71681bcd878918",
-        "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-        "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-        "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-        "0820c3c3303afc7410787dac07bb9785ecd138a1",
-        "9810afa85445851a42ac1e7c9be6615c89268038",
-        "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-        "527b457fd32128d7d325662a9f3a64fce77b9faf",
-        "42a1f13f754702933e7c9a156289ffc9c3819379",
-        "81aab35bf43078ef921891a31f4ce34669630506"
-      ],
-      "unknownPaths": [
-        "docs/assets/screenshots/cli-tui.png",
-        "docs/assets/screenshots/desktop-ask-agent.png",
-        "docs/assets/screenshots/desktop-quick-ask.png",
-        "docs/assets/screenshots/desktop-vscode-view.png",
-        "docs/assets/screenshots/originals/cli-tui.png",
-        "docs/assets/screenshots/originals/desktop-ask-agent.png",
-        "docs/assets/screenshots/originals/desktop-quick-ask.png",
-        "docs/assets/screenshots/originals/desktop-vscode-view.png",
-        "docs/assets/screenshots/originals/vscode-command-approval.png",
-        "docs/assets/screenshots/originals/vscode-diff-review.png",
-        "docs/assets/screenshots/source/build-ask-agent-demo-history.mjs",
-        "docs/assets/screenshots/vscode-command-approval.png",
-        "docs/assets/screenshots/vscode-diff-review.png",
-        "integrations/meridian-plugin-agentlink/LICENSE",
-        "integrations/meridian-plugin-agentlink/README.md",
-        "integrations/meridian-plugin-agentlink/index.js",
-        "integrations/meridian-plugin-agentlink/install.mjs",
-        "integrations/meridian-plugin-agentlink/package.json",
-        "integrations/meridian-plugin-agentlink/probe.mjs"
-      ],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.11.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "cli-v0.11.0",
-      "notes": [
-        {
-          "sha": "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
-          "subject": "docs(readme): add product screenshots for VS Code, Desktop, and CLI",
-          "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
-          "breaking": false
-        },
-        {
-          "sha": "60a0e82c81e332e307e0eb571850627247cf236d",
-          "subject": "feat(terminal): choose workspace directories inside the terminal panel",
-          "summary": "In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.",
-          "breaking": false
-        },
-        {
-          "sha": "411650fb13ba9aa303e7732a318112037f6bcbf4",
-          "subject": "feat(meridian): add AgentLink companion plugin and integration skill",
-          "summary": "Adds a standalone Meridian companion plugin and install script that keeps AgentLink's tools eagerly loaded for single-turn handoff, plus a maintenance skill and integration probe.",
-          "breaking": false
-        },
-        {
-          "sha": "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f",
-          "subject": "feat(updates): add user-triggered self-update for CLI, Desktop, and VS Code",
-          "summary": "Adds user-triggered self-update: VS Code gets Install Update and Reload for Update commands, Desktop gets install/restart actions, and the CLI gets `agentlink updates --install` and an /updates install option, all with checksum-verified downloads.",
-          "breaking": false
-        },
-        {
-          "sha": "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-          "subject": "feat(prompts): add per-model prompt profile selection across surfaces",
-          "summary": "Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.",
-          "breaking": false
-        },
-        {
-          "sha": "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-          "subject": "fix(feedback): preserve complete reports and retrieve them by id",
-          "summary": "send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.",
-          "breaking": false
-        },
-        {
-          "sha": "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-          "subject": "fix: recover expired MCP sessions, index tiny files, exact-save bulk replace",
-          "summary": "Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.",
-          "breaking": false
-        },
-        {
-          "sha": "2950823c311c96a8628d19862340e93170f56a04",
-          "subject": "chore(deps): update AI SDKs and in-range dependencies",
-          "summary": "Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.",
-          "breaking": false
-        },
-        {
-          "sha": "c76130303058959a716c75cfaaa71768bf988158",
-          "subject": "chore(deps): bump pinned runtime dependencies",
-          "summary": "Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.",
-          "breaking": false
-        },
-        {
-          "sha": "f4617a6aa596a1a0c78922b04d71681bcd878918",
-          "subject": "chore(deps): bump Node library majors",
-          "summary": "Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.",
-          "breaking": false
-        },
-        {
-          "sha": "7d0e98de811577467d92357e8c0ea4bb5c77d570",
-          "subject": "chore(deps): bump UI library majors and keep the CLI on Ink 7",
-          "summary": "Upgrades UI libraries (preact 11, monaco 0.57, xterm 6, mermaid 12), themes the xterm scrollbar, and keeps the CLI on Ink 7.",
-          "breaking": false
-        },
-        {
-          "sha": "4bc233ef86699f9cf0a33acafd82a47c47f2b830",
-          "subject": "chore(deps): bump web-tree-sitter and stabilise tests under Preact 11",
-          "summary": "Bumps web-tree-sitter to 0.27 and adds test setup to stabilise tests under Preact 11.",
-          "breaking": false
-        },
-        {
-          "sha": "acea65799c6d549c39c2a8f5dc732eaaa04fe725",
-          "subject": "chore(deps): bump vitest 5 and jsdom 30",
-          "summary": "Upgrades vitest and jsdom dev tooling and renames the vitest config to .mts.",
-          "breaking": false
-        },
-        {
-          "sha": "0820c3c3303afc7410787dac07bb9785ecd138a1",
-          "subject": "chore(deps): bump oxfmt to 0.72 and apply its formatting",
-          "summary": "Bumps the oxfmt formatter and applies formatting-only changes.",
-          "breaking": false
-        },
-        {
-          "sha": "9810afa85445851a42ac1e7c9be6615c89268038",
-          "subject": "fix(terminal): match sandbox runtime proxy wrapper contract",
-          "summary": "Fixes the sandbox runtime helper's proxy wrapper checks to match sandbox-runtime 0.0.79, preventing repeated helper_protocol_failed errors.",
-          "breaking": false
-        },
-        {
-          "sha": "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
-          "subject": "chore(deps): update vega-lite and web-tree-sitter",
-          "summary": "Updates vega-lite to 6.5.0 and web-tree-sitter to 0.27.1.",
-          "breaking": false
-        },
-        {
-          "sha": "527b457fd32128d7d325662a9f3a64fce77b9faf",
-          "subject": "fix: align CLI keyring checks and isolate checkpoint test setup",
-          "summary": "Aligns CLI bundle manifest and verification checks with the updated @napi-rs/keyring 2.1.0 version.",
-          "breaking": false
-        },
-        {
-          "sha": "42a1f13f754702933e7c9a156289ffc9c3819379",
-          "subject": "fix(core): build CommonJS prompt profile export",
-          "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
-          "breaking": false
-        },
-        {
-          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
-          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
-          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
-          "breaking": false
-        }
-      ]
-    },
-    "sdk": {
-      "published": "0.6.1",
-      "baselineRef": "sdk-v0.6.1",
-      "reserved": "0.7.0",
-      "commits": [
-        "60a0e82c81e332e307e0eb571850627247cf236d",
-        "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-        "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-        "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-        "2950823c311c96a8628d19862340e93170f56a04",
-        "c76130303058959a716c75cfaaa71768bf988158",
-        "f4617a6aa596a1a0c78922b04d71681bcd878918",
-        "0820c3c3303afc7410787dac07bb9785ecd138a1",
-        "42a1f13f754702933e7c9a156289ffc9c3819379"
-      ],
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.7.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "sdk-v0.7.0",
-      "notes": [
-        {
-          "sha": "60a0e82c81e332e307e0eb571850627247cf236d",
-          "subject": "feat(terminal): choose workspace directories inside the terminal panel",
-          "summary": "In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.",
-          "breaking": false
-        },
-        {
-          "sha": "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
-          "subject": "feat(prompts): add per-model prompt profile selection across surfaces",
-          "summary": "Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.",
-          "breaking": false
-        },
-        {
-          "sha": "694cdc2345b0324e0560535bcdb27f71ae5a54ad",
-          "subject": "fix(feedback): preserve complete reports and retrieve them by id",
-          "summary": "send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.",
-          "breaking": false
-        },
-        {
-          "sha": "334b97ea2f4fec82d164e3db98b9c1e7af7e8644",
-          "subject": "fix: recover expired MCP sessions, index tiny files, exact-save bulk replace",
-          "summary": "Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.",
-          "breaking": false
-        },
-        {
-          "sha": "2950823c311c96a8628d19862340e93170f56a04",
-          "subject": "chore(deps): update AI SDKs and in-range dependencies",
-          "summary": "Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.",
-          "breaking": false
-        },
-        {
-          "sha": "c76130303058959a716c75cfaaa71768bf988158",
-          "subject": "chore(deps): bump pinned runtime dependencies",
-          "summary": "Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.",
-          "breaking": false
-        },
-        {
-          "sha": "f4617a6aa596a1a0c78922b04d71681bcd878918",
-          "subject": "chore(deps): bump Node library majors",
-          "summary": "Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.",
-          "breaking": false
-        },
-        {
-          "sha": "0820c3c3303afc7410787dac07bb9785ecd138a1",
-          "subject": "chore(deps): bump oxfmt to 0.72 and apply its formatting",
-          "summary": "Bumps the oxfmt formatter and applies formatting-only changes.",
-          "breaking": false
-        },
-        {
-          "sha": "42a1f13f754702933e7c9a156289ffc9c3819379",
-          "subject": "fix(core): build CommonJS prompt profile export",
-          "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
+    },
+    "sdk": {
+      "published": "0.7.1",
+      "baselineRef": "sdk-v0.7.1",
+      "reserved": "0.7.1",
+      "commits": [],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "60a0e82c81e332e307e0eb571850627247cf236d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "In multi-project workspaces, the AgentLink Terminal panel now shows its own in-panel directory chooser (keyboard navigable, cancellable) instead of VS Code's top-of-window quick pick.",
+    "39a786755f9fd16bc59368d5d8c8001da8016d72": {
+      "bump": "patch",
+      "breakingUnits": ["cli", "desktop", "vscode"],
+      "summary": "Upgrades LanceDB and drops Intel Mac (darwin-x64) support; installers and the VS Code install commands now require Apple Silicon.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "1036fc2b487b41b992d566bda274663c060db77e": {
+    "5f5e17d3854f62cb4f1834594835d84149e8074e": {
+      "bump": "patch",
+      "breakingUnits": ["vscode"],
+      "summary": "The VS Code extension now requires VS Code 1.140.0 or newer, so older editors can no longer install the current release.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5f113c66bf469a69f030ce11d9592ba0a70f6da1": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP Manager server rows no longer overlap in narrow panels; names and statuses stay above wrapping badges and actions, following the Manager's own width.",
+      "summary": "Native shell startup timeouts now report the shell's last output, such as an update prompt, in the error and output channel log.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "bc4457223fed6b3cb4bcb3bff1b8a512b1053298": {
+    "ba01165559855e54dc99b03bbded3fff99d44df4": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Codex web_fetch previews with an explicit start_line now begin at the first returned numbered line at or after it, so provider headers don't consume the preview budget.",
+      "summary": "The CLI multiline composer moves to Ink 8 with a local editor supporting cursor movement, paste, and horizontal scrolling of long lines.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "d3786edee7d26a9c0ae7f572236c91a92c05aba8": {
+    "1466f3085cddaa38911535b71e52be6c3c9cc7b2": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP Manager server rows stay compact and single-line when space allows, hiding secondary counts and badges before wrapping, with full status in tooltips and accessible labels.",
+      "summary": "The terminal tasks menu now stays inside the webview viewport instead of overflowing the left edge in narrow panels.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "f44807c31e811a2e5399863070be8446dcc812de": {
+    "f7752cea8c2ee2a76f7861ca15f5938627fac69f": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Command preflight now recognises git apply --cached/--index workflows that write protected Git metadata and offers reviewed native execution, including a reusable command template when inline files were supplied.",
+      "summary": "Pending ask_user questions in non-foreground chat tabs are now persisted and restored on reload instead of being treated as interrupted.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "411650fb13ba9aa303e7732a318112037f6bcbf4": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a standalone Meridian companion plugin and install script that keeps AgentLink's tools eagerly loaded for single-turn handoff, plus a maintenance skill and integration probe.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "31c0a963829662f78b7b37e44385a39738a5196f": {
+    "515cf9529208deb0490dcedc01ab3b7871c6bed1": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Copyable code blocks in chat are now wrapped so the copy button stays anchored at the bottom-right while wide code scrolls.",
+      "summary": "Fixes search_files match limits and offsets, ignores no-op document version bumps in edit review, logs sandbox probe errors, and warns when attaching to an outdated browser gateway helper.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "d8f8acdc7336cdcb1e2c915b20f7fc6c535ebd9f": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds user-triggered self-update: VS Code gets Install Update and Reload for Update commands, Desktop gets install/restart actions, and the CLI gets `agentlink updates --install` and an /updates install option, all with checksum-verified downloads.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0dae67d3e1e3d33178b34df9dfda92d143bff3d1": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds per-model prompt profile selection: compatible models accept promptProfile (compatibility or reasoning), applied across VS Code, Browser Ask Agent, Desktop and the CLI, with new Codex defaults and a new SDK prompt-profile entry point.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "694cdc2345b0324e0560535bcdb27f71ae5a54ad": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "send_feedback now preserves complete reports up to 128 KiB, and get_feedback gains id lookup with paging to retrieve the full record, while lists and the sidebar label shortened previews.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "70b53aa889d80ef9958f6d6dcd2af19930f8506e": {
+    "43c0e5f91bcb42b876c4ef42eb085982a7453840": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Redesigns the release update dialog with a version headline, tinted install-state notices, a primary install action and quieter footer, hides Install when self-update is blocked, and themes default desktop buttons.",
+      "summary": "Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "98d82dbda283af1945c7c43b6edb4c2ed437bea8": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Locally Team ID-signed Desktop builds can now self-update to the unsigned release after a confirmation explaining the Keychain and permission re-approval.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d82d96a78d63d3018e6bc4d1fe2125d5bd9864ec": {
+    "41193a70f19afb6c60e9042cef1c66cec90ba875": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Desktop's Check for updates action moved into the More menu; the title bar shows the update indicator only when a newer release is available.",
+      "summary": "Budget-exhausted background results include a completed-tool digest, sandboxed gh keyring failures get host-credential guidance, more config secrets are redacted, and compose telemetry records rejected children.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "4300be098233b996cc3ef5a488f18858458511ee": {
+    "16693ce7c1e6f7a49310ac9cef79175f3d20987f": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Codex web_fetch now treats provider cache-miss and Internal Error page responses, including citation-prefixed Source headers, as failed reads so hosted fallback can recover.",
+      "summary": "write_file now refuses full rewrites of structured config files that would replace existing secret values with the [REDACTED] placeholder.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "dcbe50a5531bfa1f8c0439ec1d0cbb0d3e739228": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Background agents' task result schema and runtime validation now share one contract, returning bounded field-specific diagnostics for rejected results.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "72f8ee47bf285b05e69f9798e48cada13cec06e5": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When load_skill rejects an exact SKILL.md path that discovery excluded, it now returns recorded validation diagnostics explaining why.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4f01447fd5543bfc75eb03bfc6dc080f5f5fb10d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "get_repo_map now reserves budget for file skeletons and lists dependency/cache trees such as node_modules after project code.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "851e6b78fe2277209da13779c5cb82b7e233b1a7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Compose scripts can now call read-only MCP tools through call_mcp_tool, and find_mcp_tools marks them read_only; approval policy is unchanged.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "334b97ea2f4fec82d164e3db98b9c1e7af7e8644": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds save_without_formatting to find_and_replace, recovers expired Streamable HTTP MCP sessions, indexes tiny files, and lets embedded hosts set maxAttachments to 0.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2950823c311c96a8628d19862340e93170f56a04": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Updates AI SDKs (openai, MCP SDK, ACP SDK, zod) and other in-range dependencies, and makes sandbox runtime packaging tolerate hoisted dependencies.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c76130303058959a716c75cfaaa71768bf988158": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Bumps pinned runtime dependencies including sandbox-runtime, keyring, ajv, electron, ws and yaml.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4ec5ee1dcb7c8961ff38ea8c31086d1dcc6bcdc6": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Session outcome telemetry now records provider transport (WebSocket/HTTP) and fallback counts for completed API turns.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f4617a6aa596a1a0c78922b04d71681bcd878918": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Bumps Node library majors (eventsource, simple-git, https-proxy-agent, commander, marked, osx-sign) and fixes shadow-repo checkpoint creation that was silently failing.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7d0e98de811577467d92357e8c0ea4bb5c77d570": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Upgrades UI libraries (preact 11, monaco 0.57, xterm 6, mermaid 12), themes the xterm scrollbar, and keeps the CLI on Ink 7.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4bc233ef86699f9cf0a33acafd82a47c47f2b830": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Bumps web-tree-sitter to 0.27 and adds test setup to stabilise tests under Preact 11.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "acea65799c6d549c39c2a8f5dc732eaaa04fe725": {
+    "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b": {
       "bump": "none",
       "breakingUnits": [],
-      "summary": "Upgrades vitest and jsdom dev tooling and renames the vitest config to .mts.",
+      "summary": "Release bookkeeping commit that updates version metadata, the lockfile, and changelogs without changing shipped behaviour.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "0820c3c3303afc7410787dac07bb9785ecd138a1": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Bumps the oxfmt formatter and applies formatting-only changes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "9810afa85445851a42ac1e7c9be6615c89268038": {
+    "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Fixes the sandbox runtime helper's proxy wrapper checks to match sandbox-runtime 0.0.79, preventing repeated helper_protocol_failed errors.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "09f168c5732bda9a9f1640cf28d420c427230cbc": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes browser approval diff editors by registering all Monaco services before the first editor is created.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8472adb3fc93e2e7bf4166aee443bb525b13080f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Browser live updates now recover with a fresh session snapshot when reconnecting outlasts the gateway's retained event history.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "05f6e55898d9c9462f29f4cd05d5f4ebe0218158": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Updates vega-lite to 6.5.0 and web-tree-sitter to 0.27.1.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "527b457fd32128d7d325662a9f3a64fce77b9faf": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Aligns CLI bundle manifest and verification checks with the updated @napi-rs/keyring 2.1.0 version.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f81e8898e8e191cbf3d5aa39b552d55d320c2966": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Foreground chats now automatically continue up to twice after a provider truncates a response, never executing truncated tool calls, and show a paused warning if truncation persists.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "42a1f13f754702933e7c9a156289ffc9c3819379": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c41c4eb8a1dfd8d54e3914ae2853de59071eba75": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8319dca1f07fad6da862f0377a55c5e6b411abc5": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "58354021594378ac2e4b0af798a0d839f2353afa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "be8e9e163323477b099e8e2669f9434a61fbb7ff": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "16df905cdc0a6e94c50bba4c086c7e07cbf9609e": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "81aab35bf43078ef921891a31f4ce34669630506": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+      "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

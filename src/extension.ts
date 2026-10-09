@@ -189,6 +189,7 @@ import { WorkspaceContinuityCatalog } from "./agent/workspaceContinuityCatalog.j
 import {
   classifyWorkspaceHistoryTransition,
   hasPersistedWorkspaceHistory,
+  isWorkspaceHistoryMigrationOffer,
   migrateWorkspaceHistory,
   type WorkspaceHistoryShape,
 } from "./agent/workspaceHistoryMigration.js";
@@ -2137,16 +2138,17 @@ export async function activate(
     },
     destination: WorkspaceSessionLocation,
   ): Promise<void> => {
+    const transition = classifyWorkspaceHistoryTransition(
+      workspaceHistoryShape(source),
+      workspaceHistoryShape(destination),
+    );
     if (
       workspaceMigrationPromptInFlight ||
       destination.status !== "ready" ||
       !destination.stateAnchor ||
       source.workspaceIdentity === destination.workspaceIdentity ||
       !isRealDirectory(source.historyDirectory) ||
-      classifyWorkspaceHistoryTransition(
-        workspaceHistoryShape(source),
-        workspaceHistoryShape(destination),
-      ) !== "source_subset_of_destination" ||
+      !isWorkspaceHistoryMigrationOffer(transition) ||
       hasIndependentPersistedHistory(destination, source.historyDirectory)
     ) {
       return;
@@ -2159,7 +2161,9 @@ export async function activate(
     workspaceMigrationPromptInFlight = true;
     try {
       const choice = await vscode.window.showWarningMessage(
-        "AgentLink found history for a related workspace shape. Migrate it into an independent branch for this workspace?",
+        transition === "untitled_workspace_saved"
+          ? "AgentLink found history from this workspace before it was saved. Migrate it into an independent branch for the saved workspace?"
+          : "AgentLink found history for a related workspace shape. Migrate it into an independent branch for this workspace?",
         { modal: true },
         "Migrate history",
         "Start new workspace",
@@ -2244,7 +2248,7 @@ export async function activate(
     }),
   );
   const startupMigrationCandidate = workspaceContinuityCatalog
-    .findExpansionCandidates(workspaceHistoryShape(workspaceSessionLocation))
+    .findMigrationCandidates(workspaceHistoryShape(workspaceSessionLocation))
     .sort((left, right) => right.updatedAt - left.updatedAt)[0];
   if (startupMigrationCandidate) {
     void offerWorkspaceHistoryMigration(

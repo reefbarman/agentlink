@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyWorkspaceHistoryTransition,
   hasPersistedWorkspaceHistory,
+  isWorkspaceHistoryMigrationOffer,
   migrateWorkspaceHistory,
   type WorkspaceHistoryShape,
 } from "./workspaceHistoryMigration.js";
@@ -76,6 +77,57 @@ describe("classifyWorkspaceHistoryTransition", () => {
         shape("other", ["file:///workspace/docs"]),
       ),
     ).toBe("unrelated");
+  });
+
+  it("accepts saving an untitled workspace to a file with the same folders", () => {
+    const folders = ["file:///workspace/api", "file:///workspace/app"];
+    const untitled = {
+      ...shape("untitled", folders),
+      workspaceFileUri: "untitled://Untitled-1/workspace.json",
+    };
+    const saved = {
+      ...shape("saved", [...folders].reverse()),
+      workspaceFileUri: "file:///workspace/app.code-workspace",
+    };
+
+    expect(classifyWorkspaceHistoryTransition(untitled, saved)).toBe(
+      "untitled_workspace_saved",
+    );
+    expect(isWorkspaceHistoryMigrationOffer("untitled_workspace_saved")).toBe(
+      true,
+    );
+    // Reverse direction, different folders, and untitled-to-untitled stay unrelated.
+    expect(classifyWorkspaceHistoryTransition(saved, untitled)).toBe(
+      "unrelated",
+    );
+    expect(
+      classifyWorkspaceHistoryTransition(untitled, {
+        ...saved,
+        workspaceFolderUris: [...folders, "file:///workspace/docs"],
+      }),
+    ).toBe("unrelated");
+    expect(
+      classifyWorkspaceHistoryTransition(untitled, {
+        ...saved,
+        workspaceFolderUris: ["file:///workspace/app"],
+      }),
+    ).toBe("unrelated");
+    expect(
+      classifyWorkspaceHistoryTransition(untitled, {
+        ...untitled,
+        workspaceIdentity: "untitled-2",
+        workspaceFileUri: "untitled://Untitled-2/workspace.json",
+      }),
+    ).toBe("unrelated");
+    expect(
+      classifyWorkspaceHistoryTransition(untitled, {
+        ...saved,
+        workspaceFolderUris: [],
+      }),
+    ).toBe("unrelated");
+    expect(
+      isWorkspaceHistoryMigrationOffer("destination_subset_of_source"),
+    ).toBe(false);
   });
 });
 
@@ -180,6 +232,62 @@ describe("migrateWorkspaceHistory", () => {
     ).toMatchObject({
       sourceWorkspaceIdentity: "source-identity",
       kind: "import",
+    });
+  });
+
+  it("migrates an untitled workspace namespace into the saved workspace", async () => {
+    const anchorRoot = makeTempDirectory("agentlink-history-anchor");
+    const untitledHistory = path.join(
+      anchorRoot,
+      ".agentlink",
+      "history",
+      "workspace-0123456789abcdef",
+    );
+    fs.mkdirSync(untitledHistory, { recursive: true });
+    fs.writeFileSync(
+      path.join(untitledHistory, "sessions.json"),
+      '[{"id":"untitled-session"}]\n',
+      "utf-8",
+    );
+    const folders = ["file:///workspace/api", "file:///workspace/app"];
+
+    const result = await migrateWorkspaceHistory({
+      source: {
+        ...shape("untitled-identity", folders),
+        workspaceFileUri: "untitled://Untitled-1/workspace.json",
+      },
+      destination: {
+        ...shape("saved-identity", folders),
+        workspaceFileUri: "file:///workspace/app.code-workspace",
+      },
+      sourceHistoryDirectory: untitledHistory,
+      destinationAnchorRootPath: anchorRoot,
+      destinationLegacyHistoryDirectory: path.join(
+        anchorRoot,
+        ".agentlink",
+        "history",
+        "workspace-fedcba9876543210",
+      ),
+    });
+
+    expect(result.rollbackLineage).toBeUndefined();
+    expect(
+      fs.readFileSync(
+        path.join(result.historyDirectory, "sessions.json"),
+        "utf-8",
+      ),
+    ).toBe('[{"id":"untitled-session"}]\n');
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(result.workspaceRoot, "workspace.json"),
+          "utf-8",
+        ),
+      ),
+    ).toMatchObject({
+      workspaceIdentity: "saved-identity",
+      workspaceFileUri: "file:///workspace/app.code-workspace",
+      activeLineage: result.lineage,
     });
   });
 
