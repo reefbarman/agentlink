@@ -46,6 +46,11 @@ export {
 } from "./AttemptLimiter.js";
 export { HttpError } from "./httpJson.js";
 export {
+  openFileSessionEventLog,
+  type SessionEventLog,
+} from "./FileSessionEventLog.js";
+export {
+  SERVER_RESTARTED_ERROR,
   SessionEventHub,
   type AssistantSessionEvent,
   type AssistantTaskActor,

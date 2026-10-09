@@ -3,6 +3,7 @@ import type {
   EmbeddedAgentTurnEvent,
 } from "@agentlink/protocol";
 
+import type { SessionEventLog } from "./FileSessionEventLog.js";
 import type { WorkspaceBackgroundLifecycle } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
 
@@ -65,7 +66,7 @@ export type AssistantSessionEvent =
     };
 
 export interface SequencedSessionEvent {
-  /** Monotonic per session within one server epoch, starting at 1. */
+  /** Monotonic per session within one epoch, starting at 1. */
   readonly sequence: number;
   readonly event: AssistantSessionEvent;
 }
@@ -86,31 +87,58 @@ export type SessionEventSubscription =
 
 interface SessionChannel {
   next: number;
-  readonly retained: SequencedSessionEvent[];
+  retained: SequencedSessionEvent[];
+  /** Events in the session's log file since it was last compacted. */
+  persisted: number;
+  /** A started task with no outcome yet; the log is not compacted meanwhile. */
+  openTaskId: string | undefined;
   readonly listeners: Set<(event: SequencedSessionEvent) => void>;
 }
 
+/** Error code for a task that was running when the server stopped. */
+export const SERVER_RESTARTED_ERROR = "server_restarted";
+
 /**
- * In-memory sequenced event log per session. The epoch changes on every
- * server start, so clients can tell a restart from a gap. Durable state
- * lives in the session repository; this log only bridges reconnects.
+ * Sequenced event log per session. Without a `log` it is in memory and the
+ * epoch changes on every start. With one, events survive restarts and the
+ * epoch only changes when the log may have lost events, so clients can
+ * replay across a clean restart and reset after a crash. The session
+ * repository stays the source of truth; this log bridges reconnects.
  */
 export class SessionEventHub {
-  readonly epoch = randomUUID();
+  readonly epoch: string;
   private readonly channels = new Map<string, SessionChannel>();
+  private closed = false;
 
-  constructor(private readonly maxRetained = 1_000) {}
-
-  latestSequence(key: string): number {
-    return (this.channels.get(key)?.next ?? 1) - 1;
+  constructor(
+    private readonly maxRetained = 1_000,
+    private readonly log?: SessionEventLog,
+  ) {
+    this.epoch = log?.epoch ?? randomUUID();
   }
 
-  publish(key: string, event: AssistantSessionEvent): SequencedSessionEvent {
+  latestSequence(key: string): number {
+    // Through channel(): after a restart the session's log loads from disk.
+    return this.channel(key).next - 1;
+  }
+
+  /**
+   * Stop publishing: later events are dropped, not sequenced or delivered,
+   * so no client can see an event the log did not keep. Call before closing
+   * the log, once tasks and background children have stopped.
+   */
+  close(): void {
+    this.closed = true;
+  }
+
+  /** Undefined once the hub is closed. */
+  publish(
+    key: string,
+    event: AssistantSessionEvent,
+  ): SequencedSessionEvent | undefined {
+    if (this.closed) return undefined;
     const channel = this.channel(key);
-    const sequenced = { sequence: channel.next, event };
-    channel.next += 1;
-    channel.retained.push(sequenced);
-    if (channel.retained.length > this.maxRetained) channel.retained.shift();
+    const sequenced = this.record(key, channel, event);
     // Snapshot: a listener may unsubscribe while events are delivered.
     for (const listener of Array.from(channel.listeners)) {
       try {
@@ -169,11 +197,62 @@ export class SessionEventHub {
     };
   }
 
+  /** Sequence, retain, and persist an event; delivery is the caller's. */
+  private record(
+    key: string,
+    channel: SessionChannel,
+    event: AssistantSessionEvent,
+  ): SequencedSessionEvent {
+    const sequenced = { sequence: channel.next, event };
+    channel.next += 1;
+    channel.retained.push(sequenced);
+    if (channel.retained.length > this.maxRetained) channel.retained.shift();
+    if (event.kind === "task") {
+      if (event.state === "started") channel.openTaskId = event.taskId;
+      else if (event.taskId === channel.openTaskId) {
+        channel.openTaskId = undefined;
+      }
+    }
+    if (this.log) {
+      // Written before delivery, so a client never sees an unwritten event.
+      this.log.append(key, sequenced);
+      channel.persisted += 1;
+      // Not mid-task: a crash must still find the task's `started` event to
+      // close it after the restart, even after a long turn.
+      if (
+        channel.persisted > this.maxRetained * 2 &&
+        channel.openTaskId === undefined
+      ) {
+        this.log.compact(key, channel.retained);
+        channel.persisted = channel.retained.length;
+      }
+    }
+    return sequenced;
+  }
+
   private channel(key: string): SessionChannel {
     let channel = this.channels.get(key);
     if (!channel) {
-      channel = { next: 1, retained: [], listeners: new Set() };
+      const loaded = this.log?.load(key, this.maxRetained);
+      channel = {
+        next: loaded?.next ?? 1,
+        retained: loaded?.events ?? [],
+        persisted: loaded?.events.length ?? 0,
+        openTaskId: undefined,
+        listeners: new Set(),
+      };
       this.channels.set(key, channel);
+      // A channel loads before this process publishes to it, so a task
+      // still open in the log belonged to a previous run, which stopped it.
+      const interrupted = loaded?.openTaskId;
+      if (interrupted) {
+        this.record(key, channel, {
+          kind: "task",
+          state: "failed",
+          taskId: interrupted,
+          error: SERVER_RESTARTED_ERROR,
+        });
+      }
     }
     return channel;
   }

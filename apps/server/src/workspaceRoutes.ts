@@ -16,6 +16,7 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError, readJsonBody, sendJson, stringField } from "./httpJson.js";
 import { singleHeader } from "./requestGuard.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
+import type { SessionEventLog } from "./FileSessionEventLog.js";
 import type { ServerAccessStore } from "./ServerAccessStore.js";
 import {
   SessionEventHub,
@@ -98,6 +99,11 @@ export interface CreateAssistantWorkspaceRoutesOptions {
   readonly authorizeProject: AuthorizeAssistantProject;
   readonly models: AssistantModelSelection;
   readonly maxRetainedEvents?: number;
+  /**
+   * Keeps session events across restarts. The caller owns it and closes it
+   * after these routes and the hosts have stopped. In memory when absent.
+   */
+  readonly eventLog?: SessionEventLog;
   /** Event stream keepalive and session revalidation interval. */
   readonly heartbeatMs?: number;
   /** How long a backpressured event stream may stall before it is dropped. */
@@ -229,7 +235,7 @@ export function createAssistantWorkspaceRoutes(
     return { providerId: model.providerId, modelId: model.modelId };
   };
 
-  const hub = new SessionEventHub(options.maxRetainedEvents);
+  const hub = new SessionEventHub(options.maxRetainedEvents, options.eventLog);
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const streamStallTimeoutMs =
     options.streamStallTimeoutMs ?? DEFAULT_STREAM_STALL_TIMEOUT_MS;

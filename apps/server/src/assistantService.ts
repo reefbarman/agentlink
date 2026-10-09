@@ -42,6 +42,7 @@ import {
   usesLocalCa,
   type AssistantServerConfig,
 } from "./serverConfig.js";
+import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import {
   createAssistantWorkspaceRoutes,
   ownerProjectAccess,
@@ -70,6 +71,11 @@ export interface AssistantService {
 /** Where the access store (owner, devices, sessions) lives under the data root. */
 export function serverAccessDataRoot(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "server");
+}
+
+/** Where session event logs live, for replay across restarts. */
+export function serverEventLogDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "events");
 }
 
 /** Where the server-managed local CA and server certificate live. */
@@ -373,6 +379,14 @@ export async function startAssistantService(
     }
   };
 
+  // Opened before the hosts so a second process stops here, untouched.
+  const eventLog = await openFileSessionEventLog({
+    directory: serverEventLogDirectory(config),
+    log,
+  }).catch(async (error: unknown) => {
+    await certificates?.stop();
+    throw error;
+  });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
   // Bound once the routes exist; children cannot start before then.
@@ -436,6 +450,7 @@ export async function startAssistantService(
         defaultModel: config.defaultModel,
         ...(config.modelRoles ? { roles: config.modelRoles } : {}),
       },
+      eventLog,
     });
     agentNotifier = routes;
     server = await createAssistantServer({
@@ -473,6 +488,9 @@ export async function startAssistantService(
           await started.close();
           await recovery.settled();
           await closeHosts();
+          // Last: stopping turns and children publishes their final events.
+          routes.events.close();
+          await eventLog.close();
           await certificates?.stop();
         })();
         return closing;
@@ -483,6 +501,7 @@ export async function startAssistantService(
     await server?.close().catch(() => undefined);
     await recovery.settled();
     await closeHosts();
+    await eventLog.close();
     await certificates?.stop();
     throw error;
   }

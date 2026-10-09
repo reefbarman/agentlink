@@ -14,7 +14,9 @@ import {
   createTestCertificate,
   freePort,
   httpsRequest,
+  openEventStream,
   sessionCookieFrom,
+  type TestServerSentEvent,
 } from "./testSupport.js";
 
 const execFileAsync = promisify(execFile);
@@ -195,7 +197,27 @@ describe("agentlink-server process", () => {
         session: owner,
       });
       const { sessionId } = created.body as { sessionId: string };
-      const turns = `/api/projects/home/sessions/${sessionId}/turns`;
+      const sessionPath = `/api/projects/home/sessions/${sessionId}`;
+      const turns = `${sessionPath}/turns`;
+      const cursor = async () =>
+        (
+          (await request({ path: sessionPath, session: owner })).body as {
+            events: { epoch: string; sequence: number };
+          }
+        ).events;
+      const events = (query: string) =>
+        openEventStream({
+          port,
+          ca: certificate.cert,
+          path: `${sessionPath}/events${query}`,
+          headers: { cookie: owner.cookie },
+        });
+      const sessionEvent =
+        (predicate: (event: Record<string, unknown>) => boolean) =>
+        (message: TestServerSentEvent) =>
+          message.event === "session" &&
+          predicate((message.data as { event: Record<string, unknown> }).event);
+      const firstEpoch = (await cursor()).epoch;
       await expect(
         request({
           method: "POST",
@@ -222,6 +244,34 @@ describe("agentlink-server process", () => {
         `Session ${sessionId} in project "home" is still leased`,
       );
       expect(second.output()).not.toContain("Setup credential");
+
+      // The crash may have lost events a client saw, so the epoch changes
+      // and an old cursor resets. The log itself survived: replay from the
+      // new epoch shows the interrupted turn, closed as server_restarted.
+      const afterCrash = await cursor();
+      expect(afterCrash.epoch).not.toBe(firstEpoch);
+      const stale = await events(`?epoch=${firstEpoch}&after=1`);
+      await stale.waitFor(
+        (message) =>
+          message.event === "reset" &&
+          (message.data as { reason: string }).reason === "epoch_changed",
+      );
+      stale.close();
+      const crashed = await events(`?epoch=${afterCrash.epoch}&after=0`);
+      await crashed.waitFor(
+        sessionEvent(
+          (event) => event.kind === "task" && event.state === "started",
+        ),
+      );
+      await crashed.waitFor(
+        sessionEvent(
+          (event) =>
+            event.kind === "task" &&
+            event.state === "failed" &&
+            event.error === "server_restarted",
+        ),
+      );
+      crashed.close();
       await expect(
         request({
           method: "POST",
@@ -248,6 +298,7 @@ describe("agentlink-server process", () => {
       await vi.waitFor(() => expect(model.requests).toHaveLength(2), {
         timeout: 15_000,
       });
+      const beforeStop = await cursor();
 
       // Local recovery works while the server runs, and the code goes only
       // to the command's own output, never to the service log.
@@ -275,6 +326,39 @@ describe("agentlink-server process", () => {
       await expect(second.exited).resolves.toEqual({ code: 0, signal: null });
       expect(second.output()).toContain("AgentLink server stopped");
       await vi.waitFor(() => expect(model.requests[1]!.aborted).toBe(true));
+
+      // After a clean stop the epoch survives, so a client reconnecting with
+      // its cursor replays what it missed (the stopped turn) without a reset.
+      const third = startProcess(configPath);
+      await third.waitFor(/listening on 127\.0\.0\.1/u);
+      try {
+        expect((await cursor()).epoch).toBe(beforeStop.epoch);
+        const resumed = await events(
+          `?epoch=${beforeStop.epoch}&after=${beforeStop.sequence}`,
+        );
+        await resumed.waitFor(
+          sessionEvent(
+            (event) =>
+              event.kind === "task" &&
+              (event.state === "finished" || event.state === "failed"),
+          ),
+        );
+        expect(
+          resumed.events.some((message) => message.event === "reset"),
+        ).toBe(false);
+        expect(
+          resumed.events.some(
+            (message) =>
+              message.event === "session" &&
+              (message.data as { sequence: number }).sequence <=
+                beforeStop.sequence,
+          ),
+        ).toBe(false);
+        resumed.close();
+      } finally {
+        third.child.kill("SIGTERM");
+        await third.exited;
+      }
     } finally {
       await model.close();
     }
