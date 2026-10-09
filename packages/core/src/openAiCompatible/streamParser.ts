@@ -428,8 +428,31 @@ export async function* parseOpenAiCompatibleStreamEvents(
   yield { type: "done" };
 }
 
+/**
+ * Providers downscale large images, so an image costs a bounded number of
+ * tokens regardless of its encoded size. Mirrors the host's per-image estimate.
+ */
+const ESTIMATED_TOKENS_PER_IMAGE = 1_500;
+
+/**
+ * Fallback input estimate used when a stream reports no usage. Image parts are
+ * counted at a fixed per-image cost: counting a base64 data URL as text turns
+ * one screenshot into hundreds of thousands of phantom tokens, which survives
+ * condensing and makes every following request trigger another condense.
+ */
 export function estimateOpenAiCompatibleInputTokens(value: unknown): number {
-  return estimateTokens(JSON.stringify(value).length);
+  let images = 0;
+  const serialized = JSON.stringify(value, (key, entry: unknown) => {
+    if (key === "image_url" && isRecord(entry)) {
+      images += 1;
+      return {};
+    }
+    return entry;
+  });
+  return (
+    estimateTokens(serialized?.length ?? 0) +
+    images * ESTIMATED_TOKENS_PER_IMAGE
+  );
 }
 
 function estimateTokens(characters: number): number {
