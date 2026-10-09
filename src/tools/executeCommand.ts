@@ -533,6 +533,17 @@ const CONTAINER_RUNTIME_DENIAL_PATTERNS = [
   /(?:docker\.sock|colima).*(?:permission denied|operation not permitted)/i,
 ];
 
+/**
+ * gh stores its token in the host credential store (macOS Keychain), which the
+ * sandbox cannot read. gh then reports the token as invalid even when the host
+ * login is fine, so this evidence must not be presented as a broken login.
+ */
+const GH_KEYRING_FAILURE_PATTERNS = [
+  /\btoken in keyring is invalid\b/i,
+  /\bfailed to (?:get|read|load|retrieve) (?:the )?(?:auth )?(?:token|credentials?) from (?:the )?(?:keyring|keychain)\b/i,
+  /\b(?:keyring|keychain)\b[^\r\n]{0,80}\b(?:operation not permitted|permission denied|access denied|not allowed)\b/i,
+];
+
 const NODE_OOM_PATTERNS = [
   /fatal error:.*(?:heap out of memory|allocation failed)/i,
   /javascript heap out of memory/i,
@@ -1616,6 +1627,9 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
       (["npx", "pnpm", "yarn"].includes(tokens?.[0] ?? "") &&
         tokens?.some((token) => /(?:^|[\\/])tsx(?:$|[\\/.])/i.test(token))));
   const isMiseTrustDenial = isMiseRun && isMiseTrustedConfigDenial(output);
+  const isGhKeyringDenial =
+    segments.some((segment) => isDirectGhCommand(segment)) &&
+    GH_KEYRING_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
   if (result.security.permissionIntent !== "default" && !isTsxUnixIpcDenial)
     return;
   if (
@@ -1623,7 +1637,8 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
     !isProcessSignal &&
     !isContainerRuntimeDenial &&
     !isTsxUnixIpcDenial &&
-    !isMiseTrustDenial
+    !isMiseTrustDenial &&
+    !isGhKeyringDenial
   )
     return;
 
@@ -1636,11 +1651,26 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
         ? "container_runtime_socket"
         : isTsxUnixIpcDenial
           ? "unix_ipc_socket"
-          : "mise_trusted_config";
+          : isMiseTrustDenial
+            ? "mise_trusted_config"
+            : "host_credential_store";
+  const message =
+    capability === "host_credential_store"
+      ? "gh could not use its host keyring credentials inside the sandbox. The sandbox cannot read the host credential store, so this result does not establish that the host GitHub login is invalid; do not ask the user to re-authenticate on this evidence alone. Use the exact reviewed native check only when host credentials are needed. AgentLink will not retry or weaken the sandbox automatically."
+      : `The sandbox denied ${capability.replaceAll("_", " ")}. This workflow cannot be granted narrowly; use the exact reviewed native retry only when host access is necessary. AgentLink will not retry or weaken the sandbox automatically.`;
+  if (capability === "host_credential_store") {
+    Object.assign(result, {
+      credential_failure_evidence: {
+        client: "gh",
+        credential_store: "host_keyring",
+        host_login_status: "unverified",
+      },
+    });
+  }
   Object.assign(result, {
     retry_guidance: {
       code: "sandbox_host_integration",
-      message: `The sandbox denied ${capability.replaceAll("_", " ")}. This workflow cannot be granted narrowly; use the exact reviewed native retry only when host access is necessary. AgentLink will not retry or weaken the sandbox automatically.`,
+      message,
       automatic_retry: false,
       options: [
         {

@@ -498,6 +498,7 @@ function createEmptyReport() {
       outcomes: {},
       errorKinds: {},
       errorCodes: {},
+      rejectedChildren: {},
       childBuckets: {},
       queueWaitBuckets: {},
       artifactRetention: {},
@@ -673,6 +674,7 @@ function buildComposeReport(tool, compose) {
   compose.outcomes = categoricalMetricCounts(tool, "composeOutcome:");
   compose.errorKinds = categoricalMetricCounts(tool, "errorKind:");
   compose.errorCodes = categoricalMetricCounts(tool, "errorCode:");
+  compose.rejectedChildren = categoricalMetricCounts(tool, "rejectedChild:");
   compose.childBuckets = categoricalMetricCounts(tool, "childCountBucket:");
   compose.queueWaitBuckets = categoricalMetricCounts(tool, "queueWaitBucket:");
   compose.artifactRetention = categoricalMetricCounts(
@@ -1388,6 +1390,12 @@ function printSummary(report, inputPath, top) {
           "error codes",
           Object.entries(compose.errorCodes)
             .map(([code, count]) => `${code}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "rejected children (tool:policy)",
+          Object.entries(compose.rejectedChildren)
+            .map(([child, count]) => `${child}:${count}`)
             .join(" ") || "none",
         ],
         [

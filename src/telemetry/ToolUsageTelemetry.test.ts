@@ -213,6 +213,51 @@ describe("ToolUsageTelemetry", () => {
     expect(JSON.stringify(record)).not.toContain("SECRET_CHILD_RESULT");
   });
 
+  it("records bounded rejected compose children without leaking unknown names", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.recordCompose({
+      outcome: "error",
+      childCount: 0,
+      errorKind: "policy",
+      errorCode: "composability_policy",
+      rejectedChild: {
+        tool: "call_mcp_tool",
+        policy: "tool_input_not_composable",
+      },
+    });
+    telemetry.recordCompose({
+      outcome: "error",
+      childCount: 0,
+      errorKind: "policy",
+      errorCode: "composability_policy",
+      rejectedChild: {
+        tool: "private_server__secret_tool",
+        policy: "/private/reason",
+      },
+    });
+    telemetry.recordCompose({ outcome: "ok", childCount: 1 });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<string, { categoricalMetrics: Record<string, number> }>;
+    }>;
+    const rejected = Object.fromEntries(
+      Object.entries(record.tools.compose.categoricalMetrics).filter(([key]) =>
+        key.startsWith("rejectedChild:"),
+      ),
+    );
+    expect(rejected).toEqual({
+      "rejectedChild:call_mcp_tool:tool_input_not_composable": 1,
+      "rejectedChild:other:other": 1,
+    });
+    expect(JSON.stringify(record)).not.toContain("secret_tool");
+  });
+
   it("records bounded compose diagnostics through the narrow interface", async () => {
     const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
     const telemetry = new ToolUsageTelemetry({

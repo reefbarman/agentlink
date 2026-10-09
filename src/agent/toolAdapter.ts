@@ -2510,6 +2510,7 @@ function observeToolInvocation(
         queueWaitBucket: trace.queueWaitBucket,
         artifactRetention: trace.artifactRetention,
         outputSpilled: trace.outputSpilled,
+        rejectedChild: trace.rejectedChild,
       });
     } else if (
       request.name === "compose" &&

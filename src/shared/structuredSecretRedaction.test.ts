@@ -23,6 +23,7 @@ describe("structured secret redaction", () => {
       "/workspace/mise/config.toml",
       "/workspace/mise.production.toml",
       "/workspace/.mise.development.local.toml",
+      "/home/user/.codex/config.toml",
     ]) {
       expect(isStructuredConfigPath(filePath), filePath).toBe(true);
     }
@@ -263,6 +264,60 @@ describe("structured secret redaction", () => {
     expect(() =>
       parseToml(result.content.replace(/\r\n?|\n/g, "\n")),
     ).not.toThrow();
+  });
+
+  it("redacts credential-like header values in Codex TOML without hiding ordinary settings", () => {
+    const input = [
+      'sandbox_mode = "workspace-write"',
+      "[otel.exporter.otlp-http.headers]",
+      'Gram-Key = "FAKE_GRAM_CREDENTIAL"',
+      'Content-Type = "application/json"',
+      "[mcp_servers.remote]",
+      'url = "https://example.test/mcp"',
+      'http_headers = { "X-Session-Id" = "FAKE_SESSION", Accept = "text/plain" }',
+      'env_http_headers = { "Gram-Key" = "REMOTE_GRAM_KEY_ENV" }',
+      "",
+    ].join("\n");
+
+    const result = redactStructuredSecrets(
+      "/home/user/.codex/config.toml",
+      input,
+    );
+
+    expect(result.status).toBeUndefined();
+    expect(result.redactionCount).toBe(2);
+    expect(result.redactedKeys).toEqual(["Gram-Key", "X-Session-Id"]);
+    expect(result.content).not.toContain("FAKE_GRAM_CREDENTIAL");
+    expect(result.content).not.toContain("FAKE_SESSION");
+    expect(result.content).toContain('sandbox_mode = "workspace-write"');
+    expect(result.content).toContain('Content-Type = "application/json"');
+    expect(result.content).toContain('Accept = "text/plain"');
+    // Environment-variable names are references, not secrets.
+    expect(result.content).toContain('"Gram-Key" = "REMOTE_GRAM_KEY_ENV"');
+    expect(() => parseToml(result.content)).not.toThrow();
+  });
+
+  it("redacts credential-like header values inside JSON header maps only", () => {
+    const input = JSON.stringify(
+      {
+        mcpServers: {
+          remote: {
+            url: "https://example.test/mcp",
+            headers: { "Gram-Key": "FAKE_JSON_KEY", Accept: "text/plain" },
+          },
+        },
+        "Gram-Key-Label": "visible",
+      },
+      null,
+      2,
+    );
+
+    const result = redactStructuredSecrets("/workspace/.mcp.json", input);
+
+    expect(result.redactedKeys).toEqual(["Gram-Key"]);
+    expect(result.content).not.toContain("FAKE_JSON_KEY");
+    expect(result.content).toContain('"Accept": "text/plain"');
+    expect(result.content).toContain('"Gram-Key-Label": "visible"');
   });
 
   it("does not process ineligible TOML", () => {

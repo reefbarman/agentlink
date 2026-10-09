@@ -101,6 +101,18 @@ export const COMPOSE_ARTIFACT_RETENTION_CATEGORIES = [
 export type ComposeArtifactRetentionCategory =
   (typeof COMPOSE_ARTIFACT_RETENTION_CATEGORIES)[number];
 
+/** Scope-policy kinds recorded for a rejected compose child. */
+export const COMPOSE_REJECTED_CHILD_POLICIES = [
+  "tool_not_composable",
+  "tool_input_not_composable",
+  "tool_output_not_composable",
+  "recursive_compose",
+  "tool_not_in_request",
+  "tool_not_in_mode",
+  "tool_not_available",
+  "interaction_denied",
+] as const;
+
 /** Privacy-safe runtime diagnostics for one Compose call. */
 export interface ComposeToolUsageObservation {
   invocation?: ToolInvocationDimensions;
@@ -124,6 +136,8 @@ export interface ComposeToolUsageObservation {
   artifactRetention?: ComposeArtifactRetentionCategory;
   outputSpilled?: boolean;
   sameTurnRepair?: boolean;
+  /** First child rejected by compose policy; only native tool names are kept. */
+  rejectedChild?: { tool: string; policy: string };
 }
 
 export interface ToolUsageEvent {
@@ -254,6 +268,17 @@ export const TOOL_TELEMETRY_LIMITS = {
 } as const;
 const OVERFLOW = "__overflow__";
 const NATIVE_NAMES = new Set(Object.keys(TOOL_CAPABILITIES));
+const COMPOSE_REJECTED_CHILD_POLICY_SET = new Set<string>(
+  COMPOSE_REJECTED_CHILD_POLICIES,
+);
+/** Bounded `tool:policy` categories; unknown parts collapse to `other`. */
+const COMPOSE_REJECTED_CHILD_CATEGORIES = new Set<string>(
+  [...NATIVE_NAMES, "other"].flatMap((tool) =>
+    [...COMPOSE_REJECTED_CHILD_POLICIES, "other"].map(
+      (policy) => `${tool}:${policy}`,
+    ),
+  ),
+);
 const MODES = new Set([
   "code",
   "architect",
@@ -348,6 +373,7 @@ const METRIC_KEYS = new Set([
   "searchRankingReason",
   "searchResultCount",
   "readView",
+  "rejectedChild",
 ]);
 const METRIC_CATEGORIES = new Set([
   ...COMPOSE_ERROR_KINDS,
@@ -708,6 +734,9 @@ export class ToolUsageTelemetry {
         artifactRetention: observation.artifactRetention ?? "none",
         outputSpilled: observation.outputSpilled === true,
         sameTurnRepair: observation.sameTurnRepair === true,
+        ...(observation.rejectedChild
+          ? { rejectedChild: composeRejectedChild(observation.rejectedChild) }
+          : {}),
       },
     });
   }
@@ -963,7 +992,11 @@ export class ToolUsageTelemetry {
       if (typeof value === "number" && Number.isFinite(value)) {
         this.addCount(bucket.numericMetrics, key, value, "numericMetric");
       } else if (typeof value === "string" || typeof value === "boolean") {
-        const category = `${key}:${this.dimension(String(value), METRIC_CATEGORIES, "metricCategory")}`;
+        const allowed =
+          key === "rejectedChild"
+            ? COMPOSE_REJECTED_CHILD_CATEGORIES
+            : METRIC_CATEGORIES;
+        const category = `${key}:${this.dimension(String(value), allowed, "metricCategory")}`;
         this.addCount(bucket.categoricalMetrics, category, 1, "metricCategory");
       }
     }
@@ -1173,6 +1206,17 @@ export function composeChildCountBucket(
   if (count <= 7) return "4-7";
   if (count <= 15) return "8-15";
   return "16+";
+}
+
+function composeRejectedChild(rejected: {
+  tool: string;
+  policy: string;
+}): string {
+  const tool = NATIVE_NAMES.has(rejected.tool) ? rejected.tool : "other";
+  const policy = COMPOSE_REJECTED_CHILD_POLICY_SET.has(rejected.policy)
+    ? rejected.policy
+    : "other";
+  return `${tool}:${policy}`;
 }
 
 function nonNegativeInteger(value: number | undefined): number {

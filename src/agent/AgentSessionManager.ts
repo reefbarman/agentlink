@@ -1,5 +1,9 @@
 import * as crypto from "crypto";
 import { appendOwnershipHandoff } from "./background/ownershipHandoff.js";
+import {
+  BUDGET_EVIDENCE_DIGEST_MARKER,
+  buildBudgetEvidenceDigest,
+} from "./background/budgetEvidenceDigest.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
@@ -13438,7 +13442,7 @@ export class AgentSessionManager {
     const durablePartialResult =
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
-    const partialResult =
+    let partialResult =
       options?.preferDurableMetadata || options?.preferPartialResult
         ? (durablePartialResult ??
           session.getLastAssistantText() ??
@@ -13551,6 +13555,21 @@ export class AgentSessionManager {
         retrySafe: true,
         agentRetryable: false,
       };
+    }
+
+    if (
+      resultState === "budget_exhausted" &&
+      session.fleetMetadata?.backend === "native" &&
+      !partialResult?.includes(BUDGET_EVIDENCE_DIGEST_MARKER)
+    ) {
+      // The hard backstop can stop an agent before it summarizes; keep the
+      // sources it already inspected so the coordinator need not rediscover them.
+      const digest = buildBudgetEvidenceDigest(session.getMessages());
+      if (digest) {
+        partialResult = partialResult?.trim()
+          ? `${partialResult.trimEnd()}\n\n${digest}`
+          : digest;
+      }
     }
 
     const markerTerminalReason =

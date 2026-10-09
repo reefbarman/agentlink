@@ -71,5 +71,7 @@ export interface ComposeTrace {
   outputSpilled?: boolean;
   errorKind?: string;
   errorCode?: ComposeErrorCode;
+  /** First child rejected by compose scope policy (tool name and policy kind). */
+  rejectedChild?: { tool: string; policy: string };
   children: ComposeTraceChild[];
 }

@@ -135,6 +135,59 @@ describe("compose runtime", () => {
     });
   });
 
+  it("records the first policy-rejected child tool and kind on the trace", async () => {
+    const scope: ComposeExecutionScope = {
+      ...fakeScope(),
+      preflightChild: (name) => {
+        if (name === "write_file") {
+          throw new ComposeScopeError(
+            "tool_not_composable",
+            "Tool 'write_file' is not composable",
+          );
+        }
+        if (name === "call_mcp_tool") {
+          throw new ComposeScopeError(
+            "tool_input_not_composable",
+            "MCP tool not read-only",
+          );
+        }
+      },
+    };
+
+    const single = await run(
+      `return tool("write_file", { path: "a" });`,
+      scope,
+    );
+    expect(single.uiMeta.composeTrace.errorCode).toBe("composability_policy");
+    expect(single.uiMeta.composeTrace.rejectedChild).toEqual({
+      tool: "write_file",
+      policy: "tool_not_composable",
+    });
+
+    const batch = await run(
+      `return toolAllSettled([
+         { name: "read_file", input: {} },
+         { name: "call_mcp_tool", input: {} },
+       ]);`,
+      scope,
+    );
+    expect(batch.uiMeta.composeTrace.rejectedChild).toEqual({
+      tool: "call_mcp_tool",
+      policy: "tool_input_not_composable",
+    });
+
+    const authorization = await run(`return tool("blocked", {});`, {
+      ...fakeScope(undefined, (name) => name !== "blocked"),
+    });
+    expect(authorization.uiMeta.composeTrace.rejectedChild).toEqual({
+      tool: "blocked",
+      policy: "tool_not_in_request",
+    });
+
+    const ok = await run(`return tool("read_file", {});`, scope);
+    expect(ok.uiMeta.composeTrace.rejectedChild).toBeUndefined();
+  });
+
   it("runs dependent tool calls sequentially and returns canonical child data", async () => {
     const calls: Array<[string, Record<string, unknown>]> = [];
     const scope = fakeScope((name, input) => {

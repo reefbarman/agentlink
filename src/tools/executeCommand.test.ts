@@ -5441,6 +5441,32 @@ describe("handleExecuteCommand", () => {
       },
     },
     {
+      name: "gh host keyring credential failure",
+      command: "gh auth status",
+      output:
+        "github.com\n  X Failed to log in to github.com account octocat (keyring)\n  - Active account: true\n  - The token in keyring is invalid.",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "compound gh host keyring credential failure",
+      command: "git status --short && gh auth status",
+      output: "  - The token in keyring is invalid.",
+      action: "isolate_failed_step_for_reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+      sameCommand: false,
+    },
+    {
       name: "host process signal denial",
       command: "kill 80446",
       output: "operation not permitted",

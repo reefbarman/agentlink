@@ -58,6 +58,7 @@ const CONFIG_DIRECTORY_SEGMENTS = new Set([
   ".agentlink",
   ".agents",
   ".claude",
+  ".codex",
   ".continue",
   ".cursor",
   ".kilocode",
@@ -141,6 +142,39 @@ export function isHighConfidenceSecretKey(key: string): boolean {
   );
 }
 
+/**
+ * HTTP header maps use arbitrary header names, so a credential such as
+ * `Gram-Key` misses the generic key rules. Inside a header container, redact
+ * only credential-like header names; ordinary headers stay readable. Maps of
+ * environment-variable names (for example Codex `env_http_headers`) are not
+ * header containers because their values are not secrets.
+ */
+const HEADER_CONTAINER_KEYS = new Set([
+  "headers",
+  "httpheaders",
+  "requestheaders",
+  "customheaders",
+  "extraheaders",
+  "defaultheaders",
+]);
+
+function isCredentialHeaderName(key: string): boolean {
+  return /(?:key|token|secret|auth|signature|cookie|password|credential|session)/.test(
+    normalizeKey(key),
+  );
+}
+
+export function isSecretHeaderEntry(
+  containerKey: string | undefined,
+  key: string,
+): boolean {
+  return (
+    containerKey !== undefined &&
+    HEADER_CONTAINER_KEYS.has(normalizeKey(containerKey)) &&
+    isCredentialHeaderName(key)
+  );
+}
+
 class JsoncSecretScanner {
   private index = 0;
   readonly spans: ValueSpan[] = [];
@@ -209,11 +243,11 @@ class JsoncSecretScanner {
     return this.invalid();
   }
 
-  private parseValue(collectSecrets: boolean): number {
+  private parseValue(collectSecrets: boolean, parentKey?: string): number {
     this.skipTrivia();
     const start = this.index;
     const char = this.text[this.index];
-    if (char === "{") return this.parseObject(collectSecrets);
+    if (char === "{") return this.parseObject(collectSecrets, parentKey);
     if (char === "[") return this.parseArray(collectSecrets);
     if (char === '"') {
       this.parseString();
@@ -233,7 +267,7 @@ class JsoncSecretScanner {
     return Math.max(start, this.index);
   }
 
-  private parseObject(collectSecrets: boolean): number {
+  private parseObject(collectSecrets: boolean, parentKey?: string): number {
     this.index += 1;
     this.skipTrivia();
     if (this.text[this.index] === "}") {
@@ -248,8 +282,11 @@ class JsoncSecretScanner {
       this.index += 1;
       this.skipTrivia();
       const valueStart = this.index;
-      const sensitive = collectSecrets && isHighConfidenceSecretKey(key.value);
-      const valueEnd = this.parseValue(collectSecrets && !sensitive);
+      const sensitive =
+        collectSecrets &&
+        (isHighConfidenceSecretKey(key.value) ||
+          isSecretHeaderEntry(parentKey, key.value));
+      const valueEnd = this.parseValue(collectSecrets && !sensitive, key.value);
       if (sensitive) {
         this.spans.push({ start: valueStart, end: valueEnd, key: key.value });
       }
@@ -309,6 +346,13 @@ function replacementPreservingLines(
     return placeholder;
   });
   return insertedPlaceholder ? replacement : placeholder + original;
+}
+
+function isTomlSecretPath(fullPath: readonly string[]): boolean {
+  return (
+    fullPath.some(isTomlSecretKey) ||
+    isSecretHeaderEntry(fullPath.at(-2), fullPath.at(-1) as string)
+  );
 }
 
 function isTomlSecretKey(key: string): boolean {
@@ -405,7 +449,7 @@ class TomlSecretScanner {
     const keyPath = this.parseKeyPath();
     const key = keyPath.at(-1) as string;
     const fullPath = [...parentPath, ...keyPath];
-    const sensitive = collectSecrets && fullPath.some(isTomlSecretKey);
+    const sensitive = collectSecrets && isTomlSecretPath(fullPath);
     this.skipInlineTrivia();
     if (this.text[this.index] !== "=") this.invalid();
     this.index += 1;
@@ -525,7 +569,7 @@ class TomlSecretScanner {
       const keyPath = this.parseKeyPath();
       const key = keyPath.at(-1) as string;
       const fullPath = [...parentPath, ...keyPath];
-      const sensitive = collectSecrets && fullPath.some(isTomlSecretKey);
+      const sensitive = collectSecrets && isTomlSecretPath(fullPath);
       this.skipInlineTrivia();
       if (this.text[this.index] !== "=") this.invalid();
       this.index += 1;

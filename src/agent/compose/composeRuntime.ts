@@ -336,6 +336,49 @@ function classifyError(error: unknown): ComposeRuntimeError {
   );
 }
 
+const REJECTED_CHILD_POLICY_KINDS = new Set([
+  "authorization",
+  "recursive_compose",
+  "tool_input_not_composable",
+  "tool_not_composable",
+  "tool_output_not_composable",
+]);
+
+/**
+ * Record the first scope-policy rejection so telemetry can attribute compose
+ * policy failures to the child tool and policy kind. Must receive the raw scope
+ * error: classification collapses these kinds into `composability_policy`.
+ */
+function noteRejectedChild(
+  trace: ComposeTrace,
+  toolName: string,
+  error: unknown,
+): void {
+  if (trace.rejectedChild) return;
+  if (typeof error !== "object" || error === null || !("kind" in error)) return;
+  const kind = String(error.kind);
+  if (!REJECTED_CHILD_POLICY_KINDS.has(kind)) return;
+  const code =
+    "code" in error && typeof error.code === "string" ? error.code : kind;
+  trace.rejectedChild = {
+    tool: toolName,
+    policy: kind === "authorization" ? code : kind,
+  };
+}
+
+function preflightChild(
+  scope: ComposeExecutionScope,
+  descriptor: ComposeToolDescriptor,
+  state: ComposeRuntimeState,
+): void {
+  try {
+    scope.preflightChild(descriptor.name, descriptor.input);
+  } catch (error) {
+    noteRejectedChild(state.trace, descriptor.name, error);
+    throw error;
+  }
+}
+
 function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new ComposeRuntimeError(
@@ -739,8 +782,7 @@ async function executeOne(
   options: { prepared?: boolean; policy?: ComposeBatchPolicy } = {},
 ): Promise<JsonValue> {
   assertNotAborted(signal);
-  if (!options.prepared)
-    scope.preflightChild(descriptor.name, descriptor.input);
+  if (!options.prepared) preflightChild(scope, descriptor, state);
   if (!options.prepared && state.callCount >= COMPOSE_MAX_CHILD_CALLS) {
     throw new ComposeRuntimeError(
       "budget_exhausted",
@@ -792,6 +834,7 @@ async function executeOne(
     });
     return value;
   } catch (error) {
+    noteRejectedChild(state.trace, descriptor.name, error);
     const classified = classifyError(error);
     if (options.policy === "settled" && isSettledChildError(classified)) {
       const envelope = accountBridgedValue(
@@ -848,7 +891,7 @@ async function executeBatch(
     );
   }
   for (const descriptor of descriptors) {
-    scope.preflightChild(descriptor.name, descriptor.input);
+    preflightChild(scope, descriptor, state);
   }
   scope.reserveChildren(descriptors.length);
   if (descriptors.length === 0) return [];

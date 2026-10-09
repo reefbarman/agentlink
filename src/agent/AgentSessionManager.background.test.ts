@@ -142,6 +142,7 @@ const mocks = vi.hoisted(() => {
         }),
         autoTitle: vi.fn(),
         getAllMessages: vi.fn(() => messages),
+        getMessages: vi.fn(() => messages),
         createAbortController: vi.fn(() => new AbortController()),
         abort: vi.fn(),
         get isAborted() {
@@ -6804,6 +6805,67 @@ describe("AgentSessionManager background agents", () => {
       });
     },
   );
+
+  it("appends a completed-tool evidence digest to hard budget-exhausted native results", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = {
+      id: "bg-budget-digest",
+      status: "error",
+      getLastFinalMarker: () => undefined,
+      getLastAssistantText: () => "I'll research the client binding.",
+      getMessages: () => [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "t1",
+              name: "read_file",
+              input: { path: "src/client.ts" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "FILE_BODY" },
+          ],
+        },
+      ],
+      fleetMetadata: {
+        backend: "native",
+        taskClass: "readonly-research",
+        terminalReason: "budget_exhausted:tokens",
+        delegation: { expectedResult: "text" },
+      },
+    };
+
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved.resultState).toBe("budget_exhausted");
+    expect(resolved.partialResult).toContain(
+      "I'll research the client binding.",
+    );
+    expect(resolved.partialResult).toContain(
+      "[budget_exhausted evidence digest]",
+    );
+    expect(resolved.partialResult).toContain("- read_file path=src/client.ts");
+    expect(resolved.partialResult).not.toContain("FILE_BODY");
+    expect(JSON.parse(resolved.resultText).partialOutput).toBe(
+      resolved.partialResult,
+    );
+
+    // Re-resolving finalized output does not duplicate the digest.
+    session.fleetMetadata = {
+      ...session.fleetMetadata,
+      partialResult: resolved.partialResult,
+    } as typeof session.fleetMetadata;
+    const again = (mgr as any).resolveBackgroundResult(session, "fallback", {
+      preferDurableMetadata: true,
+    });
+    expect(
+      again.partialResult.split("[budget_exhausted evidence digest]"),
+    ).toHaveLength(2);
+  });
 
   it("preserves unfinalized native text-review narration as incomplete evidence", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
