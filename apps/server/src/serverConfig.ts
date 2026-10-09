@@ -19,10 +19,14 @@ export interface AssistantServerConfig {
   readonly listen: { readonly host: string; readonly port: number };
   readonly publicOrigins: readonly string[];
   readonly tls: AssistantServerTlsConfig;
-  readonly defaultModel: {
-    readonly providerId: string;
-    readonly modelId: string;
-  };
+  readonly defaultModel: AssistantServerModelReference;
+  /**
+   * Named model roles a client can ask for instead of an exact model, for
+   * example `review` to run reviews on a different provider.
+   */
+  readonly modelRoles?: Readonly<
+    Partial<Record<AssistantServerModelRole, AssistantServerModelReference>>
+  >;
   readonly providers: readonly AssistantServerProviderConfig[];
   readonly projects: readonly AssistantServerProjectConfig[];
   /** Absolute ripgrep binary for `search_files`; built-in search otherwise. */
@@ -36,6 +40,49 @@ export interface AssistantServerConfig {
 export type AssistantServerTlsConfig =
   | { readonly certFile: string; readonly keyFile: string }
   | { readonly localCa: true };
+
+export interface AssistantServerModelReference {
+  readonly providerId: string;
+  readonly modelId: string;
+}
+
+export const ASSISTANT_SERVER_MODEL_ROLES = ["review"] as const;
+export type AssistantServerModelRole =
+  (typeof ASSISTANT_SERVER_MODEL_ROLES)[number];
+
+/** One model a client may select, as declared in the configuration. */
+export interface AssistantServerModelChoice extends AssistantServerModelReference {
+  readonly displayName?: string;
+  readonly providerDisplayName?: string;
+}
+
+/** Every model the configuration declares, in configuration order. */
+export function configuredModels(
+  config: Pick<AssistantServerConfig, "providers">,
+): AssistantServerModelChoice[] {
+  const choices: AssistantServerModelChoice[] = [];
+  for (const provider of config.providers) {
+    const providerId = provider.id ?? provider.type;
+    const providerDisplayName = provider.displayName
+      ? { providerDisplayName: provider.displayName }
+      : {};
+    if (provider.type === "openai-compatible") {
+      for (const model of provider.models) {
+        choices.push({
+          providerId,
+          modelId: model.id,
+          ...(model.displayName ? { displayName: model.displayName } : {}),
+          ...providerDisplayName,
+        });
+      }
+    } else {
+      for (const modelId of provider.modelIds) {
+        choices.push({ providerId, modelId, ...providerDisplayName });
+      }
+    }
+  }
+  return choices;
+}
 
 export function usesLocalCa(
   tls: AssistantServerTlsConfig,
@@ -146,6 +193,7 @@ export function parseAssistantServerConfig(
     "publicOrigins",
     "tls",
     "defaultModel",
+    "modelRoles",
     "providers",
     "projects",
     "ripgrepPath",
@@ -184,9 +232,6 @@ export function parseAssistantServerConfig(
     };
   }
 
-  const defaultModel = record(config.defaultModel, "defaultModel");
-  allowKeys(defaultModel, "defaultModel", ["providerId", "modelId"]);
-
   if (!Array.isArray(config.providers) || config.providers.length === 0) {
     throw new Error("providers must be a non-empty array");
   }
@@ -199,12 +244,50 @@ export function parseAssistantServerConfig(
     if (providerIds.has(id)) throw new Error(`Duplicate provider id: ${id}`);
     providerIds.add(id);
   }
-  const parsedDefaultModel = {
-    providerId: identifier(defaultModel.providerId, "defaultModel.providerId"),
-    modelId: text(defaultModel.modelId, "defaultModel.modelId"),
+  const declared = configuredModels({ providers });
+  const modelReference = (
+    input: unknown,
+    label: string,
+  ): AssistantServerModelReference => {
+    const item = record(input, label);
+    allowKeys(item, label, ["providerId", "modelId"]);
+    const reference = {
+      providerId: identifier(item.providerId, `${label}.providerId`),
+      modelId: text(item.modelId, `${label}.modelId`),
+    };
+    if (!providerIds.has(reference.providerId)) {
+      throw new Error(`${label}.providerId does not match a provider`);
+    }
+    if (
+      !declared.some(
+        (choice) =>
+          choice.providerId === reference.providerId &&
+          choice.modelId === reference.modelId,
+      )
+    ) {
+      throw new Error(
+        `${label}.modelId is not a model of provider "${reference.providerId}"`,
+      );
+    }
+    return reference;
   };
-  if (!providerIds.has(parsedDefaultModel.providerId)) {
-    throw new Error("defaultModel.providerId does not match a provider");
+  const parsedDefaultModel = modelReference(
+    config.defaultModel,
+    "defaultModel",
+  );
+  let modelRoles: AssistantServerConfig["modelRoles"];
+  if (config.modelRoles !== undefined) {
+    const roles = record(config.modelRoles, "modelRoles");
+    allowKeys(roles, "modelRoles", ASSISTANT_SERVER_MODEL_ROLES);
+    const parsedRoles: Partial<
+      Record<AssistantServerModelRole, AssistantServerModelReference>
+    > = {};
+    for (const role of ASSISTANT_SERVER_MODEL_ROLES) {
+      if (roles[role] !== undefined) {
+        parsedRoles[role] = modelReference(roles[role], `modelRoles.${role}`);
+      }
+    }
+    modelRoles = parsedRoles;
   }
 
   if (!Array.isArray(config.projects) || config.projects.length === 0) {
@@ -248,6 +331,7 @@ export function parseAssistantServerConfig(
     publicOrigins,
     tls: parsedTls,
     defaultModel: parsedDefaultModel,
+    ...(modelRoles ? { modelRoles } : {}),
     providers,
     projects,
     ...(config.ripgrepPath === undefined

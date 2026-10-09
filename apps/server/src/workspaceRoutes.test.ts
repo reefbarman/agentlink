@@ -87,6 +87,7 @@ async function startHarness(
   const projectRoot = path.join(parent, "project");
   await fs.mkdir(projectRoot);
   const fetch = vi.fn<typeof globalThis.fetch>();
+  const claudeFetch = vi.fn<typeof globalThis.fetch>();
   const host: WorkspaceHost = await createWorkspaceHost({
     projectRoot,
     dataRoot: path.join(parent, "workspace-data"),
@@ -108,6 +109,21 @@ async function startHarness(
         ],
         fetch,
       },
+      {
+        type: "openai-compatible",
+        id: "claude",
+        baseURL: "https://claude.invalid/v1",
+        noAuth: true,
+        models: [
+          {
+            id: "claude-review",
+            contextWindow: 32_768,
+            maxOutputTokens: 4_096,
+            supportsToolUse: true,
+          },
+        ],
+        fetch: claudeFetch,
+      },
     ],
     files: { enabled: true },
   });
@@ -122,6 +138,18 @@ async function startHarness(
   const routes = createAssistantWorkspaceRoutes({
     projects: [{ projectId: "home", label: "Home", host }],
     authorizeProject: (request) => authorizeProject(request),
+    models: {
+      available: [
+        { providerId: "fixture", modelId: "fixture-model" },
+        {
+          providerId: "claude",
+          modelId: "claude-review",
+          displayName: "Claude review",
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      roles: { review: { providerId: "claude", modelId: "claude-review" } },
+    },
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
   });
@@ -198,6 +226,7 @@ async function startHarness(
     server,
     closeServer,
     fetch,
+    claudeFetch,
     clock,
     projectRoot,
     owner,
@@ -591,6 +620,214 @@ describe("assistant workspace routes", () => {
     ).resolves.toMatchObject({ status: 202 });
     await harness.routes.whenIdle("home", sessionId);
     await expect(readPending(harness, base)).resolves.toBeUndefined();
+  });
+
+  it("routes sessions to the selected model or role", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    const sentModel = (mock: typeof harness.fetch, call: number) =>
+      (
+        JSON.parse(String(mock.mock.calls[call]![1]!.body)) as {
+          model: string;
+        }
+      ).model;
+
+    await expect(
+      request({ path: "/api/projects/home/models", session: owner }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: {
+        models: [
+          { providerId: "fixture", modelId: "fixture-model" },
+          {
+            providerId: "claude",
+            modelId: "claude-review",
+            displayName: "Claude review",
+          },
+        ],
+        defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+        roles: { review: { providerId: "claude", modelId: "claude-review" } },
+      },
+    });
+
+    const review = await request({
+      method: "POST",
+      path: "/api/projects/home/sessions",
+      session: owner,
+      body: { role: "review" },
+    });
+    expect(review).toMatchObject({
+      status: 201,
+      body: { model: { providerId: "claude", modelId: "claude-review" } },
+    });
+    const reviewId = (review.body as { sessionId: string }).sessionId;
+    harness.claudeFetch.mockResolvedValueOnce(completion("reviewed"));
+    await request({
+      method: "POST",
+      path: `/api/projects/home/sessions/${reviewId}/turns`,
+      session: owner,
+      body: { text: "review this" },
+    });
+    await harness.routes.whenIdle("home", reviewId);
+    expect(harness.claudeFetch).toHaveBeenCalledTimes(1);
+    expect(sentModel(harness.claudeFetch, 0)).toBe("claude-review");
+    expect(harness.fetch).not.toHaveBeenCalled();
+
+    // A default session can switch to Claude between turns.
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    harness.fetch.mockResolvedValueOnce(completion("default"));
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "hello" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    expect(sentModel(harness.fetch, 0)).toBe("fixture-model");
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/model`,
+        session: owner,
+        body: { model: { providerId: "claude", modelId: "claude-review" } },
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { model: { providerId: "claude", modelId: "claude-review" } },
+    });
+    await expect(
+      request({ path: base, session: owner }),
+    ).resolves.toMatchObject({
+      body: { model: { providerId: "claude", modelId: "claude-review" } },
+    });
+    harness.claudeFetch.mockResolvedValueOnce(completion("switched"));
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "again" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    expect(harness.fetch).toHaveBeenCalledTimes(1);
+    expect(sentModel(harness.claudeFetch, 1)).toBe("claude-review");
+
+    const listed = await request({
+      path: "/api/projects/home/sessions",
+      session: owner,
+    });
+    expect(
+      (listed.body as { sessions: { model: { modelId: string } }[] }).sessions
+        .map((session) => session.model.modelId)
+        .sort(),
+    ).toEqual(["claude-review", "claude-review"]);
+  });
+
+  it("rejects unavailable models and changes during a turn", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    const create = (body: unknown) =>
+      request({
+        method: "POST",
+        path: "/api/projects/home/sessions",
+        session: owner,
+        body,
+      });
+    await expect(
+      create({ model: { providerId: "fixture", modelId: "gpt-unknown" } }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "model_not_available" },
+    });
+    await expect(create({ role: "planner" })).resolves.toMatchObject({
+      status: 400,
+      body: { error: "model_role_not_configured" },
+    });
+    await expect(
+      create({
+        role: "review",
+        model: { providerId: "fixture", modelId: "fixture-model" },
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "model_selection_invalid" },
+    });
+    await expect(
+      create({
+        model: {
+          providerId: "fixture",
+          modelId: "fixture-model",
+          baseURL: "https://evil.invalid",
+        },
+      }),
+    ).resolves.toMatchObject({ status: 400, body: { error: "model_invalid" } });
+
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/model`,
+        session: owner,
+        body: {},
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "model_required" },
+    });
+
+    harness.fetch.mockImplementationOnce(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+    );
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "long task" },
+    });
+    await vi.waitFor(() => expect(harness.fetch).toHaveBeenCalledTimes(1));
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/model`,
+        session: owner,
+        body: { role: "review" },
+      }),
+    ).resolves.toMatchObject({ status: 409, body: { error: "session_busy" } });
+    await request({ method: "POST", path: `${base}/cancel`, session: owner });
+    await harness.routes.whenIdle("home", sessionId);
+    await expect(
+      request({ path: base, session: owner }),
+    ).resolves.toMatchObject({
+      body: { model: { providerId: "fixture", modelId: "fixture-model" } },
+    });
+  });
+
+  it("requires write access to choose a model", async () => {
+    const harness = await startHarness({
+      authorizeProject: ({ access }) => access === "read",
+    });
+    const { owner, request } = harness;
+    await expect(
+      request({ path: "/api/projects/home/models", session: owner }),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      request({
+        method: "POST",
+        path: "/api/projects/home/sessions",
+        session: owner,
+        body: { role: "review" },
+      }),
+    ).resolves.toMatchObject({
+      status: 403,
+      body: { error: "project_access_denied" },
+    });
   });
 
   it("maps project access explicitly", async () => {

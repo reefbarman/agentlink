@@ -28,6 +28,7 @@ import {
   type LocalServerCertificate,
 } from "./localCertificateAuthority.js";
 import {
+  configuredModels,
   resolveWorkspaceProviders,
   usesLocalCa,
   type AssistantServerConfig,
@@ -322,6 +323,11 @@ export async function startAssistantService(
         host,
       })),
       authorizeProject: (request) => authorizeProject(request),
+      models: {
+        available: configuredModels(config),
+        defaultModel: config.defaultModel,
+        ...(config.modelRoles ? { roles: config.modelRoles } : {}),
+      },
     });
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),

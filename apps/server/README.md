@@ -32,7 +32,8 @@ One JSON file. Relative paths resolve against its directory, and unknown keys ar
 | `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                                                                                                    |
 | `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                                                                                                 |
 | `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS; see [Meridian](#claude-models-meridian) for the container exception. |
-| `defaultModel`  | `{ providerId, modelId }`.                                                                                                                                                                                                                                  |
+| `defaultModel`  | `{ providerId, modelId }`. The model must be declared by that provider.                                                                                                                                                                                     |
+| `modelRoles`    | Optional. `{ "review": { providerId, modelId } }` names the model a client gets when it creates a session with `{ "role": "review" }`, for example Claude through [Meridian](#claude-models-meridian). The model must be declared.                          |
 | `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                                                                                                                                    |
 | `ripgrepPath`   | Optional absolute `rg` binary for `search_files`.                                                                                                                                                                                                           |
 
@@ -85,13 +86,17 @@ mkdir -m 700 secrets meridian
 echo "COMPOSE_FILE=compose.yaml:compose.meridian.yaml" >> .env
 docker compose up -d
 
-# Sign in to Claude: open the printed link, sign in, paste the code back
+# Sign in to Claude: open the printed link, sign in, paste the code back.
+# Saved in meridian/.config/meridian/profiles; no restart needed.
 docker compose exec meridian node dist/cli.js profile add claude --headless
+docker compose exec meridian node dist/cli.js profile list
 
-# Optional: AgentLink's Meridian plugin (from an AgentLink checkout)
+# AgentLink's Meridian plugin (from an AgentLink checkout)
 node integrations/meridian-plugin-agentlink/install.mjs meridian/.config/meridian/plugins
 docker compose restart meridian
 ```
+
+Install the [AgentLink plugin](../../integrations/meridian-plugin-agentlink/README.md). Without it, Meridian treats the assistant as a generic OpenAI client: it defers AgentLink's tools and can run extra hidden model turns before handing a tool call back. With it, tool calls return to the assistant in one turn and the assistant runs them under its own approvals. It applies only to requests that carry the session-affinity header (`meridianSessionAffinity: true`) and AgentLink's prompt. To check, `GET /plugins/list` on Meridian should show `agentlink-client-tools` as `active`, and `GET /telemetry/requests` should show `isPassthrough: true` and `hasDeferredTools: false` for assistant requests. Sessions created before the plugin was loaded keep their old behaviour; start a new session.
 
 Then add the provider to `server.json` (full example: [`deploy/container/server.with-meridian.example.json`](deploy/container/server.with-meridian.example.json)) and `docker compose restart assistant`:
 
@@ -115,6 +120,8 @@ Then add the provider to `server.json` (full example: [`deploy/container/server.
   ]
 }
 ```
+
+To run reviews on Claude while everything else uses the default model, add `"modelRoles": { "review": { "providerId": "claude", "modelId": "claude-opus-5-5" } }` and create review sessions with `{ "role": "review" }` (see [Model selection](#model-selection)).
 
 `meridianSessionAffinity` lets Meridian resume each conversation's Claude session. Use the context window Meridian's `/v1/models` reports for your plan; 200k is safe for every plan. Requests use your Claude subscription's limits. To rotate the key, replace the file and `docker compose up -d --force-recreate`.
 
@@ -197,13 +204,24 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 
 ## Workspace sessions
 
-`createAssistantWorkspaceRoutes({ projects, authorizeProject })` mounts one or more workspace hosts. Pass its `handleRequest` to the server and its `close` as `onClose`.
+`createAssistantWorkspaceRoutes({ projects, authorizeProject, models })` mounts one or more workspace hosts. Pass its `handleRequest` to the server and its `close` as `onClose`.
 
 - **Explicit project access.** `authorizeProject({ principal, projectId, access })` maps the server principal to `read`, `write`, or `approve` on each mounted project. It is required; `ownerProjectAccess(store)` grants everything to the bootstrapped owner and nothing to anyone else. The host still runs as its own project principal.
-- **Routes.** `GET /api/projects`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, running task, and event cursor), `POST .../turns`, `POST .../interaction`, `POST .../cancel`, and `GET .../events`.
+- **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, model, running task, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, and `GET .../events`.
 - **Server-owned turns.** A turn or resume runs on the server, not the request: closing the browser does not cancel it. One task runs per session at a time (`409 session_busy`). A cancelled or failed turn leaves the session `interrupted`, which accepts the next turn. Server shutdown aborts running tasks and waits for them.
 - **Approvals.** `POST .../interaction` needs `approve` access and reauthentication within the window. The decision names the exact `interactionId` and `interactionRevision` the owner saw. A mismatch returns `409 stale_interaction`, and the host binds the same pair into the engine's atomic resume, so a decision cannot reach a replacement request. Revocation and reauthentication are rechecked immediately before the resume starts, and a revoked session stops reading a stalled request body.
 - **Event stream.** `GET .../events` is Server-Sent Events. Events carry `id: <epoch>:<sequence>`. Reconnect with `?epoch=&after=` (or `Last-Event-ID`) to replay retained events. A `reset` control event means the cursor cannot be served (server restarted or the event aged out) and the client should re-read the snapshot. The stream closes on revocation and rechecks the session every heartbeat. A backpressured reader is caught up from the retained log once it drains; one that stays stalled for 30 seconds is dropped and can reconnect.
+
+### Model selection
+
+Each session has its own model, chosen from the models `server.json` declares. Nothing outside that list is accepted, so a client cannot point a session at another endpoint.
+
+- `GET /api/projects/:id/models` (read access) returns `{ models, defaultModel, roles }`. Each model is `{ providerId, modelId, displayName?, providerDisplayName? }`.
+- `POST /api/projects/:id/sessions` takes an optional body: `{ "model": { providerId, modelId } }` or `{ "role": "review" }`, not both. No body uses `defaultModel`. Errors: `400 model_not_available`, `model_role_not_configured`, `model_selection_invalid`, or `model_invalid`.
+- `POST .../sessions/:sid/model` (write access) changes the model between turns with the same body. It returns `409 session_busy` while a turn runs and `409 interaction_pending` while an approval waits.
+- Session reads and lists include `model`: the session's own choice, or `defaultModel` if it has none.
+
+A review is an ordinary session on the review model. The server does not yet run reviews as background agents of another session.
 
 The event log is in memory, so it only bridges reconnects within one server process. The durable session repository remains the source of truth.
 

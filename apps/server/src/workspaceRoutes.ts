@@ -1,6 +1,7 @@
 import {
   projectEmbeddedAgentSessionSnapshot,
   projectEmbeddedAgentTurnEvent,
+  type AgentModelReference,
   type AgentTurnEvent,
   type AgentTurnResult,
 } from "@agentlink/core";
@@ -11,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError, readJsonBody, sendJson, stringField } from "./httpJson.js";
 import { singleHeader } from "./requestGuard.js";
+import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { ServerAccessStore } from "./ServerAccessStore.js";
 import {
   SessionEventHub,
@@ -29,7 +31,9 @@ const DEFAULT_HEARTBEAT_MS = 15_000;
  */
 const DEFAULT_STREAM_STALL_TIMEOUT_MS = 30_000;
 const ROUTE_PATTERN =
-  /^\/api\/projects\/([^/]+)(?:\/sessions(?:\/([^/]+)(?:\/(turns|interaction|cancel|events))?)?)?$/u;
+  /^\/api\/projects\/([^/]+)(?:\/sessions(?:\/([^/]+)(?:\/(turns|interaction|cancel|events|model))?)?)?$/u;
+const MODELS_ROUTE_PATTERN = /^\/api\/projects\/([^/]+)\/models$/u;
+const MODEL_ROLE_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u;
 
 /**
  * The workspace host operations the server uses. The host acts as its own
@@ -40,6 +44,7 @@ export type AssistantWorkspaceHost = Pick<
   | "createSession"
   | "listSessions"
   | "readSession"
+  | "setSessionModel"
   | "runTurn"
   | "resumeInteraction"
   | "cancel"
@@ -65,10 +70,22 @@ export type AuthorizeAssistantProject = (request: {
   readonly access: AssistantProjectAccess;
 }) => boolean | Promise<boolean>;
 
+/**
+ * The models a client may choose for a session. Choices are checked against
+ * `available`; the engine itself stores any model reference it is given.
+ */
+export interface AssistantModelSelection {
+  readonly available: readonly AssistantServerModelChoice[];
+  readonly defaultModel: AgentModelReference;
+  /** Named roles (for example `review`) mapped to one available model. */
+  readonly roles?: Readonly<Record<string, AgentModelReference | undefined>>;
+}
+
 export interface CreateAssistantWorkspaceRoutesOptions {
   readonly projects: readonly AssistantProjectMount[];
   /** Required explicit mapping from the server principal to project access. */
   readonly authorizeProject: AuthorizeAssistantProject;
+  readonly models: AssistantModelSelection;
   readonly maxRetainedEvents?: number;
   /** Event stream keepalive and session revalidation interval. */
   readonly heartbeatMs?: number;
@@ -122,6 +139,69 @@ export function createAssistantWorkspaceRoutes(
     }
     projects.set(mount.projectId, mount);
   }
+  const models = options.models;
+  const isAvailable = (model: AgentModelReference) =>
+    models.available.some(
+      (choice) =>
+        choice.providerId === model.providerId &&
+        choice.modelId === model.modelId,
+    );
+  if (!isAvailable(models.defaultModel)) {
+    throw new Error("The default model must be one of the available models");
+  }
+  const roles = new Map<string, AgentModelReference>();
+  for (const [role, model] of Object.entries(models.roles ?? {})) {
+    if (!model) continue;
+    if (!MODEL_ROLE_PATTERN.test(role)) {
+      throw new Error(`Invalid model role: ${role}`);
+    }
+    if (!isAvailable(model)) {
+      throw new Error(`Model role "${role}" must use an available model`);
+    }
+    roles.set(role, { providerId: model.providerId, modelId: model.modelId });
+  }
+  /**
+   * `{ model: { providerId, modelId } }` or `{ role: "review" }`, never both.
+   * Undefined when the body names neither.
+   */
+  const requestedModel = (
+    body: Record<string, unknown>,
+  ): AgentModelReference | undefined => {
+    const { model, role } = body;
+    if (model !== undefined && role !== undefined) {
+      throw new HttpError(400, "model_selection_invalid");
+    }
+    if (role !== undefined) {
+      const selected = typeof role === "string" ? roles.get(role) : undefined;
+      if (!selected) throw new HttpError(400, "model_role_not_configured");
+      return { ...selected };
+    }
+    if (model === undefined) return undefined;
+    if (
+      !model ||
+      typeof model !== "object" ||
+      Array.isArray(model) ||
+      Object.keys(model).some(
+        (key) => key !== "providerId" && key !== "modelId",
+      )
+    ) {
+      throw new HttpError(400, "model_invalid");
+    }
+    const { providerId, modelId } = model as Record<string, unknown>;
+    if (typeof providerId !== "string" || typeof modelId !== "string") {
+      throw new HttpError(400, "model_invalid");
+    }
+    const reference = { providerId, modelId };
+    if (!isAvailable(reference)) {
+      throw new HttpError(400, "model_not_available");
+    }
+    return reference;
+  };
+  const effectiveModel = (selected: AgentModelReference | undefined) => {
+    const model = selected ?? models.defaultModel;
+    return { providerId: model.providerId, modelId: model.modelId };
+  };
+
   const hub = new SessionEventHub(options.maxRetainedEvents);
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const streamStallTimeoutMs =
@@ -262,6 +342,18 @@ export function createAssistantWorkspaceRoutes(
       return true;
     }
 
+    const modelsMatch = MODELS_ROUTE_PATTERN.exec(url.pathname);
+    if (modelsMatch) {
+      if (method !== "GET") throw new HttpError(405, "method_not_allowed");
+      await authorize(auth, decodeURIComponent(modelsMatch[1]!), "read");
+      sendJson(response, 200, {
+        models: models.available,
+        defaultModel: effectiveModel(undefined),
+        roles: Object.fromEntries(roles),
+      });
+      return true;
+    }
+
     const match = ROUTE_PATTERN.exec(url.pathname);
     if (!match) return false;
     const projectId = decodeURIComponent(match[1]!);
@@ -289,6 +381,7 @@ export function createAssistantWorkspaceRoutes(
             sessionId: session.sessionId,
             updatedAt: session.updatedAt,
             state: session.state,
+            model: effectiveModel(session.model),
             background: mount.host.isBackgroundSession(session.sessionId),
           })),
         });
@@ -296,10 +389,19 @@ export function createAssistantWorkspaceRoutes(
       }
       if (method === "POST") {
         const mount = await authorize(auth, projectId, "write");
+        // The body is optional: no body creates a default-model session.
+        const model = hasRequestBody(request)
+          ? requestedModel(await readJsonBody(request, undefined, auth.signal))
+          : undefined;
         if (closing) throw new HttpError(503, "server_closing");
         await assertStillAuthorized(auth, false);
-        const created = await mount.host.createSession();
-        sendJson(response, 201, { sessionId: created.sessionId });
+        const created = await mount.host.createSession(
+          model ? { model } : undefined,
+        );
+        sendJson(response, 201, {
+          sessionId: created.sessionId,
+          model: effectiveModel(model),
+        });
         return true;
       }
       throw new HttpError(405, "method_not_allowed");
@@ -322,6 +424,7 @@ export function createAssistantWorkspaceRoutes(
       sendJson(response, 200, {
         projectId,
         session: projectEmbeddedAgentSessionSnapshot(hydration),
+        model: effectiveModel(hydration.record.selectedModel),
         background: mount.host.isBackgroundSession(sessionId),
         task: task ? { taskId: task.taskId, operation: task.operation } : null,
         events: { epoch: hub.epoch, sequence },
@@ -418,6 +521,47 @@ export function createAssistantWorkspaceRoutes(
           }),
       );
       sendJson(response, 202, { taskId });
+      return true;
+    }
+
+    if (operation === "model") {
+      const mount = await authorize(auth, projectId, "write");
+      const body = await readJsonBody(request, undefined, auth.signal);
+      const model = requestedModel(body);
+      if (!model) throw new HttpError(400, "model_required");
+      assertStartable(key);
+      if (mount.host.isBackgroundSession(sessionId)) {
+        throw new HttpError(409, "background_session");
+      }
+      const snapshot = projectEmbeddedAgentSessionSnapshot(
+        await readSnapshot(mount, sessionId),
+      );
+      if (snapshot.pendingInteraction) {
+        throw new HttpError(409, "interaction_pending");
+      }
+      if (snapshot.phase !== "idle" && snapshot.phase !== "interrupted") {
+        throw new HttpError(409, "session_busy");
+      }
+      await assertStillAuthorized(auth, false);
+      assertStartable(key);
+      try {
+        await mount.host.setSessionModel(sessionId, model);
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "session_not_found") {
+          throw new HttpError(404, "session_not_found");
+        }
+        if (
+          code === "session_busy" ||
+          code === "turn_lease_held" ||
+          code === "turn_lease_lost" ||
+          code === "session_revision_conflict"
+        ) {
+          throw new HttpError(409, "session_busy");
+        }
+        throw error;
+      }
+      sendJson(response, 200, { model: effectiveModel(model) });
       return true;
     }
 
@@ -575,6 +719,13 @@ export function createAssistantWorkspaceRoutes(
       await Promise.all(running.map((task) => task.done));
     },
   };
+}
+
+/** True when the request declares a body (non-zero length or chunked). */
+function hasRequestBody(request: IncomingMessage): boolean {
+  if (request.headers["transfer-encoding"] !== undefined) return true;
+  const length = singleHeader(request.headers["content-length"]);
+  return length !== undefined && length !== "0";
 }
 
 function sessionKey(projectId: string, sessionId: string): string {

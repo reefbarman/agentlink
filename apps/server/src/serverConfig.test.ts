@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  configuredModels,
   loadAssistantServerConfig,
   parseAssistantServerConfig,
   prepareSecret,
@@ -58,6 +59,33 @@ const withChange = (change: (config: Record<string, unknown>) => void) => {
 };
 
 describe("parseAssistantServerConfig", () => {
+  it("parses a review model role and lists configured models", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        (value.providers as unknown[]).push({
+          type: "codex",
+          displayName: "ChatGPT",
+          modelIds: ["gpt-6.1-sol"],
+        });
+        value.modelRoles = {
+          review: { providerId: "local", modelId: "fixture" },
+        };
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.modelRoles).toEqual({
+      review: { providerId: "local", modelId: "fixture" },
+    });
+    expect(configuredModels(config)).toEqual([
+      { providerId: "local", modelId: "fixture" },
+      {
+        providerId: "codex",
+        modelId: "gpt-6.1-sol",
+        providerDisplayName: "ChatGPT",
+      },
+    ]);
+  });
+
   it("resolves relative paths against the configuration directory", () => {
     const config = parseAssistantServerConfig(validConfig(), "/etc/agentlink");
     expect(config).toMatchObject({
@@ -151,6 +179,31 @@ describe("parseAssistantServerConfig", () => {
         config.defaultModel = { providerId: "missing", modelId: "fixture" };
       }),
       "does not match a provider",
+    ],
+    [
+      "a default model the provider does not declare",
+      withChange((config) => {
+        config.defaultModel = { providerId: "local", modelId: "missing" };
+      }),
+      'defaultModel.modelId is not a model of provider "local"',
+    ],
+    [
+      "an unknown model role",
+      withChange((config) => {
+        config.modelRoles = {
+          planner: { providerId: "local", modelId: "fixture" },
+        };
+      }),
+      'unknown key "planner"',
+    ],
+    [
+      "a review role on an undeclared model",
+      withChange((config) => {
+        config.modelRoles = {
+          review: { providerId: "local", modelId: "missing" },
+        };
+      }),
+      "modelRoles.review.modelId is not a model",
     ],
     [
       "a plain-HTTP public origin",
