@@ -1,0 +1,33 @@
+scripts/verify-cli-package.mjs
+  h_e08a86bb3a33a2 14,192
+src/agent/AgentSessionManager.background.test.ts
+  h_e08a86bb3a33a2 3301-3310
+  h_e08a86bb3a33a2 3298-3300,3311
+scripts/verify-cli-bundle.mjs
+  h_e08a86bb3a33a2 118,144,146
+scripts/verify-cli-bundle.test.mjs
+  h_e08a86bb3a33a2 35,48,53
+src/agent/webview/App.sessionlessTabRestore.test.tsx
+  h_e08a86bb3a33a2 243-256
+scripts/verify-cli-package.test.mjs
+  h_e08a86bb3a33a2 7,24,32,45-57
+  h_e08a86bb3a33a2 58
+apps/cli/bundle.mjs
+  h_e08a86bb3a33a2 99
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 5964-5981
+  h_e08a86bb3a33a2 5962-5963,5982
+apps/cli/esbuild.mjs
+  h_e08a86bb3a33a2 224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "527b457fd32128d7d325662a9f3a64fce77b9faf",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
