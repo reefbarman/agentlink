@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "node esbuild.mjs",
-    "lint": "tsc -p tsconfig.json --noEmit && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && oxlint src web/src --import-plugin --report-unused-disable-directives --deny-warnings",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

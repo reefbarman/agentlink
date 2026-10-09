@@ -35,6 +35,7 @@ import {
   type PassphraseCost,
   type ServerAccessSession,
 } from "./ServerAccessStore.js";
+import { serveWebAsset, type WebAssets } from "./webAssets.js";
 
 const DEFAULT_REAUTHENTICATION_WINDOW_MS = 5 * 60 * 1000;
 
@@ -125,6 +126,11 @@ export interface CreateAssistantServerOptions {
    * connections and the access store close.
    */
   readonly onClose?: () => void | Promise<void>;
+  /**
+   * Static web app files, served without a session (they hold no data) but
+   * after the Host, Origin, and forged-header checks.
+   */
+  readonly webAssets?: WebAssets;
   readonly now?: () => number;
   readonly passphraseCost?: PassphraseCost;
   readonly reauthenticationWindowMs?: number;
@@ -284,6 +290,7 @@ export async function createAssistantServer(
     const pathname = new URL(request.url ?? "/", "https://server.invalid")
       .pathname;
 
+    if (serveWebAsset(request, response, options.webAssets)) return;
     if (method === "GET" && pathname === "/api/auth/state") {
       sendJson(response, 200, { ownerConfigured: store.ownerConfigured });
       return;

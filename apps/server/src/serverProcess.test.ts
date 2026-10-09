@@ -181,6 +181,21 @@ describe("agentlink-server process", () => {
               : {}),
           },
         });
+      // The bundle embeds the web app and serves it without a session.
+      const shell = await request({ path: "/" });
+      expect(shell.status).toBe(200);
+      expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
+      expect(String(shell.body)).toContain('src="/app.js"');
+      for (const asset of [
+        "/app.js",
+        "/app.css",
+        "/icon.svg",
+        "/manifest.webmanifest",
+      ]) {
+        const served = await request({ path: asset });
+        expect(served.status, asset).toBe(200);
+        expect(String(served.headers["content-length"]), asset).not.toBe("0");
+      }
       const bootstrap = await request({
         method: "POST",
         path: "/api/auth/bootstrap",

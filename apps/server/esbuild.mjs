@@ -1,6 +1,6 @@
 import * as esbuild from "esbuild";
 
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -64,6 +64,44 @@ if (!customOutput) {
   await rm(path.dirname(output), { recursive: true, force: true });
 }
 await mkdir(path.dirname(output), { recursive: true });
+
+// The web app is embedded in the server bundle (the container image only
+// receives this one file) and served from fixed paths; see webAssets.ts.
+const webRoot = path.join(root, "web");
+const webApp = await esbuild.build({
+  entryPoints: [path.join(webRoot, "src", "main.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: ["es2022", "safari16", "chrome110", "firefox110"],
+  minify: true,
+  legalComments: "none",
+  write: false,
+});
+const webFile = (name) => readFile(path.join(webRoot, name), "utf8");
+const webAssets = {
+  "/": {
+    contentType: "text/html; charset=utf-8",
+    body: await webFile("index.html"),
+  },
+  "/app.js": {
+    contentType: "text/javascript; charset=utf-8",
+    body: webApp.outputFiles[0].text,
+  },
+  "/app.css": {
+    contentType: "text/css; charset=utf-8",
+    body: await webFile("app.css"),
+  },
+  "/icon.svg": {
+    contentType: "image/svg+xml",
+    body: await webFile("icon.svg"),
+  },
+  "/manifest.webmanifest": {
+    contentType: "application/manifest+json",
+    body: await webFile("manifest.webmanifest"),
+  },
+};
+
 const build = await esbuild.build({
   entryPoints: [path.join(root, "src", "main.ts")],
   outfile: output,
@@ -73,6 +111,7 @@ const build = await esbuild.build({
   target: "node22",
   sourcemap: false,
   metafile: true,
+  define: { __AGENTLINK_WEB_ASSETS__: JSON.stringify(webAssets) },
   banner: {
     js: '#!/usr/bin/env node\nimport { createRequire as __agentlinkCreateRequire } from "node:module";\nconst require = __agentlinkCreateRequire(import.meta.url);',
   },

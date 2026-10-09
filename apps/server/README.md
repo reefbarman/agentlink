@@ -1,6 +1,6 @@
 # @agentlink/server
 
-Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. The web app and jobs come in later slices.
+Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, a first web app, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. Jobs and notifications come in later slices.
 
 Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.js APIs (Node 22.19+), and its test suite runs on both.
 
@@ -20,6 +20,17 @@ agentlink-server codex-logout --config /etc/agentlink/server.json
 `--config` can be omitted when `AGENTLINK_SERVER_CONFIG` names the file; the container image sets it.
 
 `--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. On first start without an owner, the server writes a single-use setup credential to stderr (the journal under systemd, the log file under launchd); see [Access layer](#access-layer). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
+
+### Web app
+
+Open the first `publicOrigins` URL in a browser. The server serves a small mobile-friendly app from the same origin:
+
+- **First start:** enter the setup credential from the log (`docker compose logs assistant`), choose a passphrase (12+ characters), and name the device.
+- **More devices:** on a signed-in device open **Devices → Create pairing code** and enter the code on the new device within 5 minutes. If every device is lost, use **Recovery code** with a code from `agentlink-server recover` and the passphrase.
+- **Chats:** pick a project, choose a model, and start a chat. Replies stream live; the work keeps running if you close the tab, and reopening the chat (on any device) replays a turn in progress. Change the model between turns from the chat header.
+- **Approvals:** tool approvals (including a background agent's) appear above the composer. Allow or deny asks for the passphrase again when it was last confirmed more than 5 minutes ago.
+
+The app is embedded in the server bundle at build time (`apps/server/web/`, built by `esbuild.mjs`) and served from fixed paths (`/`, `/app.js`, `/app.css`, `/icon.svg`, `/manifest.webmanifest`) without a session, since those files hold no data. The Host, Origin, and forged-header checks still apply, and every `/api/` path still needs a session. Model output is only ever inserted as text. Chat history comes from a display-only transcript in the session snapshot: user and assistant text plus tool names, the last 200 entries, each capped at 20,000 characters. Thinking, tool inputs and results, and attachments are never sent. Not yet supported: Markdown rendering, attachments, chat titles, and notifications.
 
 ### Configuration
 
@@ -223,7 +234,7 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 `createAssistantWorkspaceRoutes({ projects, authorizeProject, models })` mounts one or more workspace hosts. Pass its `handleRequest` to the server and its `close` as `onClose`.
 
 - **Explicit project access.** `authorizeProject({ principal, projectId, access })` maps the server principal to `read`, `write`, or `approve` on each mounted project. It is required; `ownerProjectAccess(store)` grants everything to the bootstrapped owner and nothing to anyone else. The host still runs as its own project principal.
-- **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, model, running task, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, `GET .../events`, and the [background agent](#background-agents) routes under `.../agents`.
+- **Routes.** `GET /api/projects`, `GET /api/projects/:id/models`, `GET|POST /api/projects/:id/sessions`, `GET .../sessions/:sid` (snapshot, display transcript, model, running task with its start sequence and prompt, and event cursor), `POST .../turns`, `POST .../model`, `POST .../interaction`, `POST .../cancel`, `GET .../events`, and the [background agent](#background-agents) routes under `.../agents`.
 - **Server-owned turns.** A turn or resume runs on the server, not the request: closing the browser does not cancel it. One task runs per session at a time (`409 session_busy`). A cancelled or failed turn leaves the session `interrupted`, which accepts the next turn. Server shutdown aborts running tasks and waits for them.
 - **Approvals.** `POST .../interaction` needs `approve` access and reauthentication within the window. The decision names the exact `interactionId` and `interactionRevision` the owner saw. A mismatch returns `409 stale_interaction`, and the host binds the same pair into the engine's atomic resume, so a decision cannot reach a replacement request. Revocation and reauthentication are rechecked immediately before the resume starts, and a revoked session stops reading a stalled request body.
 - **Event stream.** `GET .../events` is Server-Sent Events. Events carry `id: <epoch>:<sequence>`. Reconnect with `?epoch=&after=` (or `Last-Event-ID`) to replay retained events. A `reset` control event means the cursor cannot be served (the event aged out, or the server crashed since the cursor was issued) and the client should re-read the snapshot. The stream closes on revocation and rechecks the session every heartbeat. A backpressured reader is caught up from the retained log once it drains; one that stays stalled for 30 seconds is dropped and can reconnect.

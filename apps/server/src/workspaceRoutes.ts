@@ -19,6 +19,10 @@ import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { SessionEventLog } from "./FileSessionEventLog.js";
 import type { ServerAccessStore } from "./ServerAccessStore.js";
 import {
+  MAX_TRANSCRIPT_TEXT_LENGTH,
+  projectSessionTranscript,
+} from "./sessionTranscript.js";
+import {
   SessionEventHub,
   type AssistantTaskOperation,
   type SequencedSessionEvent,
@@ -142,6 +146,13 @@ export interface AssistantWorkspaceRoutes {
 interface RunningTask {
   readonly taskId: string;
   readonly operation: AssistantTaskOperation;
+  /** Sequence of the task's `started` event, for replaying a live turn. */
+  readonly startedSequence: number | undefined;
+  /**
+   * The turn's prompt for display (bounded): the transcript only has it once
+   * the turn commits, so a client loading mid-turn would otherwise miss it.
+   */
+  readonly text: string | undefined;
   readonly controller: AbortController;
   readonly done: Promise<void>;
 }
@@ -288,12 +299,13 @@ export function createAssistantWorkspaceRoutes(
       signal: AbortSignal,
       onEvent: (event: AgentTurnEvent) => void,
     ) => Promise<AgentTurnResult>,
+    text?: string,
   ): string => {
     const key = sessionKey(projectId, sessionId);
     const taskId = randomUUID();
     // Deliberately not `auth.signal`: closing the browser must not stop work.
     const controller = new AbortController();
-    hub.publish(key, {
+    const started = hub.publish(key, {
       kind: "task",
       state: "started",
       taskId,
@@ -328,7 +340,14 @@ export function createAssistantWorkspaceRoutes(
         tasks.delete(key);
       }
     })();
-    tasks.set(key, { taskId, operation, controller, done });
+    tasks.set(key, {
+      taskId,
+      operation,
+      startedSequence: started?.sequence,
+      text: text?.slice(0, MAX_TRANSCRIPT_TEXT_LENGTH),
+      controller,
+      done,
+    });
     return taskId;
   };
 
@@ -476,9 +495,19 @@ export function createAssistantWorkspaceRoutes(
       sendJson(response, 200, {
         projectId,
         session: projectEmbeddedAgentSessionSnapshot(hydration),
+        transcript: projectSessionTranscript(hydration.record.messages),
         model: effectiveModel(hydration.record.selectedModel),
         background: mount.host.isBackgroundSession(sessionId),
-        task: task ? { taskId: task.taskId, operation: task.operation } : null,
+        task: task
+          ? {
+              taskId: task.taskId,
+              operation: task.operation,
+              ...(task.startedSequence !== undefined
+                ? { startedSequence: task.startedSequence }
+                : {}),
+              ...(task.text !== undefined ? { text: task.text } : {}),
+            }
+          : null,
         events: { epoch: hub.epoch, sequence },
       });
       return true;
@@ -529,6 +558,7 @@ export function createAssistantWorkspaceRoutes(
         auth,
         (signal, onEvent) =>
           mount.host.runTurn(sessionId, text, { signal, onEvent }),
+        text,
       );
       sendJson(response, 202, { taskId });
       return true;

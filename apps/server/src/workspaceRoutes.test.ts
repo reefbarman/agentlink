@@ -631,10 +631,41 @@ describe("assistant workspace routes", () => {
         body: { text: "second" },
       }),
     ).resolves.toMatchObject({ status: 409, body: { error: "session_busy" } });
+    // A client loading mid-turn learns where the running task started, so
+    // it can replay the turn from the log.
+    const started = await stream.waitFor(isTaskState("started"));
+    const running = await request({
+      path: `/api/projects/home/sessions/${sessionId}`,
+      session: owner,
+    });
+    expect(running.body).toMatchObject({
+      task: {
+        operation: "turn",
+        startedSequence: (started.data as { sequence: number }).sequence,
+        text: "long task",
+      },
+    });
     stream.close();
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     release();
     await harness.routes.whenIdle("home", sessionId);
+    await expect(
+      request({
+        path: `/api/projects/home/sessions/${sessionId}`,
+        session: owner,
+      }),
+    ).resolves.toMatchObject({
+      body: {
+        task: null,
+        transcript: {
+          omitted: 0,
+          entries: [
+            { kind: "user", text: "long task" },
+            { kind: "assistant", text: "finished offline" },
+          ],
+        },
+      },
+    });
 
     const reconnected = await harness.events(
       owner,

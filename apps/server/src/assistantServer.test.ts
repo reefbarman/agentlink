@@ -683,4 +683,60 @@ describe("assistant server access layer", () => {
     ).resolves.toMatchObject({ status: 401 });
     expect(handleRequest).not.toHaveBeenCalled();
   });
+
+  it("serves web app files without a session, behind the envelope checks", async () => {
+    const handleRequest = vi.fn(() => false);
+    const harness = await startHarness(undefined, {
+      handleRequest,
+      webAssets: new Map([
+        ["/", { contentType: "text/html; charset=utf-8", body: "<p>app</p>" }],
+        [
+          "/app.js",
+          { contentType: "text/javascript; charset=utf-8", body: "1;" },
+        ],
+        // A web asset can never shadow the API.
+        ["/api/projects", { contentType: "text/plain", body: "shadowed" }],
+      ]),
+    });
+    const shell = await harness.request({ path: "/" });
+    expect(shell).toMatchObject({ status: 200, body: "<p>app</p>" });
+    expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(shell.headers["content-security-policy"]).toContain(
+      "default-src 'self'",
+    );
+    expect(shell.headers["x-content-type-options"]).toBe("nosniff");
+    expect(shell.headers["set-cookie"]).toBeUndefined();
+    await expect(
+      harness.request({ path: "/app.js?v=1" }),
+    ).resolves.toMatchObject({ status: 200, body: "1;" });
+    await expect(
+      harness.request({ method: "HEAD", path: "/app.js" }),
+    ).resolves.toMatchObject({ status: 200, body: undefined });
+    // Unknown paths and the API still need a session.
+    await expect(harness.request({ path: "/other.js" })).resolves.toMatchObject(
+      {
+        status: 401,
+        body: { error: "authentication_required" },
+      },
+    );
+    await expect(
+      harness.request({ path: "/api/projects" }),
+    ).resolves.toMatchObject({ status: 401 });
+    // Unsafe methods are never served as assets.
+    await expect(
+      harness.request({
+        method: "POST",
+        path: "/",
+        headers: { origin: harness.origin },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    // The Host and forged-header checks still apply.
+    await expect(
+      harness.request({ path: "/", headers: { host: "evil.example" } }),
+    ).resolves.toMatchObject({ status: 421 });
+    await expect(
+      harness.request({ path: "/", headers: { "x-forwarded-for": "1.2.3.4" } }),
+    ).resolves.toMatchObject({ status: 400 });
+    expect(handleRequest).not.toHaveBeenCalled();
+  });
 });

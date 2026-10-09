@@ -43,6 +43,7 @@ import {
   type AssistantServerConfig,
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
+import { bundledWebAssets } from "./webAssets.js";
 import {
   createAssistantWorkspaceRoutes,
   ownerProjectAccess,
@@ -460,6 +461,7 @@ export async function startAssistantService(
       listen: config.listen,
       handleRequest: routes.handleRequest,
       onClose: () => routes.close(),
+      webAssets: bundledWebAssets(),
       onSetupCredential: ({ token, expiresAt }) => {
         log(
           [
