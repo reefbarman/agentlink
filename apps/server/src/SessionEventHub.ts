@@ -1,4 +1,9 @@
-import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
+import type {
+  BackgroundAgentRuntimePhase,
+  EmbeddedAgentTurnEvent,
+} from "@agentlink/protocol";
+
+import type { WorkspaceBackgroundLifecycle } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
 
 /** Who started server-owned work, for display and audit hints. */
@@ -44,6 +49,19 @@ export type AssistantSessionEvent =
         | "stopped";
       readonly childSessionId: string;
       readonly actor?: AssistantTaskActor;
+    }
+  | {
+      /**
+       * A background child's lifecycle, phase, or current tool changed,
+       * including completion. Carries state only, never output; read
+       * `GET .../agents` for results.
+       */
+      readonly kind: "agent";
+      readonly state: "updated";
+      readonly childSessionId: string;
+      readonly lifecycle: WorkspaceBackgroundLifecycle;
+      readonly phase: BackgroundAgentRuntimePhase;
+      readonly currentTool?: string;
     };
 
 export interface SequencedSessionEvent {

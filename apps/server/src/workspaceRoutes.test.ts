@@ -88,11 +88,12 @@ async function startHarness(
   await fs.mkdir(projectRoot);
   const fetch = vi.fn<typeof globalThis.fetch>();
   const claudeFetch = vi.fn<typeof globalThis.fetch>();
-  let notifyAgentApproval: (request: {
-    projectId: string;
-    parentSessionId: string;
-    childSessionId: string;
-  }) => void = () => undefined;
+  let agentNotifier:
+    | Pick<
+        ReturnType<typeof createAssistantWorkspaceRoutes>,
+        "notifyAgentApproval" | "notifyAgentChange"
+      >
+    | undefined;
   const host: WorkspaceHost = await createWorkspaceHost({
     projectRoot,
     dataRoot: path.join(parent, "workspace-data"),
@@ -137,11 +138,13 @@ async function startHarness(
         review: { providerId: "claude", modelId: "claude-review" },
       },
       onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
-        notifyAgentApproval({
+        agentNotifier?.notifyAgentApproval({
           projectId: "home",
           parentSessionId,
           childSessionId,
         }),
+      onAgentChanged: (change) =>
+        agentNotifier?.notifyAgentChange({ ...change, projectId: "home" }),
     },
   });
   cleanup.push(() => host.close());
@@ -170,7 +173,7 @@ async function startHarness(
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
   });
-  notifyAgentApproval = (request) => routes.notifyAgentApproval(request);
+  agentNotifier = routes;
   const server = await createAssistantServer({
     dataRoot: path.join(parent, "server-data"),
     tls: certificate,
@@ -897,6 +900,8 @@ describe("assistant workspace routes", () => {
     );
     const sessionId = await createSession(harness);
     const base = `/api/projects/home/sessions/${sessionId}`;
+    const live = await harness.events(owner, sessionId);
+    await live.waitFor((event) => event.event === "ready");
     await request({
       method: "POST",
       path: `${base}/turns`,
@@ -904,6 +909,23 @@ describe("assistant workspace routes", () => {
       body: { text: "get a review" },
     });
     await harness.routes.whenIdle("home", sessionId);
+    // Completion is pushed to the parent's stream, with state but no output.
+    const done = await live.waitFor(
+      (event) =>
+        event.event === "session" &&
+        (event.data as { event: { kind: string; lifecycle?: string } }).event
+          .lifecycle === "completed",
+    );
+    expect(done.data).toMatchObject({
+      event: {
+        kind: "agent",
+        state: "updated",
+        lifecycle: "completed",
+        phase: "completed",
+      },
+    });
+    expect(JSON.stringify(done.data)).not.toContain("add subtracts");
+    live.close();
 
     let agent!: { childSessionId: string };
     await vi.waitFor(async () => {
@@ -999,7 +1021,7 @@ describe("assistant workspace routes", () => {
       (event) =>
         event.event === "session" &&
         (event.data as { event: { kind: string; state?: string } }).event
-          .kind === "agent",
+          .state === "approval_required",
     );
     expect(notified.data).toMatchObject({
       event: { kind: "agent", state: "approval_required" },
@@ -1215,10 +1237,23 @@ describe("assistant workspace routes", () => {
     });
     const log = harness.routes.events.read(`home\u0000${sessionId}`, 0);
     if (log.reset) throw new Error("expected the retained event log");
-    const published = log.events.flatMap(({ event }) =>
-      event.kind === "agent" ? [event.state] : [],
+    const agentEvents = log.events.flatMap(({ event }) =>
+      event.kind === "agent" ? [event] : [],
     );
-    expect(published).toEqual(["steered", "stopped"]);
+    expect(
+      agentEvents.flatMap((event) =>
+        event.state === "updated" ? [] : [event.state],
+      ),
+    ).toEqual(["steered", "stopped"]);
+    // The stop's terminal state is pushed exactly once, before the action.
+    const updates = agentEvents.flatMap((event) =>
+      event.state === "updated" ? [event.lifecycle] : [],
+    );
+    expect(updates[0]).toBe("running");
+    expect(updates.filter((lifecycle) => lifecycle === "cancelled")).toEqual([
+      "cancelled",
+    ]);
+    expect(updates.at(-1)).toBe("cancelled");
   });
 
   it("maps project access explicitly", async () => {

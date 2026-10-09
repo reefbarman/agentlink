@@ -294,11 +294,12 @@ export async function startAssistantService(
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
   // Bound once the routes exist; children cannot start before then.
-  let notifyAgentApproval: (request: {
-    readonly projectId: string;
-    readonly parentSessionId: string;
-    readonly childSessionId: string;
-  }) => void = () => undefined;
+  let agentNotifier:
+    | Pick<
+        ReturnType<typeof createAssistantWorkspaceRoutes>,
+        "notifyAgentApproval" | "notifyAgentChange"
+      >
+    | undefined;
   try {
     for (const project of config.projects) {
       const host = await createWorkspaceHost({
@@ -321,10 +322,15 @@ export async function startAssistantService(
           enabled: true,
           ...(config.modelRoles ? { modelRoles: config.modelRoles } : {}),
           onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
-            notifyAgentApproval({
+            agentNotifier?.notifyAgentApproval({
               projectId: project.id,
               parentSessionId,
               childSessionId,
+            }),
+          onAgentChanged: (change) =>
+            agentNotifier?.notifyAgentChange({
+              ...change,
+              projectId: project.id,
             }),
         },
       });
@@ -348,7 +354,7 @@ export async function startAssistantService(
         ...(config.modelRoles ? { roles: config.modelRoles } : {}),
       },
     });
-    notifyAgentApproval = (request) => routes.notifyAgentApproval(request);
+    agentNotifier = routes;
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
       tls,

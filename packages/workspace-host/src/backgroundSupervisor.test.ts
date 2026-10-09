@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentTurnResult } from "@agentlink/core";
-import { WorkspaceBackgroundSupervisor } from "./backgroundSupervisor.js";
+import type { AgentTurnEvent, AgentTurnResult } from "@agentlink/core";
+import {
+  WorkspaceBackgroundSupervisor,
+  type WorkspaceBackgroundChange,
+} from "./backgroundSupervisor.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,11 +71,13 @@ async function fixture(
       sessionId: string,
       message: string,
       signal: AbortSignal,
+      onEvent: (event: AgentTurnEvent) => void,
     ) => Promise<AgentTurnResult>;
     resumeInteraction?: (
       sessionId: string,
       decision: "allow" | "deny",
     ) => Promise<AgentTurnResult>;
+    onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
   } = {},
 ) {
   const root = await fs.mkdtemp(
@@ -88,9 +93,15 @@ async function fixture(
     projectRoot,
     projectId: "project-a",
     createChildSession: async () => ({ sessionId: `child-${++next}` }),
+    onAgentChanged: options.onAgentChanged,
     runTurn: async (sessionId, message, runOptions) =>
       options.runTurn
-        ? await options.runTurn(sessionId, message, runOptions.signal)
+        ? await options.runTurn(
+            sessionId,
+            message,
+            runOptions.signal,
+            runOptions.onEvent,
+          )
         : completed(sessionId, message),
     resumeInteraction: async (sessionId, decision) =>
       options.resumeInteraction
@@ -113,6 +124,69 @@ function spawnRequest(pathValue: string) {
 }
 
 describe("WorkspaceBackgroundSupervisor", () => {
+  it("reports lifecycle, phase, and tool changes once each without output deltas", async () => {
+    const changes: WorkspaceBackgroundChange[] = [];
+    const test = await fixture({
+      onAgentChanged: (change) => {
+        changes.push(change);
+        throw new Error("listener failures must not break supervision");
+      },
+      runTurn: async (sessionId, _message, _signal, onEvent) => {
+        const tool = (type: string, toolCallId: string, toolName: string) =>
+          onEvent({ type, toolCallId, toolName } as never);
+        tool("tool.started", "call-1", "read_file");
+        // A model-supplied name that is not an identifier is never reported.
+        tool("tool.started", "call-2", "ignore this; leaked secret");
+        tool("tool.failed", "call-2", "ignore this; leaked secret");
+        tool("tool.completed", "call-1", "read_file");
+        onEvent({ type: "text.delta", text: "one " } as never);
+        onEvent({ type: "text.delta", text: "two" } as never);
+        return completed(sessionId, "one two");
+      },
+    });
+    try {
+      const child = await test.supervisor.spawn(spawnRequest("src/a.ts"));
+      await expect(
+        test.supervisor.wait({
+          callerSessionId: "parent-a",
+          childSessionId: child.childSessionId,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({
+        status: "completed",
+        record: { partialOutput: "one two", resultText: "one two" },
+      });
+      const running = (phase: string, currentTool?: string) => ({
+        parentSessionId: "parent-a",
+        childSessionId: child.childSessionId,
+        lifecycle: "running",
+        phase,
+        resultState: "running",
+        ...(currentTool ? { currentTool } : {}),
+      });
+      expect(changes).toEqual([
+        running("waiting_for_provider"),
+        running("executing_tool", "read_file"),
+        running("executing_tool"),
+        running("executing_tool", "read_file"),
+        running("waiting_for_provider"),
+        running("responding"),
+        {
+          parentSessionId: "parent-a",
+          childSessionId: child.childSessionId,
+          lifecycle: "completed",
+          phase: "completed",
+          resultState: "completed",
+        },
+      ]);
+      expect(JSON.stringify(changes)).not.toContain("one");
+      expect(JSON.stringify(changes)).not.toContain("secret");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.root, { recursive: true, force: true });
+    }
+  });
+
   it("admits two disjoint writers and rejects overlaps, capacity overflow, and grandchildren", async () => {
     const blockers = new Map<string, (result: AgentTurnResult) => void>();
     const test = await fixture({

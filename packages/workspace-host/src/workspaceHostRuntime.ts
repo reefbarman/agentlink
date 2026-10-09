@@ -26,6 +26,7 @@ import {
 import {
   readWorkspaceBackgroundSessionIds,
   WorkspaceBackgroundSupervisor,
+  type WorkspaceBackgroundChange,
 } from "./backgroundSupervisor.js";
 import { createWorkspaceBackgroundTools } from "./backgroundTools.js";
 import {
@@ -149,6 +150,8 @@ export interface CreateWorkspaceHostOptions {
       readonly parentSessionId: string;
       readonly childSessionId: string;
     }) => void;
+    /** Lifecycle, phase, or current-tool changes of a child (no output text). */
+    readonly onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
   };
   readonly sessionInteractions?: CreateWorkspaceSessionInteractionToolsOptions;
   readonly sharedMcp?: Omit<CreateWorkspaceSharedMcpToolsOptions, "secret"> & {
@@ -375,6 +378,7 @@ export async function createWorkspaceHost(
         projectId: project.id,
         maxActiveChildren: options.background.maxActiveChildren,
         onApprovalAvailable: options.background.onApprovalAvailable,
+        onAgentChanged: options.background.onAgentChanged,
         createChildSession: async (request) => {
           const parent = await engine.sessions.read({
             principal,

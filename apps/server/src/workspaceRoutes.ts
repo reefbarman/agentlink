@@ -5,7 +5,10 @@ import {
   type AgentTurnEvent,
   type AgentTurnResult,
 } from "@agentlink/core";
-import type { WorkspaceHost } from "@agentlink/workspace-host";
+import type {
+  WorkspaceBackgroundChange,
+  WorkspaceHost,
+} from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -117,6 +120,13 @@ export interface AssistantWorkspaceRoutes {
     readonly parentSessionId: string;
     readonly childSessionId: string;
   }): void;
+  /**
+   * Tell clients of the parent session that a background child's lifecycle,
+   * phase, or current tool changed. Wire to `background.onAgentChanged`.
+   */
+  notifyAgentChange(
+    request: WorkspaceBackgroundChange & { readonly projectId: string },
+  ): void;
   /** Resolves once no server-owned task is running for the session. */
   whenIdle(projectId: string, sessionId: string): Promise<void>;
   /** Abort running tasks and wait for them to settle. */
@@ -895,6 +905,24 @@ export function createAssistantWorkspaceRoutes(
         kind: "agent",
         state: "approval_required",
         childSessionId,
+      });
+    },
+    notifyAgentChange({
+      projectId,
+      parentSessionId,
+      childSessionId,
+      lifecycle,
+      phase,
+      currentTool,
+    }) {
+      if (!projects.has(projectId)) return;
+      hub.publish(sessionKey(projectId, parentSessionId), {
+        kind: "agent",
+        state: "updated",
+        childSessionId,
+        lifecycle,
+        phase,
+        ...(currentTool ? { currentTool } : {}),
       });
     },
     async whenIdle(projectId, sessionId) {
