@@ -1,0 +1,46 @@
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 704-707,1063-1067
+apps/server/README.md
+  h_e08a86bb3a33a2 31,90,101,260-265
+  h_e08a86bb3a33a2 266
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 574-585
+  h_e08a86bb3a33a2 586
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 12,88-89,96-107,132,182-189,231,310,1078-1079,1419-1558
+  h_e08a86bb3a33a2 181,190
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 22-25,47,120-124,254-258,471,491,517,668-698
+  s_0085cdbbf0f7a8::t_8b0ae4ccd277fa 21,699-701
+packages/core/src/turnKernel.test.ts
+  h_e08a86bb3a33a2 743-773
+  h_e08a86bb3a33a2 559-641,774-781
+apps/server/src/SessionApprovalModes.test.ts
+  h_e08a86bb3a33a2 1-64
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 46,83-85,165-166,184-186,424-430,442-443,451,454-457,501
+  s_0085cdbbf0f7a8::t_851260d2ae8b13 86-87
+apps/server/src/SessionApprovalModes.ts
+  h_e08a86bb3a33a2 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0085cdbbf0f7a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6850007-21c9-4ea9-9da6-8aa1f868401e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
