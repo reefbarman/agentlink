@@ -1,6 +1,7 @@
 import {
   ServerAccessStore,
   csrfTokenForSession,
+  issueLocalRecoveryCredential,
   verifyCsrfToken,
 } from "./ServerAccessStore.js";
 import { afterEach, describe, expect, it } from "vitest";
@@ -122,15 +123,9 @@ describe("server access store", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses to revoke the last active device", async () => {
+  it("recovers access locally after the last device is revoked", async () => {
     const clock = { value: Date.now() };
-    const { store, issued } = await bootstrapped(clock);
-    await expect(
-      store.revokeDevice(issued.session.deviceId),
-    ).rejects.toMatchObject({ code: "last_active_device" });
-    const phone = await store.redeemPairing({
-      code: store.createPairing().code,
-    });
+    const { store, root, issued } = await bootstrapped(clock);
     await expect(store.revokeDevice(issued.session.deviceId)).resolves.toBe(
       true,
     );
@@ -138,9 +133,112 @@ describe("server access store", () => {
     await expect(store.authenticate(issued.token)).resolves.toMatchObject({
       ok: false,
     });
+
+    // The local command works while the server holds the data-root lock.
+    const { token } = await issueLocalRecoveryCredential({
+      dataRoot: root,
+      now: () => clock.value,
+    });
+    const requestPath = path.join(root, "recovery-request.json");
+    expect((await fs.stat(requestPath)).mode & 0o777).toBe(0o600);
+    expect(await fs.readFile(requestPath, "utf8")).not.toContain(token);
+
     await expect(
-      store.revokeDevice(phone.session.deviceId),
-    ).rejects.toMatchObject({ code: "last_active_device" });
+      store.redeemRecovery({ recoveryToken: token, passphrase: "wrong" }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+    await expect(
+      store.redeemRecovery({
+        recoveryToken: "x".repeat(43),
+        passphrase: PASSPHRASE,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+
+    // A wrong passphrase does not burn the code; success consumes it.
+    const recovered = await store.redeemRecovery({
+      recoveryToken: token,
+      passphrase: PASSPHRASE,
+      deviceLabel: "Recovered laptop",
+    });
+    expect(recovered.session.deviceLabel).toBe("Recovered laptop");
+    await expect(store.authenticate(recovered.token)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(fs.stat(requestPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      store.redeemRecovery({ recoveryToken: token, passphrase: PASSPHRASE }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+  });
+
+  it("expires, replaces, and rejects tampered recovery credentials", async () => {
+    const clock = { value: Date.now() };
+    const { store, root } = await bootstrapped(clock);
+    const issue = () =>
+      issueLocalRecoveryCredential({ dataRoot: root, now: () => clock.value });
+    const requestPath = path.join(root, "recovery-request.json");
+
+    const expired = await issue();
+    clock.value += 15 * 60 * 1000;
+    await expect(
+      store.redeemRecovery({
+        recoveryToken: expired.token,
+        passphrase: PASSPHRASE,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+    await expect(fs.stat(requestPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const replaced = await issue();
+    const current = await issue();
+    await expect(
+      store.redeemRecovery({
+        recoveryToken: replaced.token,
+        passphrase: PASSPHRASE,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+
+    // A request file readable by others is ignored, not trusted.
+    await fs.chmod(requestPath, 0o644);
+    await expect(
+      store.redeemRecovery({
+        recoveryToken: current.token,
+        passphrase: PASSPHRASE,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_recovery_credential" });
+    await fs.chmod(requestPath, 0o600);
+
+    // Two concurrent redemptions of one code: exactly one succeeds.
+    const results = await Promise.allSettled([
+      store.redeemRecovery({
+        recoveryToken: current.token,
+        passphrase: PASSPHRASE,
+      }),
+      store.redeemRecovery({
+        recoveryToken: current.token,
+        passphrase: PASSPHRASE,
+      }),
+    ]);
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+  });
+
+  it("refuses local recovery before an owner exists or on corrupt state", async () => {
+    const clock = { value: Date.now() };
+    const { store, root } = await openStore(clock);
+    await expect(
+      issueLocalRecoveryCredential({ dataRoot: root }),
+    ).rejects.toMatchObject({ code: "owner_missing" });
+    await expect(
+      issueLocalRecoveryCredential({ dataRoot: path.join(root, "missing") }),
+    ).rejects.toMatchObject({ code: "owner_missing" });
+    await store.close();
+    await fs.writeFile(path.join(root, "access-state.json"), "{not json");
+    await expect(
+      issueLocalRecoveryCredential({ dataRoot: root }),
+    ).rejects.toMatchObject({ code: "access_state_corrupt" });
   });
 
   it("binds CSRF tokens to one session token", () => {

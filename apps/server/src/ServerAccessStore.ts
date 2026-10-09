@@ -8,11 +8,15 @@ import {
   timingSafeEqual,
   type ScryptOptions,
 } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 const STATE_FILE = "access-state.json";
 const LOCK_FILE = "access-state.lock";
+const RECOVERY_FILE = "recovery-request.json";
+const DEFAULT_RECOVERY_TTL_MS = 15 * 60 * 1000;
+const MAX_RECOVERY_FILE_BYTES = 4_096;
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_IDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SETUP_TTL_MS = 15 * 60 * 1000;
@@ -44,7 +48,8 @@ export type ServerAccessErrorCode =
   | "invalid_pairing_code"
   | "pairing_limit_reached"
   | "invalid_label"
-  | "last_active_device"
+  | "invalid_recovery_credential"
+  | "recovery_wrong_user"
   | "access_state_locked"
   | "access_state_closed"
   | "access_state_corrupt";
@@ -143,6 +148,12 @@ interface AccessState {
   sessions: StoredSession[];
 }
 
+interface StoredRecoveryRequest {
+  readonly schemaVersion: 1;
+  readonly tokenHash: string;
+  readonly expiresAt: number;
+}
+
 interface PendingPairing {
   readonly codeHash: string;
   readonly expiresAt: number;
@@ -159,6 +170,7 @@ export class ServerAccessStore {
   private readonly lastPersistedSeen = new Map<string, number>();
   private writes: Promise<void> = Promise.resolve();
   private closed = false;
+  private recoveries: Promise<unknown> = Promise.resolve();
   private readonly revocationListeners = new Set<
     (sessionIds: readonly string[]) => void
   >();
@@ -305,6 +317,63 @@ export class ServerAccessStore {
   }
 
   /**
+   * Redeem a local recovery credential written by
+   * `issueLocalRecoveryCredential`. The owner passphrase is also required,
+   * so a leaked recovery code alone cannot sign anyone in. Success consumes
+   * the credential and creates a new device and session; a wrong passphrase
+   * leaves it valid until it expires. Redemptions run one at a time.
+   */
+  redeemRecovery(input: {
+    readonly recoveryToken: string;
+    readonly passphrase: string;
+    readonly deviceLabel?: string;
+  }): Promise<IssuedServerSession> {
+    const run = this.recoveries.then(() => this.redeemRecoveryNow(input));
+    this.recoveries = run.catch(() => undefined);
+    return run;
+  }
+
+  private async redeemRecoveryNow(input: {
+    readonly recoveryToken: string;
+    readonly passphrase: string;
+    readonly deviceLabel?: string;
+  }): Promise<IssuedServerSession> {
+    const owner = this.state.owner;
+    if (!owner) throw new ServerAccessError("owner_missing");
+    const label = normalizeLabel(input.deviceLabel);
+    const recoveryPath = path.join(path.dirname(this.filePath), RECOVERY_FILE);
+    const request = await readRecoveryRequest(recoveryPath);
+    if (!request) throw new ServerAccessError("invalid_recovery_credential");
+    if (request.expiresAt <= this.options.now()) {
+      await fs.unlink(recoveryPath).catch(() => undefined);
+      throw new ServerAccessError("invalid_recovery_credential");
+    }
+    const tokenHash = hashSecret(
+      typeof input.recoveryToken === "string" ? input.recoveryToken : "",
+    );
+    if (!hashesEqual(tokenHash, request.tokenHash)) {
+      throw new ServerAccessError("invalid_recovery_credential");
+    }
+    if (
+      typeof input.passphrase !== "string" ||
+      input.passphrase.length > MAX_PASSPHRASE_LENGTH ||
+      !(await verifyPassphrase(input.passphrase, owner.passphrase))
+    ) {
+      throw new ServerAccessError("invalid_recovery_credential");
+    }
+    // The local command may have replaced the credential during the slow
+    // passphrase check. Consume only the one that was verified, and fail
+    // closed if it cannot be removed, so it can never be used twice.
+    const current = await readRecoveryRequest(recoveryPath);
+    if (!current || current.tokenHash !== request.tokenHash) {
+      throw new ServerAccessError("invalid_recovery_credential");
+    }
+    await fs.unlink(recoveryPath);
+    await syncDirectory(path.dirname(recoveryPath));
+    return await this.issueSessionForNewDevice(label);
+  }
+
+  /**
    * Validate a session token. By default this records client activity and
    * extends the idle window; pass `recordActivity: false` for server-side
    * rechecks (stream heartbeats, pre-execution checks) that must not keep an
@@ -375,23 +444,15 @@ export class ServerAccessStore {
   }
 
   /**
-   * Revoke a device and every session it holds. The last active device
-   * cannot be revoked: there is no local recovery path yet, so doing so
-   * would lock the owner out permanently.
+   * Revoke a device and every session it holds. Revoking the last active
+   * device is allowed; the owner then signs in again with a local recovery
+   * credential (`agentlink-server recover`).
    */
   async revokeDevice(deviceId: string): Promise<boolean> {
     const device = this.state.devices.find(
       (candidate) => candidate.deviceId === deviceId,
     );
     if (!device || device.revokedAt !== undefined) return false;
-    if (
-      !this.state.devices.some(
-        (candidate) =>
-          candidate.deviceId !== deviceId && candidate.revokedAt === undefined,
-      )
-    ) {
-      throw new ServerAccessError("last_active_device");
-    }
     const now = this.options.now();
     device.revokedAt = now;
     const revoked: string[] = [];
@@ -492,6 +553,97 @@ export class ServerAccessStore {
     const write = this.writes.then(() => writeState(this.filePath, snapshot));
     this.writes = write.catch(() => undefined);
     await write;
+  }
+}
+
+/**
+ * Issue a local recovery credential for an existing owner. Run by the
+ * `agentlink-server recover` command on the server machine, as the account
+ * that owns the data root; it works whether or not the server is running.
+ * Only a hash is written, to a private file next to the access state. A new
+ * credential replaces any earlier one.
+ */
+export async function issueLocalRecoveryCredential(options: {
+  readonly dataRoot: string;
+  readonly now?: () => number;
+  readonly ttlMs?: number;
+}): Promise<{ token: string; expiresAt: number }> {
+  if (!path.isAbsolute(options.dataRoot)) {
+    throw new Error("Local recovery requires an absolute data root");
+  }
+  let root: Stats;
+  try {
+    root = await fs.stat(options.dataRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new ServerAccessError("owner_missing");
+    }
+    throw error;
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && root.uid !== uid) {
+    throw new ServerAccessError("recovery_wrong_user");
+  }
+  const state = await readState(path.join(options.dataRoot, STATE_FILE));
+  if (!state.owner) throw new ServerAccessError("owner_missing");
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt =
+    (options.now ?? Date.now)() + (options.ttlMs ?? DEFAULT_RECOVERY_TTL_MS);
+  const request: StoredRecoveryRequest = {
+    schemaVersion: 1,
+    tokenHash: hashSecret(token),
+    expiresAt,
+  };
+  await writeState(
+    path.join(options.dataRoot, RECOVERY_FILE),
+    `${JSON.stringify(request, null, 2)}\n`,
+  );
+  return { token, expiresAt };
+}
+
+/**
+ * Read the recovery request, accepting only a small regular file that is
+ * private to this account. Anything else is treated as no credential.
+ */
+async function readRecoveryRequest(
+  filePath: string,
+): Promise<StoredRecoveryRequest | undefined> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(
+      filePath,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+    );
+  } catch {
+    return undefined;
+  }
+  try {
+    const stat = await handle.stat();
+    const uid = process.getuid?.();
+    if (
+      !stat.isFile() ||
+      (stat.mode & 0o077) !== 0 ||
+      (uid !== undefined && stat.uid !== uid) ||
+      stat.size > MAX_RECOVERY_FILE_BYTES
+    ) {
+      return undefined;
+    }
+    const parsed = JSON.parse(
+      await handle.readFile("utf8"),
+    ) as Partial<StoredRecoveryRequest>;
+    if (
+      parsed?.schemaVersion !== 1 ||
+      typeof parsed.tokenHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(parsed.tokenHash) ||
+      typeof parsed.expiresAt !== "number"
+    ) {
+      return undefined;
+    }
+    return parsed as StoredRecoveryRequest;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
   }
 }
 
@@ -646,7 +798,11 @@ async function writeState(filePath: string, content: string): Promise<void> {
   }
   // Make the rename durable before reporting success, so a crash after a
   // revocation response cannot restore the earlier state.
-  const directory = await fs.open(path.dirname(filePath), "r");
+  await syncDirectory(path.dirname(filePath));
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  const directory = await fs.open(directoryPath, "r");
   try {
     await directory.sync();
   } finally {

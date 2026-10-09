@@ -309,6 +309,21 @@ export async function createAssistantServer(
       issueSession(response, issued);
       return;
     }
+    if (method === "POST" && pathname === "/api/auth/recover") {
+      const body = await readJsonBody(request);
+      const issued = await guardAttempt(
+        request,
+        () =>
+          store.redeemRecovery({
+            recoveryToken: stringField(body, "recoveryToken"),
+            passphrase: stringField(body, "passphrase"),
+            deviceLabel: optionalStringField(body, "deviceLabel"),
+          }),
+        (error) => accessCode(error) === "invalid_recovery_credential",
+      );
+      issueSession(response, issued);
+      return;
+    }
 
     const authenticated = await authenticateRequest(request);
     if (!authenticated?.result.ok) {
@@ -525,11 +540,11 @@ function accessStatus(code: string): number {
   switch (code) {
     case "invalid_setup_credential":
     case "invalid_pairing_code":
+    case "invalid_recovery_credential":
       return 401;
     case "owner_exists":
     case "owner_missing":
     case "pairing_limit_reached":
-    case "last_active_device":
       return 409;
     case "weak_passphrase":
     case "invalid_label":

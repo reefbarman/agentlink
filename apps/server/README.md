@@ -11,6 +11,7 @@ Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.j
 ```sh
 agentlink-server --config /etc/agentlink/server.json --check   # validate and exit
 agentlink-server --config /etc/agentlink/server.json           # serve until SIGTERM/SIGINT
+agentlink-server recover --config /etc/agentlink/server.json   # print a recovery code
 ```
 
 `--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. On first start without an owner, the server writes a single-use setup credential to stderr (the journal under systemd, the log file under launchd); see [Access layer](#access-layer). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
@@ -44,13 +45,27 @@ API keys are never inline. `{ "file": "/path" }` reads a file that must not be r
 
 Sessions, the owner, devices, and pairings survive restarts. A turn that was running when the process died is marked interrupted at startup. After a hard crash the dead process's turn lease stays valid for up to 30 seconds and is never broken early: the server starts immediately, that session reports `409 session_busy`, and recovery completes in the background once the lease expires.
 
+### Lost access
+
+If every signed-in browser is gone (cookies cleared, devices revoked or lost), run `recover` on the server machine as the service account. It works while the server is running:
+
+```sh
+# Ubuntu
+sudo -u agentlink /usr/bin/node /opt/agentlink/server/agentlink-server.js recover --config /etc/agentlink/server.json
+# macOS
+sudo -u _agentlink /opt/homebrew/bin/node /usr/local/lib/agentlink/server/agentlink-server.js recover --config /usr/local/etc/agentlink/server.json
+```
+
+It prints a single-use code, valid for 15 minutes, to the terminal only (never to the service log). Redeem it at `POST /api/auth/recover` with the owner passphrase. Running it again replaces the code. It refuses to run as any account other than the owner of the data root, before an owner exists, or when the access state is corrupt. A forgotten passphrase is not recoverable this way; stop the server and delete `server/access-state.json` to start over with a new setup credential.
+
 ## Access layer
 
 `createAssistantServer(options)` starts an HTTPS-only listener (TLS 1.2+, certificate and key required, no plain-HTTP mode) that owns authentication:
 
 - **Owner bootstrap.** While no owner exists, `start()` issues a 15-minute setup credential to `onSetupCredential`, which must only show it locally. `POST /api/auth/bootstrap` redeems it once with an owner passphrase (12+ characters) and returns a session.
 - **Device pairing.** A signed-in, recently reauthenticated owner creates a single-use code (`POST /api/auth/pairings`, 5 minutes). A new browser redeems it at `POST /api/auth/pairings/redeem`. There is no passphrase login for unknown browsers.
-- **Sessions.** `__Host-agentlink_session` cookie (`Secure; HttpOnly; SameSite=Strict; Path=/`), 30-day absolute and 7-day idle expiry. `GET /api/auth/session` returns the session and its CSRF token. `POST /api/auth/logout` ends it, and `DELETE /api/auth/devices/:id` revokes a device and all its sessions. The last active device cannot be revoked, because there is no local recovery path yet.
+- **Sessions.** `__Host-agentlink_session` cookie (`Secure; HttpOnly; SameSite=Strict; Path=/`), 30-day absolute and 7-day idle expiry. `GET /api/auth/session` returns the session and its CSRF token. `POST /api/auth/logout` ends it, and `DELETE /api/auth/devices/:id` revokes a device and all its sessions, including the last one; sign in again with [local recovery](#lost-access).
+- **Local recovery.** `agentlink-server recover` writes a hash of a 15-minute code to `<dataRoot>/recovery-request.json` (`0600`) without taking the store lock. `POST /api/auth/recover` needs that code and the owner passphrase, creates a new device and session, and deletes the file. The server ignores the file unless it is a regular file owned by its own account and private to it. A wrong passphrase does not consume the code, and attempts share the credential rate limiter.
 - **Reauthentication.** `POST /api/auth/reauthenticate` checks the scrypt-hashed passphrase. Sensitive routes need it within the last 5 minutes.
 - **Request guard.** Every request and upgrade is rejected when it carries `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `X-Remote-User`, `X-Auth-Request-*` or similar identity/proxy headers, when `Host` is not a configured public origin, when `Origin` is foreign, or when `Sec-Fetch-Site` is `cross-site`. Unsafe methods and upgrades require `Origin`. Authenticated unsafe requests also need `x-agentlink-csrf`.
 - **Rate limiting.** Setup, pairing, and passphrase guesses are limited per socket address and globally, and attempts still in flight count against the limit. Client headers never select the key.
@@ -78,4 +93,4 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 
 The event log is in memory, so it only bridges reconnects within one server process. The durable session repository remains the source of truth.
 
-Not yet provided: certificate provisioning and device trust onboarding, recovery when every session is lost, passkeys, command execution and background-agent routes, an installer, and the web app.
+Not yet provided: certificate provisioning and device trust onboarding, passkeys, command execution and background-agent routes, an installer, and the web app.

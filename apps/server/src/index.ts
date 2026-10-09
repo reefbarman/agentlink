@@ -6,6 +6,7 @@ export {
 } from "./assistantServer.js";
 export {
   preflightAssistantService,
+  serverAccessDataRoot,
   startAssistantService,
   type AssistantService,
   type AssistantServiceOptions,
@@ -60,6 +61,7 @@ export {
   ServerAccessError,
   ServerAccessStore,
   csrfTokenForSession,
+  issueLocalRecoveryCredential,
   verifyCsrfToken,
   type IssuedServerSession,
   type PassphraseCost,

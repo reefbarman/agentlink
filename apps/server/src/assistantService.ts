@@ -36,6 +36,11 @@ export interface AssistantService {
   close(): Promise<void>;
 }
 
+/** Where the access store (owner, devices, sessions) lives under the data root. */
+export function serverAccessDataRoot(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "server");
+}
+
 export interface AssistantServicePreflight {
   readonly tls: { readonly cert: Buffer; readonly key: Buffer };
 }
@@ -135,7 +140,7 @@ export async function startAssistantService(
       authorizeProject: (request) => authorizeProject(request),
     });
     server = await createAssistantServer({
-      dataRoot: path.join(config.dataRoot, "server"),
+      dataRoot: serverAccessDataRoot(config),
       tls,
       publicOrigins: config.publicOrigins,
       listen: config.listen,

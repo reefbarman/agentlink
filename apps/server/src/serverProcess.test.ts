@@ -249,6 +249,27 @@ describe("agentlink-server process", () => {
         timeout: 15_000,
       });
 
+      // Local recovery works while the server runs, and the code goes only
+      // to the command's own output, never to the service log.
+      const recovered = await execFileAsync(process.execPath, [
+        bundle,
+        "recover",
+        "--config",
+        configPath,
+      ]);
+      const recoveryToken = /recovery code[^\n]*:\n\s*\n\s+(\S+)/u.exec(
+        recovered.stdout,
+      )?.[1];
+      expect(recoveryToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      expect(second.output()).not.toContain(recoveryToken);
+      await expect(
+        request({
+          method: "POST",
+          path: "/api/auth/recover",
+          body: { recoveryToken, passphrase: PASSPHRASE },
+        }),
+      ).resolves.toMatchObject({ status: 201 });
+
       // Graceful stop aborts the running turn before exiting.
       second.child.kill("SIGTERM");
       await expect(second.exited).resolves.toEqual({ code: 0, signal: null });

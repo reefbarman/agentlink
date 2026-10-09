@@ -9,6 +9,7 @@ import {
   type AssistantServerAuth,
   type CreateAssistantServerOptions,
 } from "./assistantServer.js";
+import { issueLocalRecoveryCredential } from "./ServerAccessStore.js";
 import {
   createTestCertificate,
   freePort,
@@ -544,6 +545,62 @@ describe("assistant server access layer", () => {
         }),
       ]),
     });
+  });
+
+  it("signs in again with a local recovery code after revoking every device", async () => {
+    const harness = await startHarness();
+    const owner = await bootstrap(harness);
+    const ownerId = (owner.response.body as { ownerId: string }).ownerId;
+    await expect(
+      harness.request({
+        method: "DELETE",
+        path: `/api/auth/devices/${owner.deviceId}`,
+        headers: authHeaders(harness, owner),
+      }),
+    ).resolves.toMatchObject({ status: 204 });
+    await expect(
+      harness.request({
+        path: "/api/auth/session",
+        headers: { cookie: owner.cookie },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+
+    const { token } = await issueLocalRecoveryCredential({
+      dataRoot: harness.dataRoot,
+      now: () => harness.clock.value,
+    });
+    const redeem = (body: Record<string, unknown>, origin = harness.origin) =>
+      harness.request({
+        method: "POST",
+        path: "/api/auth/recover",
+        headers: { origin },
+        body,
+      });
+    await expect(
+      redeem({ recoveryToken: token, passphrase: PASSPHRASE }, "https://evil"),
+    ).resolves.toMatchObject({ status: 403 });
+    await expect(
+      redeem({ recoveryToken: token, passphrase: "not the passphrase" }),
+    ).resolves.toMatchObject({
+      status: 401,
+      body: { error: "invalid_recovery_credential" },
+    });
+    const recovered = await redeem({
+      recoveryToken: token,
+      passphrase: PASSPHRASE,
+      deviceLabel: "Recovered",
+    });
+    expect(recovered.status).toBe(201);
+    expect(recovered.body).toMatchObject({ ownerId, deviceLabel: "Recovered" });
+    await expect(
+      harness.request({
+        path: "/api/app/echo",
+        headers: { cookie: sessionCookieFrom(recovered) },
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { subjectId: ownerId } });
+    await expect(
+      redeem({ recoveryToken: token, passphrase: PASSPHRASE }),
+    ).resolves.toMatchObject({ status: 401 });
   });
 
   it("expires pairing codes", async () => {
