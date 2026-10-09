@@ -1,0 +1,55 @@
+src/integrations/editDurability.ts
+  h_e08a86bb3a33a2 391-425
+src/adapters/vscode/editReviewCapabilities.ts
+  h_e08a86bb3a33a2 12,14,485,487,661,664
+src/integrations/DiffViewProvider.test.ts
+  h_e08a86bb3a33a2 912,917,932
+src/terminal/sandbox/SandboxBehaviorAttestationService.test.ts
+  h_e08a86bb3a33a2 299-337
+src/extension.ts
+  h_e08a86bb3a33a2 162,1094-1097,2490,2701-2728
+CHANGELOG.md
+  h_e08a86bb3a33a2 8-11
+src/terminal/sandbox/SandboxBehaviorAttestationService.ts
+  h_e08a86bb3a33a2 172-176,179-193,677-681
+  s_dd7ad18bc73ba9::t_98c936661f8b88 177-178
+src/integrations/editDurability.test.ts
+  h_e08a86bb3a33a2 7-11,13-78
+src/integrations/DiffViewProvider.ts
+  h_e08a86bb3a33a2 20,22,420,423
+src/tools/searchFiles.ts
+  h_e08a86bb3a33a2 501-504,506-516,530,534-536
+src/tools/searchFiles.test.ts
+  h_e08a86bb3a33a2 611-653
+resources/builtin-skills/documentation/references/release-notes.md
+  s_fcb958d60e880f::t_846f1f897e105a 8-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "515cf9529208deb0490dcedc01ab3b7871c6bed1",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_dd7ad18bc73ba9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "899d5213-52ff-4e40-9bad-9f239e4448f3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_fcb958d60e880f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db8e9f9b-075d-4a21-9983-d02feab5c610",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
