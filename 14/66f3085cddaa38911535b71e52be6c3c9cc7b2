@@ -1,0 +1,25 @@
+src/terminal/webview/App.tsx
+  h_e08a86bb3a33a2 4,6,33-35,668-702,706,710-721
+  s_a5450da2f01da7::t_2836dfcd13d716 1-3,5,7,705,707-709,722
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1466f3085cddaa38911535b71e52be6c3c9cc7b2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_a5450da2f01da7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a1a22ee-3150-4f98-9057-ce03e654e2a0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
