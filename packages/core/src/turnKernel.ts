@@ -701,9 +701,10 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           options.authorizeToolCall !== undefined,
       )
       .map((tool) => tool.definition);
-    const authorizedToolCallIds = new Set(
-      continuation?.state.authorizedToolCallIds ?? [],
-    );
+    // Ids persisted by older continuations are ignored: an id alone does not
+    // say which call or input was approved, so every pending call is
+    // authorized again on its own input (the resumed call excepted).
+    const authorizedToolCallIds = new Set<string>();
     const resumedDecisions = new Map<string, ToolAuthorizationDecision>();
     const resumedCall = continuation?.state.pendingToolCalls[0];
     if (continuation && resumedCall) {
@@ -1059,7 +1060,11 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
     if (resumedDecision === "deny") {
       return authorizationDenied(call, emit, undefined, tool);
     }
-    if (resumedDecision !== "allow" && !authorizedToolCallIds.has(call.id)) {
+    // A recorded authorization is single-use. Providers may reuse a tool call
+    // id across iterations; a later call with the same id must be authorized
+    // on its own input, never inherit an earlier call's approval.
+    const previouslyAuthorized = authorizedToolCallIds.delete(call.id);
+    if (resumedDecision !== "allow" && !previouslyAuthorized) {
       if (!options.authorizeToolCall) {
         return authorizationRequired(call, emit, tool);
       }
@@ -1108,7 +1113,6 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
           emit,
         );
       }
-      authorizedToolCallIds.add(call.id);
       if (authorization.preparedInput) {
         canonicalInput = structuredClone(authorization.preparedInput);
       }

@@ -28,7 +28,7 @@ Open the first `publicOrigins` URL in a browser. The server serves a small mobil
 - **First start:** enter the setup credential from the log (`docker compose logs assistant`), choose a passphrase (12+ characters), and name the device.
 - **More devices:** on a signed-in device open **Devices → Create pairing code** and enter the code on the new device within 5 minutes. If every device is lost, use **Recovery code** with a code from `agentlink-server recover` and the passphrase.
 - **Chats:** pick a project, choose a model, and start a chat. Replies stream live; the work keeps running if you close the tab, and reopening the chat (on any device) replays a turn in progress. Change the model between turns from the chat header.
-- **Approvals:** tool approvals (including a background agent's) appear above the composer. Allow or deny asks for the passphrase again when it was last confirmed more than 5 minutes ago.
+- **Approvals:** a chat works on its own by default: file edits and foreground commands in the project run without asking. It still asks before writing protected files (`.env*`, `.git`, `.agentlink`, `.claude`, and instruction files such as `AGENTS.md`), before background commands, and for anything a background agent wants to run. A chat can instead ask for everything through the [approval mode](#approval-mode) route. Approvals appear above the composer; allow or deny asks for the passphrase again when it was last confirmed more than 5 minutes ago.
 
 The app is embedded in the server bundle at build time (`apps/server/web/`, built by `esbuild.mjs`) and served from fixed paths (`/`, `/app.js`, `/app.css`, `/icon.svg`, `/manifest.webmanifest`) without a session, since those files hold no data. The Host, Origin, and forged-header checks still apply, and every `/api/` path still needs a session. Model output is only ever inserted as text. Chat history comes from a display-only transcript in the session snapshot: user and assistant text plus tool names, the last 200 entries, each capped at 20,000 characters. Thinking, tool inputs and results, and attachments are never sent. Not yet supported: Markdown rendering, attachments, chat titles, and notifications.
 
@@ -87,7 +87,7 @@ docker compose exec assistant agentlink-server recover
 
 ### Command worker
 
-The assistant never runs commands itself; its image has no shell. When `commandWorker` is configured, `execute_command`, git, and ripgrep run in the `command-worker` service, and each command still needs the owner's approval in the session (the server sends no allow rules).
+The assistant never runs commands itself; its image has no shell. When `commandWorker` is configured, `execute_command`, git, and ripgrep run in the `command-worker` service. Foreground commands run without asking unless the chat asks for everything; background commands always ask (the server sends no allow rules).
 
 - **What it sees.** Only `projects/`, mounted at the same path as in the assistant, and the shared token. No server data, sign-ins, TLS keys, or provider secrets. Each command gets a fixed environment (`PATH`, `HOME=/tmp`, `LANG`, `TERM`, and the proxy variables below), not the worker's.
 - **Network.** The worker is only on an internal network shared with the assistant and the [egress gateway](#egress-gateway): commands have no route to the internet, the LAN, the Docker host, or Meridian. They reach allowlisted HTTPS hosts through the gateway. The network uses `gateway_mode_ipv4: isolated` (Docker Engine 28 or later), so the host has no address on it either; without that, commands could reach host services such as sshd through the bridge gateway. Changing network options needs `docker compose down` then `up -d`, because Compose does not recreate an existing network.
@@ -98,7 +98,7 @@ The assistant never runs commands itself; its image has no shell. When `commandW
 
 - **What it allows.** HTTPS tunnels (`CONNECT`) on port 443 to allowlisted names: `registry.npmjs.org`, `registry.yarnpkg.com`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `raw.githubusercontent.com`, `pypi.org`, `files.pythonhosted.org`, and `nodejs.org`. Add hosts with `AGENTLINK_EGRESS_ALLOW` in `.env` (comma-separated; `*.example.org` covers subdomains only), then `docker compose up -d`.
 - **What it refuses.** Unlisted names, plain HTTP, IP addresses, other ports, single-label names (sibling containers), and allowlisted names that resolve to any private, loopback, link-local, or other non-public address. Tunnels use IPv4 only, so a NAT64 address cannot smuggle a private destination. The tunnel connects to the address it checked, so DNS cannot switch it to the LAN afterwards, and a redirect to another host is a new tunnel that is checked again. Refusals are a `403` whose status line names the host (`403 Blocked example.com: not on the AgentLink egress allowlist`); git shows only the code, so check `docker compose logs egress-gateway`, which logs every tunnel and refusal.
-- **What it does not do.** It does not inspect TLS, so an allowlisted host is reachable in full (for example any GitHub repository). Commands still need the owner's approval; the allowlist limits where an approved command can send data, not what it does there.
+- **What it does not do.** It does not inspect TLS, so an allowlisted host is reachable in full (for example any GitHub repository). The allowlist limits where a command can send data, not what it does there.
 - **Unrestricted escape hatch.** `COMPOSE_FILE=compose.yaml:compose.worker-egress.yaml` in `.env` gives the worker a normal network as well: any internet host, and the LAN and Docker host by address. Prefer adding hosts to the allowlist.
 - **Limits.** 2 GB of memory, 2 CPUs, and 512 processes by default (`AGENTLINK_WORKER_MEMORY`, `AGENTLINK_WORKER_CPUS`, `AGENTLINK_WORKER_PIDS`), and at most 16 commands at once.
 - **Token.** The protocol is plain TCP authenticated by the token. Commands can read the token, so the worker refuses connections from its own container: only the assistant can launch anything. Run `agentlink-server command-worker` outside a container only with `--allow-local-peers`, on a host where that trade-off is acceptable.
@@ -256,6 +256,13 @@ Each session has its own model, chosen from the models `server.json` declares. N
 - `POST /api/projects/:id/sessions` takes an optional body: `{ "model": { providerId, modelId } }` or `{ "role": "review" }`, not both. No body uses `defaultModel`. Errors: `400 model_not_available`, `model_role_not_configured`, `model_selection_invalid`, or `model_invalid`.
 - `POST .../sessions/:sid/model` (write access) changes the model between turns with the same body. It returns `409 session_busy` while a turn runs and `409 interaction_pending` while an approval waits.
 - Session reads and lists include `model`: the session's own choice, or `defaultModel` if it has none.
+
+### Approval mode
+
+- Session reads, lists, and the create response include `approvalMode`: `"autonomous"` (the default) or `"ask"`.
+- `autonomous` lets the session's own file writes and foreground commands run without a card. Protected paths, background commands, and a background agent's commands and writes still ask, and forbidden command rules are still refused.
+- `POST .../sessions/:sid/approval-mode` (approve access) takes `{ "mode": "ask" | "autonomous" }`. Switching to `ask` takes effect for the next tool call. Switching to `autonomous` needs reauthentication within the window (`401 reauthentication_required`). Errors: `400 approval_mode_invalid`, `409 approval_mode_unavailable`.
+- Only `ask` sessions are stored, in `<dataRoot>/settings/approval-modes.json`. A missing file means every session is autonomous; an unreadable one stops the server from starting.
 
 A review can also be an ordinary session on the review model.
 

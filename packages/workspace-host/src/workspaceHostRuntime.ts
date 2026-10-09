@@ -571,7 +571,19 @@ export async function createWorkspaceHost(
   const fileTools = options.files
     ? createWorkspaceFileTools({
         projectRoot: project.root,
-        approvalPolicy: options.files.approvalPolicy,
+        // A background child never inherits a session grant: its writes
+        // pause for the foreground, like its commands and MCP calls.
+        approvalPolicy: options.files.approvalPolicy?.hasSessionGrant
+          ? {
+              hasSessionGrant: (proposal, request) =>
+                backgroundSupervisor?.getRecordForSession(request.sessionId) ===
+                  undefined &&
+                options.files!.approvalPolicy!.hasSessionGrant!(
+                  proposal,
+                  request,
+                ),
+            }
+          : options.files.approvalPolicy,
         resolveScopes: resolveHostFileScopes,
         ripgrepExecutable: options.files.ripgrepExecutable,
         executionBackend: options.executionBackend,

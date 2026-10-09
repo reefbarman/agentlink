@@ -9,6 +9,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createAssistantServer } from "./assistantServer.js";
 import { commandHostOptions } from "./assistantService.js";
+import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { startCommandWorker } from "./commandWorker.js";
 import {
   createTestCertificate,
@@ -84,12 +85,26 @@ async function startHarness(
     streamStallTimeoutMs?: number;
     /** Run commands on an in-process command worker, as the server does. */
     commandWorker?: boolean;
+    /** Wire per-session approval modes as the service does (default autonomous). */
+    approvalModes?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
   cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
   const projectRoot = path.join(parent, "project");
   await fs.mkdir(projectRoot);
+  const approvalModesFile = path.join(
+    parent,
+    "settings",
+    "approval-modes.json",
+  );
+  const approvalModes = options.approvalModes
+    ? await openSessionApprovalModes({ file: approvalModesFile })
+    : undefined;
+  const autonomous = approvalModes
+    ? (request: { readonly sessionId: string }) =>
+        approvalModes.get("home", request.sessionId) === "autonomous"
+    : undefined;
   let commandOptions = {};
   if (options.commandWorker) {
     const worker = await startCommandWorker({
@@ -114,6 +129,7 @@ async function startHarness(
         port: worker.port,
         readToken: async () => "route-test-worker-token",
       },
+      autonomous,
     );
   }
   const fetch = vi.fn<typeof globalThis.fetch>();
@@ -162,7 +178,16 @@ async function startHarness(
       },
     ],
     ...commandOptions,
-    files: { enabled: true },
+    files: {
+      enabled: true,
+      ...(autonomous
+        ? {
+            approvalPolicy: {
+              hasSessionGrant: (_proposal, request) => autonomous(request),
+            },
+          }
+        : {}),
+    },
     background: {
       enabled: true,
       modelRoles: {
@@ -203,6 +228,7 @@ async function startHarness(
     },
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
+    approvalModes,
   });
   agentNotifier = routes;
   const server = await createAssistantServer({
@@ -281,6 +307,7 @@ async function startHarness(
     claudeFetch,
     clock,
     projectRoot,
+    approvalModesFile,
     owner,
     request,
     toSession,
@@ -1048,7 +1075,8 @@ describe("assistant workspace routes", () => {
   });
 
   it("approves a child's write only after reauthentication", async () => {
-    const harness = await startHarness();
+    // The parent is autonomous; its child still asks.
+    const harness = await startHarness({ approvalModes: true });
     const { owner, request } = harness;
     harness.fetch.mockImplementation(async (_url, init) => {
       if (lastUser(init) === "write child.txt") {
@@ -1386,6 +1414,146 @@ describe("assistant workspace routes", () => {
       .map((message) => JSON.stringify(message.content));
     // Only the server's fixed environment reaches the command.
     expect(toolResults.join("\n")).toContain("from-worker /tmp []");
+  });
+
+  it("runs edits and commands without asking unless the session asks for everything", async () => {
+    const harness = await startHarness({
+      commandWorker: true,
+      approvalModes: true,
+    });
+    const { owner, request } = harness;
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    const runTurn = async (...calls: Response[]) => {
+      harness.fetch.mockReset();
+      for (const call of calls) harness.fetch.mockResolvedValueOnce(call);
+      harness.fetch.mockResolvedValue(completion("done"));
+      await request({
+        method: "POST",
+        path: `${base}/turns`,
+        session: owner,
+        body: { text: "go" },
+      });
+      await harness.routes.whenIdle("home", sessionId);
+      return await readPending(harness, base);
+    };
+    const snapshot = async () =>
+      (await request({ path: base, session: owner })).body as {
+        approvalMode: string;
+      };
+    expect((await snapshot()).approvalMode).toBe("autonomous");
+
+    // Autonomous: a file write and a command both run with no approval.
+    await expect(
+      runTurn(
+        toolCall("write_file", {
+          path: "note.txt",
+          content: "hello\n",
+          expectedAbsent: true,
+        }),
+        toolCall("execute_command", { command: "touch ran.txt" }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "note.txt"), "utf8"),
+    ).resolves.toBe("hello\n");
+
+    await expect(
+      fs.access(path.join(harness.projectRoot, "ran.txt")),
+    ).resolves.toBeUndefined();
+
+    // Protected files still ask, even in an autonomous session.
+    const protectedWrite = await runTurn(
+      toolCall("write_file", {
+        path: "AGENTS.md",
+        content: "be nice\n",
+        expectedAbsent: true,
+      }),
+    );
+    expect(protectedWrite).toBeDefined();
+    await request({
+      method: "POST",
+      path: `${base}/interaction`,
+      session: owner,
+      body: {
+        interactionId: protectedWrite!.request.interactionId,
+        interactionRevision: protectedWrite!.interactionRevision,
+        decision: "deny",
+      },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+
+    // Asking needs no reauthentication and applies to the next tool call.
+    harness.clock.value += 6 * 60 * 1000;
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/approval-mode`,
+        session: owner,
+        body: { mode: "ask" },
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { approvalMode: "ask" } });
+    const asked = await runTurn(
+      toolCall("execute_command", { command: "touch second.txt" }),
+    );
+    expect(asked).toBeDefined();
+    await expect(
+      fs.access(path.join(harness.projectRoot, "second.txt")),
+    ).rejects.toThrow();
+    await request({
+      method: "POST",
+      path: `${base}/cancel`,
+      session: owner,
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    // It is durable.
+    expect(
+      (await openSessionApprovalModes({ file: harness.approvalModesFile })).get(
+        "home",
+        sessionId,
+      ),
+    ).toBe("ask");
+
+    // Going back to autonomous widens authority: it needs a recent sign-in.
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/approval-mode`,
+        session: owner,
+        body: { mode: "autonomous" },
+      }),
+    ).resolves.toMatchObject({
+      status: 401,
+      body: { error: "reauthentication_required" },
+    });
+    await request({
+      method: "POST",
+      path: "/api/auth/reauthenticate",
+      session: owner,
+      body: { passphrase: PASSPHRASE },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/approval-mode`,
+        session: owner,
+        body: { mode: "autonomous" },
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { approvalMode: "autonomous" },
+    });
+    await expect(
+      request({
+        method: "POST",
+        path: `${base}/approval-mode`,
+        session: owner,
+        body: { mode: "sometimes" },
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "approval_mode_invalid" },
+    });
   });
 
   it("maps project access explicitly", async () => {

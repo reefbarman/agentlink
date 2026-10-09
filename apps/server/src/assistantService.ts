@@ -43,6 +43,7 @@ import {
   type AssistantServerConfig,
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
+import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
   createAssistantWorkspaceRoutes,
@@ -77,6 +78,11 @@ export function serverAccessDataRoot(config: AssistantServerConfig): string {
 /** Where session event logs live, for replay across restarts. */
 export function serverEventLogDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "events");
+}
+
+/** Per-session approval modes (which sessions ask for everything). */
+export function serverApprovalModesFile(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "settings", "approval-modes.json");
 }
 
 /** Where the server-managed local CA and server certificate live. */
@@ -156,6 +162,8 @@ async function commandWorkerClient(
 export function commandHostOptions(
   config: Pick<AssistantServerConfig, "commandWorker">,
   client: CommandWorkerClientOptions | undefined,
+  /** Whether a foreground command in this session may run without asking. */
+  autonomous?: (request: { readonly sessionId: string }) => boolean,
 ): Pick<CreateWorkspaceHostOptions, "executionBackend" | "commands"> {
   if (!client || !config.commandWorker) return {};
   return {
@@ -173,6 +181,9 @@ export function commandHostOptions(
       shellExecutable: config.commandWorker.shell,
       resolveEnvironment: () =>
         commandWorkerEnvironment(config.commandWorker?.egressProxy),
+      ...(autonomous
+        ? { hasSessionGrant: (_proposal, request) => autonomous(request) }
+        : {}),
     },
   };
 }
@@ -410,6 +421,13 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  const approvalModes = await openSessionApprovalModes({
+    file: serverApprovalModesFile(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
   // Bound once the routes exist; children cannot start before then.
@@ -421,6 +439,8 @@ export async function startAssistantService(
     | undefined;
   try {
     for (const project of config.projects) {
+      const autonomous = (request: { readonly sessionId: string }) =>
+        approvalModes.get(project.id, request.sessionId) === "autonomous";
       const host = await createWorkspaceHost({
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
@@ -428,9 +448,13 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
-        ...commandHostOptions(config, worker),
+        ...commandHostOptions(config, worker, autonomous),
         files: {
           enabled: true,
+          // Protected paths always ask, whatever this says.
+          approvalPolicy: {
+            hasSessionGrant: (_proposal, request) => autonomous(request),
+          },
           ...(config.ripgrepPath
             ? { ripgrepExecutable: config.ripgrepPath }
             : {}),
@@ -474,6 +498,7 @@ export async function startAssistantService(
         ...(config.modelRoles ? { roles: config.modelRoles } : {}),
       },
       eventLog,
+      approvalModes,
     });
     agentNotifier = routes;
     server = await createAssistantServer({

@@ -19,6 +19,11 @@ import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { SessionEventLog } from "./FileSessionEventLog.js";
 import type { ServerAccessStore } from "./ServerAccessStore.js";
 import {
+  SESSION_APPROVAL_MODES,
+  type SessionApprovalMode,
+  type SessionApprovalModes,
+} from "./SessionApprovalModes.js";
+import {
   MAX_TRANSCRIPT_TEXT_LENGTH,
   projectSessionTranscript,
 } from "./sessionTranscript.js";
@@ -39,7 +44,7 @@ const DEFAULT_HEARTBEAT_MS = 15_000;
  */
 const DEFAULT_STREAM_STALL_TIMEOUT_MS = 30_000;
 const ROUTE_PATTERN =
-  /^\/api\/projects\/([^/]+)(?:\/sessions(?:\/([^/]+)(?:\/(turns|interaction|cancel|events|model))?)?)?$/u;
+  /^\/api\/projects\/([^/]+)(?:\/sessions(?:\/([^/]+)(?:\/(turns|interaction|cancel|events|model|approval-mode))?)?)?$/u;
 const MODELS_ROUTE_PATTERN = /^\/api\/projects\/([^/]+)\/models$/u;
 const AGENTS_ROUTE_PATTERN =
   /^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/agents(?:\/([^/]+)\/(steer|stop|approval))?$/u;
@@ -112,6 +117,11 @@ export interface CreateAssistantWorkspaceRoutesOptions {
   readonly heartbeatMs?: number;
   /** How long a backpressured event stream may stall before it is dropped. */
   readonly streamStallTimeoutMs?: number;
+  /**
+   * Per-session approval modes, which the hosts also consult. Without it
+   * every session reports `ask`, matching hosts given no grant.
+   */
+  readonly approvalModes?: SessionApprovalModes;
 }
 
 export interface AssistantWorkspaceRoutes {
@@ -241,6 +251,11 @@ export function createAssistantWorkspaceRoutes(
     }
     return reference;
   };
+  const approvalMode = (
+    projectId: string,
+    sessionId: string,
+  ): SessionApprovalMode =>
+    options.approvalModes?.get(projectId, sessionId) ?? "ask";
   const effectiveModel = (selected: AgentModelReference | undefined) => {
     const model = selected ?? models.defaultModel;
     return { providerId: model.providerId, modelId: model.modelId };
@@ -453,6 +468,7 @@ export function createAssistantWorkspaceRoutes(
             updatedAt: session.updatedAt,
             state: session.state,
             model: effectiveModel(session.model),
+            approvalMode: approvalMode(projectId, session.sessionId),
             background: mount.host.isBackgroundSession(session.sessionId),
           })),
         });
@@ -472,6 +488,7 @@ export function createAssistantWorkspaceRoutes(
         sendJson(response, 201, {
           sessionId: created.sessionId,
           model: effectiveModel(model),
+          approvalMode: approvalMode(projectId, created.sessionId),
         });
         return true;
       }
@@ -497,6 +514,7 @@ export function createAssistantWorkspaceRoutes(
         session: projectEmbeddedAgentSessionSnapshot(hydration),
         transcript: projectSessionTranscript(hydration.record.messages),
         model: effectiveModel(hydration.record.selectedModel),
+        approvalMode: approvalMode(projectId, sessionId),
         background: mount.host.isBackgroundSession(sessionId),
         task: task
           ? {
@@ -644,6 +662,40 @@ export function createAssistantWorkspaceRoutes(
         throw error;
       }
       sendJson(response, 200, { model: effectiveModel(model) });
+      return true;
+    }
+
+    if (operation === "approval-mode") {
+      const mount = await authorize(auth, projectId, "approve");
+      const body = await readJsonBody(request, undefined, auth.signal);
+      const mode = body.mode;
+      if (
+        typeof mode !== "string" ||
+        !SESSION_APPROVAL_MODES.includes(mode as SessionApprovalMode)
+      ) {
+        throw new HttpError(400, "approval_mode_invalid");
+      }
+      if (!options.approvalModes) {
+        throw new HttpError(409, "approval_mode_unavailable");
+      }
+      // Autonomy widens what the session may do without the owner.
+      const widening = mode === "autonomous";
+      if (widening && !auth.recentlyAuthenticated) {
+        throw new HttpError(401, "reauthentication_required");
+      }
+      if (mount.host.isBackgroundSession(sessionId)) {
+        throw new HttpError(404, "session_not_found");
+      }
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth, widening);
+      await options.approvalModes.set(
+        projectId,
+        sessionId,
+        mode as SessionApprovalMode,
+      );
+      sendJson(response, 200, {
+        approvalMode: approvalMode(projectId, sessionId),
+      });
       return true;
     }
 
