@@ -36,6 +36,38 @@ jobs:
           path: cli-releases/*.tar.gz
           if-no-files-found: error
 
+  # The standalone assistant server on Linux, where it is deployed: its own
+  # lint and tests (including the real-process and command-worker tests),
+  # then both container images built and smoke-tested under Docker Compose.
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - name: Build workspaces and the server bundle
+        run: npm run build:workspaces
+      - name: Lint apps/server
+        run: npm run lint --workspace apps/server
+      - name: Test apps/server
+        run: npm test --workspace apps/server
+
+      - name: Build container images
+        run: |
+          docker build -t agentlink-assistant:local \
+            -f apps/server/deploy/container/Dockerfile apps/server
+          docker build --target command-worker -t agentlink-command-worker:local \
+            -f apps/server/deploy/container/Dockerfile apps/server
+      - name: Smoke-test the container deployment
+        run: apps/server/deploy/container/smoke-test.sh
+
   verify:
     runs-on: ubuntu-latest
     steps:

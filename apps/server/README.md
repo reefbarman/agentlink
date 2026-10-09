@@ -67,6 +67,7 @@ docker compose exec assistant agentlink-server export-ca > agentlink-ca.pem
 docker compose exec assistant agentlink-server recover
 ```
 
+- **Smoke test.** After building the images, `apps/server/deploy/container/smoke-test.sh` starts the shipped `compose.yaml` and `server.example.json` as a throwaway project on `127.0.0.1:18443` (`AGENTLINK_SMOKE_PORT`). It checks the users, that the assistant has no shell, that `--check` reaches the worker, that the host policy and `export-ca` work, and that the worker refuses connections from its own container, then removes everything. It is safe next to a running deployment and is what CI runs on Linux.
 - **Ownership.** The container runs as uid/gid 1000 by default (`AGENTLINK_UID`/`AGENTLINK_GID` in `.env`), so `data/` and `projects/` belong to the host user. Create them before the first start, or Docker creates them owned by root.
 - **Network.** The port is published on all addresses by default (`AGENTLINK_PUBLISH`, for example `192.168.1.20:8443`, narrows it). Docker publishes ports outside ufw, so ufw neither blocks nor protects it. Binding a single LAN address fails at boot if that address is not up yet. The server answers only HTTPS, only for `publicOrigins`, and only to signed-in devices.
 - **Config.** In the container, `listen` is `0.0.0.0:8443`, `dataRoot` is `/var/lib/agentlink`, and project roots are under `/srv/agentlink/projects`. `publicOrigins` lists the addresses devices use on the LAN.
