@@ -38,12 +38,12 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
@@ -61,7 +61,7 @@ jobs:
         run: npm run test:core-sdk-consumer
       - name: Pack verified SDK archive set
         run: npm run vendor:core-sdk -- --destination sdk-dist --include-node-host
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: agentlink-sdk
           path: sdk-dist/*
@@ -79,12 +79,12 @@ jobs:
     env:
       SDK_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: agentlink-sdk
           path: dist

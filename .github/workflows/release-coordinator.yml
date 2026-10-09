@@ -48,7 +48,7 @@ jobs:
       cli_version: ${{ steps.plan.outputs.cli_version }}
       sdk_version: ${{ steps.plan.outputs.sdk_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -88,7 +88,7 @@ jobs:
             echo "Dry run: set RELEASE_AUTOMATION=publish or dispatch mode=publish to release."
           fi
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         if: steps.source.outputs.sha
         with:
           node-version: 22.x
@@ -111,7 +111,7 @@ jobs:
             --published-tags-file published-tags.json \
             --out release-plan.json --github-output
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: steps.source.outputs.sha
         with:
           name: release-plan
@@ -127,19 +127,19 @@ jobs:
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: npm
 
       - run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: release-plan
 
