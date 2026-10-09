@@ -625,6 +625,25 @@ function invalidContentResult(
   };
 }
 
+/**
+ * Detect a write that would replace real structured-config secrets with the
+ * redaction placeholder an agent saw in a redacted read. Returns the redacted
+ * keys of the existing file, or undefined when the write is safe. A file that
+ * already contains the literal placeholder is left to the author.
+ */
+export function findRedactionPlaceholderOverwrite(
+  filePath: string,
+  existingContent: string,
+  nextContent: string,
+): string[] | undefined {
+  const placeholder = JSON.stringify(REDACTED_VALUE);
+  if (!nextContent.includes(placeholder)) return undefined;
+  if (existingContent.includes(placeholder)) return undefined;
+  if (!isStructuredConfigPath(filePath)) return undefined;
+  const existing = redactStructuredSecrets(filePath, existingContent);
+  return existing.redactionCount > 0 ? existing.redactedKeys : undefined;
+}
+
 export function redactStructuredSecrets(
   filePath: string,
   content: string,

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -23,6 +24,7 @@ import type {
 } from "../core/capabilities/editReview.js";
 import { finalizeEditReviewResult } from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
+import { findRedactionPlaceholderOverwrite } from "../shared/structuredSecretRedaction.js";
 import {
   DEFAULT_DIAGNOSTIC_DELAY_MS,
   evaluateWriteAuthorization,
@@ -95,6 +97,30 @@ export async function handleWriteFile(
         path: relPath,
         reason: "edit_review_unavailable",
       });
+    }
+
+    // read_file shows structured-config secrets as "[REDACTED]". Rewriting
+    // the whole file from that view would silently replace real credentials.
+    const existingContent = await readFile(filePath, "utf-8").catch(
+      () => undefined,
+    );
+    const overwrittenKeys =
+      existingContent === undefined
+        ? undefined
+        : findRedactionPlaceholderOverwrite(
+            filePath,
+            existingContent,
+            params.content,
+          );
+    if (overwrittenKeys) {
+      return errorResult(
+        "write_file would replace redacted secret values with the [REDACTED] placeholder. Use apply_diff to edit only the non-secret lines, or supply the real values if this task is authorised to change them.",
+        {
+          path: relPath,
+          reason: "redaction_placeholder_overwrite",
+          redacted_keys: overwrittenKeys,
+        },
+      );
     }
 
     const authorization = evaluateWriteAuthorization(

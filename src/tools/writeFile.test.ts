@@ -184,6 +184,59 @@ describe("handleWriteFile", () => {
     expect(onApprovalPrompt).toHaveBeenCalledOnce();
   });
 
+  it("rejects rewriting structured-config secrets with the redaction placeholder", async () => {
+    const filePath = path.join(workspaceDir, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const original =
+      '[otel.exporter.otlp-http.headers]\nGram-Key = "FAKE_REAL_KEY"\n';
+    fs.writeFileSync(filePath, original, "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: ".codex/config.toml",
+        ...durable("ok"),
+      })),
+    };
+    const policy = createApprovalPolicy(true);
+    const { handleWriteFile } = await import("./writeFile.js");
+    const write = (content: string) =>
+      handleWriteFile(
+        { path: ".codex/config.toml", content },
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        "code",
+        { editReviewProvider, writeApprovalPolicyProvider: policy },
+      );
+
+    const rejected = await write(
+      'sandbox_mode = "read-only"\n[otel.exporter.otlp-http.headers]\nGram-Key = "[REDACTED]"\n',
+    );
+    expect(toolJson(rejected)).toMatchObject({
+      reason: "redaction_placeholder_overwrite",
+      redacted_keys: ["Gram-Key"],
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe(original);
+
+    // Writes that carry real values, or ordinary files, still go to review.
+    await write(
+      'sandbox_mode = "read-only"\n[otel.exporter.otlp-http.headers]\nGram-Key = "FAKE_ROTATED_KEY"\n',
+    );
+    fs.writeFileSync(path.join(workspaceDir, "notes.md"), "old", "utf-8");
+    await handleWriteFile(
+      { path: "notes.md", content: 'value = "[REDACTED]"' },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects relative review-mode paths even when they resolve under the host temporary directory", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(),

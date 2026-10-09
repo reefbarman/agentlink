@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  findRedactionPlaceholderOverwrite,
   isHighConfidenceSecretKey,
   isStructuredConfigPath,
   redactStructuredSecrets,
@@ -318,6 +319,47 @@ describe("structured secret redaction", () => {
     expect(result.content).not.toContain("FAKE_JSON_KEY");
     expect(result.content).toContain('"Accept": "text/plain"');
     expect(result.content).toContain('"Gram-Key-Label": "visible"');
+  });
+
+  it("detects writes that would replace real secrets with the placeholder", () => {
+    const configPath = "/workspace/.agentlink/mcp.json";
+    const existing = '{ "apiKey": "FAKE_REAL" }';
+    expect(
+      findRedactionPlaceholderOverwrite(
+        configPath,
+        existing,
+        '{ "apiKey": "[REDACTED]", "x": 1 }',
+      ),
+    ).toEqual(["apiKey"]);
+    expect(
+      findRedactionPlaceholderOverwrite(
+        configPath,
+        existing,
+        '{ "apiKey": "FAKE_NEW" }',
+      ),
+    ).toBeUndefined();
+    // Placeholder already on disk, no secrets on disk, or ineligible path.
+    expect(
+      findRedactionPlaceholderOverwrite(
+        configPath,
+        '{ "apiKey": "[REDACTED]" }',
+        '{ "apiKey": "[REDACTED]" }',
+      ),
+    ).toBeUndefined();
+    expect(
+      findRedactionPlaceholderOverwrite(
+        configPath,
+        '{ "x": 1 }',
+        '{ "apiKey": "[REDACTED]" }',
+      ),
+    ).toBeUndefined();
+    expect(
+      findRedactionPlaceholderOverwrite(
+        "/workspace/notes.md",
+        existing,
+        '"[REDACTED]"',
+      ),
+    ).toBeUndefined();
   });
 
   it("does not process ineligible TOML", () => {
