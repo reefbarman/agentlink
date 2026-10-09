@@ -1451,6 +1451,153 @@ describe("TranscriptMessageList retry error rendering", () => {
     cleanup();
   });
 
+  it("renders terminal truncation as a paused error even when it is not latest", () => {
+    const warning: ChatMessage = {
+      id: "truncated",
+      role: "warning",
+      content: "",
+      timestamp: 1,
+      blocks: [],
+      warningMessage:
+        "The provider truncated the response. Automatic continuation stopped after two attempts. The partial response was preserved; send Continue to resume.",
+      error: { message: "truncated", retryable: true },
+    };
+    const { container } = render(
+      h(TranscriptMessageList, {
+        messages: [
+          warning,
+          {
+            id: "user-followup",
+            role: "user",
+            content: "Next prompt",
+            timestamp: 2,
+            blocks: [],
+          },
+        ],
+        streaming: false,
+        onRetry: vi.fn(),
+      }),
+    );
+
+    const notice = container.querySelector(".error-notice");
+    expect(notice?.classList.contains("error-notice-error")).toBe(true);
+    expect(notice?.textContent).toContain("Paused");
+    expect(notice?.textContent).toContain("send Continue to resume");
+    expect(notice?.textContent).not.toContain("continued successfully");
+    expect(container.querySelector(".error-retry-btn")).toBeNull();
+
+    const legacy = render(
+      h(TranscriptMessageList, {
+        messages: [
+          {
+            ...warning,
+            id: "legacy-truncation",
+            warningMessage:
+              "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
+          },
+        ],
+        streaming: false,
+      }),
+    );
+    expect(legacy.container.querySelector(".error-notice-error")).toBeTruthy();
+    expect(legacy.container.textContent).toContain("Paused");
+    expect(legacy.container.textContent).not.toContain(
+      "continued successfully",
+    );
+    cleanup();
+  });
+
+  it("shows truncation recovery attempt metadata without claiming success", () => {
+    const recovery: ChatMessage = {
+      id: "truncation-retry",
+      role: "warning",
+      content: "",
+      timestamp: 1,
+      blocks: [],
+      warningMessage:
+        "The provider truncated the response. Continuing from the preserved partial response (attempt 2/2).",
+      warningRetry: { retryAttempt: 2, retryMaxAttempts: 2 },
+    };
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages: [recovery], streaming: true }),
+    );
+
+    expect(container.textContent).toContain(
+      "Continuing from the preserved partial response (attempt 2/2).",
+    );
+    expect(container.textContent).not.toContain("continued successfully");
+    expect(container.querySelector(".error-notice-recovered")).toBeNull();
+    cleanup();
+  });
+
+  it("resolves warnings only after meaningful assistant output", () => {
+    const warning: ChatMessage = {
+      id: "retry-warning",
+      role: "warning",
+      content: "",
+      timestamp: 1,
+      blocks: [],
+      warningMessage: "Request timed out — retrying request",
+    };
+    const bookkeeping: ChatMessage[] = [
+      {
+        id: "api-request-only",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        apiRequest: apiRequest("new-model"),
+      },
+      {
+        id: "empty-assistant",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [],
+      },
+      {
+        id: "user-only",
+        role: "user",
+        content: "Another prompt",
+        timestamp: 4,
+        blocks: [],
+      },
+    ];
+    const view = render(
+      h(TranscriptMessageList, {
+        messages: [warning, ...bookkeeping],
+        streaming: false,
+      }),
+    );
+
+    expect(view.container.querySelector(".error-notice-recovered")).toBeNull();
+    view.rerender(
+      h(TranscriptMessageList, {
+        messages: [
+          warning,
+          ...bookkeeping,
+          {
+            id: "assistant-output",
+            role: "assistant",
+            content: "Recovered response",
+            timestamp: 5,
+            blocks: [{ type: "text", text: "Recovered response" }],
+          },
+        ],
+        streaming: false,
+      }),
+    );
+
+    expect(
+      view.container.querySelector(".error-notice-recovered"),
+    ).toBeTruthy();
+    expect(view.container.textContent).toContain(
+      "The agent continued successfully.",
+    );
+    cleanup();
+  });
+
   it("keeps retry notices separate when transcript content occurs between them", () => {
     const warning = (id: string, timestamp: number): ChatMessage => ({
       id,

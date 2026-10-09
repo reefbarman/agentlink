@@ -28,6 +28,24 @@ function isOverloadedWarning(message: string): boolean {
   return lower.includes("overloaded") || lower.includes("529");
 }
 
+function isTerminalTruncation(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("the model reached its output-token limit") ||
+    lower.includes("automatic continuation stopped after two attempts")
+  );
+}
+
+function isTruncationRecovery(message: ChatMessage): boolean {
+  return (
+    message.warningRetry?.retryAttempt !== undefined &&
+    message.warningRetry.retryMaxAttempts !== undefined &&
+    message.warningMessage
+      ?.toLowerCase()
+      .includes("continuing from the preserved partial response") === true
+  );
+}
+
 function getWarningTitle(message: string, resolved: boolean): string {
   const lower = message.toLowerCase();
   if (lower.includes("rate_limit") || lower.includes("429")) {
@@ -56,6 +74,9 @@ export function WarningRow({
   onRetry,
 }: WarningRowProps) {
   const message = messages[messages.length - 1];
+  const warningText = message.warningMessage ?? "";
+  const terminalTruncation = isTerminalTruncation(warningText);
+  const truncationRecovery = isTruncationRecovery(message);
   const retryAt = message.warningRetry?.retryAt;
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -83,27 +104,47 @@ export function WarningRow({
   const attemptLabel =
     attempt !== undefined
       ? `Attempt ${attempt}${maxAttempts !== undefined ? ` of ${maxAttempts}` : ""}`
-      : messages.length > 1
-        ? `${messages.length} retries`
-        : undefined;
-  const retryStatus = `${status}${attemptLabel ? ` · ${attemptLabel}` : ""}`;
-  const resolvedStatus = `${messages.length} automatic ${messages.length === 1 ? "retry" : "retries"}`;
+      : undefined;
+  const retryCount = messages.filter(
+    (warning) => warning.warningRetry?.retryAttempt !== undefined,
+  ).length;
+  const retryStatus = truncationRecovery
+    ? warningText
+    : `${status}${attemptLabel ? ` · ${attemptLabel}` : ""}`;
+  const resolvedStatus = retryCount
+    ? `${retryCount} automatic ${retryCount === 1 ? "retry" : "retries"}`
+    : undefined;
+  const isResolved = resolved && !terminalTruncation;
 
   return (
     <ErrorNotice
-      tone={resolved ? "recovered" : "recovering"}
-      title={getWarningTitle(message.warningMessage ?? "", resolved)}
-      status={resolved ? resolvedStatus : retryStatus}
+      tone={
+        terminalTruncation ? "error" : isResolved ? "recovered" : "recovering"
+      }
+      title={
+        terminalTruncation || truncationRecovery
+          ? "Response truncated"
+          : getWarningTitle(warningText, isResolved)
+      }
+      status={
+        terminalTruncation
+          ? "Paused"
+          : isResolved
+            ? resolvedStatus
+            : retryStatus
+      }
       hint={
-        resolved
-          ? "The agent continued successfully."
-          : isOverloadedWarning(message.warningMessage ?? "")
-            ? "The provider may be having issues on their end — there's nothing to fix here. The agent will keep retrying until it recovers."
-            : "The agent is still running; no action is needed."
+        terminalTruncation
+          ? "Automatic continuation stopped. The partial response was preserved; send Continue to resume."
+          : isResolved
+            ? "The agent continued successfully."
+            : isOverloadedWarning(warningText)
+              ? "The provider may be having issues on their end — there's nothing to fix here. The agent will keep retrying until it recovers."
+              : "The agent is still running; no action is needed."
       }
       details={messages.map((warning) => warning.warningMessage ?? "")}
       actions={
-        message.error && onRetry ? (
+        !terminalTruncation && message.error && onRetry ? (
           <button type="button" class="error-retry-btn" onClick={onRetry}>
             <i class="codicon codicon-refresh" />
             Retry now

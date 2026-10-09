@@ -1260,6 +1260,9 @@ export class AgentEngine {
     const toolCallBudget = new ToolCallBudget(maxToolCalls);
     let apiTurnCount = 0;
     let providerPauseTurnCount = 0;
+    let outputContinuationAttempts = 0;
+    let pendingOutputContinuation = false;
+    const MAX_OUTPUT_CONTINUATION_ATTEMPTS = 2;
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
@@ -1298,6 +1301,14 @@ export class AgentEngine {
       };
       requestLoop: while (true) {
         if (signal.aborted) break;
+        // Input can arrive while the continuation warning is being published.
+        // Hand control back to the owner instead of nudging past a new request.
+        if (
+          pendingOutputContinuation &&
+          (session.hasPendingInterjections || session.hasQueuedUiMessages)
+        ) {
+          break;
+        }
 
         const driftedSkill = session.takeActiveSkillCatalogDrift();
         if (driftedSkill) {
@@ -1722,6 +1733,13 @@ export class AgentEngine {
               role: "user",
               content:
                 "Your previous response was empty. Continue from where you left off and provide the full response.",
+            });
+          }
+          if (pendingOutputContinuation) {
+            apiMessages.push({
+              role: "user",
+              content:
+                "The provider truncated your previous response. Continue the user's task from the preserved partial response, without repeating completed work. Any tool calls in that truncated response were not executed, even if their arguments appear complete. Reissue only the calls still needed, with complete arguments. Keep the next response concise and use smaller tool-call batches or file edits. If the task is complete, call set_task_status with the actual result.",
             });
           }
           if (pendingFinalStatusNudge) {
@@ -2477,6 +2495,7 @@ export class AgentEngine {
         responsesDispatches = 0;
         visibleTextFromRetriedStream = "";
         pendingFinalStatusNudge = false;
+        pendingOutputContinuation = false;
         apiTurnCount++;
 
         if (signal.aborted) break;
@@ -2579,7 +2598,13 @@ export class AgentEngine {
         providerPauseTurnCount = 0;
 
         if (modelStopReason === "max_tokens") {
-          appendCommittedAssistantMessage();
+          // Empty truncated turns must not become non-final assistant messages:
+          // providers can reject them before the continuation nudge is applied.
+          const hasTruncatedOutput =
+            typeof committedAssistantMessage.content === "string"
+              ? committedAssistantMessage.content.trim().length > 0
+              : hasVisibleOrActionableOutput(committedAssistantMessage.content);
+          if (hasTruncatedOutput) appendCommittedAssistantMessage();
           // A truncated tool request is evidence, not authorization to execute.
           // Close its history entry before a finalization request or later resume.
           const truncatedToolCalls = Array.isArray(
@@ -2599,7 +2624,7 @@ export class AgentEngine {
               })),
             );
           }
-          opts?.onAssistantTurnCommitted?.();
+          if (hasTruncatedOutput) opts?.onAssistantTurnCommitted?.();
           const canFinalizeReview =
             isBackgroundReview &&
             finalStatusNudgeAttempts <
@@ -2608,11 +2633,32 @@ export class AgentEngine {
             !session.hasPendingInterjections &&
             !session.hasQueuedUiMessages &&
             rawTools?.some((tool) => tool.name === "set_task_status") === true;
+          const canContinueOutput =
+            !opts?.isBackground &&
+            outputContinuationAttempts < MAX_OUTPUT_CONTINUATION_ATTEMPTS &&
+            (maxApiTurns === 0 || apiTurnCount < maxApiTurns) &&
+            !signal.aborted &&
+            !session.hasPendingInterjections &&
+            !session.hasQueuedUiMessages;
+          if (canContinueOutput) {
+            outputContinuationAttempts++;
+            pendingOutputContinuation = true;
+            session.status = "streaming";
+            yield {
+              type: "warning",
+              message: `The provider truncated the response. Continuing from the preserved partial response (attempt ${outputContinuationAttempts}/${MAX_OUTPUT_CONTINUATION_ATTEMPTS}).`,
+              retryAttempt: outputContinuationAttempts,
+              retryMaxAttempts: MAX_OUTPUT_CONTINUATION_ATTEMPTS,
+            };
+            continue;
+          }
           yield {
             type: "warning",
             message: canFinalizeReview
               ? "The review reached the provider's output-token limit. Requesting a concise final result from the evidence already collected."
-              : "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
+              : outputContinuationAttempts >= MAX_OUTPUT_CONTINUATION_ATTEMPTS
+                ? "The provider truncated the response. Automatic continuation stopped after two attempts. The partial response was preserved; send Continue to resume."
+                : "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
           };
           if (canFinalizeReview) {
             finalStatusNudgeAttempts++;

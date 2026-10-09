@@ -189,6 +189,14 @@ The optional `quota` object enables `/usage` for the selected Meridian model in 
 - [ ] Continue the same conversation and check that follow-up tool rounds work.
 - [ ] Run `/usage` if quota reporting is configured.
 
+## Truncated responses and continuation
+
+In built-in foreground workspace chats, AgentLink preserves a response that the provider reports as truncated (`max_tokens`) and makes up to two automatic continuation attempts per run. The continuation asks the model to resume the task without repeating completed work, keep output concise, and use smaller tool-call batches or edits. Tool calls from a truncated response are never executed, even when their arguments look complete; the next response must reissue any calls still needed. Cancellation, queued user messages, and explicit API-turn budgets take priority over automatic continuation. Background reviews retain their separate bounded final-result recovery.
+
+If truncation persists, the chat shows a paused warning rather than claiming a successful retry. Send **Continue** to resume, or change models first. Retry counts require retry metadata, and a later bookkeeping row alone does not establish recovery. VS Code and browser workspace chats use the same warning renderer.
+
+For Meridian, a truncation signal can also represent an exhausted SDK turn or an interrupted stream, not just a literal model output-token limit. Increasing `agentMaxTokens` may help a genuinely output-limited request but is not a universal fix. Verify how your Meridian version handles client limits. Trying medium reasoning effort can reduce long thinking-heavy turns; keep higher effort available for harder tasks. After changing the companion plugin or tool-deferral policy, test a fresh conversation.
+
 ## Troubleshooting
 
 | Symptom                             | Check                                                                                                                                                                          |

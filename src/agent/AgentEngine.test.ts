@@ -2929,6 +2929,171 @@ describe("AgentEngine", () => {
       },
     );
 
+    it.each(["text", "tool", "empty", "whitespace"])(
+      "continues a truncated foreground %s response safely through production dispatch",
+      async (shape) => {
+        const requests: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          if (requests.length === 1) {
+            yield {
+              type: "model_stop",
+              reason: "max_tokens",
+              assistantMessage: {
+                role: "assistant",
+                content:
+                  shape === "empty"
+                    ? []
+                    : shape === "whitespace"
+                      ? [{ type: "text", text: "   " }]
+                      : shape === "text"
+                        ? [{ type: "text", text: "Preserved partial output." }]
+                        : [
+                            {
+                              type: "tool_use",
+                              id: "truncated_write",
+                              name: "write_file",
+                              input: {
+                                path: "never-written.txt",
+                                content: "partial",
+                              },
+                            },
+                          ],
+              },
+            };
+          } else {
+            yield {
+              type: "content_blocks",
+              blocks: [
+                {
+                  type: "tool_use",
+                  id: "recovered_final",
+                  name: "set_task_status",
+                  input: { status: "completed", summary: "Recovered result." },
+                },
+              ],
+            };
+          }
+          yield { type: "done" };
+        };
+        const session = await makeSession();
+        session.addUserMessage("finish the task");
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+        const events = await collectEvents(engine.run(session));
+        expect(requests).toHaveLength(2);
+        expect(requests[1].messages.at(-1)).toEqual({
+          role: "user",
+          content: expect.stringContaining(
+            "The provider truncated your previous response",
+          ),
+        });
+        if (shape === "empty" || shape === "whitespace") {
+          expect(
+            requests[1].messages.some(
+              (message) => message.role === "assistant",
+            ),
+          ).toBe(false);
+        }
+        expect(requests[1].maxTokens).toBe(requests[0].maxTokens);
+        expect(
+          events
+            .filter((event) => event.type === "tool_start")
+            .map((event) => event.toolName),
+        ).toEqual(["set_task_status"]);
+        expect(events.find((event) => event.type === "warning")).toMatchObject({
+          retryAttempt: 1,
+          retryMaxAttempts: 2,
+        });
+        expect(
+          events.find((event) => event.type === "final_marker"),
+        ).toMatchObject({
+          marker: { status: "completed", summary: "Recovered result." },
+        });
+        expect(JSON.stringify(session.getAllMessages())).not.toContain(
+          "The provider truncated your previous response",
+        );
+        if (shape === "tool") {
+          expect(requests[1].messages).toContainEqual({
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "truncated_write",
+                content: expect.stringContaining("Not executed"),
+              },
+            ],
+          });
+        }
+      },
+    );
+
+    it.each(["abort", "interjection", "budget"])(
+      "does not auto-continue truncation past %s",
+      async (stop) => {
+        const session = await makeSession();
+        session.addUserMessage("finish the task");
+        const provider = makeMockProvider();
+        const requests: StreamRequest[] = [];
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          yield {
+            type: "model_stop",
+            reason: "max_tokens",
+            assistantMessage: {
+              role: "assistant",
+              content: [{ type: "text", text: "Partial." }],
+            },
+          };
+          if (stop === "abort") session.abort();
+          if (stop === "interjection")
+            session.setPendingInterjection("stop this task", "queued-stop");
+          yield { type: "done" };
+        };
+        const engine = new AgentEngine(makeRegistry(provider));
+        await collectEvents(
+          engine.run(
+            session,
+            stop === "budget" ? { maxApiTurns: 1 } : undefined,
+          ),
+        );
+        expect(requests).toHaveLength(1);
+      },
+    );
+
+    it.each(["interjection", "vscode", "browser"] as const)(
+      "yields to %s input arriving after the truncation warning",
+      async (surface) => {
+        const session = await makeSession();
+        session.addUserMessage("finish the task");
+        const provider = makeMockProvider();
+        const requests: StreamRequest[] = [];
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          yield {
+            type: "model_stop",
+            reason: "max_tokens",
+            assistantMessage: { role: "assistant", content: [] },
+          };
+          yield { type: "done" };
+        };
+        const engine = new AgentEngine(makeRegistry(provider));
+        for await (const event of engine.run(session)) {
+          if (event.type !== "warning") continue;
+          if (surface === "interjection")
+            session.setPendingInterjection("stop", "queued-stop");
+          else session.setQueuedUiMessageCount(surface, 1);
+        }
+        expect(requests).toHaveLength(1);
+      },
+    );
+
     it.each([true, false])(
       "bounds repeated output truncation and closes skipped calls (background=%s)",
       async (isBackground) => {
@@ -2971,7 +3136,7 @@ describe("AgentEngine", () => {
           engine.run(session, { isBackground }),
         );
 
-        expect(requests).toHaveLength(isBackground ? 4 : 1);
+        expect(requests).toHaveLength(isBackground ? 4 : 3);
         expect(events.some((event) => event.type === "tool_start")).toBe(false);
         expect(events.some((event) => event.type === "final_marker")).toBe(
           false,

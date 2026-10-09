@@ -79,6 +79,7 @@ interface TranscriptRow {
   coordinationReply?: BackgroundCoordinationReply;
   coordinationShell?: boolean;
   warningMessages?: ChatMessage[];
+  warningResolved?: boolean;
   modelChange?: {
     previousModel: string;
     model: string;
@@ -413,6 +414,18 @@ function pairCoordinationRows(
   });
 }
 
+function hasMeaningfulAssistantOutput(message: ChatMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    (Boolean(message.content.trim()) ||
+      message.blocks.some(
+        (block) =>
+          (block.type === "text" && Boolean(block.text.trim())) ||
+          (block.type === "tool_call" && Boolean(block.result?.trim())),
+      ))
+  );
+}
+
 function buildTranscriptRows(
   messages: ChatMessage[],
   streaming: boolean,
@@ -578,6 +591,16 @@ function buildTranscriptRows(
     });
   }
 
+  for (const row of rows) {
+    if (!row.warningMessages) continue;
+    const lastWarningIndex = messages.lastIndexOf(
+      row.warningMessages[row.warningMessages.length - 1]!,
+    );
+    row.warningResolved = messages
+      .slice(lastWarningIndex + 1)
+      .some(hasMeaningfulAssistantOutput);
+  }
+
   return coalesceChangeDividers(rows);
 }
 
@@ -627,7 +650,6 @@ function renderTranscriptRow({
   bgSessions,
   detectedQuestion,
   isLatest,
-  lastMessageHasError,
   metrics,
   metricsScope,
   metricsSurface,
@@ -665,7 +687,7 @@ function renderTranscriptRow({
   ) : message.role === "warning" ? (
     <WarningRow
       messages={warningMessages ?? [message]}
-      resolved={!isLatest && !lastMessageHasError}
+      resolved={row.warningResolved}
       onRetry={
         isLatest && message.error && actions.onRetry
           ? () => actions.onRetry?.()
@@ -962,6 +984,7 @@ function createRowRevision(params: {
   const scalars = JSON.stringify({
     coordinationReply: objectRevision(row.coordinationReply?.block),
     coordinationShell: row.coordinationShell,
+    warningResolved: row.warningResolved,
     modelChange: row.modelChange,
     reasoningChange: row.reasoningChange,
     modeChange: row.modeChange,
