@@ -1075,6 +1075,37 @@ describe("Ink chat app", () => {
     screen.unmount();
   });
 
+  it("edits at the cursor and inserts bracketed paste without losing multiline text", async () => {
+    const controller = controllerFixture();
+    const onSubmit = vi.fn(async () => undefined);
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={controller.getState()}
+        loadFileSuggestions={async () => []}
+        onSubmit={onSubmit}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    await nextInputDispatch();
+    screen.stdin.write("ac");
+    await nextInputDispatch();
+    screen.stdin.write("\u001b[D");
+    await nextInputDispatch();
+    screen.stdin.write("\u001b[200~b\u001b[201~");
+    await nextInputDispatch();
+    screen.stdin.write("\u001b\r");
+    await nextInputDispatch();
+    screen.stdin.write("d");
+    await nextInputDispatch();
+    screen.stdin.write("\r");
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith("ab\ndc"));
+    screen.unmount();
+  });
+
   it("keeps large bracketed paste and Unicode text intact", async () => {
     const controller = controllerFixture();
     const onSubmit = vi.fn(async () => undefined);
@@ -1173,7 +1204,8 @@ describe("Ink chat app", () => {
 });
 
 function nextInputDispatch(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  // Ink 8 commits input and autofocus concurrently, after a single immediate.
+  return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 function stripAnsi(value: string | undefined): string {

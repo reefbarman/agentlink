@@ -16,7 +16,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { TextArea } from "react-ink-textarea";
+import { TextArea } from "./TextArea.js";
 
 import { attachmentPathsFromText } from "../attachments.js";
 import {
@@ -605,7 +605,8 @@ export function InkChatApp({
             }
           >
             <TextArea
-              focus={composer.isFocused}
+              viewportColumns={Math.max(1, compactWidth - 4)}
+              isFocused={composer.isFocused}
               value={shell.composer}
               onChange={(value) =>
                 dispatch({ type: "composer.changed", value })
@@ -751,7 +752,8 @@ export function InkChatApp({
           header={<ComposerAttachments files={attachedFiles} />}
         >
           <TextArea
-            focus={composer.isFocused && !activity.isFocused}
+            viewportColumns={Math.max(1, columns - 4)}
+            isFocused={composer.isFocused && !activity.isFocused}
             value={shell.composer}
             onChange={(value) => dispatch({ type: "composer.changed", value })}
             onSubmit={submit}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Upgrade the standalone CLI to Ink 8 and replace the unsupported textarea dependency with a local controlled multiline editor, preserving completion, history and bracketed paste.
 - Require VS Code 1.140.0 or newer and update the extension API types to match.
 - Upgrade LanceDB to 0.40.0. New VS Code and Desktop releases no longer support Intel Macs; macOS builds require Apple Silicon. Apache Arrow remains at 18.1.0, within LanceDB's supported range.
 
