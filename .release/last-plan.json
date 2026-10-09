@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "42a1f13f754702933e7c9a156289ffc9c3819379",
-  "createdAt": "2026-10-09T00:28:42.654Z",
+  "sourceSha": "a5a141451a91b2a0356f0810af5c5206922eb8f3",
+  "createdAt": "2026-10-09T00:43:11.934Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.29.1",
       "baselineRef": "v1.29.1",
-      "reserved": "1.29.16",
+      "reserved": "1.30.0",
       "commits": [
         "60a0e82c81e332e307e0eb571850627247cf236d",
         "1036fc2b487b41b992d566bda274663c060db77e",
@@ -46,7 +46,8 @@
         "8472adb3fc93e2e7bf4166aee443bb525b13080f",
         "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
         "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-        "42a1f13f754702933e7c9a156289ffc9c3819379"
+        "42a1f13f754702933e7c9a156289ffc9c3819379",
+        "81aab35bf43078ef921891a31f4ce34669630506"
       ],
       "unknownPaths": [
         "integrations/meridian-plugin-agentlink/LICENSE",
@@ -62,7 +63,7 @@
       "version": "1.30.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "v1.30.0",
       "notes": [
@@ -263,13 +264,19 @@
           "subject": "fix(core): build CommonJS prompt profile export",
           "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
           "breaking": false
+        },
+        {
+          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
+          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
+          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
       "published": "0.8.1",
       "baselineRef": "desktop-v0.8.1",
-      "reserved": "0.8.1",
+      "reserved": "0.9.0",
       "commits": [
         "60a0e82c81e332e307e0eb571850627247cf236d",
         "1036fc2b487b41b992d566bda274663c060db77e",
@@ -303,7 +310,8 @@
         "8472adb3fc93e2e7bf4166aee443bb525b13080f",
         "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
         "f81e8898e8e191cbf3d5aa39b552d55d320c2966",
-        "42a1f13f754702933e7c9a156289ffc9c3819379"
+        "42a1f13f754702933e7c9a156289ffc9c3819379",
+        "81aab35bf43078ef921891a31f4ce34669630506"
       ],
       "unknownPaths": [
         "integrations/meridian-plugin-agentlink/LICENSE",
@@ -319,7 +327,7 @@
       "version": "0.9.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "desktop-v0.9.0",
       "notes": [
@@ -520,13 +528,19 @@
           "subject": "fix(core): build CommonJS prompt profile export",
           "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
           "breaking": false
+        },
+        {
+          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
+          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
+          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+          "breaking": false
         }
       ]
     },
     "cli": {
       "published": "0.10.0",
       "baselineRef": "cli-v0.10.0",
-      "reserved": "0.10.0",
+      "reserved": "0.11.0",
       "commits": [
         "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
         "60a0e82c81e332e307e0eb571850627247cf236d",
@@ -545,7 +559,8 @@
         "9810afa85445851a42ac1e7c9be6615c89268038",
         "05f6e55898d9c9462f29f4cd05d5f4ebe0218158",
         "527b457fd32128d7d325662a9f3a64fce77b9faf",
-        "42a1f13f754702933e7c9a156289ffc9c3819379"
+        "42a1f13f754702933e7c9a156289ffc9c3819379",
+        "81aab35bf43078ef921891a31f4ce34669630506"
       ],
       "unknownPaths": [
         "docs/assets/screenshots/cli-tui.png",
@@ -574,7 +589,7 @@
       "version": "0.11.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "cli-v0.11.0",
       "notes": [
@@ -685,13 +700,19 @@
           "subject": "fix(core): build CommonJS prompt profile export",
           "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
           "breaking": false
+        },
+        {
+          "sha": "81aab35bf43078ef921891a31f4ce34669630506",
+          "subject": "chore(release): v1.30.0, desktop-v0.9.0, cli-v0.11.0, sdk-v0.7.0",
+          "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
+          "breaking": false
         }
       ]
     },
     "sdk": {
       "published": "0.6.1",
       "baselineRef": "sdk-v0.6.1",
-      "reserved": "0.6.1",
+      "reserved": "0.7.0",
       "commits": [
         "60a0e82c81e332e307e0eb571850627247cf236d",
         "0dae67d3e1e3d33178b34df9dfda92d143bff3d1",
@@ -710,7 +731,7 @@
       "version": "0.7.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "sdk-v0.7.0",
       "notes": [
@@ -772,46 +793,6 @@
     }
   },
   "decisions": {
-    "c41c4eb8a1dfd8d54e3914ae2853de59071eba75": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8319dca1f07fad6da862f0377a55c5e6b411abc5": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "58354021594378ac2e4b0af798a0d839f2353afa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "be8e9e163323477b099e8e2669f9434a61fbb7ff": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "16df905cdc0a6e94c50bba4c086c7e07cbf9609e": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "60a0e82c81e332e307e0eb571850627247cf236d": {
       "bump": "minor",
       "breakingUnits": [],
@@ -1080,6 +1061,54 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Adds the promptProfilePolicy module to the core package's CommonJS build so its export is available to CommonJS consumers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c41c4eb8a1dfd8d54e3914ae2853de59071eba75": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds product screenshots and a demo-history script to the README and docs assets, with no change to shipped behavior.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8319dca1f07fad6da862f0377a55c5e6b411abc5": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Desktop title-bar 'Check for updates' control is now an outlined button with a refresh icon, and the documentation describes it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "58354021594378ac2e4b0af798a0d839f2353afa": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "be8e9e163323477b099e8e2669f9434a61fbb7ff": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "16df905cdc0a6e94c50bba4c086c7e07cbf9609e": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "81aab35bf43078ef921891a31f4ce34669630506": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Release preparation commit that updates changelogs, lockfile, and release metadata for the new versions without changing runtime behavior.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
