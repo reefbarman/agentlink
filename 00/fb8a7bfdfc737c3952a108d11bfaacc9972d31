@@ -1,0 +1,48 @@
+src/agent/workspaceHistoryMigration.test.ts
+  h_e08a86bb3a33a2 10,81-131,238-290
+  s_4fced1bafe913a::t_a8fd11cfe2d91f 291-293
+src/agent/workspaceHistoryMigration.ts
+  h_e08a86bb3a33a2 14,108-132,135-137,148-153,171-181,196
+  s_4fced1bafe913a::t_8a0430e1a4647e 107,154-155,182-183
+src/agent/workspaceContinuityCatalog.ts
+  h_e08a86bb3a33a2 5-6,51-55,61-62
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 80
+CHANGELOG.md
+  h_e08a86bb3a33a2 16
+src/agent/workspaceContinuityCatalog.test.ts
+  h_e08a86bb3a33a2 46,55,65,71,82-119
+src/extension.ts
+  h_e08a86bb3a33a2 192,2141-2144,2151,2164-2166,2251
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 76
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "00fb8a7bfdfc737c3952a108d11bfaacc9972d31",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_4fced1bafe913a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b1aea75-c0b7-4c5c-8e9e-6ffd1c5b948c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
