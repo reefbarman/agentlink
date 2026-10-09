@@ -14,7 +14,7 @@ export interface AssistantServerConfig {
   readonly dataRoot: string;
   readonly listen: { readonly host: string; readonly port: number };
   readonly publicOrigins: readonly string[];
-  readonly tls: { readonly certFile: string; readonly keyFile: string };
+  readonly tls: AssistantServerTlsConfig;
   readonly defaultModel: {
     readonly providerId: string;
     readonly modelId: string;
@@ -23,6 +23,20 @@ export interface AssistantServerConfig {
   readonly projects: readonly AssistantServerProjectConfig[];
   /** Absolute ripgrep binary for `search_files`; built-in search otherwise. */
   readonly ripgrepPath?: string;
+}
+
+/**
+ * Either an operator-provided certificate and key, or a server-managed,
+ * name-constrained local CA under `<dataRoot>/tls`.
+ */
+export type AssistantServerTlsConfig =
+  | { readonly certFile: string; readonly keyFile: string }
+  | { readonly localCa: true };
+
+export function usesLocalCa(
+  tls: AssistantServerTlsConfig,
+): tls is { readonly localCa: true } {
+  return "localCa" in tls;
 }
 
 export interface AssistantServerProjectConfig {
@@ -139,7 +153,20 @@ export function parseAssistantServerConfig(
   createServerOriginPolicy(publicOrigins);
 
   const tls = record(config.tls, "tls");
-  allowKeys(tls, "tls", ["certFile", "keyFile"]);
+  let parsedTls: AssistantServerTlsConfig;
+  if ("localCa" in tls) {
+    allowKeys(tls, "tls", ["localCa"]);
+    if (tls.localCa !== true) {
+      throw new Error("tls.localCa must be true when present");
+    }
+    parsedTls = { localCa: true };
+  } else {
+    allowKeys(tls, "tls", ["certFile", "keyFile"]);
+    parsedTls = {
+      certFile: resolvePath(tls.certFile, "tls.certFile"),
+      keyFile: resolvePath(tls.keyFile, "tls.keyFile"),
+    };
+  }
 
   const defaultModel = record(config.defaultModel, "defaultModel");
   allowKeys(defaultModel, "defaultModel", ["providerId", "modelId"]);
@@ -203,10 +230,7 @@ export function parseAssistantServerConfig(
     dataRoot: resolvePath(config.dataRoot, "dataRoot"),
     listen: { host: text(listen.host, "listen.host"), port: Number(port) },
     publicOrigins,
-    tls: {
-      certFile: resolvePath(tls.certFile, "tls.certFile"),
-      keyFile: resolvePath(tls.keyFile, "tls.keyFile"),
-    },
+    tls: parsedTls,
     defaultModel: parsedDefaultModel,
     providers,
     projects,

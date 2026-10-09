@@ -12,7 +12,19 @@ import {
   type AssistantServer,
 } from "./assistantServer.js";
 import {
+  FileLockHeldError,
+  acquireFileLock,
+  releaseFileLock,
+} from "./fileLock.js";
+import {
+  ensureLocalServerCertificate,
+  localTlsHostsFromOrigins,
+  readLocalCertificateAuthority,
+  type LocalServerCertificate,
+} from "./localCertificateAuthority.js";
+import {
   resolveWorkspaceProviders,
+  usesLocalCa,
   type AssistantServerConfig,
 } from "./serverConfig.js";
 import {
@@ -27,6 +39,10 @@ export interface AssistantServiceOptions {
   readonly log: (line: string) => void;
   /** Environment used to resolve systemd credentials. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Clock for local certificate issuance and renewal; tests only. */
+  readonly now?: () => number;
+  /** How often the local server certificate is re-checked (default 12h). */
+  readonly certificateCheckIntervalMs?: number;
 }
 
 export interface AssistantService {
@@ -41,33 +57,43 @@ export function serverAccessDataRoot(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "server");
 }
 
-export interface AssistantServicePreflight {
-  readonly tls: { readonly cert: Buffer; readonly key: Buffer };
+/** Where the server-managed local CA and server certificate live. */
+export function serverTlsDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "tls");
 }
 
+export type AssistantServicePreflight =
+  | {
+      readonly kind: "files";
+      readonly tls: { readonly cert: Buffer; readonly key: Buffer };
+    }
+  | {
+      readonly kind: "local-ca";
+      /** Undefined until the first start creates the CA. */
+      readonly caFingerprint256?: string;
+    };
+
 /**
- * Check everything that can be checked without taking locks or listening:
- * TLS material and permissions, project directories, and provider secrets.
+ * Check everything that can be checked without taking locks, listening, or
+ * creating anything: TLS material and permissions (or the existing local
+ * CA), project directories, and provider secrets.
  */
 export async function preflightAssistantService(
   config: AssistantServerConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AssistantServicePreflight> {
-  const cert = await readRequired(config.tls.certFile, "tls.certFile");
-  const keyStat = await fs.stat(config.tls.keyFile).catch((error: unknown) => {
-    throw new Error(`Cannot read tls.keyFile: ${message(error)}`);
-  });
-  // Group read is allowed for the Debian `ssl-cert` convention (0640).
-  if ((keyStat.mode & 0o007) !== 0) {
-    throw new Error(
-      `tls.keyFile (${config.tls.keyFile}) must not be accessible by others (chmod 600 or 640)`,
-    );
-  }
-  const key = await readRequired(config.tls.keyFile, "tls.keyFile");
-  try {
-    createSecureContext({ cert, key, minVersion: "TLSv1.2" });
-  } catch (error) {
-    throw new Error(`TLS certificate or key is unusable: ${message(error)}`);
+  let result: AssistantServicePreflight;
+  if (usesLocalCa(config.tls)) {
+    const existing = await readLocalCertificateAuthority({
+      directory: serverTlsDirectory(config),
+      hosts: localTlsHostsFromOrigins(config.publicOrigins),
+    });
+    result = {
+      kind: "local-ca",
+      ...(existing ? { caFingerprint256: existing.fingerprint256 } : {}),
+    };
+  } else {
+    result = { kind: "files", tls: await readTlsFiles(config.tls) };
   }
   for (const project of config.projects) {
     const stat = await fs.stat(project.root).catch(() => undefined);
@@ -83,7 +109,134 @@ export async function preflightAssistantService(
     });
   }
   await resolveWorkspaceProviders(config.providers, env);
-  return { tls: { cert, key } };
+  return result;
+}
+
+async function readTlsFiles(tls: {
+  readonly certFile: string;
+  readonly keyFile: string;
+}): Promise<{ cert: Buffer; key: Buffer }> {
+  const cert = await readRequired(tls.certFile, "tls.certFile");
+  const keyStat = await fs.stat(tls.keyFile).catch((error: unknown) => {
+    throw new Error(`Cannot read tls.keyFile: ${message(error)}`);
+  });
+  // Group read is allowed for the Debian `ssl-cert` convention (0640).
+  if ((keyStat.mode & 0o007) !== 0) {
+    throw new Error(
+      `tls.keyFile (${tls.keyFile}) must not be accessible by others (chmod 600 or 640)`,
+    );
+  }
+  const key = await readRequired(tls.keyFile, "tls.keyFile");
+  try {
+    createSecureContext({ cert, key, minVersion: "TLSv1.2" });
+  } catch (error) {
+    throw new Error(`TLS certificate or key is unusable: ${message(error)}`);
+  }
+  return { cert, key };
+}
+
+const CERTIFICATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const TLS_LOCK_FILE = "tls.lock";
+
+/**
+ * Issue the local server certificate and keep it current: re-check on an
+ * interval and hot-swap a renewed certificate into the running listener.
+ */
+async function startLocalCertificates(
+  config: AssistantServerConfig,
+  options: AssistantServiceOptions,
+): Promise<{
+  readonly tls: { readonly cert: string; readonly key: string };
+  watch(server: AssistantServer): void;
+  stop(): Promise<void>;
+}> {
+  const { log } = options;
+  const directory = serverTlsDirectory(config);
+  // Hold the TLS directory for the life of the service, so a second process
+  // cannot create or renew certificates alongside this one.
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(directory, TLS_LOCK_FILE);
+  let lockToken: string;
+  try {
+    lockToken = await acquireFileLock(lockPath);
+  } catch (error) {
+    if (error instanceof FileLockHeldError) {
+      throw new Error(
+        `Another agentlink-server process is using ${directory}; stop it first`,
+      );
+    }
+    throw error;
+  }
+  const ensure = () =>
+    ensureLocalServerCertificate({
+      directory,
+      hosts: localTlsHostsFromOrigins(config.publicOrigins),
+      ...(options.now ? { now: options.now } : {}),
+    });
+  const reportIssued = (issued: LocalServerCertificate) => {
+    if (issued.createdCa) {
+      log(
+        [
+          "Created a local certificate authority for this server.",
+          `CA SHA-256 fingerprint: ${issued.caFingerprint256}`,
+          "Install it on each device with `agentlink-server export-ca` (see README).",
+        ].join("\n"),
+      );
+    }
+    if (issued.issuedLeaf) {
+      log(
+        `Issued server certificate valid until ${issued.notAfter.toISOString()}`,
+      );
+    }
+  };
+  let first: LocalServerCertificate;
+  try {
+    first = await ensure();
+  } catch (error) {
+    await releaseFileLock(lockPath, lockToken);
+    throw error;
+  }
+  reportIssued(first);
+  if (!first.createdCa) {
+    log(`Local CA SHA-256 fingerprint: ${first.caFingerprint256}`);
+  }
+  let timer: NodeJS.Timeout | undefined;
+  let checking = false;
+  return {
+    tls: { cert: first.certificatePem, key: first.privateKeyPem },
+    watch(server) {
+      timer = setInterval(() => {
+        if (checking) return;
+        checking = true;
+        void ensure()
+          .finally(() => {
+            checking = false;
+          })
+          .then(
+            (issued) => {
+              reportIssued(issued);
+              if (issued.issuedLeaf) {
+                server.setTls({
+                  cert: issued.certificatePem,
+                  key: issued.privateKeyPem,
+                });
+              }
+            },
+            (error: unknown) => {
+              log(`Server certificate renewal failed: ${message(error)}`);
+            },
+          );
+      }, options.certificateCheckIntervalMs ?? CERTIFICATE_CHECK_INTERVAL_MS);
+      timer.unref();
+    },
+    async stop() {
+      if (timer) clearInterval(timer);
+      while (checking) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await releaseFileLock(lockPath, lockToken);
+    },
+  };
 }
 
 export async function startAssistantService(
@@ -91,8 +244,13 @@ export async function startAssistantService(
 ): Promise<AssistantService> {
   const { config, log } = options;
   const env = options.env ?? process.env;
-  const { tls } = await preflightAssistantService(config, env);
+  const preflight = await preflightAssistantService(config, env);
   await fs.mkdir(config.dataRoot, { recursive: true, mode: 0o700 });
+  const certificates =
+    preflight.kind === "local-ca"
+      ? await startLocalCertificates(config, options)
+      : undefined;
+  const tls = preflight.kind === "files" ? preflight.tls : certificates!.tls;
   const providers = await resolveWorkspaceProviders(config.providers, env);
   const ownerId = `agentlink-server-${process.pid}-${randomUUID()}`;
 
@@ -159,6 +317,7 @@ export async function startAssistantService(
     });
     authorizeProject = ownerProjectAccess(server.store);
     const { port } = await server.start();
+    certificates?.watch(server);
     log(
       `AgentLink server listening on ${config.listen.host}:${port} for ${config.publicOrigins.join(", ")} (${hosts.length} project${hosts.length === 1 ? "" : "s"})`,
     );
@@ -173,6 +332,7 @@ export async function startAssistantService(
           await started.close();
           await recovery.settled();
           await closeHosts();
+          await certificates?.stop();
         })();
         return closing;
       },
@@ -182,6 +342,7 @@ export async function startAssistantService(
     await server?.close().catch(() => undefined);
     await recovery.settled();
     await closeHosts();
+    await certificates?.stop();
     throw error;
   }
 }

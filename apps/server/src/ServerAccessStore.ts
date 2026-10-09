@@ -12,6 +12,13 @@ import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
+import { syncDirectory, writeFileAtomic } from "./atomicFile.js";
+import {
+  FileLockHeldError,
+  acquireFileLock,
+  releaseFileLock,
+} from "./fileLock.js";
+
 const STATE_FILE = "access-state.json";
 const LOCK_FILE = "access-state.lock";
 const RECOVERY_FILE = "recovery-request.json";
@@ -781,93 +788,23 @@ async function readState(filePath: string): Promise<AccessState> {
   }
 }
 
-async function writeState(filePath: string, content: string): Promise<void> {
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  const handle = await fs.open(temporary, "wx", 0o600);
-  try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await fs.rename(temporary, filePath);
-  } catch (error) {
-    await fs.unlink(temporary).catch(() => undefined);
-    throw error;
-  }
-  // Make the rename durable before reporting success, so a crash after a
-  // revocation response cannot restore the earlier state.
-  await syncDirectory(path.dirname(filePath));
-}
-
-async function syncDirectory(directoryPath: string): Promise<void> {
-  const directory = await fs.open(directoryPath, "r");
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
-  }
-}
-
 /**
- * Create the lock file exclusively. A lock left by a process that no longer
- * exists is replaced; a live holder (including this process) is refused.
+ * The rename is durable before this resolves, so a crash after a revocation
+ * response cannot restore the earlier state.
  */
+async function writeState(filePath: string, content: string): Promise<void> {
+  await writeFileAtomic(filePath, content, 0o600);
+}
+
 async function acquireLock(lockPath: string): Promise<string> {
-  const token = randomUUID();
-  const content = `${JSON.stringify({ pid: process.pid, token })}\n`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fs.open(lockPath, "wx", 0o600);
-      try {
-        await handle.writeFile(content, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      return token;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    const holder = await readLockHolder(lockPath);
-    if (holder !== undefined && processExists(holder)) {
+  try {
+    return await acquireFileLock(lockPath);
+  } catch (error) {
+    if (error instanceof FileLockHeldError) {
       throw new ServerAccessError("access_state_locked");
     }
-    await fs.unlink(lockPath).catch(() => undefined);
-  }
-  throw new ServerAccessError("access_state_locked");
-}
-
-async function readLockHolder(lockPath: string): Promise<number | undefined> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
-      pid?: unknown;
-    };
-    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid)
-      ? parsed.pid
-      : undefined;
-  } catch {
-    return undefined;
+    throw error;
   }
 }
 
-function processExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function releaseLock(lockPath: string, token: string): Promise<void> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
-      token?: unknown;
-    };
-    if (parsed.token === token) await fs.unlink(lockPath);
-  } catch {
-    // Already released or replaced; nothing to do.
-  }
-}
+const releaseLock = releaseFileLock;

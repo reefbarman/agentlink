@@ -12,6 +12,7 @@ Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.j
 agentlink-server --config /etc/agentlink/server.json --check   # validate and exit
 agentlink-server --config /etc/agentlink/server.json           # serve until SIGTERM/SIGINT
 agentlink-server recover --config /etc/agentlink/server.json   # print a recovery code
+agentlink-server export-ca --config /etc/agentlink/server.json > agentlink-ca.pem
 ```
 
 `--check` validates the configuration, TLS certificate and key, project directories, and provider secrets without taking locks or listening. On first start without an owner, the server writes a single-use setup credential to stderr (the journal under systemd, the log file under launchd); see [Access layer](#access-layer). SIGTERM stops running turns, waits for them, and exits 0. A second signal exits immediately.
@@ -22,10 +23,10 @@ One JSON file. Relative paths resolve against its directory, and unknown keys ar
 
 | Key             | Meaning                                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataRoot`      | Access state (`server/`) and workspace session data (`workspace/`). Created `0700`.                                                            |
+| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), and the local CA (`tls/`). Created `0700`.                                    |
 | `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                          |
 | `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                       |
-| `tls`           | `{ certFile, keyFile }`. The key must not be readable by others (`0600`, or `0640` with a group).                                              |
+| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).    |
 | `providers`     | `openai` (`modelIds`, `apiKey`) or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS. |
 | `defaultModel`  | `{ providerId, modelId }`.                                                                                                                     |
 | `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands are not enabled yet.                       |
@@ -40,6 +41,35 @@ API keys are never inline. `{ "file": "/path" }` reads a file that must not be r
 ### macOS (launchd)
 
 [`deploy/launchd/local.agentlink.server.plist`](deploy/launchd/local.agentlink.server.plist) is a LaunchDaemon that runs as a hidden `_agentlink` user with a `0077` umask and restarts on failure. Logs, including the setup credential, go to `/usr/local/var/log/agentlink/server.log`; keep that directory private to the service user. The plist header lists the install commands. API keys use `{ "file": ... }` with a `0600` file.
+
+### Device trust
+
+With `"tls": { "localCa": true }` the server creates its own certificate authority (CA) on first start, in `<dataRoot>/tls`, and issues its HTTPS certificate from it. Install the CA once on each phone, tablet, and computer, and browsers trust the server with no warnings.
+
+The CA is **name-constrained** to the hosts in `publicOrigins`: devices that trust it accept it only for those hostnames (and names under them, such as `x.framework16.local`, which is how DNS name constraints work) and those exact IP addresses, never for any other website, even if its key leaked. The trade-off is that changing `publicOrigins` needs a new CA. The server refuses to start rather than replace a CA silently; move `<dataRoot>/tls` aside, restart, and install the new CA on every device. The CA is valid for 10 years. The server certificate is valid for a year and is renewed automatically within 30 days of expiry (checked every 12 hours, no restart).
+
+Prefer a hostname origin, such as the machine's mDNS name (`https://framework16.local:8443`), alongside or instead of an IP address: it survives DHCP address changes, which would otherwise need a new CA.
+
+`<dataRoot>/tls/ca-key.pem` holds the CA key and certificate together and is the only authoritative copy; back it up privately. `ca.pem` is a public copy that is rebuilt from it if missing.
+
+Export the CA (it is public; only `ca-key.pem` is secret and it never leaves the server):
+
+```sh
+# Ubuntu
+sudo -u agentlink /usr/bin/node /opt/agentlink/server/agentlink-server.js export-ca --config /etc/agentlink/server.json > agentlink-ca.pem
+# macOS
+sudo -u _agentlink /opt/homebrew/bin/node /usr/local/lib/agentlink/server/agentlink-server.js export-ca --config /usr/local/etc/agentlink/server.json > agentlink-ca.pem
+```
+
+It prints the CA's SHA-256 fingerprint on the terminal, as does the service log at startup. Move the file to each device over a channel you trust (AirDrop, USB, your own email), and compare the fingerprint the device shows before trusting it.
+
+- **iPhone and iPad:** open the file (AirDrop or Files), then Settings → General → VPN & Device Management → install the profile. Then turn on full trust in Settings → General → About → Certificate Trust Settings.
+- **Android:** Settings → Security → Encryption & credentials → Install a certificate → CA certificate (the menu path varies by manufacturer). Chrome uses it. Firefox needs its "use third-party CA certificates" setting.
+- **macOS:** `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain agentlink-ca.pem`, or import it into the System keychain in Keychain Access and set it to Always Trust.
+- **Windows:** `certutil -user -addstore Root agentlink-ca.pem`.
+- **Ubuntu desktop:** `sudo cp agentlink-ca.pem /usr/local/share/ca-certificates/agentlink-ca.crt && sudo update-ca-certificates` for system tools. Chrome and Firefox on Linux keep their own lists: import it as an authority in their certificate settings.
+
+To stop trusting the server, remove the profile or certificate from the device.
 
 ### Restarts and crashes
 
@@ -93,4 +123,4 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 
 The event log is in memory, so it only bridges reconnects within one server process. The durable session repository remains the source of truth.
 
-Not yet provided: certificate provisioning and device trust onboarding, passkeys, command execution and background-agent routes, an installer, and the web app.
+Not yet provided: passkeys, command execution and background-agent routes, an installer, and the web app.

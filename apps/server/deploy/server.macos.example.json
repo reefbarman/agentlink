@@ -3,10 +3,7 @@
   "dataRoot": "/usr/local/var/agentlink",
   "listen": { "host": "192.168.1.21", "port": 8443 },
   "publicOrigins": ["https://assistant-mini.home.arpa:8443"],
-  "tls": {
-    "certFile": "/usr/local/etc/agentlink/tls/server.crt",
-    "keyFile": "/usr/local/etc/agentlink/tls/server.key"
-  },
+  "tls": { "localCa": true },
   "defaultModel": { "providerId": "openai", "modelId": "gpt-5.5" },
   "providers": [
     {

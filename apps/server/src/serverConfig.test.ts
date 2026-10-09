@@ -141,6 +141,20 @@ describe("parseAssistantServerConfig", () => {
       "bare https:// origins",
     ],
     [
+      "a local CA mixed with certificate files",
+      withChange((config) => {
+        config.tls = { localCa: true, certFile: "tls/server.crt" };
+      }),
+      'unknown key "certFile"',
+    ],
+    [
+      "a disabled local CA flag",
+      withChange((config) => {
+        config.tls = { localCa: false };
+      }),
+      "tls.localCa must be true",
+    ],
+    [
       "an out-of-range port",
       withChange((config) => {
         config.listen = { host: "127.0.0.1", port: 70_000 };
@@ -151,6 +165,17 @@ describe("parseAssistantServerConfig", () => {
     expect(() => parseAssistantServerConfig(config, "/etc/agentlink")).toThrow(
       message,
     );
+  });
+
+  it("accepts a server-managed local CA", () => {
+    expect(
+      parseAssistantServerConfig(
+        withChange((config) => {
+          config.tls = { localCa: true };
+        }),
+        "/etc/agentlink",
+      ).tls,
+    ).toEqual({ localCa: true });
   });
 
   it("accepts the shipped Linux and macOS examples", async () => {

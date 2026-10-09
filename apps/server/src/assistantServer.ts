@@ -133,6 +133,14 @@ export interface CreateAssistantServerOptions {
 export interface AssistantServer {
   readonly store: ServerAccessStore;
   start(): Promise<{ readonly port: number }>;
+  /**
+   * Replace the certificate and key for new connections (for example after
+   * a renewal). Existing connections keep the old certificate.
+   */
+  setTls(tls: {
+    readonly cert: string | Buffer;
+    readonly key: string | Buffer;
+  }): void;
   close(): Promise<void>;
 }
 
@@ -486,6 +494,13 @@ export async function createAssistantServer(
 
   return {
     store,
+    setTls(tls) {
+      server.setSecureContext({
+        cert: tls.cert,
+        key: tls.key,
+        minVersion: "TLSv1.2",
+      });
+    },
     async start() {
       if (!store.ownerConfigured) {
         await options.onSetupCredential(await store.issueSetupCredential());

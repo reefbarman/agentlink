@@ -7,10 +7,22 @@ export {
 export {
   preflightAssistantService,
   serverAccessDataRoot,
+  serverTlsDirectory,
   startAssistantService,
   type AssistantService,
   type AssistantServiceOptions,
+  type AssistantServicePreflight,
 } from "./assistantService.js";
+export {
+  LocalCertificateAuthorityError,
+  ensureLocalServerCertificate,
+  localTlsHostsFromOrigins,
+  readLocalCertificateAuthority,
+  type LocalCertificateAuthorityErrorCode,
+  type LocalCertificateAuthorityOptions,
+  type LocalServerCertificate,
+  type LocalTlsHosts,
+} from "./localCertificateAuthority.js";
 export {
   ASSISTANT_SERVER_USAGE,
   runAssistantServerCli,
@@ -20,11 +32,13 @@ export {
   loadAssistantServerConfig,
   parseAssistantServerConfig,
   resolveWorkspaceProviders,
+  usesLocalCa,
   type AssistantServerCompatibleModelConfig,
   type AssistantServerConfig,
   type AssistantServerProjectConfig,
   type AssistantServerProviderConfig,
   type AssistantServerSecretSource,
+  type AssistantServerTlsConfig,
 } from "./serverConfig.js";
 export {
   AttemptLimiter,

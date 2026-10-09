@@ -280,6 +280,102 @@ describe("agentlink-server process", () => {
     }
   }, 120_000);
 
+  it("serves a certificate from its local CA that devices verify via export-ca", async () => {
+    const root = path.join(workDir, "local-ca");
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    const port = await freePort();
+    const configPath = path.join(root, "server.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [`https://localhost:${port}`],
+        tls: { localCa: true },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: "http://127.0.0.1:9/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", root: "projects/home" }],
+      }),
+    );
+    const exportCa = () =>
+      execFileAsync(process.execPath, [
+        bundle,
+        "export-ca",
+        "--config",
+        configPath,
+      ]);
+
+    // --check creates nothing; export-ca has nothing to export yet.
+    const checked = await execFileAsync(process.execPath, [
+      bundle,
+      "--config",
+      configPath,
+      "--check",
+    ]);
+    expect(checked.stdout).toContain("local CA will be created on first start");
+    await expect(exportCa()).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("Start the server once"),
+    });
+
+    const server = startProcess(configPath);
+    try {
+      const [, fingerprint] = await server.waitFor(
+        /CA SHA-256 fingerprint: ([0-9A-F:]{95})/u,
+      );
+      await server.waitFor(/listening on 127\.0\.0\.1/u);
+      const exported = await exportCa();
+      expect(exported.stdout).toMatch(/^-----BEGIN CERTIFICATE-----/u);
+      expect(exported.stderr).toContain(fingerprint);
+
+      // A client that trusts only the exported CA verifies the server.
+      await expect(
+        httpsRequest({ port, ca: exported.stdout, path: "/api/auth/state" }),
+      ).resolves.toMatchObject({ status: 200 });
+
+      const rechecked = await execFileAsync(process.execPath, [
+        bundle,
+        "--config",
+        configPath,
+        "--check",
+      ]);
+      expect(rechecked.stdout).toContain(`local CA ${fingerprint}`);
+    } finally {
+      server.child.kill("SIGTERM");
+      await server.exited;
+    }
+
+    // Restarting reuses the same CA, so devices keep trusting the server.
+    const restarted = startProcess(configPath);
+    try {
+      await restarted.waitFor(/listening on 127\.0\.0\.1/u);
+      expect(restarted.output()).not.toContain("Created a local certificate");
+      const exported = await exportCa();
+      await expect(
+        httpsRequest({ port, ca: exported.stdout, path: "/api/auth/state" }),
+      ).resolves.toMatchObject({ status: 200 });
+    } finally {
+      restarted.child.kill("SIGTERM");
+      await restarted.exited;
+    }
+  }, 60_000);
+
   it("refuses a TLS key that other users can read", async () => {
     const certificate = createTestCertificate();
     const root = path.join(workDir, "loose-key");
