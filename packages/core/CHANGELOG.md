@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-10-09
+
+- Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.
+
 ## 0.7.1 — 2026-10-09
 
 - Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.

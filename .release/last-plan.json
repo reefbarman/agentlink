@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
-  "createdAt": "2026-10-09T11:23:14.307Z",
+  "sourceSha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+  "createdAt": "2026-10-09T12:31:58.378Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -25,7 +25,8 @@
         "41193a70f19afb6c60e9042cef1c66cec90ba875",
         "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
         "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
-        "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181"
+        "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
+        "8b30ef6e3912defc9d9e852e84e111da99fdac14"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -107,29 +108,35 @@
           "subject": "fix(agent): offer history migration when an untitled workspace is saved",
           "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
           "breaking": false
+        },
+        {
+          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
+          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.10.0",
-      "baselineRef": "desktop-v0.10.0",
-      "reserved": "0.10.0",
-      "commits": ["33ba852d4ac9404b4cc80fc4d251e7ef8bc13181"],
+      "published": "0.10.1",
+      "baselineRef": "desktop-v0.10.1",
+      "reserved": "0.10.1",
+      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.10.1",
-      "effectiveBump": "patch",
+      "version": "0.11.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.10.1",
+      "tag": "desktop-v0.11.0",
       "notes": [
         {
-          "sha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
-          "subject": "fix(agent): offer history migration when an untitled workspace is saved",
-          "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
+          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
+          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
           "breaking": false
         }
       ]
@@ -138,25 +145,49 @@
       "published": "0.11.0",
       "baselineRef": "cli-v0.11.0",
       "reserved": "0.11.0",
-      "commits": [],
+      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.12.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.12.0",
+      "notes": [
+        {
+          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
+          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.7.1",
       "baselineRef": "sdk-v0.7.1",
       "reserved": "0.7.1",
-      "commits": [],
+      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.8.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.8.0",
+      "notes": [
+        {
+          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
+          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -252,6 +283,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8b30ef6e3912defc9d9e852e84e111da99fdac14": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
