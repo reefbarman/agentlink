@@ -20,6 +20,8 @@ When this skill is active, **do not read files outside this directory** to answe
 
 If the relevant bundled reference does not document a detail, say: **“The bundled AgentLink documentation does not cover that detail.”** Do not guess and do not explore the extension installation for an answer.
 
+This boundary covers product-support answers, not source work the user explicitly requests. When the user names an AgentLink source checkout or repository and asks for implementation, architecture, integration-feasibility, or code-audit work on it, inspect that checkout with your normal repository tools, subject to their usual approvals. Use these references for documented behavior, and say which conclusions come from the documentation and which from the source. This never permits exploring the installed extension directory.
+
 ## Topic routing
 
 Read the smallest relevant reference page directly with `read_skill_resource`:
