@@ -299,6 +299,27 @@ Run the reusable repository and lease conformance runners from `@agentlink/core/
 
 Remote MCP tools are bound to the tenant/subject/session/turn that discovered them. Hosts whose principal carries additional authority fields such as live/demo data realm must supply `principalEquals` so those fields are part of the binding. Reusing a resolved tool from another context fails before a new connection or network request. Remote calls use a fixed total request timeout without progress-based extension; injected fetch receives `redirect: "error"`, and any returned redirect response is rejected. The Node-host command resolver uses `shell: false`, bounded stdout/stderr, fixed timeout/cancellation, and child cleanup. It intentionally does not provide shell parsing, model-supplied arguments, PTY input, terminal persistence, a sandbox, workspace inference, or network policy.
 
+## Add voice input
+
+AgentLink's composer microphone (text appears at each pause, stops after silence, tap to toggle or hold to talk) is built from two core entry points that any host can reuse. The SDK does not record audio; the host supplies the microphone, UI, credentials, and upload route.
+
+| Piece                               | Entry point                                       | Runs in                |
+| ----------------------------------- | ------------------------------------------------- | ---------------------- |
+| Pause segmentation, levels, WAV     | `@agentlink/core/voice`                           | Node, browser, or edge |
+| Transcription with Codex/OpenAI key | `transcribeCodexAudio` in `@agentlink/core/codex` | Node only              |
+
+`@agentlink/core/voice` is the only browser-safe core entry point. It exports `VoiceActivitySegmenter`, `resampleToPcm16`, and `encodeWavPcm16`, and imports nothing.
+
+1. **Show the button** only when the host has a ChatGPT/Codex sign-in or an OpenAI API key for the user. Disable it with a reason when recording cannot work, for example on a browser page that is not HTTPS or `localhost`. Treat transcription error code `auth_required` as signed out.
+2. **Capture** mono 16-bit PCM at 16 kHz in frames of roughly 20 to 100 ms. In a browser, use `getUserMedia` plus an `AudioContext` processor and convert each buffer with `resampleToPcm16(samples, context.sampleRate, 16000)`. In a Node process on Linux, read raw PCM from `arecord -t raw -f S16_LE -r 16000 -c 1` or `pw-record`.
+3. **Segment** with one `VoiceActivitySegmenter` per dictation. Each `push(frame)` returns a meter `level` in `[0, 1]`, a `segment` when the speaker pauses (`pauseMs`, default 700), and `autoStop` once after `autoStopMs` of silence following speech or `noSpeechTimeoutMs` without speech. Call `flush()` for the tail when dictation ends. `peak === 0` afterwards means the microphone delivered digital silence, usually a permission problem.
+4. **Transcribe** each segment with `encodeWavPcm16(segment, 16000)` and `transcribeCodexAudio(...)` on the server, chained so text arrives in speaking order. A browser UI must upload segments to its own authenticated route rather than calling ChatGPT directly.
+5. **Drive the UI** from a small state machine (`idle`, `starting`, `recording`, `transcribing`): a press shorter than 350 ms toggles, a longer hold records until release and ignores auto-stop, Escape cancels and discards late results, and text is inserted at the current caret. Keep auto-send off by default; when enabled, send only after a hands-free finish, never after the user clicks stop.
+
+Transcription with ChatGPT/Codex OAuth uses ChatGPT's dictation endpoint, which OpenAI does not document as a public API, so it may change; usage counts against the user's plan. Electron hosts need a `fetch` with a narrower TLS cipher list to avoid Cloudflare's bot challenge (`challenge_blocked`). Text arrives per utterance, about a second after each pause, not word by word.
+
+The core package ships the full recipe as `docs/voice-input.md`: complete browser and Node capture functions, a framework-neutral dictation controller, UI details, error handling, and a smoke-test checklist.
+
 ## Migration playbooks
 
 ### Existing application agent

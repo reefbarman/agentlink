@@ -12,7 +12,8 @@
     "dist/**/*.d.ts",
     "dist/**/*.d.cts",
     "CHANGELOG.md",
-    "README.md"
+    "README.md",
+    "docs/**/*.md"
   ],
   "exports": {
     ".": {

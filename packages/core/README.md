@@ -1,8 +1,8 @@
 # @agentlink/core
 
-`@agentlink/core` is a **private, pre-release Node.js SDK** for embedding AgentLink's bounded conversational engine in a server application. It is not a browser, Edge, React client-component, or VS Code extension API.
+`@agentlink/core` is a **private, pre-release Node.js SDK** for embedding AgentLink's bounded conversational engine in a server application. It is not a browser, Edge, React client-component, or VS Code extension API. The one exception is `@agentlink/core/voice`, a dependency-free set of dictation helpers that also runs in browser and edge bundles (see [Voice input](#voice-input)).
 
-Current package version: `0.1.0`.
+Current package version: `0.9.0`.
 
 ## Status and compatibility
 
@@ -112,69 +112,6 @@ const result = await ai.generateObject({
 
 For the public OpenAI Responses API, use `createOpenAIResponsesProvider(...)` from `@agentlink/core/openai-responses`. It fixes the API-key endpoint, sends the exact selected maintained model, maps native schemas to `text.format`, sends `store: false`, and never inherits Codex OAuth remapping or Responses Lite behavior. For ChatGPT/Codex OAuth, use `createCodexOAuthProvider(...)` from `@agentlink/core/codex` with a host-owned `CodexCredentialProvider`. The OAuth endpoint intentionally does not advertise native structured output, temperature, or a provider-enforced output-token cap. Requesting those options fails before model dispatch rather than being silently omitted. Both providers resolve credentials per principal and operation; an operation-level credential resolver suppresses factory credentials even when it returns no credential.
 
-To turn recorded speech into prompt text, call `transcribeCodexAudio(...)` from `@agentlink/core/codex` with the same host-owned `CodexCredentialProvider`. The SDK does not record audio. The host captures a clip with whatever recorder its platform offers (for example `MediaRecorder` in a web UI, or a native or `arecord`/PipeWire capture on a device such as a Steam Deck) and passes the encoded bytes and MIME type. Credentials resolve with purpose `"transcription"` and model ID `CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID`.
-
-```ts
-import {
-  CodexTranscriptionError,
-  transcribeCodexAudio,
-} from "@agentlink/core/codex";
-
-const { text } = await transcribeCodexAudio({
-  credentialProvider,
-  context: principal,
-  audio: { data: wavBytes, mimeType: "audio/wav", filename: "speech.wav" },
-  signal,
-});
-```
-
-ChatGPT/Codex OAuth credentials use ChatGPT's subscription transcription endpoint (`CODEX_TRANSCRIBE_URL`), which Codex dictation uses but OpenAI does not document as a public API. It may change, and it can be blocked by a bot challenge, reported as `CodexTranscriptionError` code `challenge_blocked`. A 401 triggers one credential refresh and retry. Cloudflare also judges the client's TLS handshake: Electron-hosted Node (BoringSSL) is challenged with its default cipher list, while plain Node is accepted. In an Electron host, pass a `fetch` whose TLS connection uses a narrower modern ECDHE/AEAD cipher list (for example an undici `Agent` with `connect.ciphers`) through the `fetch` option. The request body is pre-encoded multipart bytes, so any fetch implementation works. OpenAI API-key credentials use the public Audio API with `gpt-4o-mini-transcribe` (override with `apiKeyModel`). Clips over 25 MiB are rejected before upload. Other error codes are `auth_required`, `audio_empty`, `audio_too_large`, `usage_limited`, `request_failed`, and `invalid_response`. Present the transcript for review rather than sending it automatically.
-
-For live dictation, `@agentlink/core/voice` turns a stream of recorded frames into utterances as the user speaks. Feed mono 16-bit PCM frames (roughly 20 to 100 ms each) to a `VoiceActivitySegmenter`. Each `push(...)` returns a meter `level` in `[0, 1]`, a finished `segment` when the speaker pauses (default `pauseMs` 700), and `autoStop: true` once, after `autoStopMs` of silence following speech or `noSpeechTimeoutMs` without any speech. Transcribe segments in order while recording continues, then `flush()` the tail when the dictation ends. `resampleToPcm16(...)` converts Web Audio `Float32Array` frames to 16 kHz PCM, and `encodeWavPcm16(...)` wraps PCM for `transcribeCodexAudio`. The module imports nothing, so the same segmenter runs in a Node backend or in a browser UI such as a Steam Deck plugin frontend; transcription itself still needs the Node-only `codex` entry point.
-
-```ts
-import { transcribeCodexAudio } from "@agentlink/core/codex";
-import { encodeWavPcm16, VoiceActivitySegmenter } from "@agentlink/core/voice";
-
-const SAMPLE_RATE = 16_000;
-const segmenter = new VoiceActivitySegmenter({
-  sampleRate: SAMPLE_RATE,
-  autoStopMs: 2_000,
-  noSpeechTimeoutMs: 10_000,
-});
-let transcripts = Promise.resolve();
-const transcribe = (pcm: Int16Array) =>
-  (transcripts = transcripts.then(async () => {
-    const { text } = await transcribeCodexAudio({
-      credentialProvider,
-      context: principal,
-      audio: {
-        data: encodeWavPcm16(pcm, SAMPLE_RATE),
-        mimeType: "audio/wav",
-        filename: "speech.wav",
-      },
-    });
-    if (text.trim()) appendToDraft(text);
-  }));
-
-// For each captured frame, e.g. from `arecord -f S16_LE -r 16000 -c 1`:
-function onFrame(frame: Int16Array) {
-  const { level, segment, autoStop } = segmenter.push(frame);
-  showMicLevel(level);
-  if (segment) void transcribe(segment);
-  if (autoStop) void stopRecording();
-}
-
-async function stopRecording() {
-  stopCapture();
-  const tail = segmenter.flush();
-  if (tail) void transcribe(tail);
-  await transcripts;
-}
-```
-
-The segmenter is energy-based with an adaptive noise floor, not a speech model. It holds 300 ms of audio before speech so first syllables are kept, ignores bursts shorter than `minSpeechMs` (200), and cuts monologues at `maxSegmentMs` (25 s). `segmenter.peak === 0` after a recording means the input was digital silence, which usually indicates a missing microphone permission. Use a fresh segmenter per dictation.
-
 `streamText(...)` lazily emits `text.delta`, `usage`, and one terminal `completed`, `cancelled`, or `error` event. Consume the generator return value when the terminal result is needed. Closing it early cancels the provider stream and cleans up request listeners and timers.
 
 Use `run(...)` to collect one bounded tool workflow, or `stream(...)` for its safe ordered events. Both use the same headless turn-kernel path. Supply `input` for the current request and optional complete server-owned `history`; AgentLink retains neither after settlement. Tools must be `HostTool` values from `defineTool` or `defineZodTool`. A tool with `authorization: "required"` needs a request-scoped `authorizeToolCall` callback returning only `allow` or `deny`. Stateless workflows never suspend for a later approval.
@@ -202,6 +139,44 @@ Public events/results contain only safe tool projections and stable errors. Set 
 The client defaults to a 60-second deadline, zero provider retries, 64 KiB each for serialized input and schema, 1 MiB of accumulated output, and a 1 MiB event queue. It sends `store: false` only when the endpoint is configured with `supportsStoreFalse`. Typed output succeeds only after an observed normal provider finish followed by local schema validation. Refusal, truncation, missing termination evidence, malformed JSON, and schema failure are errors.
 
 Use the durable engine below when the SDK should own conversational history, resumable approvals, recovery, or multi-process session coordination. Moving from the client to the engine is an explicit lifecycle choice, not a durability flag on one API.
+
+## Voice input
+
+Two entry points turn speech into prompt text. The SDK does not record audio; the host supplies the microphone.
+
+- `transcribeCodexAudio(...)` from `@agentlink/core/codex` (Node only) transcribes one recorded clip with the same host-owned `CodexCredentialProvider` used for models. Credentials resolve with purpose `"transcription"` and model ID `CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID`.
+- `@agentlink/core/voice` (Node, browser, and edge) turns a live stream of recorded frames into utterances at natural pauses, reports a meter level, and signals auto-stop after silence. It exports `VoiceActivitySegmenter`, `resampleToPcm16`, and `encodeWavPcm16`, and imports nothing.
+
+```ts
+import { transcribeCodexAudio } from "@agentlink/core/codex";
+import { encodeWavPcm16, VoiceActivitySegmenter } from "@agentlink/core/voice";
+
+const segmenter = new VoiceActivitySegmenter({
+  sampleRate: 16_000,
+  autoStopMs: 2_000, // silence after speech that ends the dictation
+  noSpeechTimeoutMs: 10_000, // give up if nobody speaks
+});
+
+// For each 16 kHz mono PCM frame from the microphone:
+const { level, segment, autoStop } = segmenter.push(frame);
+if (segment) {
+  const { text } = await transcribeCodexAudio({
+    credentialProvider,
+    context: principal,
+    audio: {
+      data: encodeWavPcm16(segment, 16_000),
+      mimeType: "audio/wav",
+      filename: "speech.wav",
+    },
+  });
+}
+```
+
+Transcribe segments in order while recording continues, and `flush()` the tail when dictation ends. When the UI runs in a browser, segment there and upload each WAV to your own backend; never call ChatGPT from the page.
+
+**[Add a voice input button](docs/voice-input.md)** is the full recipe for a dictation button like AgentLink's composer microphone: browser and Node capture code, segmenter options, an ordered transcription queue, a framework-neutral controller with tap, hold-to-talk, auto-stop, cancel, and auto-send, UI details, error handling, and a smoke-test checklist.
+
+ChatGPT/Codex OAuth uses ChatGPT's subscription transcription endpoint (`CODEX_TRANSCRIBE_URL`), which Codex dictation uses but OpenAI does not document as a public API. It may change, and it can be blocked by a bot challenge, reported as `CodexTranscriptionError` code `challenge_blocked`. A 401 triggers one credential refresh and retry. Cloudflare also judges the client's TLS handshake: Electron-hosted Node (BoringSSL) is challenged with its default cipher list, while plain Node is accepted. In an Electron host, pass a `fetch` whose TLS connection uses a narrower modern ECDHE/AEAD cipher list (for example an undici `Agent` with `connect.ciphers`) through the `fetch` option. The request body is pre-encoded multipart bytes, so any fetch implementation works. OpenAI API-key credentials use the public Audio API with `gpt-4o-mini-transcribe` (override with `apiKeyModel`). Clips over 25 MiB are rejected before upload. Other error codes are `auth_required`, `audio_empty`, `audio_too_large`, `usage_limited`, `request_failed`, and `invalid_response`. Present the transcript for review rather than sending it automatically.
 
 ## Compose a durable engine
 
