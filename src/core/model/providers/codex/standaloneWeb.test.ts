@@ -189,6 +189,7 @@ describe("executeCodexStandaloneWeb", () => {
     'Internal Error ()\n【turn0view0】 Source: open({"ref_id":"https://example.com"}); Total lines: 1',
     'Internal Error ()\nciteturn0view0 [wordlim: 200] Source: open({"ref_id":"https://example.com/a.yaml","lineno":null}); Total lines: 1\nL0: Failed to fetch https://example.com/a.yaml: Cache miss',
     'Internal Error ()\n\ue200cite\ue202turn0view0\ue201 [wordlim: 200] Source: open({"ref_id":"https://example.com/a.yaml","lineno":null}); Total lines: 1\nL0: Failed to fetch https://example.com/a.yaml: Cache miss',
+    'Internal Error ()\nciteturn0view0 [wordlim: 200] Source: open({"ref_id":"https://host.invalid/page","lineno":null}); Total lines: 1\nL0: URL https://host.invalid/page is not accessible via this tool.',
   ])(
     "rejects provider page-access errors instead of completing with error text: %s",
     async (output) => {

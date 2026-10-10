@@ -601,8 +601,10 @@ function findPageContentOffset(
 const PROVIDER_INTERNAL_ERROR_LINE = /^(?:L\d+:\s*)?Internal Error\s*\(\)\s*$/i;
 // The provider may pair its error marker with a numbered fetch-failure line,
 // e.g. "L0: Failed to fetch https://example.com/a.yaml: Cache miss".
+// Unreachable hosts instead produce e.g.
+// "L0: URL https://host.invalid/page is not accessible via this tool."
 const PROVIDER_FETCH_FAILURE_LINE =
-  /^(?:L\d+:\s*)?Failed to fetch\s+https?:\/\/\S+?:\s*\S[^\n]*$/i;
+  /^(?:L\d+:\s*)?(?:Failed to fetch\s+https?:\/\/\S+?:\s*\S[^\n]*|URL\s+https?:\/\/\S+\s+is not accessible via this tool\.?)$/i;
 
 function isProviderPageHeaderLine(line: string): boolean {
   return (
