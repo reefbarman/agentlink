@@ -72,7 +72,17 @@ const ALLOW_DECISIONS = new Set(["accept", "accept-session"]);
 
 /** Routes the UI calls that this server does not implement yet. */
 const EMPTY_GET_RESPONSES: Readonly<Record<string, unknown>> = {
-  "/api/ask-agent/slash-commands": { commands: [] },
+  // The Agent Fleet hides once every agent has finished; `/fleet` reopens it.
+  "/api/ask-agent/slash-commands": {
+    commands: [
+      {
+        name: "fleet",
+        description: "Show the Agent Fleet panel",
+        source: "builtin",
+        builtin: true,
+      },
+    ],
+  },
   "/api/ask-agent/read-grants": { grants: [] },
   "/api/ask-agent/project-handoff/targets": { targets: [] },
   // Polled by the shared UI: no updates to offer.

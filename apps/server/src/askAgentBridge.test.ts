@@ -879,7 +879,7 @@ describe("Ask Agent bridge", () => {
     });
     await expect(call("/api/ask-agent/slash-commands")).resolves.toMatchObject({
       status: 200,
-      body: { commands: [] },
+      body: { commands: [{ name: "fleet", builtin: true }] },
     });
     await expect(call("/api/instances")).resolves.toMatchObject({
       status: 200,

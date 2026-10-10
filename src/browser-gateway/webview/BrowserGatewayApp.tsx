@@ -7156,6 +7156,10 @@ export function BrowserGatewayApp({
     _args: string,
   ): void => {
     switch (name) {
+      case "fleet":
+        // Only the Assistant serves its chat's agents to Ask Agent.
+        if (assistantFleet) setShowFleetRequest((request) => request + 1);
+        break;
       case "memory":
         setMemoryPanelOpen(true);
         setShowAskAgentMemory(false);
