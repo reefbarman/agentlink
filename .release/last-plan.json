@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
-  "createdAt": "2026-10-10T10:48:11.165Z",
+  "sourceSha": "6ef16d0b704ec1d200f1d4124025e8c500e0d885",
+  "createdAt": "2026-10-10T11:28:13.398Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.30.0",
       "baselineRef": "v1.30.0",
-      "reserved": "1.30.12",
+      "reserved": "1.30.13",
       "commits": [
         "39a786755f9fd16bc59368d5d8c8001da8016d72",
         "5f5e17d3854f62cb4f1834594835d84149e8074e",
@@ -28,7 +28,9 @@
         "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
         "8b30ef6e3912defc9d9e852e84e111da99fdac14",
         "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-        "776bc1d0d4400d3ab593343e471d3f9de136acfc"
+        "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+        "0a6a81187b725493b453073dd1e708d0f90e96ff",
+        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -128,38 +130,29 @@
           "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
           "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
           "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.12.0",
-      "baselineRef": "desktop-v0.12.0",
-      "reserved": "0.12.0",
-      "commits": ["776bc1d0d4400d3ab593343e471d3f9de136acfc"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.13.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.13.0",
-      "notes": [
+        },
         {
-          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
-          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
-          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
+          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
+          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
+          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+          "breaking": false
+        },
+        {
+          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
+          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
           "breaking": false
         }
       ]
     },
-    "cli": {
+    "desktop": {
       "published": "0.13.0",
-      "baselineRef": "cli-v0.13.0",
+      "baselineRef": "desktop-v0.13.0",
       "reserved": "0.13.0",
-      "commits": ["776bc1d0d4400d3ab593343e471d3f9de136acfc"],
+      "commits": [
+        "0a6a81187b725493b453073dd1e708d0f90e96ff",
+        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -169,12 +162,51 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.14.0",
+      "tag": "desktop-v0.14.0",
       "notes": [
         {
-          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
-          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
-          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
+          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
+          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
+          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+          "breaking": false
+        },
+        {
+          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
+          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.14.0",
+      "baselineRef": "cli-v0.14.0",
+      "reserved": "0.14.0",
+      "commits": [
+        "0a6a81187b725493b453073dd1e708d0f90e96ff",
+        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.15.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.15.0",
+      "notes": [
+        {
+          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
+          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
+          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+          "breaking": false
+        },
+        {
+          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
+          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
           "breaking": false
         }
       ]
@@ -183,13 +215,34 @@
       "published": "0.9.0",
       "baselineRef": "sdk-v0.9.0",
       "reserved": "0.9.0",
-      "commits": [],
+      "commits": [
+        "0a6a81187b725493b453073dd1e708d0f90e96ff",
+        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.10.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.10.0",
+      "notes": [
+        {
+          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
+          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
+          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+          "breaking": false
+        },
+        {
+          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
+          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -309,6 +362,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0a6a81187b725493b453073dd1e708d0f90e96ff": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
