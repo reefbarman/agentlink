@@ -594,6 +594,8 @@ export type GatewaySnapshot = {
     } | null;
   };
   background: BgSessionInfo[];
+  /** The Assistant's per-chat approval mode; absent elsewhere. */
+  approvalMode?: "autonomous" | "ask";
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -7048,6 +7050,44 @@ export function BrowserGatewayApp({
     void handleSend(`/checkpoint diff ${checkpointId} ${scope}`, []);
   };
 
+  const handleSetSessionApprovalMode = (mode: "autonomous" | "ask"): void => {
+    void (async () => {
+      try {
+        const response = await fetch("/api/ask-agent/approval-mode", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (!body.ok) {
+          setModeStatus(
+            `Approval mode change failed: ${body.error ?? response.status}`,
+          );
+          return;
+        }
+        if (!relayClientEnabled && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+            selectedTabGenerationRef.current,
+          );
+        }
+        setModeStatus(
+          mode === "ask"
+            ? "This chat now asks before every edit and command."
+            : "This chat now works on its own.",
+        );
+      } catch (err) {
+        setModeStatus(`Approval mode change failed: ${String(err)}`);
+      }
+    })();
+  };
+
   const handleStopBackground = (sessionId: string): void => {
     void (async () => {
       try {
@@ -10601,6 +10641,12 @@ export function BrowserGatewayApp({
                     }
                     onSetAgentWriteApproval={
                       isAskAgentSelected ? undefined : handleSetWriteApproval
+                    }
+                    sessionApprovalMode={snapshot?.approvalMode}
+                    onSetSessionApprovalMode={
+                      assistantFleet && snapshot?.approvalMode
+                        ? handleSetSessionApprovalMode
+                        : undefined
                     }
                     commandApprovalPolicy={
                       isAskAgentSelected

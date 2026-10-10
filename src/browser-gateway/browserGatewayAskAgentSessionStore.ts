@@ -218,6 +218,11 @@ export interface BrowserGatewayAskAgentSnapshot {
    * Agent has none; a host that runs them may fill this in.
    */
   background: BgSessionInfo[];
+  /**
+   * Whether the active session works on its own or asks before each edit
+   * and command, for a host that offers the choice; absent otherwise.
+   */
+  approvalMode?: "autonomous" | "ask";
   diffs: [];
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion: 0;
@@ -1161,13 +1166,46 @@ export class BrowserGatewayAskAgentSessionStore {
     return message;
   }
 
+  /**
+   * Append a finished, host-projected message (for example a background
+   * agent's result card) to a session, which need not be the active one.
+   */
+  appendSessionMessage(
+    sessionId: string,
+    params: Pick<ChatMessage, "role" | "content" | "blocks"> & { now: number },
+  ): ChatMessage | undefined {
+    const session = this.sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
+    if (!session) return undefined;
+    const message: ChatMessage = {
+      id: this.nextMessageId(session, `ask-agent-${params.role}`),
+      role: params.role,
+      content: params.content,
+      timestamp: params.now,
+      blocks: params.blocks,
+    };
+    session.messages.push(message);
+    session.lastActiveAt = params.now;
+    return message;
+  }
+
   startAssistantMessage(params: {
     now: number;
     text?: string;
     memoryDisclosure?: ChatMessage["memoryDisclosure"];
+    /** A session other than the active one; it is not marked streaming. */
+    sessionId?: string;
   }): ChatMessage {
     const text = params.text ?? "";
-    const session = this.getActiveSession(params.now);
+    const target =
+      params.sessionId === undefined
+        ? undefined
+        : this.sessions.find((candidate) => candidate.id === params.sessionId);
+    if (params.sessionId !== undefined && !target) {
+      throw new Error("browser_gateway_ask_agent_session_not_found");
+    }
+    const session = target ?? this.getActiveSession(params.now);
     const message: ChatMessage = {
       id: this.nextMessageId(session, "ask-agent-assistant"),
       role: "assistant",
@@ -1180,7 +1218,7 @@ export class BrowserGatewayAskAgentSessionStore {
     };
     session.messages.push(message);
     session.lastActiveAt = params.now;
-    this.streaming = true;
+    if (session.id === this.activeSessionId) this.streaming = true;
     return message;
   }
 

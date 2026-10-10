@@ -10,6 +10,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAskAgentBridge, type AskAgentBridge } from "./askAgentBridge.js";
+import { parseAgentResultPrompt } from "./backgroundResultDelivery.js";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import {
@@ -57,6 +58,7 @@ function createFakeOperations(events: SessionEventHub) {
     {
       model: AgentModelReference;
       reasoningEffort?: CoreReasoningEffort;
+      approvalMode?: "autonomous" | "ask";
       messages: unknown[];
     }
   >();
@@ -93,10 +95,22 @@ function createFakeOperations(events: SessionEventHub) {
         messages: session.messages,
         model: session.model,
         reasoningEffort: session.reasoningEffort,
+        approvalMode: session.approvalMode ?? ("autonomous" as const),
         createdAt: 1,
         updatedAt: 2,
       };
     }),
+    setApprovalMode: vi.fn(
+      async (
+        _auth,
+        _projectId,
+        sessionId: string,
+        mode: "autonomous" | "ask",
+      ) => {
+        sessions.get(sessionId)!.approvalMode = mode;
+        return mode;
+      },
+    ),
     createSession: vi.fn(
       async (
         _auth,
@@ -523,6 +537,183 @@ describe("Ask Agent bridge", () => {
     expect(
       (fresh.body.snapshot as { background: unknown[] }).background,
     ).toEqual([]);
+  });
+
+  describe("finished background agents", () => {
+    const child = (
+      patch: Partial<WorkspaceBackgroundRecord> = {},
+    ): WorkspaceBackgroundRecord =>
+      ({
+        schemaVersion: 1,
+        childSessionId: "child-1",
+        parentSessionId: "ws-1",
+        parentTurnId: "turn-1",
+        rootSessionId: "ws-1",
+        projectId: "home",
+        depth: 1,
+        task: "List the files",
+        scopes: [],
+        lifecycle: "running",
+        phase: "responding",
+        resultState: "running",
+        createdAt: 10,
+        updatedAt: 20,
+        steeringQueued: 0,
+        ...patch,
+      }) as WorkspaceBackgroundRecord;
+    const done = child({
+      lifecycle: "completed",
+      phase: "completed",
+      resultState: "completed",
+      resultText: "AGENTS.md, notes.md",
+    });
+    const agentChanged = (
+      fake: Awaited<ReturnType<typeof startBridge>>["fake"],
+    ) =>
+      fake.publish("ws-1", {
+        kind: "agent",
+        state: "updated",
+        childSessionId: "child-1",
+        lifecycle: "completed",
+        phase: "completed",
+      });
+    const turnText = (
+      fake: Awaited<ReturnType<typeof startBridge>>["fake"],
+      index: number,
+    ) =>
+      (fake.operations.startTurn.mock.calls[index] as unknown[])[3] as string;
+    const reply = (
+      fake: Awaited<ReturnType<typeof startBridge>>["fake"],
+      text: string,
+      before?: (sessionId: string) => void,
+    ) =>
+      fake.setScript((sessionId, taskId) => {
+        before?.(sessionId);
+        fake.turn(sessionId, { type: "text.delta", text });
+        fake.turn(sessionId, { type: "turn.completed", result: { text } });
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "finished",
+          taskId,
+          status: "completed",
+        });
+      });
+
+    it("wakes the chat once with the result card when an agent finishes", async () => {
+      const { fake, call } = await startBridge();
+      reply(fake, "Started it", (sessionId) =>
+        fake.agents.set(sessionId, [child()]),
+      );
+      await call("/api/ask-agent/send", {
+        text: "list files in the background",
+      });
+
+      reply(fake, "It found two files.");
+      fake.agents.set("ws-1", [done]);
+      agentChanged(fake);
+      await vi.waitFor(() =>
+        expect(fake.operations.startTurn).toHaveBeenCalledTimes(2),
+      );
+      expect(parseAgentResultPrompt(turnText(fake, 1))).toMatchObject([
+        { childSessionId: "child-1", resultText: "AGENTS.md, notes.md" },
+      ]);
+      const messages = await vi.waitFor(async () => {
+        const snapshot = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        );
+        const projected = snapshot.session.foreground.projectedMessages;
+        expect(projected.at(-1)?.content).toBe("It found two files.");
+        return projected;
+      });
+      // The result shows as a card, never as something the owner typed.
+      expect(messages.filter((message) => message.role === "user")).toEqual([
+        expect.objectContaining({ content: "list files in the background" }),
+      ]);
+      expect(JSON.stringify(messages)).toContain("bg_agent_result");
+
+      // Later updates do not report it again.
+      agentChanged(fake);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not wake the chat for a result its turn already collected", async () => {
+      const { fake, call } = await startBridge();
+      reply(fake, "Both files are listed", (sessionId) => {
+        fake.agents.set(sessionId, [done]);
+        fake.turn(sessionId, {
+          type: "tool.completed",
+          toolCallId: "call-1",
+          toolName: "get_background_result",
+          displayContent: { status: "completed", record: done },
+        });
+      });
+      await call("/api/ask-agent/send", { text: "list files and wait" });
+      agentChanged(fake);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not wake a chat the owner stopped", async () => {
+      const { fake, call } = await startBridge();
+      reply(fake, "Started it", (sessionId) =>
+        fake.agents.set(sessionId, [child()]),
+      );
+      await call("/api/ask-agent/send", {
+        text: "list files in the background",
+      });
+      await call("/api/ask-agent/stop", {});
+      fake.agents.set("ws-1", [done]);
+      agentChanged(fake);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("lets the owner choose whether a chat asks before each change", async () => {
+    const { fake, call } = await startBridge();
+    const modeOf = (body: Record<string, unknown>) =>
+      (body.snapshot as { approvalMode?: string }).approvalMode;
+    expect(modeOf((await call("/api/ask-agent/session")).body)).toBe(
+      "autonomous",
+    );
+    // Before the first message there is no session yet: the choice waits.
+    const early = await call("/api/ask-agent/approval-mode", { mode: "ask" });
+    expect(modeOf(early.body)).toBe("ask");
+    expect(fake.operations.setApprovalMode).not.toHaveBeenCalled();
+
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, { type: "turn.completed", result: { text: "ok" } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    await call("/api/ask-agent/send", { text: "hello" });
+    expect(fake.operations.setApprovalMode).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      "ask",
+    );
+    expect(modeOf((await call("/api/ask-agent/session")).body)).toBe("ask");
+
+    const back = await call("/api/ask-agent/approval-mode", {
+      mode: "autonomous",
+    });
+    expect(modeOf(back.body)).toBe("autonomous");
+    expect(fake.operations.setApprovalMode).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      "autonomous",
+    );
+    expect(
+      (await call("/api/ask-agent/approval-mode", { mode: "sometimes" }))
+        .status,
+    ).toBe(400);
   });
 
   it("surfaces an approval and resumes the turn with the decision", async () => {

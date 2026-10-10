@@ -150,9 +150,17 @@ export interface AssistantSessionOperations {
     readonly messages: readonly unknown[];
     readonly model: AgentModelReference;
     readonly reasoningEffort: CoreReasoningEffort | undefined;
+    readonly approvalMode: SessionApprovalMode;
     readonly createdAt: number;
     readonly updatedAt: number;
   }>;
+  /** Whether the session works on its own or asks before every change. */
+  setApprovalMode(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    mode: SessionApprovalMode,
+  ): Promise<SessionApprovalMode>;
   createSession(
     auth: AssistantServerAuth,
     projectId: string,
@@ -562,9 +570,27 @@ export function createAssistantWorkspaceRoutes(
         messages: record.messages,
         model: effectiveModel(record.selectedModel),
         reasoningEffort: record.reasoningEffort,
+        approvalMode: approvalMode(projectId, sessionId),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       };
+    },
+    async setApprovalMode(auth, projectId, sessionId, mode) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "approve");
+      if (!SESSION_APPROVAL_MODES.includes(mode)) {
+        throw new HttpError(400, "approval_mode_invalid");
+      }
+      if (!options.approvalModes) {
+        throw new HttpError(409, "approval_mode_unavailable");
+      }
+      if (mount.host.isBackgroundSession(sessionId)) {
+        throw new HttpError(404, "session_not_found");
+      }
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth);
+      await options.approvalModes.set(projectId, sessionId, mode);
+      return approvalMode(projectId, sessionId);
     },
     async createSession(auth, projectId, model, reasoningEffort) {
       const mount = await authorize(auth, projectId, "write");
@@ -1002,7 +1028,7 @@ export function createAssistantWorkspaceRoutes(
     }
 
     if (operation === "approval-mode") {
-      const mount = await authorize(auth, projectId, "approve");
+      await authorize(auth, projectId, "approve");
       const body = await readJsonBody(request, undefined, auth.signal);
       const mode = body.mode;
       if (
@@ -1011,21 +1037,13 @@ export function createAssistantWorkspaceRoutes(
       ) {
         throw new HttpError(400, "approval_mode_invalid");
       }
-      if (!options.approvalModes) {
-        throw new HttpError(409, "approval_mode_unavailable");
-      }
-      if (mount.host.isBackgroundSession(sessionId)) {
-        throw new HttpError(404, "session_not_found");
-      }
-      await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth);
-      await options.approvalModes.set(
-        projectId,
-        sessionId,
-        mode as SessionApprovalMode,
-      );
       sendJson(response, 200, {
-        approvalMode: approvalMode(projectId, sessionId),
+        approvalMode: await operations.setApprovalMode(
+          auth,
+          projectId,
+          sessionId,
+          mode as SessionApprovalMode,
+        ),
       });
       return true;
     }

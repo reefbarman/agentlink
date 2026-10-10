@@ -36,6 +36,14 @@ import {
   parseAgentApprovalId,
   toAgentCard,
 } from "./backgroundAgentCards.js";
+import {
+  agentResultBlocks,
+  formatAgentResultPrompt,
+  isTerminalAgent,
+  terminalChildIdsIn,
+  toDeliveredResult,
+  withAgentResultCards,
+} from "./backgroundResultDelivery.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type {
@@ -158,6 +166,8 @@ interface BridgeState {
   unread: string[];
 }
 
+type ApprovalMode = "autonomous" | "ask";
+
 interface PendingInteraction {
   readonly workspaceSessionId: string;
   readonly interactionId: string;
@@ -182,6 +192,10 @@ export async function createAskAgentBridge(
   const sessionModels = new Map<string, AgentModelReference>();
   /** Last known thinking level of each workspace session. */
   const sessionEfforts = new Map<string, CoreReasoningEffort | undefined>();
+  /** Approval mode of each workspace session (absent: autonomous). */
+  const sessionApprovalModes = new Map<string, ApprovalMode>();
+  /** Modes picked for chats that have no workspace session yet. */
+  const pendingApprovalModes = new Map<string, ApprovalMode>();
 
   const sse = new SseHub<AskAgentControllerSnapshot>({
     serialize: (snapshot) => JSON.stringify(snapshot),
@@ -312,8 +326,18 @@ export async function createAskAgentBridge(
       snapshot: {
         ...state.snapshot,
         background: agentWatch.records.map(toAgentCard),
+        approvalMode: activeApprovalMode(),
       },
     };
+  };
+  const activeApprovalMode = (): ApprovalMode => {
+    const storeSessionId = store.getActiveSessionId();
+    const workspaceSessionId = workspaceSessionFor(storeSessionId);
+    return (
+      (workspaceSessionId
+        ? sessionApprovalModes.get(workspaceSessionId)
+        : pendingApprovalModes.get(storeSessionId)) ?? "autonomous"
+    );
   };
   const snapshotResponse = () => ({ ok: true as const, ...project() });
   const publishNow = () => controller.publishSnapshot(project().snapshot);
@@ -346,9 +370,29 @@ export async function createAskAgentBridge(
         }
         sessionModels.set(summary.sessionId, read.model);
         sessionEfforts.set(summary.sessionId, read.reasoningEffort);
-        const messages = agentMessagesToChatMessages([...read.messages], {
-          baseIndex: 0,
-        });
+        sessionApprovalModes.set(summary.sessionId, read.approvalMode);
+        const messages = withAgentResultCards(
+          agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+        );
+        // Agents that ended before this server started are not reported
+        // again; ones still running are, when they finish.
+        try {
+          const agents = await operations.listAgents(
+            auth,
+            projectId,
+            summary.sessionId,
+          );
+          for (const agent of agents) {
+            if (isTerminalAgent(agent)) {
+              delivery.handled.add(agent.childSessionId);
+            }
+          }
+          if (agents.some((agent) => !isTerminalAgent(agent))) {
+            trackParent(summary.sessionId);
+          }
+        } catch {
+          // Without background agents enabled there is nothing to report.
+        }
         if (messages.length === 0) continue;
         const firstPrompt = messages.find((message) => message.role === "user");
         sessions.push({
@@ -438,6 +482,154 @@ export async function createAskAgentBridge(
       },
     );
     void refreshAgents();
+  };
+
+  /**
+   * Hands finished background agents back to the chat that started them:
+   * a short turn shows the result card and lets the assistant report it.
+   * Every chat that started agents is followed, not only the open one.
+   */
+  const delivery = {
+    /** Parent workspace sessions followed for agent changes. */
+    parents: new Map<string, { unsubscribe(): void }>(),
+    /** Children already reported, collected by their parent, or old. */
+    handled: new Set<string>(),
+    /** Parents with a wake-up turn queued. */
+    queued: new Set<string>(),
+    /** Parents whose turn the owner stopped; cleared by their next message. */
+    stopped: new Set<string>(),
+  };
+
+  const storeSessionFor = (workspaceSessionId: string) => {
+    for (const [alias, id] of Object.entries(state.aliases)) {
+      if (id === workspaceSessionId && store.hasSession(alias)) return alias;
+    }
+    return store.hasSession(workspaceSessionId)
+      ? workspaceSessionId
+      : undefined;
+  };
+
+  const trackParent = (workspaceSessionId: string) => {
+    if (delivery.parents.has(workspaceSessionId) || closed) return;
+    const key = operations.sessionKey(projectId, workspaceSessionId);
+    delivery.parents.set(
+      workspaceSessionId,
+      options.events.subscribe(
+        key,
+        options.events.latestSequence(key),
+        ({ event }) => {
+          if (event.kind === "agent") void checkParent(workspaceSessionId);
+        },
+      ),
+    );
+  };
+
+  /** Queue a wake-up if a parent has finished agents not yet reported. */
+  const checkParent = async (workspaceSessionId: string) => {
+    const auth = agentWatch.auth;
+    if (!auth || closed || delivery.queued.has(workspaceSessionId)) return;
+    let agents: readonly WorkspaceBackgroundRecord[];
+    try {
+      agents = await operations.listAgents(auth, projectId, workspaceSessionId);
+    } catch {
+      return;
+    }
+    if (
+      agents.some(
+        (agent) =>
+          isTerminalAgent(agent) && !delivery.handled.has(agent.childSessionId),
+      )
+    ) {
+      queueWake(workspaceSessionId);
+    }
+  };
+
+  /** Run the wake-up turn after any turn already running or queued. */
+  const queueWake = (workspaceSessionId: string) => {
+    if (delivery.queued.has(workspaceSessionId)) return;
+    delivery.queued.add(workspaceSessionId);
+    const previous = turnChain;
+    let release!: () => void;
+    turnChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    void (async () => {
+      try {
+        await previous;
+        delivery.queued.delete(workspaceSessionId);
+        if (closed || delivery.stopped.has(workspaceSessionId)) return;
+        await wake(workspaceSessionId);
+      } catch {
+        // A failed wake-up leaves the result on the Agent Fleet card.
+      } finally {
+        delivery.queued.delete(workspaceSessionId);
+        release();
+      }
+    })();
+  };
+
+  const wake = async (workspaceSessionId: string) => {
+    const auth = agentWatch.auth;
+    if (!auth || !(await auth.revalidate()).valid) return;
+    const storeSessionId = storeSessionFor(workspaceSessionId);
+    if (!storeSessionId) return;
+    const agents = await operations.listAgents(
+      auth,
+      projectId,
+      workspaceSessionId,
+    );
+    // Re-read now: the parent may have collected a result in its last turn.
+    const results = agents
+      .filter(
+        (agent) =>
+          isTerminalAgent(agent) && !delivery.handled.has(agent.childSessionId),
+      )
+      .map(toDeliveredResult);
+    if (results.length === 0) return;
+    for (const result of results) delivery.handled.add(result.childSessionId);
+    const card = store.appendSessionMessage(storeSessionId, {
+      role: "assistant",
+      content: "",
+      blocks: agentResultBlocks(results),
+      now: now(),
+    });
+    if (!card) return;
+    const assistant = store.startAssistantMessage({
+      now: now(),
+      sessionId: storeSessionId,
+    });
+    const turn = controller.beginTurn(assistant.id);
+    if (!turn) return;
+    runningSession = storeSessionId;
+    try {
+      await publishNow();
+      await runTurn({
+        auth,
+        workspaceSessionId,
+        messageId: assistant.id,
+        turn,
+        text: formatAgentResultPrompt(results),
+      });
+    } finally {
+      controller.completeTurn(turn);
+      runningSession = undefined;
+      await flagUnread(storeSessionId, workspaceSessionId);
+    }
+    await publishNow();
+  };
+
+  /** Flag a chat that finished a turn nobody was viewing. */
+  const flagUnread = async (
+    storeSessionId: string,
+    workspaceSessionId: string,
+  ) => {
+    if (
+      (store.getActiveSessionId() !== storeSessionId || sse.size === 0) &&
+      !state.unread.includes(workspaceSessionId)
+    ) {
+      state.unread.push(workspaceSessionId);
+      await saveState().catch(() => undefined);
+    }
   };
 
   /** The watched chat's agent with this ID, or a 404. */
@@ -541,7 +733,50 @@ export async function createAskAgentBridge(
     sessionEfforts.set(sessionId, effort);
     state.aliases[storeSessionId] = sessionId;
     await saveState();
+    // A mode picked before the chat's first message.
+    const pendingMode = pendingApprovalModes.get(storeSessionId);
+    pendingApprovalModes.delete(storeSessionId);
+    sessionApprovalModes.set(
+      sessionId,
+      pendingMode
+        ? await operations.setApprovalMode(
+            auth,
+            projectId,
+            sessionId,
+            pendingMode,
+          )
+        : "autonomous",
+    );
     return sessionId;
+  };
+
+  const handleApprovalMode = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    auth: AssistantServerAuth,
+  ) => {
+    const body = await readJsonBody(request, undefined, auth.signal);
+    const mode = body.mode;
+    if (mode !== "autonomous" && mode !== "ask") {
+      throw new HttpError(400, "approval_mode_invalid");
+    }
+    const storeSessionId = store.getActiveSessionId();
+    const workspaceSessionId = workspaceSessionFor(storeSessionId);
+    if (workspaceSessionId) {
+      sessionApprovalModes.set(
+        workspaceSessionId,
+        await operations.setApprovalMode(
+          auth,
+          projectId,
+          workspaceSessionId,
+          mode,
+        ),
+      );
+    } else {
+      pendingApprovalModes.set(storeSessionId, mode);
+    }
+    const publication = await publishNow();
+    sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
   };
 
   const approvalFor = (
@@ -618,6 +853,16 @@ export async function createAskAgentBridge(
           return;
         case "tool.completed":
         case "tool.failed":
+          // The parent already saw how these agents ended: no wake-up.
+          if (
+            event.type === "tool.completed" &&
+            (event.toolName === "get_background_result" ||
+              event.toolName === "get_background_status")
+          ) {
+            for (const id of terminalChildIdsIn(event.displayContent)) {
+              delivery.handled.add(id);
+            }
+          }
           controller.completeAssistantToolCall({
             messageId,
             toolCallId: event.toolCallId,
@@ -823,6 +1068,8 @@ export async function createAskAgentBridge(
       const storeSessionId = store.getActiveSessionId();
       // A new chat's session exists now: watch it for agents it starts.
       watchActiveAgents(auth);
+      trackParent(workspaceSessionId);
+      delivery.stopped.delete(workspaceSessionId);
       markRead(storeSessionId);
       store.appendUserMessage({ ...(id ? { id } : {}), text, now: now() });
       const assistant = store.startAssistantMessage({ now: now() });
@@ -843,14 +1090,10 @@ export async function createAskAgentBridge(
         runningSession = undefined;
         // Finished while the owner was in another chat, or had no window
         // open: flag it until they look.
-        if (
-          (store.getActiveSessionId() !== storeSessionId || sse.size === 0) &&
-          !state.unread.includes(workspaceSessionId)
-        ) {
-          state.unread.push(workspaceSessionId);
-          await saveState().catch(() => undefined);
-        }
+        await flagUnread(storeSessionId, workspaceSessionId);
       }
+      // Agents that finished during the turn and were not collected by it.
+      void checkParent(workspaceSessionId);
       const publication = await publishNow();
       if (!response.writableEnded && !response.destroyed) {
         sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
@@ -919,7 +1162,11 @@ export async function createAskAgentBridge(
     response: ServerResponse,
     auth: AssistantServerAuth,
   ) => {
-    const storeSessionId = store.getActiveSessionId();
+    // The running turn may be in another chat (a background result).
+    const storeSessionId = runningSession ?? store.getActiveSessionId();
+    const stoppedSessionId = workspaceSessionFor(storeSessionId);
+    // No wake-ups for this chat until the owner writes to it again.
+    if (stoppedSessionId) delivery.stopped.add(stoppedSessionId);
     const publication = await controller.cancelActiveTurn(async (messageId) => {
       controller.finishAssistantError({
         messageId,
@@ -1018,6 +1265,8 @@ export async function createAskAgentBridge(
       }
       case "/api/ask-agent/background/stop":
         await operations.stopAgent(auth, projectId, parent, childSessionId);
+        // The owner stopped it: nothing to report back to the chat.
+        delivery.handled.add(childSessionId);
         break;
       case "/api/ask-agent/background/steer": {
         const message = typeof body.message === "string" ? body.message : "";
@@ -1116,6 +1365,9 @@ export async function createAskAgentBridge(
         return true;
       case "/api/ask-agent/stop":
         await handleStop(response, auth);
+        return true;
+      case "/api/ask-agent/approval-mode":
+        await handleApprovalMode(request, response, auth);
         return true;
       case "/api/ask-agent/session/new": {
         const { sessionId } = await readSessionId(request, auth).catch(() => ({
@@ -1249,6 +1501,10 @@ export async function createAskAgentBridge(
     async close() {
       closed = true;
       agentWatch.subscription?.unsubscribe();
+      for (const subscription of delivery.parents.values()) {
+        subscription.unsubscribe();
+      }
+      delivery.parents.clear();
       if (agentWatch.timer) clearTimeout(agentWatch.timer);
       await agentWatch.refreshing;
       await controller.dispose();
