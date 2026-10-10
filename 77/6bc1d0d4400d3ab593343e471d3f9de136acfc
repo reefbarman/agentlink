@@ -1,0 +1,96 @@
+src/agent/webview/types.ts
+  h_e08a86bb3a33a2 39-42,71,74,416
+CHANGELOG.md
+  h_e08a86bb3a33a2 6
+src/agent/voice/VoiceInputService.ts
+  h_e08a86bb3a33a2 16-21,29,43-44,50-55,58-74,88,100-101,123,126-127,131-132,137-143,146-155,157,160-176,180-183,190,192-194,199-202,210,236-237,241,285-290,294-296,301,315-322,324-326,331,362,370
+  s_b6896955344203::t_a13f79bda37043 98-99,102,128-130,133,156,158-159,238-240,242-243,284,291,293,297,323,363-369,371
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_e08a86bb3a33a2 78-79
+package.json
+  h_e08a86bb3a33a2 526-539
+src/agent/voice/voiceRecorderWorker.ts
+  h_e08a86bb3a33a2 12-13,15-16,29,83-84,86-90,92,97,100-103,105-109,111-115,137-139
+  s_a5df493a72402b::t_d14ff530f5433d 30,98-99,104,140
+src/agent/webview/components/composerVoiceInput.ts
+  h_e08a86bb3a33a2 9-18,21,26-29,34-37,59-64,68,71,74-77,82-87,89-129,131,133-134,136-139,141-151,153-160,162-163,166-193,195,198-199,203,205-207,211-228,243-244,246-247,249
+  s_a5df493a72402b::t_b6f8af8ab54d39 38,240-242,245,248,250
+src/browser-gateway/webview/useBrowserVoiceInput.ts
+  h_e08a86bb3a33a2 10-11,14-16,19,21-22,26,28-33,40-47,55,59,65,71,84-93,98-100,112-118,149-179,183-185,187,190-214,218-223,230-231,233-236,238-240,242-248,250-287,289,294,297-300,302,305-307,313,328,331,333
+  s_3021ff33e26a96::t_999045a4184271 9,12-13,48-49,180,215-217,224-229,232,249,288,290,326-327,329-330,332
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 234,699,3661-3668
+src/shared/voiceInputProtocol.ts
+  h_e08a86bb3a33a2 13-47,53
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 1079
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 10,1202-1275
+  h_e08a86bb3a33a2 1276
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 213-216,5884-5885
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 63,69-79,461-465,469-470,472-473,478,481-486,842-848,1101,1107-1112,1168-1169,2097,2105-2109,2113-2126,2131-2133,2136,2149,2154
+  s_a5df493a72402b::t_345151446f45e6 1099-1100,1102
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 1682
+src/agent/voice/voiceRecorderProtocol.ts
+  h_e08a86bb3a33a2 6-9,19-23,26,29-30
+src/extension.ts
+  h_e08a86bb3a33a2 148,1623-1631,1635-1639
+  s_a5df493a72402b::t_6f4292f312ca68 1640-1641
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 50
+src/shared/voiceActivity.ts
+  h_e08a86bb3a33a2 1-225
+src/agent/webview/styles/voice-input.css
+  h_e08a86bb3a33a2 6-8,18-21,29-34,39
+src/agent/voice/VoiceInputService.test.ts
+  h_e08a86bb3a33a2 11,18,66-67,79,81-83,96,107,109,117-181
+  s_a5df493a72402b::t_15b4461e5cfe5d 65,68,78,80,84,182-183
+src/shared/voiceActivity.test.ts
+  h_e08a86bb3a33a2 1-130
+src/agent/webview/useHostVoiceInput.ts
+  h_e08a86bb3a33a2 1-4,21,38-39,88-97,115-125,127-135,140-141
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 125-126
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_3021ff33e26a96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8676fd40-6e8d-407a-8074-ba88cdc12d7c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a5df493a72402b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da24d9cd-9533-4c3a-9fce-30c8283f8171",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b6896955344203": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca06e6b5-c960-4f97-8787-ddc1bb3f28ca",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
