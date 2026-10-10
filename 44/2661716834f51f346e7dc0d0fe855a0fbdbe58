@@ -1,0 +1,14 @@
+src/agent/webview/components/BackgroundSessionStrip.tsx
+  h_e08a86bb3a33a2 37-38,251-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "442661716834f51f346e7dc0d0fe855a0fbdbe58",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
