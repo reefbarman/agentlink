@@ -2295,13 +2295,89 @@ export class AgentSessionManager {
       this.host.config.getWebAccessSettings?.(),
     ),
   ): Promise<CoreResolvedWebAccessPolicy> {
+    return (await this.resolveWebAccess(session, provider, settings)).policy;
+  }
+
+  /**
+   * Resolve the native web policy and the provider that executes it. When the
+   * session's own provider has no hosted web, another enabled provider may lend
+   * its standalone web transport (for example, a Codex OAuth sign-in), so
+   * web_search/web_fetch stay available on every model.
+   */
+  private async resolveWebAccess(
+    session: AgentSession,
+    provider: ModelProvider | undefined,
+    settings = normalizeCoreWebAccessSettings(
+      this.host.config.getWebAccessSettings?.(),
+    ),
+  ): Promise<{
+    policy: CoreResolvedWebAccessPolicy;
+    webProvider: ModelProvider | undefined;
+  }> {
     const capabilities = provider?.getRequestCapabilities
       ? await provider.getRequestCapabilities(session.model)
       : provider?.getCapabilities(session.model);
-    return resolveCoreWebAccessPolicy({
-      settings,
-      providerCapabilities: capabilities?.hostedWeb,
-    });
+    const ownWeb = capabilities?.hostedWeb;
+    if (ownWeb?.search?.supported || ownWeb?.fetch?.supported) {
+      return {
+        policy: resolveCoreWebAccessPolicy({
+          settings,
+          providerCapabilities: ownWeb,
+        }),
+        webProvider: provider,
+      };
+    }
+    const lenders = this.listNativeWebLenderCandidates(provider);
+    const lender =
+      lenders.length > 0 ? await this.findNativeWebLender(lenders) : undefined;
+    return {
+      policy: resolveCoreWebAccessPolicy({
+        settings,
+        providerCapabilities: lender?.capabilities ?? ownWeb,
+      }),
+      webProvider: lender?.provider ?? provider,
+    };
+  }
+
+  private listNativeWebLenderCandidates(
+    exclude: ModelProvider | undefined,
+  ): ModelProvider[] {
+    const registry = this.host.providers;
+    if (typeof registry.listProviders !== "function") return [];
+    return registry
+      .listProviders()
+      .filter(
+        (candidate) =>
+          candidate !== exclude &&
+          typeof candidate.getLendableWebCapabilities === "function" &&
+          typeof candidate.executeNativeWebTool === "function" &&
+          (typeof registry.isProviderEnabled !== "function" ||
+            registry.isProviderEnabled(candidate.id)),
+      );
+  }
+
+  private async findNativeWebLender(
+    candidates: readonly ModelProvider[],
+  ): Promise<
+    | {
+        provider: ModelProvider;
+        capabilities: NonNullable<ModelCapabilities["hostedWeb"]>;
+      }
+    | undefined
+  > {
+    for (const candidate of candidates) {
+      try {
+        const capabilities = await candidate.getLendableWebCapabilities?.();
+        if (capabilities?.search?.supported || capabilities?.fetch?.supported) {
+          return { provider: candidate, capabilities };
+        }
+      } catch (error) {
+        this.log?.(
+          `[web] ${candidate.id} lendable web capability check failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return undefined;
   }
 
   private async prepareTurnExecution(
@@ -2361,11 +2437,13 @@ export class AgentSessionManager {
         this.notifySessionsChanged();
       }
       const mcpTools = this.cloneMcpToolDefinitions(context);
-      const policy = await this.resolveWebAccessPolicy(
+      const { policy, webProvider } = await this.resolveWebAccess(
         session,
         provider,
         settings,
       );
+      const webProviderIsLent =
+        webProvider !== undefined && webProvider !== provider;
 
       const serverNames = new Set(
         mcpTools
@@ -2394,17 +2472,18 @@ export class AgentSessionManager {
                     );
                   }
                   const hostedTool = route.hostedTool;
+                  const executor = webProvider ?? provider;
                   const priority = session.background
                     ? "background"
                     : "interactive";
                   const schedulerQueued =
                     !this.host.providers.requestScheduler.hasCapacity(
-                      provider.id,
+                      executor.id,
                       priority,
                     );
                   const permitPromise =
                     this.host.providers.requestScheduler.acquire(
-                      provider.id,
+                      executor.id,
                       priority,
                       request.signal,
                     );
@@ -2419,6 +2498,23 @@ export class AgentSessionManager {
                     this.setInteractiveExecutionPhase(session.id, "running");
                   }
                   try {
+                    if (webProviderIsLent) {
+                      // A lent route has no delegated fallback: hosted tools
+                      // would have to run on the lender's model.
+                      const lentResult = await executor.executeNativeWebTool?.({
+                        model: session.model,
+                        kind: request.kind,
+                        input: request.input,
+                        settings: policy.settings,
+                        signal: request.signal,
+                      });
+                      if (lentResult === null || lentResult === undefined) {
+                        throw new Error(
+                          `Native web ${request.kind} is unavailable: ${executor.id} could not serve the request. Use an MCP web tool instead.`,
+                        );
+                      }
+                      return lentResult;
+                    }
                     if (provider.executeNativeWebTool) {
                       try {
                         const directResult =

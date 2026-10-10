@@ -517,8 +517,9 @@ AgentLink's native tools are ordinary function tools from the model's perspectiv
 
 - **ChatGPT/Codex OAuth** first uses the same structured standalone search route as Codex CLI for search, exact-URL open, and find-in-page. This avoids a second model completion, applies result/content limits locally, and falls back automatically to constrained hosted search if the alpha route is unavailable or changes.
 - **OpenAI public API-key Responses** uses hosted search. Page open and find-in-page are actions of the combined hosted search capability, so AgentLink delegates `web_fetch` through that capability rather than sending a separate provider `web_fetch` definition.
+- **Any other model** (Claude, OpenAI-compatible providers, and so on) borrows the ChatGPT/Codex OAuth standalone route when you are signed in to Codex with ChatGPT. Queries and fetched URLs go to OpenAI and count against your Codex usage. A borrowed route has no hosted fallback: if the standalone call fails, the tool returns an error and the model can switch to an MCP web tool. Without a Codex OAuth sign-in, these models get no native web tools and use MCP web tools instead. Browser Ask Agent borrows the Codex OAuth credential leased by the model's owner window, or the shared Codex account store.
 - Unsupported native routes, including routes whose configured domain restrictions cannot be enforced, are omitted from that turn's tool list. Unrelated chat continues normally.
-- AgentLink never silently switches an unsupported native operation to MCP.
+- AgentLink never silently switches an unsupported native operation to MCP. The tool descriptions tell the model to try the native tool first and fall back to a connected MCP web tool when the native tool fails or returns too little.
 
 Provider-hosted execution occurs in the runtime that owns the model request: the extension for VS Code sessions and helper/core for Browser Ask Agent. Browser page JavaScript never performs web fetches and never receives provider credentials.
 
@@ -695,7 +696,7 @@ Browser Ask Agent uses the same bridge semantics over a stricter helper-owned pr
 
 ### web_search
 
-Search the public web through the selected model provider's native web transport. This AgentLink-native tool is exposed only when `agentlink.webAccess.searchBackend` is `native` and the selected provider transport supports search. Codex OAuth uses its low-latency standalone route and falls back to hosted search if needed.
+Search the public web through a native provider web transport. This AgentLink-native tool is exposed only when `agentlink.webAccess.searchBackend` is `native` and either the selected provider supports search or a ChatGPT/Codex OAuth sign-in can lend its standalone route. Codex OAuth uses its low-latency standalone route and, for Codex models only, falls back to hosted search if needed.
 
 | Parameter     | Type                               | Description                                   |
 | ------------- | ---------------------------------- | --------------------------------------------- |
@@ -721,7 +722,7 @@ Structured result counts are capped locally. Any delegated fallback is constrain
 
 ### web_fetch
 
-Open and read a public HTTP or HTTPS URL through the selected model provider's native page-access transport. This AgentLink-native tool is exposed only when `agentlink.webAccess.fetchBackend` is `native` and the provider can perform page access.
+Open and read a public HTTP or HTTPS URL through a native provider page-access transport. This AgentLink-native tool is exposed only when `agentlink.webAccess.fetchBackend` is `native` and either the selected provider can perform page access or a ChatGPT/Codex OAuth sign-in can lend its standalone route.
 
 For Codex OAuth, page open and find-in-page are direct standalone search commands. OpenAI API-key requests and compatibility fallback use the combined hosted `web_search` capability rather than sending a separate provider `web_fetch` definition.
 

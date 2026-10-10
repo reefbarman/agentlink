@@ -202,6 +202,7 @@ import {
 } from "@agentlink/protocol/prompt-profile";
 import { resolvePromptProfile } from "@agentlink/core/prompt-profile";
 import {
+  CODEX_DEFAULT_MODEL,
   CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID,
   getCodexModelCapabilities,
   transcribeCodexAudio,
@@ -376,6 +377,11 @@ export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
   standaloneMcpTurn?: StandaloneAskAgentMcpTurn;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
+  /**
+   * Codex OAuth credential lent to native web tools when the session's own
+   * provider has no hosted web. Lent routes never delegate to hosted tools.
+   */
+  lentWebCredential?: BrowserGatewayModelCredentialRecord;
   tools: readonly CoreModelToolDefinition[];
   parallelSafeMcpToolNames: readonly string[];
   parallelSafeMcpServerNames: readonly string[];
@@ -6585,28 +6591,39 @@ export class BrowserGatewayHelper {
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
       modelContext.providerId,
     );
+    const ownsHostedWeb =
+      providerId === "openai-codex" && modelContext.credential !== undefined;
+    const lentWebCredential = ownsHostedWeb
+      ? undefined
+      : await this.resolveAskAgentLentCodexWebCredential(
+          modelContext.modelOwnerId,
+        );
     const providerCapabilities =
-      providerId === "openai-codex" && modelContext.credential
+      ownsHostedWeb && modelContext.credential
         ? getCodexModelCapabilities(
             modelContext.model,
             modelContext.credential.method,
           ).hostedWeb
-        : undefined;
+        : lentWebCredential
+          ? getCodexModelCapabilities(CODEX_DEFAULT_MODEL, "oauth").hostedWeb
+          : undefined;
     const policy = resolveCoreWebAccessPolicy({
       settings,
       providerCapabilities,
     });
 
-    const nativeTools = modelContext.credential
-      ? policy.enabledKinds.map(
-          (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
-        )
-      : [];
+    const nativeTools =
+      modelContext.credential || lentWebCredential
+        ? policy.enabledKinds.map(
+            (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
+          )
+        : [];
     const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
       codexUseWebSocket,
       ...(standaloneMcpTurn ? { standaloneMcpTurn } : {}),
+      ...(lentWebCredential ? { lentWebCredential } : {}),
       policy: freezeAskAgentValue(policy),
       tools: freezeAskAgentValue(tools),
       parallelSafeMcpToolNames: freezeAskAgentValue(
@@ -7713,12 +7730,60 @@ export class BrowserGatewayHelper {
     }
   }
 
+  /**
+   * Codex OAuth credential that native web tools may borrow when the Ask Agent
+   * model's provider has no hosted web: the owner-leased Codex credential, or
+   * the shared Keychain pool when no owner has leased one.
+   */
+  private async resolveAskAgentLentCodexWebCredential(
+    modelOwnerId: string,
+  ): Promise<BrowserGatewayModelCredentialRecord | undefined> {
+    const snapshot = this.getModelCatalogSnapshot(modelOwnerId);
+    const leased = snapshot
+      ? this.modelCredentialCache.getCredential({
+          grantedByOwnerId: snapshot.publishedByOwnerId,
+          grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+          providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+          modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+          now: Date.now(),
+        })
+      : null;
+    if (leased?.method === "oauth") return leased;
+    if (!this.sharedCodexOAuth) return undefined;
+    try {
+      const auth = await this.sharedCodexOAuth.provider.resolveAuth({
+        context: { sessionId: this.askAgentSessionStore.getActiveSessionId() },
+        modelId: CODEX_DEFAULT_MODEL,
+        purpose: "nativeWeb",
+      });
+      if (auth?.method !== "oauth") return undefined;
+      return {
+        providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+        method: "oauth",
+        bearerToken: auth.bearerToken,
+        grantedByOwnerId: modelOwnerId,
+        grantedByOwnerGenerationId: "shared-codex-oauth",
+        modelScopes: [BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE],
+        grantedAt: Date.now(),
+        accountId: auth.accountId,
+        accountLabel: auth.oauthAccountLabel ?? auth.oauthAccountEmail,
+        canRefresh: auth.canRefresh === true,
+      };
+    } catch (error) {
+      logHelper(
+        `[web] Shared Codex credential lookup for native web unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
   private async executeAskAgentNativeWebTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     policy: Readonly<CoreResolvedWebAccessPolicy>,
     credential: BrowserGatewayModelCredentialRecord,
     model: string,
     signal: AbortSignal,
+    lent = false,
   ): Promise<AskAgentToolExecutionResult> {
     const kind = toolCall.name === "web_search" ? "search" : "fetch";
     const route = policy.routes[kind];
@@ -7769,11 +7834,14 @@ export class BrowserGatewayHelper {
         }
       } catch (error) {
         if (signal.aborted) throw error;
+        // A lent credential cannot delegate: hosted tools need the lender's model.
         const canDelegateHosted =
-          this.askAgentModelClient.supportsHostedTools?.({
+          !lent &&
+          (this.askAgentModelClient.supportsHostedTools?.({
             credential,
             model,
-          }) ?? true;
+          }) ??
+            true);
         this.logAskAgentEvent(`ask-agent.tool.web_${kind}.standalone`, {
           ok: false,
           fallback: canDelegateHosted ? "delegated" : "unavailable",
@@ -7935,6 +8003,17 @@ export class BrowserGatewayHelper {
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
     if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
+      const lentCredential = preparedWebAccess.lentWebCredential;
+      if (lentCredential) {
+        return await this.executeAskAgentNativeWebTool(
+          toolCall,
+          preparedWebAccess.policy,
+          lentCredential,
+          CODEX_DEFAULT_MODEL,
+          signal,
+          true,
+        );
+      }
       if (!credential) {
         throw new Error(
           "browser_gateway_native_web_unavailable:credential_missing",

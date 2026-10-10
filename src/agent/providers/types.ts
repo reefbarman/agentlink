@@ -7,6 +7,10 @@
  */
 
 import type {
+  CoreHostedWebCapabilities,
+  CoreWebAccessSettings,
+} from "@agentlink/protocol/web-access-policy";
+import type {
   CoreModelCacheOptions,
   CoreModelCapabilities,
   CoreModelCompleteRequest,
@@ -31,7 +35,6 @@ import type {
   CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
 
-import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 import { toCoreModelImageMediaType } from "@agentlink/core/model-runtime";
 
@@ -161,6 +164,15 @@ export interface ModelProvider {
     settings: CoreWebAccessSettings;
     signal?: AbortSignal;
   }): Promise<unknown | null>;
+
+  /**
+   * Optional: web capabilities this provider can serve through
+   * `executeNativeWebTool` for sessions running on other providers' models.
+   * Resolves undefined when the standalone transport is unavailable (for
+   * example, the required credential is not signed in). Lent routes never use
+   * delegated hosted-tool execution, because that needs the lender's model.
+   */
+  getLendableWebCapabilities?(): Promise<CoreHostedWebCapabilities | undefined>;
 }
 
 export interface ModelInfo {

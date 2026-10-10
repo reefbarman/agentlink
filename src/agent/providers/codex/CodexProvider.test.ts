@@ -1,9 +1,9 @@
+import { CODEX_DEFAULT_MODEL, CodexTurnState } from "@agentlink/core/codex";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentEngine } from "../../AgentEngine.js";
 import { AgentSession } from "../../AgentSession.js";
 import { CodexProvider } from "./CodexProvider.js";
-import { CodexTurnState } from "@agentlink/core/codex";
 import { ProviderRegistry } from "../index.js";
 import { createProjectlessSessionScope } from "@agentlink/protocol/workspace-project";
 
@@ -116,6 +116,49 @@ describe("CodexProvider native web", () => {
     expect(result).toMatchObject({
       output_file: "/tmp/agentlink-output-test/output.txt",
     });
+  });
+
+  it("lends standalone web capabilities only when a Codex sign-in exists", async () => {
+    await expect(
+      new CodexProvider(
+        makeAuthManager() as never,
+      ).getLendableWebCapabilities(),
+    ).resolves.toMatchObject({
+      search: { supported: true, supportsPageAccess: true },
+    });
+    await expect(
+      new CodexProvider(
+        makeAuthManager({
+          getPreferredAuthMethod: vi.fn().mockResolvedValue(null),
+        }) as never,
+      ).getLendableWebCapabilities(),
+    ).resolves.toBeUndefined();
+  });
+
+  it("uses the default Codex model when another provider's session borrows web", async () => {
+    executeCodexStandaloneWebMock.mockResolvedValueOnce({ content: "ok" });
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    await provider.executeNativeWebTool({
+      model: "claude-opus-5-5",
+      kind: "search",
+      input: { query: "agentlink" },
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        nativeSearchMode: "cached",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 3,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25_000,
+        maxReplayBytesPerTurn: 5_242_880,
+      },
+    });
+
+    expect(executeCodexStandaloneWebMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: CODEX_DEFAULT_MODEL }),
+    );
   });
 });
 

@@ -8176,6 +8176,133 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
   });
 
+  it("lends a Codex OAuth credential to native web for a provider without hosted web", async () => {
+    const customProviderId = "openai-compatible:openrouter-main";
+    const customModelId = "openrouter-moonshotai-kimi-k3";
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const executeNativeWebTool = vi.fn(async () => ({
+      backend: "provider" as const,
+      provider: "codex",
+      operation: "search" as const,
+      input: { query: "AgentLink" },
+      activities: [],
+      content: "Lent search result.",
+      citations: [],
+    }));
+    const modelClient = {
+      ...makeAskAgentToolLoopClient(async (params) => {
+        completionParams.push(params);
+        if (params.toolMessages?.length) {
+          expect(JSON.stringify(params.toolMessages)).toContain(
+            "Lent search result.",
+          );
+          return { text: "Done.", toolCalls: [] };
+        }
+        expect(params.tools?.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining(["web_search", "web_fetch"]),
+        );
+        return {
+          text: "Searching.",
+          toolCalls: [
+            {
+              id: "lent-search-1",
+              name: "web_search",
+              input: { query: "AgentLink" },
+            },
+          ],
+        };
+      }),
+      executeNativeWebTool,
+    };
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+      providerId: customProviderId,
+      model: {
+        id: customModelId,
+        displayName: "Kimi K3",
+        providerId: customProviderId,
+        providerDisplayName: "OpenRouter",
+        supportsToolUse: true,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+        authenticated: true,
+      },
+      openAiCompatibleRuntimeProfiles: {
+        [customProviderId]: {
+          providerId: customProviderId,
+          baseUrl: "https://openrouter.ai/api/v1",
+          profile: "openrouter",
+          headers: {},
+          timeoutMs: 30_000,
+          authRequired: true,
+          models: {
+            [customModelId]: {
+              id: customModelId,
+              model: "moonshotai/kimi-k3",
+              capabilities: {
+                supportsThinking: false,
+                supportsCaching: false,
+                supportsImages: false,
+                supportsToolUse: true,
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+              },
+            },
+          },
+        },
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    const codexGrant = await fetch(
+      `${harness.helperBase}/internal/model-auth/credentials`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${discovery.clientSharedSecret}`,
+        },
+        body: JSON.stringify({
+          providerId: "openai-codex",
+          method: "oauth",
+          bearerToken: "lent-codex-token",
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+          modelScopes: ["chat"],
+          helperGenerationId: discovery.helperGenerationId,
+          ttlMs: 60_000,
+        }),
+      },
+    );
+    expect(codexGrant.ok).toBe(true);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search the web" }),
+    });
+
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(2);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    expect(executeNativeWebTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-sol",
+        kind: "search",
+        credential: expect.objectContaining({
+          providerId: "openai-codex",
+          method: "oauth",
+          bearerToken: "lent-codex-token",
+        }),
+      }),
+    );
+  });
+
   it("executes native web search as an ordinary tool call while keeping provider replay private", async () => {
     const primaryRequests: string[] = [];
     const fallbackRequests: string[] = [];
