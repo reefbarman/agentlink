@@ -1,0 +1,50 @@
+packages/core/src/codex/transcriptionFetch.ts
+  h_e08a86bb3a33a2 1-76
+packages/core/README.md
+  h_e08a86bb3a33a2 179
+packages/core/src/codex/transcription.ts
+  h_e08a86bb3a33a2 9,65-70,167
+CHANGELOG.md
+  h_e08a86bb3a33a2 10
+packages/core/src/codex/transcriptionFetch.test.ts
+  h_e08a86bb3a33a2 1-115
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_e08a86bb3a33a2 319
+packages/core/package.json
+  h_e08a86bb3a33a2 396-397
+packages/core/src/codex.ts
+  h_e08a86bb3a33a2 21-25
+packages/core/docs/voice-input.md
+  h_e08a86bb3a33a2 409
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+package.json
+  s_221059000c1cd5::t_1a23375302682d 5
+package-lock.json
+  h_e08a86bb3a33a2 3,9,14406-14407
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_221059000c1cd5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37314433-c682-4bfb-9bb8-7af7a137976d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
