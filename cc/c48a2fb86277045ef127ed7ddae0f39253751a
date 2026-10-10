@@ -1,0 +1,87 @@
+src/browser-gateway/webview/DesktopRemotePane.tsx
+  h_e08a86bb3a33a2 2,8-12,16-18,21-24,56-59,70-110,113,117-124
+  s_088eecc8e34393::t_3c1b1f2dd40c51 60-69
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 20-23,62-63,94-103,170-173
+  s_088eecc8e34393::t_683d9bcdedb803 174-175
+src/shared/assistantAddress.test.ts
+  h_e08a86bb3a33a2 1-35
+apps/desktop/src/setup.css
+  h_e08a86bb3a33a2 247-251
+src/browser-gateway/webview/AssistantLauncher.tsx
+  h_e08a86bb3a33a2 1-124
+apps/desktop/src/DesktopAssistantView.ts
+  h_e08a86bb3a33a2 1-312
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 42,44-47,80,410-415,428,801-809
+  s_088eecc8e34393::t_056b8b16bd5eb2 43,810
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 755-841
+  s_088eecc8e34393::t_7c68a43bf64032 842-843
+apps/desktop/src/desktopAssistantSettings.test.ts
+  h_e08a86bb3a33a2 1-95
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 58,1425-1430,8480,8487-8489,8946-8948,9012-9017,9033
+  s_088eecc8e34393::t_576e2c6f583165 8479,8481,8486,8490
+apps/desktop/src/setup.html
+  h_e08a86bb3a33a2 104-158
+apps/desktop/src/desktopPreferences.ts
+  h_e08a86bb3a33a2 10-13
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 26-27,4346-4395,4492-4555
+  s_088eecc8e34393::t_c0c7befad83d6e 25,28,4556-4562
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 65-66,73
+apps/desktop/src/desktopAssistantTrust.ts
+  h_e08a86bb3a33a2 1-77
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+apps/desktop/src/preload.ts
+  h_e08a86bb3a33a2 18-23,62-68
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 4,51-68
+  s_088eecc8e34393::t_7b2cf088ff300c 69
+apps/desktop/src/desktopAssistantTrust.test.ts
+  h_e08a86bb3a33a2 1-110
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 149
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 54,65,110-136
+  h_e08a86bb3a33a2 137
+apps/desktop/src/setup.ts
+  h_e08a86bb3a33a2 21-26,60-64,570-660
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 8,19-29,57-61
+apps/desktop/src/DesktopRemoteView.ts
+  h_e08a86bb3a33a2 26-27,183
+  s_088eecc8e34393::t_0d55fdca8c5caf 25
+src/shared/assistantAddress.ts
+  h_e08a86bb3a33a2 1-30
+apps/desktop/src/DesktopAssistantView.test.ts
+  h_e08a86bb3a33a2 1-296
+apps/desktop/src/desktopAssistantSettings.ts
+  h_e08a86bb3a33a2 1-86
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ccc48a2fb86277045ef127ed7ddae0f39253751a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_088eecc8e34393": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b34bf175-dcc2-4ed4-a992-6268a03c496f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
