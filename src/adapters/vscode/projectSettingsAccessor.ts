@@ -75,6 +75,8 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "showThinking",
   "codex.textVerbosity",
   "codex.useWebSocket",
+  "voiceInput.autoStopAfterSilenceMs",
+  "voiceInput.autoSend",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

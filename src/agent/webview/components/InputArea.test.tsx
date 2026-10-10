@@ -7,6 +7,7 @@ import { InputArea, type ComposerContextMode } from "./InputArea";
 import {
   insertTranscript,
   type ComposerVoiceInput,
+  type ComposerVoiceSessionListener,
 } from "./composerVoiceInput";
 import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
@@ -1197,5 +1198,80 @@ describe("composer voice input", () => {
     fireEvent.click(mic());
 
     expect(await findByText("Voice input failed: Sign in again")).toBeTruthy();
+  });
+
+  it("streams utterances into the draft and auto-sends after a pause", async () => {
+    let listener: ComposerVoiceSessionListener | undefined;
+    const onSend = vi.fn();
+    const voiceInput = voiceBackend({
+      autoSend: true,
+      start: vi.fn(async (next: ComposerVoiceSessionListener) => {
+        listener = next;
+      }),
+      finish: vi.fn(async () => "and run the tests"),
+    });
+    const { container } = renderInputArea([], { voiceInput, onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    listener!.onPartial("Open the readme.");
+    await waitFor(() => expect(input.value).toBe("Open the readme."));
+    expect(onSend).not.toHaveBeenCalled();
+
+    listener!.onAutoStop();
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0]![0]).toBe("Open the readme. and run the tests");
+  });
+
+  it("keeps a manually stopped dictation as a draft even with auto-send", async () => {
+    const onSend = vi.fn();
+    const voiceInput = voiceBackend({ autoSend: true });
+    const { container } = renderInputArea([], { voiceInput, onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.click(mic());
+    await waitFor(() => expect(input.value).toBe("open the readme"));
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("records while Alt+M is held and ignores auto-stop until release", async () => {
+    let listener: ComposerVoiceSessionListener | undefined;
+    const voiceInput = voiceBackend({
+      start: vi.fn(async (next: ComposerVoiceSessionListener) => {
+        listener = next;
+      }),
+    });
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000);
+      fireEvent.keyDown(input, { key: "µ", code: "KeyM", altKey: true });
+      await waitFor(() =>
+        expect(mic().getAttribute("aria-pressed")).toBe("true"),
+      );
+      listener!.onAutoStop();
+      expect(voiceInput.finish).not.toHaveBeenCalled();
+
+      now.mockReturnValue(3_000);
+      fireEvent.keyUp(input, { key: "Alt", code: "AltLeft" });
+      await waitFor(() => expect(input.value).toBe("open the readme"));
+      expect(voiceInput.finish).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

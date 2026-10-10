@@ -60,10 +60,22 @@ import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";
 import { useFileMentionPopup } from "./useFileMentionPopup";
 import {
+  formatVoiceElapsed,
   insertTranscript,
   useComposerVoiceInput,
   type ComposerVoiceInput,
 } from "./composerVoiceInput";
+
+/** Alt+M: hold for push-to-talk, tap to toggle dictation. */
+function isVoiceShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.code === "KeyM" &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
+}
 
 export interface ComposerMedia {
   name: string;
@@ -446,16 +458,32 @@ export function InputArea({
       autosizeTextarea(current);
     });
   }, []);
+  const [voiceAutoSendPending, setVoiceAutoSendPending] = useState(false);
+  const requestVoiceAutoSend = useCallback(
+    () => setVoiceAutoSendPending(true),
+    [],
+  );
   const {
     status: voiceStatus,
     error: voiceError,
+    level: voiceLevel,
+    elapsedMs: voiceElapsedMs,
     toggle: toggleVoice,
+    pressStart: pressVoiceStart,
+    pressEnd: pressVoiceEnd,
     cancel: cancelVoice,
   } = useComposerVoiceInput({
     voiceInput,
     onTranscript: handleVoiceTranscript,
+    onAutoSend: requestVoiceAutoSend,
     onEvent: onComposerEvent,
   });
+  const handleVoiceShortcutKeyUp = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.code === "KeyM" || event.key === "Alt") pressVoiceEnd();
+    },
+    [pressVoiceEnd],
+  );
 
   const handleUndoPolish = useCallback(() => {
     if (!lastPolish) return;
@@ -811,6 +839,13 @@ export function InputArea({
     ],
   );
 
+  // Hands-free dictation: submit once the final transcript is in the draft.
+  useEffect(() => {
+    if (!voiceAutoSendPending) return;
+    setVoiceAutoSendPending(false);
+    if (text.trim()) handleSubmit();
+  }, [voiceAutoSendPending, text, handleSubmit]);
+
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
     "new",
@@ -1061,9 +1096,18 @@ export function InputArea({
       ) {
         return;
       }
-      if (e.key === "Escape" && voiceStatus === "recording") {
+      if (
+        e.key === "Escape" &&
+        (voiceStatus === "recording" || voiceStatus === "starting")
+      ) {
         e.preventDefault();
         cancelVoice();
+        return;
+      }
+      if (voiceInput && isVoiceShortcut(e)) {
+        // Option+M would otherwise type "µ" on macOS.
+        e.preventDefault();
+        if (!e.repeat && !voiceInput?.disabledReason) pressVoiceStart();
         return;
       }
       if (
@@ -1121,6 +1165,8 @@ export function InputArea({
       onComposerEvent,
       voiceStatus,
       cancelVoice,
+      voiceInput,
+      pressVoiceStart,
     ],
   );
 
@@ -2048,6 +2094,7 @@ export function InputArea({
               disabled={disabled}
               onInput={handleInput}
               onKeyDown={handleKeyDown}
+              onKeyUp={handleVoiceShortcutKeyUp}
               onPaste={handlePaste}
               rows={1}
               onDragOver={handleDragOver}
@@ -2055,20 +2102,41 @@ export function InputArea({
               onDrop={handleDrop}
             />
             <div class="composer-action-buttons">
+              {voiceInput && voiceStatus === "recording" && (
+                <span class="voice-input-timer" aria-live="off">
+                  {formatVoiceElapsed(voiceElapsedMs)}
+                </span>
+              )}
               {voiceInput && (
                 <button
                   class={`send-button voice-input-button voice-input-${voiceStatus}`}
-                  onClick={() => void toggleVoice()}
+                  style={{ "--voice-level": String(voiceLevel) }}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    // Keep focus (and the caret) in the draft.
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
+                    pressVoiceStart();
+                  }}
+                  onPointerUp={pressVoiceEnd}
+                  onPointerCancel={pressVoiceEnd}
+                  onClick={(event) => {
+                    // Pointer presses are handled above; this is Enter/Space.
+                    if (event.detail === 0) void toggleVoice();
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.preventDefault();
                       cancelVoice();
+                    } else if (isVoiceShortcut(event)) {
+                      event.preventDefault();
+                      if (!event.repeat) pressVoiceStart();
                     }
                   }}
+                  onKeyUp={handleVoiceShortcutKeyUp}
                   disabled={
                     Boolean(voiceInput.disabledReason) ||
                     (disabled && voiceStatus === "idle") ||
-                    voiceStatus === "starting" ||
                     voiceStatus === "transcribing"
                   }
                   aria-pressed={voiceStatus === "recording"}
@@ -2078,12 +2146,12 @@ export function InputArea({
                   title={
                     voiceInput.disabledReason ??
                     (voiceStatus === "recording"
-                      ? "Stop and transcribe (Esc to cancel)"
+                      ? "Click to stop, or pause to finish automatically (Esc cancels)"
                       : voiceStatus === "transcribing"
                         ? "Transcribing…"
                         : voiceStatus === "starting"
                           ? "Starting microphone…"
-                          : "Dictate with voice (uses your ChatGPT/Codex subscription)")
+                          : "Dictate with voice: click, or hold to talk (Alt+M). Uses your ChatGPT/Codex subscription")
                   }
                   type="button"
                 >

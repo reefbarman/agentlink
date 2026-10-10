@@ -210,9 +210,10 @@ import {
 } from "@agentlink/core/codex";
 import { decodeVoiceTranscribeBody } from "../voiceInputHttp.js";
 import { agentLinkTranscriptionFetch } from "../../util/httpDispatcher.js";
-import type {
-  VoiceInputAvailabilityResponse,
-  VoiceTranscribeResponse,
+import {
+  DEFAULT_VOICE_INPUT_PREFERENCES,
+  type VoiceInputAvailabilityResponse,
+  type VoiceTranscribeResponse,
 } from "../../shared/voiceInputProtocol.js";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 
@@ -5880,7 +5881,8 @@ export class BrowserGatewayHelper {
       res,
       200,
       (auth
-        ? { available: true }
+        ? // The helper has no VS Code settings, so Ask Agent uses defaults.
+          { available: true, preferences: DEFAULT_VOICE_INPUT_PREFERENCES }
         : {
             available: false,
             hidden: true,

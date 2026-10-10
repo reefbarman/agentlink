@@ -523,6 +523,20 @@
           "default": 5242880,
           "description": "Maximum private provider replay bytes retained for exact hosted-tool continuation. Oversized replay is discarded rather than truncated and is never exposed in browser or transcript projections."
         },
+        "agentlink.voiceInput.autoStopAfterSilenceMs": {
+          "scope": "window",
+          "type": "number",
+          "default": 2000,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Composer voice input stops by itself after this many milliseconds of silence once you have started talking, and after 10 seconds if it never hears speech. Set to 0 to keep recording until you click the mic again. Holding the mic button or Alt+M always records until release."
+        },
+        "agentlink.voiceInput.autoSend": {
+          "scope": "window",
+          "type": "boolean",
+          "default": false,
+          "description": "Send the message automatically when voice input finishes by itself (silence) or when you release a held mic button or Alt+M. Clicking the mic to stop still leaves the text in the draft for review."
+        },
         "agentlink.browserGatewayPort": {
           "scope": "window",
           "type": "number",

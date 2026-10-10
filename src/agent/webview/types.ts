@@ -36,6 +36,10 @@ import type {
   StructuredQuestionRequest,
   UserQuestion,
 } from "@agentlink/protocol/structured-question";
+import type {
+  VoiceInputLiveEvent,
+  VoiceInputPreferences,
+} from "../../shared/voiceInputProtocol";
 
 import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
 import type { ChatSessionHistorySummary } from "@agentlink/protocol/chat-session-history";
@@ -62,12 +66,12 @@ export type ProviderUsageCardData =
 export type Question = UserQuestion;
 export type QuestionRequest = StructuredQuestionRequest;
 
-/** Consumption vs. limits for a /btw side question, shown as a visible budget. */
 /** Host voice input state; hidden without a ChatGPT/Codex subscription. */
 export type VoiceInputAvailabilityState =
-  | { available: true }
+  | { available: true; preferences?: VoiceInputPreferences }
   | { available: false; hidden: boolean; reason: string };
 
+/** Consumption vs. limits for a /btw side question, shown as a visible budget. */
 export interface BtwBudget {
   apiTurns: number;
   maxApiTurns: number;
@@ -409,6 +413,7 @@ export type ExtensionMessage =
       type: "voiceInputAvailability";
       availability: VoiceInputAvailabilityState;
     }
+  | { type: "voiceInputEvent"; ownerId: string; event: VoiceInputLiveEvent }
   | {
       type: "voiceInputResult";
       requestId: string;

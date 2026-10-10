@@ -3,6 +3,9 @@
 .send-button.voice-input-button {
   background: transparent;
   color: var(--vscode-foreground);
+  /* Pointer presses drive hold-to-talk; avoid text selection/scroll. */
+  touch-action: none;
+  user-select: none;
 }
 
 .send-button.voice-input-button:hover:not(:disabled) {
@@ -12,7 +15,10 @@
 .send-button.voice-input-button.voice-input-recording {
   background: var(--vscode-errorForeground, #f44);
   color: var(--vscode-button-foreground, #fff);
-  animation: voice-input-pulse 1.4s ease-in-out infinite;
+  /* The ring grows with the live microphone level (--voice-level, 0..1). */
+  box-shadow: 0 0 0 calc(1px + var(--voice-level, 0) * 6px)
+    color-mix(in srgb, var(--vscode-errorForeground, #f44) 40%, transparent);
+  transition: box-shadow 90ms linear;
 }
 
 .send-button.voice-input-button.voice-input-recording:hover:not(:disabled) {
@@ -20,20 +26,16 @@
   opacity: 0.9;
 }
 
-@keyframes voice-input-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0
-      color-mix(in srgb, var(--vscode-errorForeground, #f44) 55%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px
-      color-mix(in srgb, var(--vscode-errorForeground, #f44) 0%, transparent);
-  }
+.voice-input-timer {
+  align-self: center;
+  margin-right: 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .send-button.voice-input-button.voice-input-recording {
-    animation: none;
+    transition: none;
   }
 }

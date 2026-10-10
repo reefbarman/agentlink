@@ -13,7 +13,12 @@ import type {
   VoiceRecorderWorkerData,
   VoiceRecorderWorkerReply,
 } from "./voiceRecorderProtocol.js";
-import { encodeWavPcm16 } from "./wavEncoding.js";
+import { encodeWavPcm16 } from "../../shared/wavEncoding.js";
+import {
+  DEFAULT_VOICE_INPUT_PREFERENCES,
+  VOICE_INPUT_NO_SPEECH_TIMEOUT_MS,
+  type VoiceInputPreferences,
+} from "../../shared/voiceInputProtocol.js";
 
 /** Ten minutes of 16 kHz PCM is about 19 MB of WAV, under the 25 MB limit. */
 export const VOICE_INPUT_MAX_DURATION_SECONDS = 600;
@@ -21,7 +26,7 @@ const RECORDER_SAMPLE_RATE = 16_000;
 const MIN_TRANSCRIBABLE_SAMPLES = RECORDER_SAMPLE_RATE / 4;
 
 export type VoiceInputAvailability =
-  | { available: true }
+  | { available: true; preferences: VoiceInputPreferences }
   | {
       available: false;
       /** Hidden when the user has no ChatGPT/Codex subscription. */
@@ -35,13 +40,37 @@ export interface CapturedVoiceAudio {
 }
 
 export interface VoiceCapture {
-  finish(): Promise<CapturedVoiceAudio>;
+  /** Resolves with audio not yet emitted as a segment, plus the peak. */
+  finish(): Promise<CapturedVoiceAudio & { peak: number }>;
   cancel(): void;
 }
 
 export type StartVoiceCapture = (options: {
   maxSamples: number;
+  autoStopMs: number;
+  noSpeechTimeoutMs: number;
+  /** An utterance cut at a pause while recording continues. */
+  onSegment: (audio: CapturedVoiceAudio) => void;
+  onLevel: (level: number) => void;
+  onAutoStop: () => void;
 }) => Promise<VoiceCapture>;
+
+/** Live feedback for one dictation. */
+export interface VoiceSessionListener {
+  /** Text for an utterance transcribed while recording continues. */
+  onPartial?: (text: string) => void;
+  onLevel?: (level: number) => void;
+  /** The speaker went quiet; the client decides whether to finish. */
+  onAutoStop?: () => void;
+}
+
+interface VoiceSession {
+  listener: VoiceSessionListener;
+  chain: Promise<void>;
+  segments: number;
+  cancelled: boolean;
+  error?: Error;
+}
 
 export interface VoiceInputServiceOptions {
   hasCodexSubscription: () => Promise<boolean>;
@@ -56,6 +85,7 @@ export interface VoiceInputServiceOptions {
    * pass a fetch with an accepted TLS configuration.
    */
   fetch?: typeof globalThis.fetch;
+  getPreferences?: () => VoiceInputPreferences;
   log?: (message: string) => void;
 }
 
@@ -65,7 +95,11 @@ export interface VoiceInputServiceOptions {
  * active at a time; starting from another owner cancels the previous one.
  */
 export class VoiceInputService {
-  private active: { ownerId: string; capture: VoiceCapture } | null = null;
+  private active: {
+    ownerId: string;
+    capture: VoiceCapture;
+    session: VoiceSession;
+  } | null = null;
   private readonly transcribe: typeof transcribeCodexAudio;
 
   constructor(private readonly options: VoiceInputServiceOptions) {
@@ -86,39 +120,86 @@ export class VoiceInputService {
       const reason = this.options.recorderUnavailableReason();
       if (reason) return { available: false, hidden: false, reason };
     }
-    return { available: true };
+    return { available: true, preferences: this.preferences() };
   }
 
-  async start(ownerId: string): Promise<void> {
+  private preferences(): VoiceInputPreferences {
+    return this.options.getPreferences?.() ?? DEFAULT_VOICE_INPUT_PREFERENCES;
+  }
+
+  async start(
+    ownerId: string,
+    listener: VoiceSessionListener = {},
+  ): Promise<void> {
     const availability = await this.getAvailability();
     if (!availability.available) throw new Error(availability.reason);
     this.cancel();
+    const { autoStopAfterSilenceMs } = availability.preferences;
+    const session: VoiceSession = {
+      listener,
+      chain: Promise.resolve(),
+      segments: 0,
+      cancelled: false,
+    };
     const capture = await this.options.startCapture({
       maxSamples: VOICE_INPUT_MAX_DURATION_SECONDS * RECORDER_SAMPLE_RATE,
+      autoStopMs: autoStopAfterSilenceMs,
+      noSpeechTimeoutMs:
+        autoStopAfterSilenceMs > 0 ? VOICE_INPUT_NO_SPEECH_TIMEOUT_MS : 0,
+      onSegment: (audio) => this.queueSegment(session, audio),
+      onLevel: (level) => {
+        if (!session.cancelled) listener.onLevel?.(level);
+      },
+      onAutoStop: () => {
+        if (!session.cancelled) listener.onAutoStop?.();
+      },
     });
-    this.active = { ownerId, capture };
+    this.active = { ownerId, capture, session };
   }
 
+  /** Transcribes utterances in order while the user keeps talking. */
+  private queueSegment(session: VoiceSession, audio: CapturedVoiceAudio): void {
+    if (session.cancelled || audio.pcm.length < MIN_TRANSCRIBABLE_SAMPLES) {
+      return;
+    }
+    session.segments += 1;
+    session.chain = session.chain.then(async () => {
+      if (session.cancelled || session.error) return;
+      try {
+        const text = await this.transcribeAudio(toWav(audio));
+        if (!session.cancelled && text.trim()) {
+          session.listener.onPartial?.(text);
+        }
+      } catch (error) {
+        session.error ??=
+          error instanceof Error ? error : new Error(String(error));
+      }
+    });
+  }
+
+  /**
+   * Stops recording and resolves with the text of the final utterance.
+   * Earlier utterances were already delivered through `onPartial`.
+   */
   async finish(ownerId: string): Promise<string> {
     const active = this.active;
     if (!active || active.ownerId !== ownerId) {
       throw new Error("Voice recording is no longer active.");
     }
     this.active = null;
+    const { session } = active;
     const audio = await active.capture.finish();
-    if (audio.pcm.length < MIN_TRANSCRIBABLE_SAMPLES) {
-      return "";
-    }
-    if (audio.pcm.every((sample) => sample === 0)) {
+    await session.chain;
+    if (session.error) throw session.error;
+    if (audio.peak === 0 && session.segments === 0) {
       throw new Error(
         "The microphone recorded only silence. Check that VS Code is allowed to use the microphone (macOS: System Settings > Privacy & Security > Microphone).",
       );
     }
-    return await this.transcribeAudio({
-      data: encodeWavPcm16(audio.pcm, audio.sampleRate),
-      mimeType: "audio/wav",
-      filename: "voice-input.wav",
-    });
+    if (audio.pcm.length < MIN_TRANSCRIBABLE_SAMPLES) {
+      return "";
+    }
+    return await this.transcribeAudio(toWav(audio));
   }
 
   /** Cancels the active capture, or only the owner's capture when given. */
@@ -126,6 +207,7 @@ export class VoiceInputService {
     const active = this.active;
     if (!active || (ownerId && active.ownerId !== ownerId)) return;
     this.active = null;
+    active.session.cancelled = true;
     active.capture.cancel();
   }
 
@@ -149,6 +231,14 @@ export class VoiceInputService {
   dispose(): void {
     this.cancel();
   }
+}
+
+function toWav(audio: CapturedVoiceAudio): CodexTranscriptionAudio {
+  return {
+    data: encodeWavPcm16(audio.pcm, audio.sampleRate),
+    mimeType: "audio/wav",
+    filename: "voice-input.wav",
+  };
 }
 
 const VOICE_RECORDER_PLATFORMS = new Set([
@@ -191,13 +281,24 @@ export function getBundledRecorderUnavailableReason(
 export function createWorkerVoiceCapture(
   workerPath: string,
 ): StartVoiceCapture {
-  return async ({ maxSamples }) => {
+  return async ({
+    maxSamples,
+    autoStopMs,
+    noSpeechTimeoutMs,
+    onSegment,
+    onLevel,
+    onAutoStop,
+  }) => {
     const worker = new Worker(workerPath, {
-      workerData: { maxSamples } satisfies VoiceRecorderWorkerData,
+      workerData: {
+        maxSamples,
+        autoStopMs,
+        noSpeechTimeoutMs,
+      } satisfies VoiceRecorderWorkerData,
     });
     let settleFinish:
       | {
-          resolve: (audio: CapturedVoiceAudio) => void;
+          resolve: (audio: CapturedVoiceAudio & { peak: number }) => void;
           reject: (error: Error) => void;
         }
       | undefined;
@@ -211,10 +312,23 @@ export function createWorkerVoiceCapture(
           case "started":
             resolve();
             break;
+          case "level":
+            onLevel(message.level);
+            break;
+          case "segment":
+            onSegment({
+              pcm: new Int16Array(message.pcm),
+              sampleRate: message.sampleRate,
+            });
+            break;
+          case "autoStop":
+            onAutoStop();
+            break;
           case "audio":
             settleFinish?.resolve({
               pcm: new Int16Array(message.pcm),
               sampleRate: message.sampleRate,
+              peak: message.peak,
             });
             void worker.terminate();
             break;
@@ -245,14 +359,16 @@ export function createWorkerVoiceCapture(
 
     return {
       finish: () =>
-        new Promise<CapturedVoiceAudio>((resolve, reject) => {
-          if (failure) {
-            reject(failure);
-            return;
-          }
-          settleFinish = { resolve, reject };
-          send({ type: "finish" });
-        }),
+        new Promise<CapturedVoiceAudio & { peak: number }>(
+          (resolve, reject) => {
+            if (failure) {
+              reject(failure);
+              return;
+            }
+            settleFinish = { resolve, reject };
+            send({ type: "finish" });
+          },
+        ),
       cancel: () => {
         send({ type: "cancel" });
         // Ensure the native recorder is released even if the worker stalls.

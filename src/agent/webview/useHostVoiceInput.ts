@@ -1,3 +1,7 @@
+import type {
+  ComposerVoiceInput,
+  ComposerVoiceSessionListener,
+} from "./components/composerVoiceInput";
 import type { ExtensionMessage, VoiceInputAvailabilityState } from "./types";
 import {
   useCallback,
@@ -7,7 +11,6 @@ import {
   useState,
 } from "preact/hooks";
 
-import type { ComposerVoiceInput } from "./components/composerVoiceInput";
 import { randomId } from "../../shared/randomId";
 
 const START_TIMEOUT_MS = 20_000;
@@ -15,7 +18,7 @@ const FINISH_TIMEOUT_MS = 120_000;
 
 type VoiceHostMessage = Extract<
   ExtensionMessage,
-  { type: "voiceInputAvailability" | "voiceInputResult" }
+  { type: "voiceInputAvailability" | "voiceInputResult" | "voiceInputEvent" }
 >;
 
 /**
@@ -32,6 +35,8 @@ export function useHostVoiceInput(vscodeApi: {
   const [availability, setAvailability] =
     useState<VoiceInputAvailabilityState | null>(null);
   const ownerIdRef = useRef(randomId());
+  /** Receives live events for the dictation currently recording. */
+  const listenerRef = useRef<ComposerVoiceSessionListener | null>(null);
   const pendingRef = useRef(
     new Map<
       string,
@@ -80,6 +85,16 @@ export function useHostVoiceInput(vscodeApi: {
       setAvailability(message.availability);
       return true;
     }
+    if (message.type === "voiceInputEvent") {
+      const listener = listenerRef.current;
+      if (listener && message.ownerId === ownerIdRef.current) {
+        const { event } = message;
+        if (event.kind === "partial") listener.onPartial(event.text);
+        else if (event.kind === "level") listener.onLevel(event.level);
+        else if (event.kind === "autoStop") listener.onAutoStop();
+      }
+      return true;
+    }
     if (message.type === "voiceInputResult") {
       const pending = pendingRef.current.get(message.requestId);
       if (pending) {
@@ -97,16 +112,33 @@ export function useHostVoiceInput(vscodeApi: {
     if (!availability.available && availability.hidden) return undefined;
     return {
       disabledReason: availability.available ? undefined : availability.reason,
-      start: async () => {
-        await request("voiceInputStart", START_TIMEOUT_MS);
+      autoSend: availability.available
+        ? availability.preferences?.autoSend === true
+        : false,
+      start: async (listener) => {
+        listenerRef.current = listener;
+        try {
+          await request("voiceInputStart", START_TIMEOUT_MS);
+        } catch (err) {
+          listenerRef.current = null;
+          throw err;
+        }
       },
-      finish: () => request("voiceInputFinish", FINISH_TIMEOUT_MS),
-      cancel: () =>
+      finish: async () => {
+        try {
+          return await request("voiceInputFinish", FINISH_TIMEOUT_MS);
+        } finally {
+          listenerRef.current = null;
+        }
+      },
+      cancel: () => {
+        listenerRef.current = null;
         vscodeApi.postMessage({
           command: "voiceInputCancel",
           requestId: randomId(),
           ownerId: ownerIdRef.current,
-        }),
+        });
+      },
     };
   }, [availability, request, vscodeApi]);
 

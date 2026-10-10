@@ -8,13 +8,14 @@ import {
   type StartVoiceCapture,
   type VoiceInputServiceOptions,
 } from "./VoiceInputService.js";
-import { encodeWavPcm16 } from "./wavEncoding.js";
+import { encodeWavPcm16 } from "../../shared/wavEncoding.js";
 
 function createService(overrides: Partial<VoiceInputServiceOptions> = {}) {
   const capture = {
     finish: vi.fn(async () => ({
       pcm: new Int16Array(16_000).fill(120),
       sampleRate: 16_000,
+      peak: 120,
     })),
     cancel: vi.fn(),
   };
@@ -61,7 +62,10 @@ describe("VoiceInputService", () => {
     });
     await expect(
       service.getAvailability({ requireRecorder: false }),
-    ).resolves.toEqual({ available: true });
+    ).resolves.toEqual({
+      available: true,
+      preferences: { autoStopAfterSilenceMs: 2000, autoSend: false },
+    });
   });
 
   it("records, encodes WAV, and transcribes with the Codex credential", async () => {
@@ -71,9 +75,13 @@ describe("VoiceInputService", () => {
     await service.start("pane-a");
     await expect(service.finish("pane-a")).resolves.toBe("open the readme");
 
-    expect(startCapture).toHaveBeenCalledWith({
-      maxSamples: VOICE_INPUT_MAX_DURATION_SECONDS * 16_000,
-    });
+    expect(startCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxSamples: VOICE_INPUT_MAX_DURATION_SECONDS * 16_000,
+        autoStopMs: 2000,
+        noSpeechTimeoutMs: 10_000,
+      }),
+    );
     const request = transcribe.mock.calls[0]![0];
     expect(request.credentialProvider).toBe(credentialProvider);
     expect(request.audio.mimeType).toBe("audio/wav");
@@ -85,6 +93,7 @@ describe("VoiceInputService", () => {
     capture.finish.mockResolvedValueOnce({
       pcm: new Int16Array(100),
       sampleRate: 16_000,
+      peak: 300,
     });
 
     await service.start("pane");
@@ -95,13 +104,81 @@ describe("VoiceInputService", () => {
   it("reports an all-zero recording as a microphone access problem", async () => {
     const { service, capture, transcribe } = createService();
     capture.finish.mockResolvedValueOnce({
-      pcm: new Int16Array(16_000),
+      pcm: new Int16Array(0),
       sampleRate: 16_000,
+      peak: 0,
     });
 
     await service.start("pane");
     await expect(service.finish("pane")).rejects.toThrow(/only silence/);
     expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  it("streams utterances in order while recording, then returns the tail", async () => {
+    let resolveFirst!: (value: { text: string; method: "oauth" }) => void;
+    const transcribe = vi
+      .fn<typeof transcribeCodexAudio>()
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (resolveFirst = resolve)),
+      )
+      .mockResolvedValueOnce({ text: "second part", method: "oauth" })
+      .mockResolvedValueOnce({ text: "the end", method: "oauth" });
+    const { service, startCapture } = createService({
+      transcribe,
+      getPreferences: () => ({ autoStopAfterSilenceMs: 0, autoSend: true }),
+    });
+    const partials: string[] = [];
+    const onLevel = vi.fn();
+    const onAutoStop = vi.fn();
+
+    await service.start("pane", {
+      onPartial: (text) => partials.push(text),
+      onLevel,
+      onAutoStop,
+    });
+    const options = startCapture.mock.calls[0]![0];
+    expect(options.autoStopMs).toBe(0);
+    expect(options.noSpeechTimeoutMs).toBe(0);
+    const utterance = {
+      pcm: new Int16Array(8000).fill(500),
+      sampleRate: 16_000,
+    };
+    options.onSegment(utterance);
+    options.onSegment(utterance);
+    options.onSegment({ pcm: new Int16Array(10), sampleRate: 16_000 });
+    options.onLevel(0.4);
+    options.onAutoStop();
+
+    const finished = service.finish("pane");
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1));
+    resolveFirst({ text: "first part", method: "oauth" });
+    await expect(finished).resolves.toBe("the end");
+    expect(partials).toEqual(["first part", "second part"]);
+    expect(transcribe).toHaveBeenCalledTimes(3);
+    expect(onLevel).toHaveBeenCalledWith(0.4);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops pending utterances after cancel and surfaces segment failures", async () => {
+    const transcribe = vi
+      .fn<typeof transcribeCodexAudio>()
+      .mockRejectedValue(new Error("challenge"));
+    const { service, startCapture } = createService({ transcribe });
+    const partials: string[] = [];
+    await service.start("pane", { onPartial: (text) => partials.push(text) });
+    const utterance = {
+      pcm: new Int16Array(8000).fill(500),
+      sampleRate: 16_000,
+    };
+    startCapture.mock.calls[0]![0].onSegment(utterance);
+    await expect(service.finish("pane")).rejects.toThrow("challenge");
+
+    transcribe.mockResolvedValue({ text: "late", method: "oauth" });
+    await service.start("pane", { onPartial: (text) => partials.push(text) });
+    startCapture.mock.calls[1]![0].onSegment(utterance);
+    service.cancel("pane");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(partials).toEqual([]);
   });
 
   it("lets a new owner replace an active capture and ignores stale finishes", async () => {

@@ -145,6 +145,7 @@ import {
   createWorkerVoiceCapture,
   getBundledRecorderUnavailableReason,
 } from "./agent/voice/VoiceInputService.js";
+import { normalizeVoiceInputPreferences } from "./shared/voiceInputProtocol.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
@@ -1619,7 +1620,23 @@ export async function activate(
           "voice-recorder-worker.js",
         ).fsPath,
       ),
+      getPreferences: () => {
+        const config = vscode.workspace.getConfiguration(
+          "agentlink.voiceInput",
+        );
+        return normalizeVoiceInputPreferences({
+          autoStopAfterSilenceMs: config.get<number>("autoStopAfterSilenceMs"),
+          autoSend: config.get<boolean>("autoSend"),
+        });
+      },
       log: agentLog,
+    }),
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("agentlink.voiceInput")) {
+        chatViewProvider.refreshVoiceInputAvailability();
+      }
     }),
   );
 

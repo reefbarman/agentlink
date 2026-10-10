@@ -1679,6 +1679,7 @@ export function App({
         }
 
         case "voiceInputAvailability":
+        case "voiceInputEvent":
         case "voiceInputResult":
           handleHostVoiceMessage(msg);
           break;

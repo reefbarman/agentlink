@@ -231,6 +231,7 @@ import type {
   VoiceInputAvailability,
   VoiceInputService,
 } from "./voice/VoiceInputService.js";
+import type { VoiceInputLiveEvent } from "../shared/voiceInputProtocol.js";
 import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
@@ -695,6 +696,7 @@ export type ExtensionToWebview =
       text?: string;
       error?: string;
     }
+  | { type: "voiceInputEvent"; ownerId: string; event: VoiceInputLiveEvent }
   | {
       type: "agentQuestionRequest";
       sessionId?: string;
@@ -3656,7 +3658,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!service) throw new Error("Voice input is not available.");
       let text: string | undefined;
       if (args.command === "voiceInputStart") {
-        await service.start(args.ownerId);
+        const ownerId = args.ownerId;
+        const push = (event: VoiceInputLiveEvent) =>
+          reply({ type: "voiceInputEvent", ownerId, event });
+        await service.start(ownerId, {
+          onPartial: (partial) => push({ kind: "partial", text: partial }),
+          onLevel: (level) => push({ kind: "level", level }),
+          onAutoStop: () => push({ kind: "autoStop" }),
+        });
       } else if (args.command === "voiceInputFinish") {
         text = await service.finish(args.ownerId);
       } else {

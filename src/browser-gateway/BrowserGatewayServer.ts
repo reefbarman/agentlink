@@ -1076,7 +1076,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(res, 200, {
       available: availability.available,
       ...(availability.available
-        ? {}
+        ? { preferences: availability.preferences }
         : { hidden: availability.hidden, reason: availability.reason }),
     } satisfies VoiceInputAvailabilityResponse);
   }
