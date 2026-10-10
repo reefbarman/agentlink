@@ -55,6 +55,7 @@ import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { DesktopRemotePane } from "./DesktopRemotePane";
+import { AssistantLauncher } from "./AssistantLauncher";
 import type {
   DesktopMode,
   DesktopQuickAskSubmission,
@@ -1421,8 +1422,12 @@ export function BrowserGatewayApp({
     setDesktopMode(mode);
     if (browserShell && window.innerWidth <= 720) setDesktopSidebarOpen(false);
   };
-  const desktopRemoteSelected =
-    desktopModesAvailable && desktopMode === "vscode";
+  const desktopRemoteSelected = desktopModesAvailable && desktopMode !== "ask";
+  // The desktop embeds the Assistant natively; the browser links to it.
+  const desktopAssistantAvailable =
+    desktopModesAvailable &&
+    !browserShell &&
+    Boolean(window.agentlinkDesktopShell?.onAssistantState);
   const surfaceVisibleRef = useRef(true);
   surfaceVisibleRef.current = !desktopRemoteSelected;
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
@@ -8471,12 +8476,18 @@ export function BrowserGatewayApp({
           )}
           {desktopRemoteSelected && (
             <div class="desktop-header-actions">
-              <span>VS Code</span>
+              <span>
+                {desktopMode === "assistant" ? "Assistant" : "VS Code"}
+              </span>
               {!browserShell && (
                 <button
                   class="desktop-more-trigger"
                   type="button"
-                  onClick={() => window.agentlinkDesktopShell?.retryRemote()}
+                  onClick={() =>
+                    desktopMode === "assistant"
+                      ? window.agentlinkDesktopShell?.retryAssistant?.()
+                      : window.agentlinkDesktopShell?.retryRemote()
+                  }
                 >
                   Reconnect
                 </button>
@@ -8932,7 +8943,9 @@ export function BrowserGatewayApp({
         aria-label={
           consumerShell
             ? desktopRemoteSelected
-              ? "VS Code"
+              ? desktopMode === "assistant"
+                ? "AgentLink Assistant"
+                : "VS Code"
               : "Ask Agent"
             : undefined
         }
@@ -8996,6 +9009,12 @@ export function BrowserGatewayApp({
             onManage={handleShowHistory}
             mode={desktopMode}
             onModeChange={desktopModesAvailable ? selectSurfaceMode : undefined}
+            assistantMode={desktopAssistantAvailable}
+            assistantLink={
+              browserShell && product !== "assistant" ? (
+                <AssistantLauncher />
+              ) : undefined
+            }
             header={
               product === "assistant" ? (
                 <AssistantProjectSwitcher reloadPage={reloadPage} />
@@ -9011,7 +9030,7 @@ export function BrowserGatewayApp({
             class="browser-workspace-frame"
             title="VS Code workspaces"
             src="/?browserWorkspace=1"
-            hidden={!desktopRemoteSelected}
+            hidden={desktopMode !== "vscode"}
           />
         )}
         <section

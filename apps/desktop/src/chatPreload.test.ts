@@ -51,6 +51,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "getReleaseUpdateState",
     "installReleaseUpdate",
     "onAskAgentOwnerIdChanged",
+    "onAssistantState",
     "onMcpManagerOpen",
     "onQuickAskShown",
     "onQuickAskSubmission",
@@ -61,6 +62,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "openMcpManager",
     "openSettings",
     "restartForReleaseUpdate",
+    "retryAssistant",
     "retryRemote",
     "setMcpOperation",
     "setRemoteLayout",
@@ -104,6 +106,34 @@ it("exposes only the shell bridge and strips Electron events from state callback
   expect(electron.removeListener).toHaveBeenCalledWith(
     "agentlink:remote:state",
     handler,
+  );
+
+  bridge.retryAssistant!();
+  expect(electron.send).toHaveBeenCalledWith("agentlink:assistant:retry");
+  const assistantListener = vi.fn();
+  const stopAssistant = bridge.onAssistantState!(assistantListener);
+  const assistantHandler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:assistant:state",
+  )?.[1];
+  assistantHandler(
+    { sender: "privileged" },
+    {
+      status: "unavailable",
+      origin: "https://agentlink-assistant.local:8443",
+      pinned: true,
+      error: "something-else",
+      secret: "not-forwarded",
+    },
+  );
+  expect(assistantListener).toHaveBeenCalledExactlyOnceWith({
+    status: "unavailable",
+    origin: "https://agentlink-assistant.local:8443",
+    pinned: true,
+  });
+  stopAssistant();
+  expect(electron.removeListener).toHaveBeenCalledWith(
+    "agentlink:assistant:state",
+    assistantHandler,
   );
 });
 

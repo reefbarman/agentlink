@@ -752,6 +752,95 @@
   background: var(--ag-accent-a15);
 }
 
+.browser-shell.browser-shell-desktop .assistant-launcher-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--ag-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-launcher-link
+  .codicon-link-external {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-link:hover,
+.browser-shell.browser-shell-desktop .assistant-launcher-link:focus-visible {
+  color: var(--ag-accent-text-strong);
+  background: var(--ag-accent-a15);
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-mode-navigation
+  .assistant-launcher-edit {
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-form {
+  display: grid;
+  gap: 8px;
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-form input {
+  padding: 7px 9px;
+  border: 1px solid var(--ag-accent-a30);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-error {
+  margin: 0;
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.browser-shell.browser-shell-desktop .assistant-launcher-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-mode-navigation
+  .assistant-launcher-actions
+  button {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--ag-accent-a30);
+}
+
+.browser-shell.browser-shell-desktop .desktop-remote-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
 .browser-shell.browser-shell-desktop .desktop-sidebar-history {
   display: flex;
   flex-direction: column;

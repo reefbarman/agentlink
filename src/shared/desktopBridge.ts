@@ -5,7 +5,7 @@ export const AGENTLINK_DESKTOP_OWNER_ID = "agentlink-desktop";
 export const AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX =
   "--agentlink-desktop-owner-id=";
 
-export type DesktopMode = "ask" | "vscode";
+export type DesktopMode = "ask" | "vscode" | "assistant";
 
 export interface DesktopRemoteLayout {
   mode: DesktopMode;
@@ -14,6 +14,17 @@ export interface DesktopRemoteLayout {
 
 export interface DesktopRemoteState {
   status: "idle" | "connecting" | "ready" | "unavailable";
+}
+
+/** The desktop's embedded AgentLink Assistant view. */
+export interface DesktopAssistantState {
+  status: DesktopRemoteState["status"];
+  /** The Assistant's HTTPS origin, from desktop Settings. */
+  origin: string;
+  /** True when only certificates from the configured local CA are accepted. */
+  pinned: boolean;
+  /** Why the last load failed: an untrusted certificate, or anything else. */
+  error?: "certificate" | "load";
 }
 
 export interface DesktopQuickAskMedia {
@@ -43,6 +54,11 @@ export interface DesktopBridge {
   setRemoteLayout(layout: DesktopRemoteLayout): void;
   retryRemote(): void;
   onRemoteState(listener: (state: DesktopRemoteState) => void): () => void;
+  /** Reload the Assistant view after a failure. */
+  retryAssistant?(): void;
+  onAssistantState?(
+    listener: (state: DesktopAssistantState) => void,
+  ): () => void;
   /** Opens the desktop Settings window (shortcut, login item, accounts). */
   openSettings?(): void;
   /** Quick-ask panel: hand a composed message to the main window. */

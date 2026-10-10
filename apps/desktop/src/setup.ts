@@ -18,6 +18,12 @@ interface OpenAtLoginStatus {
   requiresApproval: boolean;
 }
 
+interface DesktopAssistantSettings {
+  origin: string;
+  defaultOrigin: string;
+  caFingerprint256: string | null;
+}
+
 interface DesktopOAuthAccount {
   id: string;
   label: string;
@@ -51,6 +57,11 @@ declare global {
       setQuickAskShortcut(
         accelerator: string | null,
       ): Promise<QuickAskShortcutStatus>;
+      assistantSettings(): Promise<DesktopAssistantSettings>;
+      setAssistantSettings(update: {
+        origin: string;
+        caPem?: string | null;
+      }): Promise<DesktopAssistantSettings>;
       openAtLogin(): Promise<OpenAtLoginStatus>;
       setOpenAtLogin(enabled: boolean): Promise<OpenAtLoginStatus>;
       getReleaseInstallState(): Promise<ReleaseInstallState>;
@@ -556,3 +567,94 @@ void window.agentlinkDesktop
   .openAtLogin()
   .then(renderOpenAtLogin)
   .catch(() => showLoginNote("Login item settings are unavailable.", true));
+
+const assistantForm =
+  document.querySelector<HTMLFormElement>("#assistant-form")!;
+const assistantOrigin =
+  document.querySelector<HTMLInputElement>("#assistant-origin")!;
+const assistantCaStatus = document.querySelector<HTMLElement>(
+  "#assistant-ca-status",
+)!;
+const assistantCaChoose = document.querySelector<HTMLButtonElement>(
+  "#assistant-ca-choose",
+)!;
+const assistantCaRemove = document.querySelector<HTMLButtonElement>(
+  "#assistant-ca-remove",
+)!;
+const assistantCaFile =
+  document.querySelector<HTMLInputElement>("#assistant-ca-file")!;
+const assistantNote = document.querySelector<HTMLElement>("#assistant-note")!;
+let assistantSettings: DesktopAssistantSettings | null = null;
+
+function renderAssistantSettings(next: DesktopAssistantSettings): void {
+  assistantSettings = next;
+  assistantOrigin.value = next.origin;
+  assistantOrigin.placeholder = next.defaultOrigin;
+  assistantCaStatus.textContent = next.caFingerprint256
+    ? `Pinned, SHA-256 ${next.caFingerprint256}`
+    : "Not pinned: macOS decides which certificates to trust";
+  assistantCaRemove.hidden = next.caFingerprint256 === null;
+}
+
+function showAssistantNote(message: string, isError: boolean): void {
+  assistantNote.textContent = message;
+  assistantNote.classList.toggle("error", isError);
+}
+
+function assistantError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("assistant_origin_invalid")) {
+    return "Enter the Assistant's https:// address.";
+  }
+  if (message.includes("assistant_ca_invalid")) {
+    return "That file is not a CA certificate. Export it on the server with agentlink-server export-ca.";
+  }
+  return "AgentLink could not save the Assistant settings.";
+}
+
+async function saveAssistantSettings(caPem?: string | null): Promise<void> {
+  const controls = [assistantOrigin, assistantCaChoose, assistantCaRemove];
+  for (const control of controls) control.disabled = true;
+  try {
+    const next = await window.agentlinkDesktop.setAssistantSettings({
+      origin:
+        assistantOrigin.value.trim() ||
+        (assistantSettings?.defaultOrigin ?? ""),
+      ...(caPem === undefined ? {} : { caPem }),
+    });
+    renderAssistantSettings(next);
+    showAssistantNote(
+      caPem
+        ? "CA pinned. Check the fingerprint matches the one agentlink-server printed."
+        : "Saved.",
+      false,
+    );
+  } catch (error) {
+    showAssistantNote(assistantError(error), true);
+  } finally {
+    for (const control of controls) control.disabled = false;
+  }
+}
+
+assistantForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveAssistantSettings();
+});
+assistantCaChoose.addEventListener("click", () => assistantCaFile.click());
+assistantCaFile.addEventListener("change", () => {
+  const file = assistantCaFile.files?.[0];
+  assistantCaFile.value = "";
+  if (!file) return;
+  if (file.size > 64 * 1024) {
+    showAssistantNote(assistantError(new Error("assistant_ca_invalid")), true);
+    return;
+  }
+  void file.text().then((pem) => saveAssistantSettings(pem));
+});
+assistantCaRemove.addEventListener("click", () => {
+  void saveAssistantSettings(null);
+});
+void window.agentlinkDesktop
+  .assistantSettings()
+  .then(renderAssistantSettings)
+  .catch(() => showAssistantNote("Assistant settings are unavailable.", true));

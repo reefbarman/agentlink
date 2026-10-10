@@ -7,6 +7,10 @@ export interface DesktopPreferences {
   /** Records that the first-run login-item default was applied. */
   openAtLoginInitialized?: boolean;
   automaticUpdateChecks?: boolean;
+  /** The AgentLink Assistant's HTTPS origin for the Assistant tab. */
+  assistantOrigin?: string;
+  /** The Assistant's local CA certificate; `null` once removed. */
+  assistantCaPem?: string | null;
 }
 
 export async function readDesktopPreferences(

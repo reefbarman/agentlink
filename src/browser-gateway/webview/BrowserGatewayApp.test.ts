@@ -22,7 +22,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
-import type { DesktopQuickAskSubmission } from "../../shared/desktopBridge";
+import type {
+  DesktopAssistantState,
+  DesktopQuickAskSubmission,
+} from "../../shared/desktopBridge";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
@@ -4340,6 +4343,56 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(document.querySelector(".browser-main")).toBe(chat);
   });
 
+  it("links the browser shell to the Assistant in its own tab, at an address this browser remembers", async () => {
+    window.localStorage.removeItem("agentlink.assistantOrigin");
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          browserShell: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      const link = screen.getByRole("link", { name: /Assistant/u });
+      expect(link.getAttribute("href")).toBe(
+        "https://agentlink-assistant.local:8443/",
+      );
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+      // Never framed inside the gateway page.
+      expect(
+        document.querySelector("iframe[src*='agentlink-assistant']"),
+      ).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Change the Assistant's address" }),
+      );
+      const input = screen.getByRole("textbox", { name: "Assistant address" });
+      fireEvent.input(input, { target: { value: "http://insecure.local" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(screen.getByRole("alert").textContent).toContain("https://");
+      expect(link.getAttribute("href")).toBe(
+        "https://agentlink-assistant.local:8443/",
+      );
+
+      fireEvent.input(input, {
+        target: { value: "192.168.50.160:8443/devices" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(
+        screen.getByRole("link", { name: /Assistant/u }).getAttribute("href"),
+      ).toBe("https://192.168.50.160:8443/");
+      expect(window.localStorage.getItem("agentlink.assistantOrigin")).toBe(
+        "https://192.168.50.160:8443",
+      );
+    } finally {
+      window.localStorage.removeItem("agentlink.assistantOrigin");
+    }
+  });
+
   it("collapses browser navigation after selecting a view on narrow screens", async () => {
     const width = window.innerWidth;
     Object.defineProperty(window, "innerWidth", {
@@ -4429,6 +4482,77 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       );
       expect(document.querySelector(".browser-main")).toBe(composer);
       expect((composer as HTMLElement).style.display).not.toBe("none");
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopShell;
+      globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("shows the desktop's native Assistant view and explains a certificate it does not trust", async () => {
+    const setRemoteLayout = vi.fn();
+    const retryAssistant = vi.fn();
+    const openSettings = vi.fn();
+    let publish: (state: DesktopAssistantState) => void = () => {};
+    window.agentlinkDesktopShell = {
+      askAgentOwnerId: "agentlink-desktop",
+      onAskAgentOwnerIdChanged: () => () => {},
+      setRemoteLayout,
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+      retryAssistant,
+      openSettings,
+      onAssistantState: (listener) => {
+        publish = listener;
+        return () => {};
+      },
+    };
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver;
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      const composer = document.querySelector(".browser-main") as HTMLElement;
+      // The desktop embeds the Assistant; it does not link out to it.
+      expect(screen.queryByRole("link", { name: /Assistant/u })).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Assistant", exact: true }),
+      );
+      expect(setRemoteLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "assistant" }),
+      );
+      expect(composer.style.display).toBe("none");
+      await act(async () =>
+        publish({
+          status: "unavailable",
+          origin: "https://agentlink-assistant.local:8443",
+          pinned: false,
+          error: "certificate",
+        }),
+      );
+      expect(
+        screen.getByText(/does not trust the Assistant's certificate/u),
+      ).toBeTruthy();
+      fireEvent.click(screen.getAllByRole("button", { name: "Reconnect" })[0]!);
+      expect(retryAssistant).toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+      expect(openSettings).toHaveBeenCalled();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
+      );
+      expect(composer.style.display).not.toBe("none");
     } finally {
       cleanup();
       delete window.agentlinkDesktopShell;

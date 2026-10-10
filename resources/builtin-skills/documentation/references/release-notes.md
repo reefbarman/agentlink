@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Desktop: a new **Assistant** view shows your self-hosted AgentLink Assistant in a sandboxed, persistent view, so pairing survives restarts. Set its address in Settings, and optionally choose its local CA (from `agentlink-server export-ca`) so the view trusts only certificates that CA issued, without changing the macOS keychain. The browser gateway's sidebar gains an **Assistant** link that opens it in a new tab, at an address each browser can change.
+- Fixed the Agent Fleet timer showing a negative elapsed time (for example `-1:-13`) for a newly started agent.
 - Standalone CLI and SDK: `spawn_background_agent` accepts no write paths, starting a read-only child (for example a reviewer) that cannot write. Hosts can set `background.modelRoles` so the agent picks a configured model with `model_role` (for example `review`) instead of naming a provider and model. Previously every child needed at least one write path.
 - SDK: hosts can set `background.onAgentChanged` to be told when a background child's lifecycle, phase, or current tool changes, including completion, without polling. It carries state only, never output. A child's `currentTool` now clears when that tool finishes, and tool names that are not identifiers are not recorded. Also fixed a stopped child's late streamed events overwriting its final phase.
 - Fixed standalone CLI background children calling shared MCP tools that a server's `allowedTools` or `toolPolicy: "allow"` permits without asking the foreground. Every child MCP call now waits for foreground approval, as documented; the foreground session still uses the global allow.

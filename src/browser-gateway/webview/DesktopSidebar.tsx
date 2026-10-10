@@ -17,6 +17,10 @@ interface DesktopSidebarProps {
   onModeChange?: (mode: DesktopMode) => void;
   /** Shown above the chats, for example a product's project switcher. */
   header?: ComponentChildren;
+  /** Offer the Assistant as a view (the desktop's embedded Assistant tab). */
+  assistantMode?: boolean;
+  /** Or a link to it, shown with the views (the browser gateway). */
+  assistantLink?: ComponentChildren;
 }
 
 const ACTIVITY_LABELS: Record<ChatSessionActivity, string> = {
@@ -55,6 +59,8 @@ export function DesktopSidebar({
   mode = "ask",
   onModeChange,
   header,
+  assistantMode = false,
+  assistantLink,
 }: DesktopSidebarProps) {
   const [search, setSearch] = useState("");
   const query = search.trim().toLocaleLowerCase();
@@ -85,6 +91,16 @@ export function DesktopSidebar({
           >
             <i class="codicon codicon-vscode" aria-hidden="true" /> VS Code
           </button>
+          {assistantMode && (
+            <button
+              type="button"
+              aria-current={mode === "assistant" ? "page" : undefined}
+              onClick={() => onModeChange("assistant")}
+            >
+              <i class="codicon codicon-sparkle" aria-hidden="true" /> Assistant
+            </button>
+          )}
+          {assistantLink}
         </nav>
       )}
       {header}
@@ -149,6 +165,12 @@ export function DesktopSidebar({
       {mode === "vscode" && (
         <p class="desktop-sidebar-empty">
           Your open VS Code windows and chats, connected through AgentLink.
+        </p>
+      )}
+      {mode === "assistant" && (
+        <p class="desktop-sidebar-empty">
+          Your self-hosted AgentLink Assistant. Its chats and projects live on
+          the Assistant's server.
         </p>
       )}
     </aside>
