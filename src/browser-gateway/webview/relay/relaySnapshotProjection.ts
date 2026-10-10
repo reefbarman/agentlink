@@ -414,6 +414,9 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
       : {}),
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
+    ...(message.displayMedia
+      ? { displayMedia: projectDisplayMedia(message) }
+      : {}),
     ...(message.finalMarker ? { finalMarker: message.finalMarker } : {}),
     ...(message.surfaceChange ? { surfaceChange: message.surfaceChange } : {}),
     ...(message.error ? { error: message.error } : {}),
@@ -423,6 +426,34 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
       ? { warningMessage: message.warningMessage }
       : {}),
     ...(message.warningRetry ? { warningRetry: message.warningRetry } : {}),
+  };
+}
+
+/**
+ * Relay messages carry byte-free display-media descriptors. Images render with
+ * an empty `src` and a `remoteDetail` reference that the transcript resolves
+ * lazily through a `display-image` detail request.
+ */
+function projectDisplayMedia(
+  message: BrowserGatewayTranscriptMessage,
+): ChatMessage["displayMedia"] {
+  const displayMedia = message.displayMedia;
+  if (!displayMedia) return undefined;
+  return {
+    images: displayMedia.images.map((image, index) => ({
+      name: image.name,
+      mimeType: image.mimeType,
+      src: "",
+      remoteDetail: {
+        messageId: message.messageId,
+        contentRevision: displayMedia.contentRevision,
+        index,
+      },
+    })),
+    documents: displayMedia.documents.map((document) => ({
+      name: document.name,
+      mimeType: document.mimeType,
+    })),
   };
 }
 

@@ -16,6 +16,13 @@ export interface RemoteTranscriptBlockDetail {
   warning?: string;
 }
 
+/** Relay reference for one lazily loaded message display image. */
+export interface RemoteDisplayImageDetail {
+  messageId: string;
+  contentRevision: number;
+  index: number;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -176,7 +183,14 @@ export interface ChatMessage {
   };
   /** Display-only previews for pasted or dropped media attached to a user turn. */
   displayMedia?: {
-    images: Array<{ name: string; mimeType: string; src: string }>;
+    images: Array<{
+      name: string;
+      mimeType: string;
+      /** Data URL; empty when the bytes must be loaded through `remoteDetail`. */
+      src: string;
+      /** Relay reference used by remote surfaces to fetch the image lazily. */
+      remoteDetail?: RemoteDisplayImageDetail;
+    }>;
     documents: Array<{ name: string; mimeType: string }>;
   };
   /** Raw user-provided media retained server-side for model input; stripped from browser snapshots. */

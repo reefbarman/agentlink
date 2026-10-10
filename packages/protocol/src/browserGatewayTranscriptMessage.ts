@@ -1,6 +1,19 @@
 import type { BrowserGatewayTranscriptBlock } from "./browserGatewayTranscriptBlock.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
 
+/** Block id used by `display-image` detail requests for message display media. */
+export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
+
+/**
+ * Byte-free descriptors for message-level display media. Image bytes are
+ * fetched lazily through a `display-image` transcript detail request.
+ */
+export interface BrowserGatewayTranscriptDisplayMedia {
+  contentRevision: number;
+  images: Array<{ name: string; mimeType: string }>;
+  documents: Array<{ name: string; mimeType: string }>;
+}
+
 export interface BrowserGatewayTranscriptMessage {
   messageId: string;
   role: "user" | "assistant" | "condense" | "warning";
@@ -13,6 +26,7 @@ export interface BrowserGatewayTranscriptMessage {
   slashCommandLabel?: string;
   origin?: "vscode" | "browser";
   checkpointId?: string;
+  displayMedia?: BrowserGatewayTranscriptDisplayMedia;
   finalMarker?: {
     status: "completed" | "waiting_for_user" | "blocked" | "cancelled";
     summary?: string;

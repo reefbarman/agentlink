@@ -63,7 +63,10 @@ import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { RemoteToolDetailProvider } from "../../agent/webview/components/RemoteToolDetail";
-import { loadRemoteTranscriptBlockDetail } from "./toolDetailTransport";
+import {
+  loadRemoteDisplayImage,
+  loadRemoteTranscriptBlockDetail,
+} from "./toolDetailTransport";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
@@ -9650,6 +9653,13 @@ export function BrowserGatewayApp({
                     loadDetail={(block) =>
                       loadRemoteTranscriptBlockDetail(
                         block,
+                        foreground?.sessionId ?? "",
+                        requestRelayBlockDetail,
+                      )
+                    }
+                    loadDisplayImage={(reference) =>
+                      loadRemoteDisplayImage(
+                        reference,
                         foreground?.sessionId ?? "",
                         requestRelayBlockDetail,
                       )

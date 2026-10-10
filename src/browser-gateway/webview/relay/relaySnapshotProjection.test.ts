@@ -10,6 +10,14 @@ import {
   parseRelayInteractionPayload,
   RelaySnapshotProjector,
 } from "./relaySnapshotProjection";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import {
+  displayMediaContentRevision,
+  encodeDisplayImageDetail,
+  parseTranscriptBlockDetailResponse,
+  type TranscriptBlockDetailRequest,
+} from "../../dataPlane/transcriptBlockDetail";
+import { loadRemoteDisplayImage } from "../toolDetailTransport";
 
 const identity = {
   helperGenerationId: "helper-1",
@@ -206,6 +214,77 @@ function checkpoint(
 }
 
 describe("RelaySnapshotProjector", () => {
+  it("restores relay display media as lazily loaded image previews", async () => {
+    const imageSrc = "data:image/png;base64,UkVMQVlfSU1BR0U=";
+    const ownerMessage: ChatMessage = {
+      id: "message-user",
+      role: "user",
+      content: "what is this?",
+      timestamp: 1,
+      blocks: [{ type: "text", text: "what is this?" }],
+      displayMedia: {
+        images: [{ name: "image.png", mimeType: "image/png", src: imageSrc }],
+        documents: [{ name: "notes.pdf", mimeType: "application/pdf" }],
+      },
+    };
+    const relayMessage: BrowserGatewayTranscriptMessage = {
+      messageId: ownerMessage.id,
+      role: "user",
+      revision: 1,
+      createdAt: 1,
+      content: { kind: "inline", text: ownerMessage.content },
+      blocks: [],
+      displayMedia: {
+        contentRevision: displayMediaContentRevision(
+          ownerMessage.displayMedia!,
+        ),
+        images: [{ name: "image.png", mimeType: "image/png" }],
+        documents: [{ name: "notes.pdf", mimeType: "application/pdf" }],
+      },
+    };
+
+    const projected = new RelaySnapshotProjector().project(
+      checkpoint({
+        transcript: {
+          messages: [relayMessage],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    ).session.foreground?.projectedMessages[0];
+    const image = projected?.displayMedia?.images[0];
+    expect(projected?.displayMedia?.documents).toEqual([
+      { name: "notes.pdf", mimeType: "application/pdf" },
+    ]);
+    expect(image).toMatchObject({ name: "image.png", src: "" });
+    expect(image?.remoteDetail).toEqual({
+      messageId: "message-user",
+      contentRevision: relayMessage.displayMedia!.contentRevision,
+      index: 0,
+    });
+
+    const requests: TranscriptBlockDetailRequest[] = [];
+    const src = await loadRemoteDisplayImage(
+      image!.remoteDetail!,
+      "session-1",
+      async (request) => {
+        requests.push(request);
+        return parseTranscriptBlockDetailResponse(
+          encodeDisplayImageDetail(request, ownerMessage),
+          request,
+        );
+      },
+    );
+    expect(src).toBe(imageSrc);
+    expect(requests).toEqual([
+      expect.objectContaining({
+        sessionId: "session-1",
+        messageId: "message-user",
+        resource: { kind: "display-image", index: 0 },
+      }),
+    ]);
+  });
+
   it("maps relay owner state with conservative unavailable-field defaults", () => {
     const snapshot = new RelaySnapshotProjector().project(checkpoint());
 

@@ -1,7 +1,11 @@
+import type {
+  ChatMessage,
+  ContentBlock,
+} from "@agentlink/protocol/chat-transcript";
+
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "@agentlink/protocol/browser-gateway-data-plane-limits";
 import type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
 import type { BrowserGatewayTranscriptBlockDetailSummary } from "@agentlink/protocol/browser-gateway-transcript-block";
-import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 
 export type TranscriptDisplayBlock = Extract<
   ContentBlock,
@@ -47,7 +51,10 @@ export function transcriptBlockContentRevision(
 }
 
 function hashBlock(block: TranscriptDisplayBlock): number {
-  const serialized = JSON.stringify(block);
+  return hashString(JSON.stringify(block));
+}
+
+function hashString(serialized: string): number {
   let hash = 2_166_136_261;
   for (let index = 0; index < serialized.length; index += 1) {
     hash ^= serialized.charCodeAt(index);
@@ -118,6 +125,80 @@ export function transcriptBlockDetailSummary(
   return summary;
 }
 
+type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+
+const displayMediaRevisions = new WeakMap<DisplayMedia, number>();
+
+/** Stable revision for a message's display media, cached per object identity. */
+export function displayMediaContentRevision(
+  displayMedia: DisplayMedia,
+): number {
+  const cached = displayMediaRevisions.get(displayMedia);
+  if (cached !== undefined) return cached;
+  const revision = hashString(
+    JSON.stringify({
+      images: displayMedia.images.map(({ name, mimeType, src }) => ({
+        name,
+        mimeType,
+        src,
+      })),
+      documents: displayMedia.documents,
+    }),
+  );
+  displayMediaRevisions.set(displayMedia, revision);
+  return revision;
+}
+
+/** Encodes one message display image addressed by a `display-image` request. */
+export function encodeDisplayImageDetail(
+  request: TranscriptBlockDetailRequest,
+  message: ChatMessage | undefined,
+): Uint8Array {
+  let response: TranscriptBlockDetailResponse;
+  const displayMedia = message?.displayMedia;
+  const image =
+    request.resource?.kind === "display-image"
+      ? displayMedia?.images[request.resource.index]
+      : undefined;
+  const parsed = image ? parseDataUrl(image.src) : undefined;
+  if (!displayMedia || !image || !parsed) {
+    response = { request, state: "not_found" };
+  } else if (
+    displayMediaContentRevision(displayMedia) !== request.contentRevision
+  ) {
+    response = { request, state: "stale_revision" };
+  } else {
+    response = {
+      request,
+      state: "media",
+      data: parsed.data,
+      mimeType: parsed.mimeType || image.mimeType,
+      ...(image.name ? { name: image.name } : {}),
+    };
+  }
+  return encodeDetailResponse(request, response);
+}
+
+function parseDataUrl(
+  src: string,
+): { mimeType: string; data: string } | undefined {
+  const match = /^data:([^;,]*)(?:;[^,]*)?;base64,/i.exec(src);
+  if (!match) return undefined;
+  return { mimeType: match[1] ?? "", data: src.slice(match[0].length) };
+}
+
+function encodeDetailResponse(
+  request: TranscriptBlockDetailRequest,
+  response: TranscriptBlockDetailResponse,
+): Uint8Array {
+  const encoder = new TextEncoder();
+  const content = encoder.encode(JSON.stringify(response));
+  return content.byteLength <=
+    BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+    ? content
+    : encoder.encode(JSON.stringify({ request, state: "too_large" }));
+}
+
 export function encodeTranscriptBlockDetail(
   request: TranscriptBlockDetailRequest,
   block: TranscriptDisplayBlock | undefined,
@@ -128,7 +209,7 @@ export function encodeTranscriptBlockDetail(
     response = { request, state: "stale_revision" };
   } else if (request.resource) {
     const resource =
-      block.type === "tool_call"
+      block.type === "tool_call" && request.resource.kind !== "display-image"
         ? (request.resource.kind === "image"
             ? block.resultImages
             : block.resultDocuments)?.[request.resource.index]
@@ -197,12 +278,7 @@ export function encodeTranscriptBlockDetail(
           : [],
     };
   }
-  const encoder = new TextEncoder();
-  const content = encoder.encode(JSON.stringify(response));
-  return content.byteLength <=
-    BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
-    ? content
-    : encoder.encode(JSON.stringify({ request, state: "too_large" }));
+  return encodeDetailResponse(request, response);
 }
 
 export function parseTranscriptBlockDetailResponse(

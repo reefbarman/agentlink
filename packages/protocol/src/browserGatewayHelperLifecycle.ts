@@ -4,6 +4,7 @@ export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 2;
 export const BROWSER_GATEWAY_DATA_PLANE_FEATURES = [
   "typed-background-results-v1",
   "transcript-block-detail-v1",
+  "transcript-display-media-v1",
 ] as const;
 export type BrowserGatewayDataPlaneFeature =
   (typeof BROWSER_GATEWAY_DATA_PLANE_FEATURES)[number];

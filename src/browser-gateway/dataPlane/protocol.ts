@@ -1763,6 +1763,7 @@ function parseMessage(
     "slashCommandLabel",
     "origin",
     "checkpointId",
+    "displayMedia",
     "finalMarker",
     "surfaceChange",
     "error",
@@ -1791,6 +1792,12 @@ function parseMessage(
     new Set(["vscode", "browser"]),
   ) as BrowserGatewayTranscriptMessage["origin"];
   const checkpointId = optionalString(object, "checkpointId", path, 256);
+  const displayMedia = optionalObject(
+    object,
+    "displayMedia",
+    path,
+    parseDisplayMedia,
+  );
   const finalMarker = optionalObject(
     object,
     "finalMarker",
@@ -1841,6 +1848,7 @@ function parseMessage(
     ...(slashCommandLabel ? { slashCommandLabel } : {}),
     ...(origin ? { origin } : {}),
     ...(checkpointId ? { checkpointId } : {}),
+    ...(displayMedia ? { displayMedia } : {}),
     ...(finalMarker ? { finalMarker } : {}),
     ...(surfaceChange ? { surfaceChange } : {}),
     ...(error ? { error } : {}),
@@ -2559,6 +2567,40 @@ function parseCondenseInfo(
   };
 }
 
+const MAX_DISPLAY_MEDIA_ITEMS = 64;
+
+function parseDisplayMedia(
+  value: unknown,
+  path: string,
+): NonNullable<BrowserGatewayTranscriptMessage["displayMedia"]> {
+  const object = strictRecord(value, path, [
+    "contentRevision",
+    "images",
+    "documents",
+  ]);
+  const parseItems = (key: "images" | "documents") => {
+    const items = arrayValue(object[key], `${path}.${key}`);
+    if (items.length > MAX_DISPLAY_MEDIA_ITEMS)
+      fail("resource_limit", `${path}.${key}`, "too many display media items");
+    return items.map((item, index) => {
+      const itemPath = `${path}.${key}[${index}]`;
+      const entry = strictRecord(item, itemPath, ["name", "mimeType"]);
+      return {
+        name: boundedString(entry.name, `${itemPath}.name`, 1_000),
+        mimeType: nonEmptyString(entry.mimeType, `${itemPath}.mimeType`, 256),
+      };
+    });
+  };
+  return {
+    contentRevision: nonNegativeSafeInteger(
+      object.contentRevision,
+      `${path}.contentRevision`,
+    ),
+    images: parseItems("images"),
+    documents: parseItems("documents"),
+  };
+}
+
 function parseWarningRetry(
   value: unknown,
   path: string,
@@ -3019,8 +3061,8 @@ function parseCommandBody(
           kind: enumValue(
             item.kind,
             `${path}.resource.kind`,
-            new Set(["image", "document"]),
-          ) as "image" | "document",
+            new Set(["image", "document", "display-image"]),
+          ) as "image" | "document" | "display-image",
           index: nonNegativeSafeInteger(item.index, `${path}.resource.index`),
         };
       }

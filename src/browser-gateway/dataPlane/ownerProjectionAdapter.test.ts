@@ -7,6 +7,9 @@ import {
 } from "./interactionPayload.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import { BrowserGatewayProtocolError } from "./protocol.js";
+import { parseTranscriptBlockDetailResponse } from "./transcriptBlockDetail.js";
+import { BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
+import type { BrowserGatewayDataPlaneFeature } from "@agentlink/protocol/browser-gateway-helper-lifecycle";
 import {
   BrowserGatewayOwnerProjectionAdapter,
   type BrowserGatewayOwnerProjectionPublication,
@@ -290,7 +293,7 @@ function makeAdapter(
   sources: ProjectionSources,
   options: {
     now?: () => number;
-    dataPlaneFeatures?: readonly ["typed-background-results-v1"];
+    dataPlaneFeatures?: readonly BrowserGatewayDataPlaneFeature[];
   } = {},
 ) {
   return new BrowserGatewayOwnerProjectionAdapter(sources, identity, {
@@ -301,6 +304,78 @@ function makeAdapter(
 }
 
 describe("BrowserGatewayOwnerProjectionAdapter", () => {
+  it("projects byte-free display media and serves images through display-image detail", () => {
+    const imageSrc = "data:image/png;base64,U0NSRUVOU0hPVA==";
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-user", "user", "what is this?", 800),
+          displayMedia: {
+            images: [
+              { name: "image.png", mimeType: "image/png", src: imageSrc },
+            ],
+            documents: [{ name: "notes.pdf", mimeType: "application/pdf" }],
+          },
+        },
+      ],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-block-detail-v1"],
+    }).getCheckpoint();
+    expect(legacy.transcript.messages[0]).not.toHaveProperty("displayMedia");
+
+    const adapter = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: [
+        "transcript-block-detail-v1",
+        "transcript-display-media-v1",
+      ],
+    });
+    const projected = adapter.getCheckpoint().transcript.messages[0];
+    expect(projected?.displayMedia).toEqual({
+      contentRevision: expect.any(Number),
+      images: [{ name: "image.png", mimeType: "image/png" }],
+      documents: [{ name: "notes.pdf", mimeType: "application/pdf" }],
+    });
+    expect(JSON.stringify(projected)).not.toContain("U0NSRUVOU0hPVA");
+
+    const request = {
+      kind: "transcript.block-detail" as const,
+      sessionId: "session-1",
+      messageId: "message-user",
+      blockId: BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+      contentRevision: projected!.displayMedia!.contentRevision,
+      resource: { kind: "display-image" as const, index: 0 },
+    };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(request),
+        request,
+      ),
+    ).toMatchObject({
+      state: "media",
+      mimeType: "image/png",
+      data: "U0NSRUVOU0hPVA==",
+      name: "image.png",
+    });
+    const stale = { ...request, contentRevision: request.contentRevision + 1 };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(stale),
+        stale,
+      ).state,
+    ).toBe("stale_revision");
+    const missing = { ...request, resource: { ...request.resource, index: 1 } };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(missing),
+        missing,
+      ).state,
+    ).toBe("not_found");
+  });
+
   it("capability-gates typed background result fields", () => {
     const source = readSet();
     source.foreground = {

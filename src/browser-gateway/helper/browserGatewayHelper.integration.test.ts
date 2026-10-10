@@ -1590,6 +1590,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       dataPlaneFeatures: [
         "typed-background-results-v1",
         "transcript-block-detail-v1",
+        "transcript-display-media-v1",
       ],
     });
 
@@ -1661,6 +1662,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       dataPlaneFeatures: [
         "typed-background-results-v1",
         "transcript-block-detail-v1",
+        "transcript-display-media-v1",
       ],
       ownerRegistration: {
         owner: {

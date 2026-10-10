@@ -17,6 +17,11 @@ it("pins the complete browser gateway transcript-message contract", () => {
     slashCommandLabel?: string;
     origin?: "vscode" | "browser";
     checkpointId?: string;
+    displayMedia?: {
+      contentRevision: number;
+      images: Array<{ name: string; mimeType: string }>;
+      documents: Array<{ name: string; mimeType: string }>;
+    };
     finalMarker?: {
       status: "completed" | "waiting_for_user" | "blocked" | "cancelled";
       summary?: string;

@@ -12,6 +12,7 @@ describe("browser gateway helper lifecycle", () => {
     const features: BrowserGatewayDataPlaneFeature[] = [
       "typed-background-results-v1",
       "transcript-block-detail-v1",
+      "transcript-display-media-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);

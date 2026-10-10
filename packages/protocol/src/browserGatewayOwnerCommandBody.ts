@@ -21,7 +21,16 @@ export type BrowserGatewayOwnerCommandBody =
       messageId: string;
       blockId: string;
       contentRevision: number;
-      resource?: { kind: "image" | "document"; index: number };
+      /**
+       * `display-image` addresses message-level display media (user
+       * attachments, promoted generated images). Its `blockId` is
+       * `BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID` and `contentRevision` is the
+       * message's display-media revision.
+       */
+      resource?: {
+        kind: "image" | "document" | "display-image";
+        index: number;
+      };
     }
   | { kind: "session.stop"; sessionId: string }
   | {
