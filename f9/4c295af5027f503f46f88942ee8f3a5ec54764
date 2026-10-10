@@ -1,0 +1,56 @@
+apps/server/README.md
+  h_e08a86bb3a33a2 372-395
+apps/server/src/jobSchedule.ts
+  h_e08a86bb3a33a2 1-314
+apps/server/src/jobRunner.test.ts
+  h_e08a86bb3a33a2 1-510
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 55-58,132-136,565-566,678-693,698,710,749-767,770-778,788,791-792,824
+  s_c4f7c06fdeb025::t_255e6c1304c0d3 567-571,694-697,779
+apps/server/src/jobStore.ts
+  h_e08a86bb3a33a2 1-486
+apps/server/src/jobStore.test.ts
+  h_e08a86bb3a33a2 1-175
+apps/server/src/jobRoutes.test.ts
+  h_e08a86bb3a33a2 1-239
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 151-159,359-380,384,391,396-400,405-407,419,422,424,1518-1554
+  s_c4f7c06fdeb025::t_1875dde3e28acd 381-383,385-390,392-395,401-404,420-421,1555
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 1079-1126
+apps/server/src/jobRunner.ts
+  h_e08a86bb3a33a2 1-567
+apps/server/src/jobRoutes.ts
+  h_e08a86bb3a33a2 1-221
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 484-624
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 33
+apps/server/src/jobSchedule.test.ts
+  h_e08a86bb3a33a2 1-161
+resources/builtin-skills/documentation/references/release-notes.md
+  s_c4f7c06fdeb025::t_caf9d377cebbf9 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f94c295af5027f503f46f88942ee8f3a5ec54764",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c4f7c06fdeb025": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2e97b70b-ea57-4fa4-a432-512408a48349",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
