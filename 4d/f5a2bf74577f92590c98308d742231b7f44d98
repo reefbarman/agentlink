@@ -1,0 +1,79 @@
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_e08a86bb3a33a2 194-195
+  h_e08a86bb3a33a2 193,196
+packages/protocol/src/chatTranscript.ts
+  h_e08a86bb3a33a2 19-25,189-192
+  h_e08a86bb3a33a2 186-188,193
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_e08a86bb3a33a2 417-419,432-459
+src/browser-gateway/webview/toolDetailTransport.ts
+  h_e08a86bb3a33a2 7-37
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  h_e08a86bb3a33a2 15
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 67-68,9658-9662
+  h_e08a86bb3a33a2 66,69,9663-9664
+src/agent/webview/components/RemoteToolDetail.tsx
+  h_e08a86bb3a33a2 1-4,19,52-53,59,66,75,79,97-139,225,234-282
+  h_e08a86bb3a33a2 54-55,224,283-284
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_e08a86bb3a33a2 10-12,296,307-378
+packages/protocol/src/browserGatewayTranscriptMessage.test.ts
+  h_e08a86bb3a33a2 20-24
+packages/protocol/src/browserGatewayOwnerCommandBody.ts
+  h_e08a86bb3a33a2 24-33
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_e08a86bb3a33a2 55-56,101,146,180-183,258-263,307,625,648,1204-1224,1255-1256
+  h_e08a86bb3a33a2 1225-1227,1257
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 36,1026-1060,1075,1080-1082,1125,1128-1130
+  h_e08a86bb3a33a2 1061-1074,1076-1079,1124,1126-1127,1131-1132
+packages/protocol/src/browserGatewayTranscriptMessage.ts
+  h_e08a86bb3a33a2 4-16,29
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_e08a86bb3a33a2 7
+src/browser-gateway/dataPlane/protocol.ts
+  h_e08a86bb3a33a2 1766,1795-1800,1851,2570-2600,3064-3065
+  h_e08a86bb3a33a2 2601-2603
+src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts
+  h_e08a86bb3a33a2 13-20,217-287
+packages/protocol/src/browserGatewayOwnerCommandBody.test.ts
+  h_e08a86bb3a33a2 29-30
+  h_e08a86bb3a33a2 28,31
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 1593,1665
+CHANGELOG.md
+  h_e08a86bb3a33a2 14
+src/browser-gateway/dataPlane/transcriptBlockDetail.ts
+  h_e08a86bb3a33a2 1-5,54-57,128-195,212,281
+  h_e08a86bb3a33a2 196-201
+package-lock.json
+  s_25f5cc0cccc9e8::t_c63bf781f831c8 3,9
+package.json
+  s_25f5cc0cccc9e8::t_26d6db70bbc952 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4df5a2bf74577f92590c98308d742231b7f44d98",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_25f5cc0cccc9e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2d8a0d8c-f7c1-4322-a3dc-0f343711bdda",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
