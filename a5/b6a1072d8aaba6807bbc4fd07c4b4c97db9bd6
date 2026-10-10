@@ -1,0 +1,77 @@
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 23-25,29
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 548-549,556
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 11-12,70-71,325-330,332-357,380-381,392,395,427,461,516-517,591-592,609-610,618,625-626,686-687,697-698,751-752,801,803,821,823,913-914,917,937,1001,1049-1050,1117-1118,1163,1165,1192-1193,1197,1206,1229-1230,1254,1257,1350,1352-1353,1359,1583,1586,1606,1609,1620-1685
+  s_03b14eb52c9712::t_0fae516b995dad 393-394,396-397,1194
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 1-10,94-119,139-150,154-166,169-185,224-226,230-236,244-246,257-258,269-270,562-563,566,574-586,611-612,615-624,660-668,700-702,722-723,729-738,740-749,769-776,921,931,940-944
+  s_00481e6f810469::t_e625e6d5f55cf4 167-168,186,561,564-565,567,720-721,724,739,750,945
+apps/server/deploy/systemd/agentlink-mdns-alias.service
+  h_e08a86bb3a33a2 1-53
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 185-186
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 3-4,58-59,93,102-103,107-109,112,117-121,159-163,431-434,448-494
+  s_00481e6f810469::t_cabc901ae30af9 2,5,56-57,60,98-101,104-106,110-111,113,155-158,164,495-496
+apps/server/src/accessPages.ts
+  h_e08a86bb3a33a2 3,15-22,36,113,115,126-127,130,140-141,147
+src/browser-gateway/webview/index.tsx
+  h_e08a86bb3a33a2 25,69
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 220-223
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 1026-1030,1281-1292,1313-1349,1354,1358,1372-1374,1376,1398,1408,8223,8256,8287,9721,10301
+  s_03b14eb52c9712::t_f16b24e0489a27 1293-1294,1350,8286,8288
+src/browser-gateway/browserGatewayPages.ts
+  h_e08a86bb3a33a2 56-57,72-75,90,92,110,120-135,143-144,146,165,169-171,199,202,227-228,235,240,246
+  s_03b14eb52c9712::t_20a902b0d05f5d 167-168,172
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 8,66,150,158,166-172,485-497,518,523,526-528,532,534-535,541-558,575,1256-1260,1268-1270
+  s_00481e6f810469::t_b1c3a5e91cf823 498-499,533,536-537,559,1261-1267,1271-1272
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 79-81,84-87,91-189
+  s_00481e6f810469::t_2ef0462d81e239 82-83,88-90
+apps/server/deploy/container/server.with-meridian.example.json
+  h_e08a86bb3a33a2 15,24-25,34-36,46-48,58-60
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 5-8,139-140,177-180,182-192,257,294-300,308,315-317,325,328,944-945
+  s_00481e6f810469::t_8d49f17fa62e68 9,318
+apps/server/deploy/container/smoke-test.sh
+  h_e08a86bb3a33a2 60-62
+apps/server/README.md
+  h_e08a86bb3a33a2 48,53,58,64,68-75,78,126,163-164,172-174,181-182,187-189,281-282
+  s_03b14eb52c9712::t_39c92f24329b70 47,49-52,54-57,190
+apps/server/deploy/container/server.example.json
+  h_e08a86bb3a33a2 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5b6a1072d8aaba6807bbc4fd07c4b4c97db9bd6",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_00481e6f810469": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e4fa4829-c22f-4d20-a7e0-ecdfafc50b84",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_03b14eb52c9712": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54ed4858-cf40-4b32-9f1b-3b123b9d9b78",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
