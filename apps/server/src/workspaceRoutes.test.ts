@@ -1165,6 +1165,7 @@ describe("assistant workspace routes", () => {
       },
       signal: new AbortController().signal,
       revalidate: async () => ({ valid: true }),
+      detach: () => auth,
     };
     const transcript = await harness.routes.operations.readAgentTranscript(
       auth,

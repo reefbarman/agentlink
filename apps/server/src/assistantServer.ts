@@ -79,6 +79,13 @@ export interface AssistantServerAuth {
    * for long-lived streams and immediately before a mutation takes effect.
    */
   revalidate(): Promise<AssistantServerAuthCheck>;
+  /**
+   * The same sign-in for server-owned follow-up work that outlives this
+   * request, such as reporting a finished background agent. Its signal and
+   * `revalidate` ignore the request closing; they still end on revocation,
+   * sign-out, and expiry.
+   */
+  detach(): AssistantServerAuth;
 }
 
 export interface AssistantServerAuthCheck {
@@ -165,6 +172,8 @@ export async function createAssistantServer(
   });
   const limiter = new AttemptLimiter({ now });
   const liveRequests = new Map<string, Set<AbortController>>();
+  /** Detached auth per access session; see `AssistantServerAuth.detach`. */
+  const detachedAuths = new Map<string, AssistantServerAuth>();
   store.onSessionsRevoked((sessionIds) => {
     for (const sessionId of sessionIds) {
       for (const controller of liveRequests.get(sessionId) ?? []) {
@@ -173,22 +182,39 @@ export async function createAssistantServer(
     }
   });
 
-  /** Bind an authenticated session to one request or upgraded connection. */
+  /**
+   * Bind an authenticated session to one request or upgraded connection, or
+   * (without a lifetime) to the session itself, for detached work.
+   */
   const bindAuth = (
     session: ServerAccessSession,
     token: string,
-    lifetime: { once(event: "close", listener: () => void): unknown },
+    lifetime?: { once(event: "close", listener: () => void): unknown },
   ): AssistantServerAuth => {
     const controller = new AbortController();
     const live = liveRequests.get(session.sessionId) ?? new Set();
     live.add(controller);
     liveRequests.set(session.sessionId, live);
-    lifetime.once("close", () => {
+    const release = () => {
       live.delete(controller);
       if (live.size === 0) liveRequests.delete(session.sessionId);
+    };
+    lifetime?.once("close", () => {
+      release();
       controller.abort(new Error("request_closed"));
     });
-    return {
+    // A detached auth is dropped from the revocation set once it is invalid.
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        release();
+        if (!lifetime && detachedAuths.get(session.sessionId) === auth) {
+          detachedAuths.delete(session.sessionId);
+        }
+      },
+      { once: true },
+    );
+    const auth: AssistantServerAuth = {
       principal: { tenantId: SERVER_TENANT_ID, subjectId: session.ownerId },
       session,
       signal: controller.signal,
@@ -197,14 +223,26 @@ export async function createAssistantServer(
         const result = await store.authenticate(token, {
           recordActivity: false,
         });
-        return {
-          valid:
-            !controller.signal.aborted &&
-            result.ok &&
-            result.session.sessionId === session.sessionId,
-        };
+        const valid =
+          !controller.signal.aborted &&
+          result.ok &&
+          result.session.sessionId === session.sessionId;
+        // Expired or signed out: end detached work that is still listening.
+        if (!valid && !lifetime) controller.abort(new Error("session_ended"));
+        return { valid };
+      },
+      detach() {
+        if (!lifetime) return auth;
+        // One per sign-in, so repeated requests do not accumulate.
+        let detached = detachedAuths.get(session.sessionId);
+        if (!detached || detached.signal.aborted) {
+          detached = bindAuth(session, token);
+          detachedAuths.set(session.sessionId, detached);
+        }
+        return detached;
       },
     };
+    return auth;
   };
 
   const authenticateRequest = async (request: IncomingMessage) => {

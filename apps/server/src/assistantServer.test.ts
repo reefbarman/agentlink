@@ -402,6 +402,36 @@ describe("assistant server access layer", () => {
     ).resolves.toMatchObject({ status: 401 });
   });
 
+  it("keeps detached auth valid after its request closes, until revocation", async () => {
+    const harness = await startHarness();
+    const owner = await pairDevice(harness);
+    const phone = await pairDevice(harness, "Phone");
+    await harness.request({
+      path: "/api/app/echo",
+      headers: { cookie: phone.cookie },
+    });
+    const request = harness.appCalls.at(-1)!;
+    await vi.waitFor(() => expect(request.signal.aborted).toBe(true));
+    await expect(request.revalidate()).resolves.toEqual({ valid: false });
+
+    const detached = request.detach();
+    expect(request.detach()).toBe(detached);
+    expect(detached.detach()).toBe(detached);
+    expect(detached.signal.aborted).toBe(false);
+    await expect(detached.revalidate()).resolves.toEqual({ valid: true });
+
+    const revoked = await harness.request({
+      method: "DELETE",
+      path: `/api/auth/devices/${phone.deviceId}`,
+      headers: authHeaders(harness, owner),
+    });
+    expect(revoked.status).toBe(204);
+    expect(detached.signal.aborted).toBe(true);
+    await expect(detached.revalidate()).resolves.toEqual({ valid: false });
+    // A later sign-in gets a fresh one rather than the revoked auth.
+    expect(request.detach()).not.toBe(detached);
+  });
+
   it("lets a signed-in device pair another and revoke it durably", async () => {
     let harness = await startHarness();
     const owner = await pairDevice(harness);

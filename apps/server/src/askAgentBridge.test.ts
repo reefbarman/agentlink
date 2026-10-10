@@ -232,8 +232,8 @@ async function startBridge(
       ? { agentRefreshMs: options.agentRefreshMs }
       : {}),
   });
-  const auth: AssistantServerAuth = {
-    principal: { tenantId: "agentlink-server", subjectId: "owner" },
+  const signedIn = {
+    principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
     session: {
       ownerId: "owner",
       sessionId: "s",
@@ -242,12 +242,31 @@ async function startBridge(
       createdAt: 0,
       expiresAt: Number.MAX_SAFE_INTEGER,
     },
+  };
+  const detached: AssistantServerAuth = {
+    ...signedIn,
     signal: options.signal ?? new AbortController().signal,
     revalidate: async () => ({ valid: true }),
+    detach: () => detached,
+  };
+  // Like the real server: a request's auth is invalid once it has closed.
+  const requestAuth = (response: http.ServerResponse): AssistantServerAuth => {
+    const closed = new AbortController();
+    response.once("close", () => closed.abort());
+    return {
+      ...signedIn,
+      signal: options.signal
+        ? AbortSignal.any([options.signal, closed.signal])
+        : closed.signal,
+      revalidate: async () => ({
+        valid: !closed.signal.aborted && !options.signal?.aborted,
+      }),
+      detach: () => detached,
+    };
   };
   const server = http.createServer((request, response) => {
     bridge
-      .handleRequest(request, response, auth)
+      .handleRequest(request, response, requestAuth(response))
       .then((handled) => {
         if (!handled) {
           response.writeHead(404);

@@ -463,9 +463,9 @@ export async function createAskAgentBridge(
 
   /** Follow the open chat's workspace session, if it has one. */
   const watchActiveAgents = (auth: AssistantServerAuth) => {
-    // Agent reads only need project read access, which the principal keeps
-    // for its lifetime; the latest signed-in request is used.
-    agentWatch.auth = auth;
+    // Detached: refreshes and wake-ups run after this request has closed,
+    // and must still stop when the owner signs out or is revoked.
+    agentWatch.auth = auth.detach();
     const sessionId = workspaceSessionFor(store.getActiveSessionId());
     if (sessionId === agentWatch.sessionId) return;
     agentWatch.subscription?.unsubscribe();

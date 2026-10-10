@@ -91,6 +91,7 @@ async function setup(options: { clone?: boolean; valid?: boolean } = {}) {
     },
     signal: new AbortController().signal,
     revalidate: async () => ({ valid: options.valid ?? true }),
+    detach: () => auth,
   };
   const server = http.createServer((request, response) => {
     chats
