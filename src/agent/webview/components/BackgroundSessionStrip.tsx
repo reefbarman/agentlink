@@ -34,7 +34,8 @@ const WRAP_UP_MESSAGE =
   "Stop using tools and return your best findings now. Do not investigate further; package the evidence you already have and complete the task.";
 
 function formatElapsed(startMs: number, now: number): string {
-  const secs = Math.floor((now - startMs) / 1000);
+  // Never negative: a start can be newer than the last tick, or clocks skew.
+  const secs = Math.max(0, Math.floor((now - startMs) / 1000));
   const m = Math.floor(secs / 60);
   const s = secs % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
@@ -247,6 +248,8 @@ export function BackgroundSessionStrip({
 
   useEffect(() => {
     if (!hasActive) return;
+    // `now` is stale from the last active period; refresh it immediately.
+    setNow(Date.now());
     const interval = setInterval(() => {
       if (hasActiveRef.current) {
         setNow(Date.now());
