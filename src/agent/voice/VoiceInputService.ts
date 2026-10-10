@@ -13,7 +13,7 @@ import type {
   VoiceRecorderWorkerData,
   VoiceRecorderWorkerReply,
 } from "./voiceRecorderProtocol.js";
-import { encodeWavPcm16 } from "../../shared/wavEncoding.js";
+import { encodeWavPcm16 } from "@agentlink/core/voice";
 import {
   DEFAULT_VOICE_INPUT_PREFERENCES,
   VOICE_INPUT_NO_SPEECH_TIMEOUT_MS,

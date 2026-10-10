@@ -30,6 +30,7 @@ const modules = [
   "turnInteractions",
   "turnKernel",
   "turnLeases",
+  "voice",
   "webAccess",
 ];
 

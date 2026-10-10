@@ -4,7 +4,7 @@ import {
   VoiceActivitySegmenter,
   resampleToPcm16,
   type VoiceActivityResult,
-} from "./voiceActivity";
+} from "./voiceActivity.js";
 
 const RATE = 16_000;
 const FRAME = 512; // 32 ms

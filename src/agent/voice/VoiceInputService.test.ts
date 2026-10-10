@@ -8,7 +8,7 @@ import {
   type StartVoiceCapture,
   type VoiceInputServiceOptions,
 } from "./VoiceInputService.js";
-import { encodeWavPcm16 } from "../../shared/wavEncoding.js";
+import { encodeWavPcm16 } from "@agentlink/core/voice";
 
 function createService(overrides: Partial<VoiceInputServiceOptions> = {}) {
   const capture = {

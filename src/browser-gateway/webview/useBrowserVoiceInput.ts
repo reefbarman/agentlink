@@ -11,9 +11,10 @@ import type {
   ComposerVoiceSessionListener,
 } from "../../agent/webview/components/composerVoiceInput";
 import {
+  encodeWavPcm16,
   resampleToPcm16,
   VoiceActivitySegmenter,
-} from "../../shared/voiceActivity";
+} from "@agentlink/core/voice";
 import {
   BROWSER_VOICE_MAX_DURATION_SECONDS,
   DEFAULT_VOICE_INPUT_PREFERENCES,
@@ -23,7 +24,6 @@ import {
   type VoiceInputAvailabilityResponse,
   type VoiceTranscribeResponse,
 } from "../../shared/voiceInputProtocol";
-import { encodeWavPcm16 } from "../../shared/wavEncoding";
 
 /** Transcription input rate: small uploads, plenty for speech. */
 const TARGET_SAMPLE_RATE = 16_000;

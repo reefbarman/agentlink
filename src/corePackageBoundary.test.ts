@@ -306,6 +306,20 @@ const CORE_MODULES = [
     loadEsm: () => import("@agentlink/core/turn-leases"),
   },
   {
+    exportPath: "voice",
+    fileName: "voice",
+    // The only browser-safe entry point: dependency-free dictation helpers
+    // that hosts run wherever they record audio.
+    browserSafe: true,
+    declarationDependencies: ["voice/voiceActivity", "voice/wavEncoding"],
+    identityExports: [
+      "VoiceActivitySegmenter",
+      "encodeWavPcm16",
+      "resampleToPcm16",
+    ],
+    loadEsm: () => import("@agentlink/core/voice"),
+  },
+  {
     exportPath: "web-access",
     fileName: "webAccess",
     declarationDependencies: [],
@@ -578,6 +592,24 @@ describe("core package boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  it("keeps browser-safe core modules free of runtime imports", () => {
+    const voiceSources = [
+      path.join(CORE_SOURCE, "voice.ts"),
+      ...walkTypeScriptFiles(path.join(CORE_SOURCE, "voice")),
+    ].filter((filePath) => !filePath.endsWith(".test.ts"));
+    expect(voiceSources.length).toBeGreaterThan(1);
+    const voiceRoot = path.join(CORE_SOURCE, "voice");
+    for (const filePath of voiceSources) {
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const specifier of importedModules(filePath, source)) {
+        expect(
+          specifier.startsWith(voiceRoot),
+          `${path.relative(ROOT, filePath)} imports ${specifier}`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("wires every curated core module through all package surfaces", async () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(CORE_PACKAGE, "package.json"), "utf8"),
@@ -610,13 +642,15 @@ describe("core package boundary", () => {
       edge: null,
     });
     for (const module of CORE_MODULES) {
+      const esmEntry = {
+        types: `./dist/${module.fileName}.d.ts`,
+        default: `./dist/${module.fileName}.js`,
+      };
+      const browserEntry = "browserSafe" in module ? esmEntry : null;
       expect(manifest.exports?.[`./${module.exportPath}`]).toEqual({
-        browser: null,
-        edge: null,
-        import: {
-          types: `./dist/${module.fileName}.d.ts`,
-          default: `./dist/${module.fileName}.js`,
-        },
+        browser: browserEntry,
+        edge: browserEntry,
+        import: esmEntry,
         require: {
           types: `./dist/cjs/${module.fileName}.d.cts`,
           default: `./dist/cjs/${module.fileName}.cjs`,

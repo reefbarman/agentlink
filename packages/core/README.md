@@ -39,11 +39,11 @@ The automated package-boundary proof is:
 npm run test:core-sdk-consumer
 ```
 
-It packs protocol, core, and Node-host as one exact-version set, installs them outside this repository, type-checks and runtime-loads every exported core entry point under ESM and CommonJS, rejects every core entry point under browser and Edge conditions, and runs one host-authorized remote MCP tool through Node-host and the core turn loop.
+It packs protocol, core, and Node-host as one exact-version set, installs them outside this repository, type-checks and runtime-loads every exported core entry point under ESM and CommonJS, rejects every Node-only core entry point under browser and Edge conditions, bundles the browser-safe `voice` entry point for the browser, and runs one host-authorized remote MCP tool through Node-host and the core turn loop.
 
 ## Reviewed entry points
 
-The private contract currently exposes these Node-only entry points. The packed-consumer gate type-checks and runtime-loads every one under ESM and CommonJS. Prefer the root entry point unless a focused subpath is needed for an adapter or test.
+The private contract currently exposes these entry points. All are Node-only except `voice`, which is dependency-free and also bundles for browser and edge runtimes. The packed-consumer gate type-checks and runtime-loads every one under ESM and CommonJS, rejects the Node-only ones under browser and Edge conditions, and bundles `voice` for the browser. Prefer the root entry point unless a focused subpath is needed for an adapter or test.
 
 | Entry point                                                                                   | Purpose                                                                                                                 |
 | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -61,6 +61,7 @@ The private contract currently exposes these Node-only entry points. The packed-
 | `embedded-agent-web`                                                                          | Framework-neutral Web `Request`/`Response` handler with bounded JSON, lifecycle dispatch, and NDJSON turn streaming.    |
 | `native-web-tools`, `web-access`                                                              | Portable provider-native web-access contracts; they do not grant a host network authority by themselves.                |
 | `session-transcript-recall`, `surface-model-messages`                                         | Portable transcript and model-message conversion helpers.                                                               |
+| `voice`                                                                                       | Browser-safe dictation helpers: pause-based utterance segmentation, auto-stop, meter levels, resampling, WAV encoding.  |
 
 Do not import unexported files under `dist/` or rely on root `src/` compatibility facades. Any addition, rename, or removal must update the packed-consumer fixture before another consumer relies on it.
 
@@ -128,6 +129,51 @@ const { text } = await transcribeCodexAudio({
 ```
 
 ChatGPT/Codex OAuth credentials use ChatGPT's subscription transcription endpoint (`CODEX_TRANSCRIBE_URL`), which Codex dictation uses but OpenAI does not document as a public API. It may change, and it can be blocked by a bot challenge, reported as `CodexTranscriptionError` code `challenge_blocked`. A 401 triggers one credential refresh and retry. Cloudflare also judges the client's TLS handshake: Electron-hosted Node (BoringSSL) is challenged with its default cipher list, while plain Node is accepted. In an Electron host, pass a `fetch` whose TLS connection uses a narrower modern ECDHE/AEAD cipher list (for example an undici `Agent` with `connect.ciphers`) through the `fetch` option. The request body is pre-encoded multipart bytes, so any fetch implementation works. OpenAI API-key credentials use the public Audio API with `gpt-4o-mini-transcribe` (override with `apiKeyModel`). Clips over 25 MiB are rejected before upload. Other error codes are `auth_required`, `audio_empty`, `audio_too_large`, `usage_limited`, `request_failed`, and `invalid_response`. Present the transcript for review rather than sending it automatically.
+
+For live dictation, `@agentlink/core/voice` turns a stream of recorded frames into utterances as the user speaks. Feed mono 16-bit PCM frames (roughly 20 to 100 ms each) to a `VoiceActivitySegmenter`. Each `push(...)` returns a meter `level` in `[0, 1]`, a finished `segment` when the speaker pauses (default `pauseMs` 700), and `autoStop: true` once, after `autoStopMs` of silence following speech or `noSpeechTimeoutMs` without any speech. Transcribe segments in order while recording continues, then `flush()` the tail when the dictation ends. `resampleToPcm16(...)` converts Web Audio `Float32Array` frames to 16 kHz PCM, and `encodeWavPcm16(...)` wraps PCM for `transcribeCodexAudio`. The module imports nothing, so the same segmenter runs in a Node backend or in a browser UI such as a Steam Deck plugin frontend; transcription itself still needs the Node-only `codex` entry point.
+
+```ts
+import { transcribeCodexAudio } from "@agentlink/core/codex";
+import { encodeWavPcm16, VoiceActivitySegmenter } from "@agentlink/core/voice";
+
+const SAMPLE_RATE = 16_000;
+const segmenter = new VoiceActivitySegmenter({
+  sampleRate: SAMPLE_RATE,
+  autoStopMs: 2_000,
+  noSpeechTimeoutMs: 10_000,
+});
+let transcripts = Promise.resolve();
+const transcribe = (pcm: Int16Array) =>
+  (transcripts = transcripts.then(async () => {
+    const { text } = await transcribeCodexAudio({
+      credentialProvider,
+      context: principal,
+      audio: {
+        data: encodeWavPcm16(pcm, SAMPLE_RATE),
+        mimeType: "audio/wav",
+        filename: "speech.wav",
+      },
+    });
+    if (text.trim()) appendToDraft(text);
+  }));
+
+// For each captured frame, e.g. from `arecord -f S16_LE -r 16000 -c 1`:
+function onFrame(frame: Int16Array) {
+  const { level, segment, autoStop } = segmenter.push(frame);
+  showMicLevel(level);
+  if (segment) void transcribe(segment);
+  if (autoStop) void stopRecording();
+}
+
+async function stopRecording() {
+  stopCapture();
+  const tail = segmenter.flush();
+  if (tail) void transcribe(tail);
+  await transcripts;
+}
+```
+
+The segmenter is energy-based with an adaptive noise floor, not a speech model. It holds 300 ms of audio before speech so first syllables are kept, ignores bursts shorter than `minSpeechMs` (200), and cuts monologues at `maxSegmentMs` (25 s). `segmenter.peak === 0` after a recording means the input was digital silence, which usually indicates a missing microphone permission. Use a fresh segmenter per dictation.
 
 `streamText(...)` lazily emits `text.delta`, `usage`, and one terminal `completed`, `cancelled`, or `error` event. Consume the generator return value when the terminal result is needed. Closing it early cancels the provider stream and cleans up request listeners and timers.
 

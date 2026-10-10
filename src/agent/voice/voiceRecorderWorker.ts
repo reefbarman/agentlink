@@ -9,7 +9,7 @@ import type {
  */
 import { parentPort, workerData } from "node:worker_threads";
 
-import { VoiceActivitySegmenter } from "../../shared/voiceActivity.js";
+import { VoiceActivitySegmenter } from "@agentlink/core/voice";
 
 const FRAME_LENGTH = 512;
 /** About 10 meter updates per second at 16 kHz. */

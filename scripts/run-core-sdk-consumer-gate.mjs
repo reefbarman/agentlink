@@ -19,6 +19,8 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = join(ROOT, "fixtures", "core-sdk-consumer");
 const PACKAGES = ["protocol", "core", "node-host"];
+/** Dependency-free core entry points that must also bundle for browsers. */
+const BROWSER_SAFE_CORE_EXPORTS = new Set(["./voice"]);
 
 async function run(command, args, options = {}) {
   try {
@@ -101,7 +103,11 @@ function packageSpecifier(exportPath) {
 }
 
 async function writeExportContracts(consumerDirectory, corePack) {
-  const specifiers = Object.keys(corePack.exports).map(packageSpecifier);
+  const exportPaths = Object.keys(corePack.exports);
+  const specifiers = exportPaths.map(packageSpecifier);
+  const nodeOnlySpecifiers = exportPaths
+    .filter((exportPath) => !BROWSER_SAFE_CORE_EXPORTS.has(exportPath))
+    .map(packageSpecifier);
   const esmImports = specifiers.map(
     (specifier, index) =>
       `import * as module${index} from ${JSON.stringify(specifier)};`,
@@ -140,8 +146,16 @@ async function writeExportContracts(consumerDirectory, corePack) {
       join(consumerDirectory, "protocol-browser.mjs"),
       'import { resolveCoreModelCatalogReadiness } from "@agentlink/protocol/model-catalog";\nconsole.log(resolveCoreModelCatalogReadiness({ authenticated: true }).status);\n',
     ),
+    writeFile(
+      join(consumerDirectory, "core-voice-browser.mjs"),
+      'import { VoiceActivitySegmenter, encodeWavPcm16 } from "@agentlink/core/voice";\nconst segmenter = new VoiceActivitySegmenter({ sampleRate: 16000 });\nconsole.log(segmenter.push(new Int16Array(160)).level, encodeWavPcm16(new Int16Array(1), 16000).length);\n',
+    ),
   ]);
-  return { specifiers, exportCount: specifiers.length };
+  return {
+    specifiers,
+    nodeOnlySpecifiers,
+    exportCount: specifiers.length,
+  };
 }
 
 function exactLockedVersion(lock, packageName) {
@@ -334,7 +348,16 @@ async function main() {
       );
     }
     for (const [exportPath, conditions] of Object.entries(corePack.exports)) {
-      if (conditions.browser !== null || conditions.edge !== null) {
+      if (BROWSER_SAFE_CORE_EXPORTS.has(exportPath)) {
+        if (
+          conditions.browser?.default !== conditions.import?.default ||
+          conditions.edge?.default !== conditions.import?.default
+        ) {
+          throw new Error(
+            `Core export ${exportPath} must map browser and edge conditions to its ESM entry`,
+          );
+        }
+      } else if (conditions.browser !== null || conditions.edge !== null) {
         throw new Error(
           `Core export ${exportPath} must explicitly reject browser and edge conditions`,
         );
@@ -367,7 +390,7 @@ async function main() {
       packageJsonPath,
       `${JSON.stringify(packageJson, null, 2)}\n`,
     );
-    const { specifiers, exportCount } = await writeExportContracts(
+    const { nodeOnlySpecifiers, exportCount } = await writeExportContracts(
       consumerDirectory,
       corePack,
     );
@@ -511,9 +534,25 @@ async function main() {
       ],
       { cwd: consumerDirectory },
     );
+    await run(
+      bin("esbuild"),
+      [
+        "core-voice-browser.mjs",
+        "--bundle",
+        "--format=esm",
+        "--platform=browser",
+        "--conditions=browser",
+        "--outfile=core-voice-browser.js",
+      ],
+      { cwd: consumerDirectory },
+    );
     await Promise.all(
       ["browser", "edge"].map((target) =>
-        assertUnsupportedCondition(consumerDirectory, specifiers, target),
+        assertUnsupportedCondition(
+          consumerDirectory,
+          nodeOnlySpecifiers,
+          target,
+        ),
       ),
     );
 
@@ -532,6 +571,7 @@ async function main() {
           esmAndCjsExportsLoaded: true,
           browserAndEdgeImportsRejected: true,
           protocolBrowserImportAccepted: true,
+          coreVoiceBrowserImportAccepted: true,
           isolatedResolution: [
             resolution.expectedCoreRoot,
             resolution.expectedNodeHostRoot,

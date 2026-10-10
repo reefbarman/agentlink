@@ -351,6 +351,24 @@
         "default": "./dist/cjs/turnLeases.cjs"
       }
     },
+    "./voice": {
+      "browser": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "edge": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "import": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "require": {
+        "types": "./dist/cjs/voice.d.cts",
+        "default": "./dist/cjs/voice.cjs"
+      }
+    },
     "./web-access": {
       "browser": null,
       "edge": null,
