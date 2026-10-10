@@ -1,0 +1,24 @@
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_86eee317b3406e::t_fb4edfd1892f9a 13,30,47,64,81,92,103,114,125,142,159,176,193,204,215,226,237,254,271,288,305,316,327,338,349,366,383,400,417,428,439,450,461,478,495,512,529,540,551,562,573,590,607,624,641,652,663,674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ef16d0b704ec1d200f1d4124025e8c500e0d885",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_86eee317b3406e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "871e9834-ffc1-4c44-83ad-1a2e6ad055e9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
