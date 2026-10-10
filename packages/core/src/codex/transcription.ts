@@ -6,6 +6,7 @@ import {
 } from "./credentialResolution.js";
 import type { CodexAuthMethod } from "./models.js";
 import { OPENAI_API_BASE_URL, type CodexFetch } from "./openaiClient.js";
+import { getDefaultCodexTranscriptionFetch } from "./transcriptionFetch.js";
 
 /**
  * ChatGPT/Codex subscription transcription endpoint used by Codex Desktop
@@ -61,6 +62,12 @@ export interface TranscribeCodexAudioOptions<TContext> {
   /** Optional ISO-639-1 language hint such as `en` or `ja`. */
   readonly language?: string;
   readonly signal?: AbortSignal;
+  /**
+   * Defaults to a `node:https` fetch restricted to
+   * `CODEX_TRANSCRIPTION_TLS_CIPHERS`, which avoids chatgpt.com's bot
+   * challenge on runtimes such as Electron. Pass your own (with the same
+   * ciphers) to route through a proxy.
+   */
   readonly fetch?: CodexFetch;
   readonly env?: NodeJS.ProcessEnv;
   /** Model for the API-key endpoint. Ignored for ChatGPT/Codex OAuth. */
@@ -157,7 +164,7 @@ async function sendTranscriptionRequest<TContext>(
   });
   headers["Content-Type"] = multipart.contentType;
 
-  return await (options.fetch ?? globalThis.fetch)(url, {
+  return await (options.fetch ?? getDefaultCodexTranscriptionFetch())(url, {
     method: "POST",
     headers,
     body: multipart.body,

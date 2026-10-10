@@ -18,5 +18,10 @@ export * from "./codex/responsesTransport.js";
 export * from "./codex/ResponsesTransportSession.js";
 export * from "./codex/streamParser.js";
 export * from "./codex/transcription.js";
+export {
+  CODEX_TRANSCRIPTION_TLS_CIPHERS,
+  createCodexTranscriptionFetch,
+} from "./codex/transcriptionFetch.js";
+export type { CreateCodexTranscriptionFetchOptions } from "./codex/transcriptionFetch.js";
 export * from "./codex/translation.js";
 export * from "./codex/turnRouting.js";

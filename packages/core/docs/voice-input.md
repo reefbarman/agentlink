@@ -406,7 +406,7 @@ Read the caret position when each piece arrives, not when recording started, so 
 | `invalid_response`             | Unexpected response shape. Report it.                                                |
 
 - ChatGPT/Codex OAuth uses ChatGPT's dictation endpoint (`CODEX_TRANSCRIBE_URL`). Codex uses it too, but OpenAI does not document it as a public API, so it may change. Usage counts against the user's ChatGPT plan. An OpenAI API key uses the public Audio API instead.
-- Cloudflare inspects the TLS handshake. Electron-hosted Node is challenged with its default cipher list, while plain Node is accepted. In Electron, pass a `fetch` option whose connection uses a narrower ECDHE/AEAD cipher list, for example an undici `Agent` with `connect.ciphers`.
+- Cloudflare inspects the TLS handshake. Electron-hosted Node is challenged with its default cipher list. `transcribeCodexAudio` therefore uploads by default through undici with a narrower ECDHE/AEAD cipher list (`CODEX_TRANSCRIPTION_TLS_CIPHERS`) and honours proxy environment variables, so hosts need no extra setup. Do not pass your own `fetch` unless you need to; if you do, give it the same cipher list (`createCodexTranscriptionFetch()` builds one). Always call it from the Node side of your app, never from a browser or CEF page.
 - Responses are final text per utterance. Text appears about a second after each pause, not word by word.
 
 ## Smoke test
