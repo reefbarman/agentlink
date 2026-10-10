@@ -1,0 +1,35 @@
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 466-468
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 1168
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 94
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 405-434
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 235-236,245-247,250-265,269
+apps/server/src/assistantServer.ts
+  h_e08a86bb3a33a2 82-88,175-176,186-187,192,198,201-203,206-217,226,229-242,245
+  s_0061b657755cf2::t_aa3f3b8c1b095c 185,188,227-228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2185cb7b446a3df802098eea8f92f348f68ed3f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0061b657755cf2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46dae513-fb17-41ff-9894-1571b3a0979d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
