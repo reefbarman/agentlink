@@ -7,6 +7,38 @@ import { DesktopSidebar } from "./DesktopSidebar";
 afterEach(cleanup);
 
 describe("DesktopSidebar", () => {
+  it("marks chats a scheduled job started", () => {
+    const { container } = render(
+      <DesktopSidebar
+        sessions={[
+          {
+            id: "run",
+            title: "Brief · 12 Oct",
+            mode: "ask",
+            model: "test-model",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            messageCount: 2,
+            createdAt: 1,
+            lastActiveAt: 2,
+            scheduled: true,
+            activity: "unread",
+          },
+        ]}
+        currentSessionId={null}
+        onSelect={() => undefined}
+        onNew={() => undefined}
+        onManage={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Brief · 12 Oct (scheduled run, New reply)",
+      }),
+    ).toBeTruthy();
+    expect(container.querySelector(".desktop-chat-scheduled")).not.toBeNull();
+  });
+
   it("searches chats and forwards the selected session and navigation actions", () => {
     const onSelect = vi.fn();
     const onNew = vi.fn();

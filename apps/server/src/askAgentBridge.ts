@@ -136,6 +136,16 @@ export interface AskAgentBridgeOptions {
   readonly now?: () => number;
   /** Background agent refresh interval while one is active (tests). */
   readonly agentRefreshMs?: number;
+  /** The Assistant's inbox and jobs status, carried in every snapshot. */
+  readonly assistantStatus?: () => {
+    readonly inboxUnread: number;
+    readonly revision: number;
+  };
+  /**
+   * Stop the scheduled run working in this chat, when the owner presses
+   * Stop while viewing it. Without it the chat's turn is cancelled.
+   */
+  readonly stopRun?: (workspaceSessionId: string) => Promise<void>;
 }
 
 export interface AskAgentBridge {
@@ -150,13 +160,28 @@ export interface AskAgentBridge {
   activity(): AskAgentBridgeActivity;
   /**
    * Show a chat started outside this UI (a scheduled job's run) in the
-   * chat list, titled and unread, once its work has finished.
+   * chat list, titled and unread, once its work has finished. Ends any
+   * live following of it.
    */
   adoptSession(
     auth: AssistantServerAuth,
     workspaceSessionId: string,
     title: string,
   ): Promise<void>;
+  /**
+   * Show a scheduled run's chat while it works: its prompt, streamed text
+   * and tool calls, and any approval it waits for (answered from the chat
+   * like any other). `adoptSession` ends the following.
+   */
+  followSession(
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    run: { readonly title: string; readonly prompt: string },
+  ): void;
+  /** Make a chat the open one, for links from the inbox or jobs. */
+  openSession(auth: AssistantServerAuth, sessionId: string): Promise<boolean>;
+  /** Republish the snapshot (the inbox or jobs changed). */
+  refresh(): void;
   close(): Promise<void>;
 }
 
@@ -173,6 +198,8 @@ interface BridgeState {
   hidden: string[];
   /** Workspace sessions that finished a turn nobody was viewing. */
   unread: string[];
+  /** Workspace sessions started by scheduled jobs. */
+  scheduled: string[];
 }
 
 type ApprovalMode = "autonomous" | "ask";
@@ -182,6 +209,22 @@ interface PendingInteraction {
   readonly interactionId: string;
   readonly interactionRevision: string;
 }
+
+/** A scheduled run's chat, shown live while the run works. */
+interface FollowedRun {
+  readonly workspaceSessionId: string;
+  /** Held by the store too: its updates land here. */
+  readonly session: BrowserGatewayAskAgentPersistedSession;
+  readonly messageId: string;
+  readonly toolStarts: Map<string, number>;
+  approval:
+    | (PendingInteraction & { readonly request: ApprovalRequest })
+    | undefined;
+  subscription: { unsubscribe(): void } | undefined;
+}
+
+/** Approval IDs of followed runs: `run:<session>:<interaction>`. */
+const RUN_APPROVAL_PREFIX = "run:";
 
 export function modelKey(model: AgentModelReference): string {
   return `${model.providerId}/${model.modelId}`;
@@ -275,6 +318,8 @@ export async function createAskAgentBridge(
   applyDefaults();
 
   let pendingInteraction: PendingInteraction | undefined;
+  /** Scheduled runs' chats shown live, by workspace session. */
+  const followed = new Map<string, FollowedRun>();
   /** The UI session whose turn is running, if any. */
   let runningSession: string | undefined;
   let loaded: Promise<void> | undefined;
@@ -324,9 +369,11 @@ export async function createAskAgentBridge(
       now: now(),
       theme,
       modelCredentialStatus: CREDENTIAL_STATUS,
-      // A chat's own approval first; then a background agent's.
+      // A chat's own approval first (one of its own turns, or the
+      // scheduled run working in it); then a background agent's.
       approval:
         controller.getPendingApproval() ??
+        followed.get(store.getActiveSessionId())?.approval?.request ??
         agentApprovalRequest(agentWatch.records),
       memoryCandidateNudge: null,
     });
@@ -336,6 +383,9 @@ export async function createAskAgentBridge(
         ...state.snapshot,
         background: agentWatch.records.map(toAgentCard),
         approvalMode: activeApprovalMode(),
+        ...(options.assistantStatus
+          ? { assistant: { ...options.assistantStatus() } }
+          : {}),
       },
     };
   };
@@ -425,6 +475,8 @@ export async function createAskAgentBridge(
       }
       sessions.sort((left, right) => right.lastActiveAt - left.lastActiveAt);
       store.loadHistory({ sessions });
+      // Runs working now keep their live chat over the partial history.
+      for (const run of followed.values()) store.upsertSession(run.session);
     })().catch((error: unknown) => {
       loaded = undefined;
       throw error;
@@ -434,7 +486,9 @@ export async function createAskAgentBridge(
 
   const workspaceSessionFor = (storeSessionId: string) =>
     state.aliases[storeSessionId] ??
-    (sessionModels.has(storeSessionId) ? storeSessionId : undefined);
+    (sessionModels.has(storeSessionId) || followed.has(storeSessionId)
+      ? storeSessionId
+      : undefined);
 
   /** Re-read the watched chat's agents; overlapping calls coalesce. */
   const refreshAgents = (): Promise<void> => {
@@ -673,6 +727,10 @@ export async function createAskAgentBridge(
     ) {
       return "needs-you";
     }
+    const run = workspaceSessionId
+      ? followed.get(workspaceSessionId)
+      : undefined;
+    if (run) return run.approval ? "needs-you" : "running";
     const watched =
       workspaceSessionId !== undefined &&
       workspaceSessionId === agentWatch.sessionId;
@@ -826,6 +884,72 @@ export async function createAskAgentBridge(
   };
 
   /**
+   * Project a turn's text and tool events into an assistant message, which
+   * may be in any chat. False for other events.
+   */
+  const projectTurnContent = (
+    messageId: string,
+    toolStarts: Map<string, number>,
+    event: EmbeddedAgentTurnEvent,
+  ): boolean => {
+    switch (event.type) {
+      case "text.delta":
+        controller.appendAssistantDelta(messageId, event.text);
+        schedule();
+        return true;
+      case "tool.requested":
+      case "tool.started":
+        if (!toolStarts.has(event.toolCallId)) {
+          toolStarts.set(event.toolCallId, event.emittedAt);
+        }
+        controller.startAssistantToolCall({
+          messageId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.displayInput ?? {},
+        });
+        schedule();
+        return true;
+      case "tool.completed":
+      case "tool.failed":
+        // The parent already saw how these agents ended: no wake-up.
+        if (
+          event.type === "tool.completed" &&
+          (event.toolName === "get_background_result" ||
+            event.toolName === "get_background_status")
+        ) {
+          for (const id of terminalChildIdsIn(event.displayContent)) {
+            delivery.handled.add(id);
+          }
+        }
+        controller.completeAssistantToolCall({
+          messageId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: {},
+          result:
+            event.type === "tool.failed"
+              ? `Error: ${event.error.message}`
+              : event.displayContent === undefined
+                ? ""
+                : truncate(
+                    stringify(event.displayContent),
+                    MAX_TOOL_RESULT_LENGTH,
+                  ),
+          durationMs: Math.max(
+            0,
+            event.emittedAt -
+              (toolStarts.get(event.toolCallId) ?? event.emittedAt),
+          ),
+        });
+        schedule();
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  /**
    * Run one turn and project its events until it settles, including any
    * approval pauses (each resume is a new task on the same session).
    */
@@ -850,58 +974,8 @@ export async function createAskAgentBridge(
     };
 
     const onTurnEvent = (event: EmbeddedAgentTurnEvent) => {
+      if (projectTurnContent(messageId, toolStarts, event)) return;
       switch (event.type) {
-        case "text.delta":
-          controller.appendAssistantDelta(messageId, event.text);
-          schedule();
-          return;
-        case "tool.requested":
-        case "tool.started":
-          if (!toolStarts.has(event.toolCallId)) {
-            toolStarts.set(event.toolCallId, event.emittedAt);
-          }
-          controller.startAssistantToolCall({
-            messageId,
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            input: event.displayInput ?? {},
-          });
-          schedule();
-          return;
-        case "tool.completed":
-        case "tool.failed":
-          // The parent already saw how these agents ended: no wake-up.
-          if (
-            event.type === "tool.completed" &&
-            (event.toolName === "get_background_result" ||
-              event.toolName === "get_background_status")
-          ) {
-            for (const id of terminalChildIdsIn(event.displayContent)) {
-              delivery.handled.add(id);
-            }
-          }
-          controller.completeAssistantToolCall({
-            messageId,
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            input: {},
-            result:
-              event.type === "tool.failed"
-                ? `Error: ${event.error.message}`
-                : event.displayContent === undefined
-                  ? ""
-                  : truncate(
-                      stringify(event.displayContent),
-                      MAX_TOOL_RESULT_LENGTH,
-                    ),
-            durationMs: Math.max(
-              0,
-              event.emittedAt -
-                (toolStarts.get(event.toolCallId) ?? event.emittedAt),
-            ),
-          });
-          schedule();
-          return;
         case "interaction.required": {
           pendingInteraction = {
             workspaceSessionId,
@@ -1030,6 +1104,10 @@ export async function createAskAgentBridge(
     const requestedSessionId =
       typeof body.sessionId === "string" ? body.sessionId.trim() : "";
     if (closed) throw new HttpError(503, "server_closing");
+    // A scheduled run is working in that chat: write once it has finished.
+    if (followed.has(requestedSessionId || store.getActiveSessionId())) {
+      throw new HttpError(409, "ask_agent_turn_in_progress");
+    }
     if (
       requestedSessionId &&
       !store.hasSession(requestedSessionId) &&
@@ -1150,6 +1228,27 @@ export async function createAskAgentBridge(
       sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
       return;
     }
+    if (body.id.startsWith(RUN_APPROVAL_PREFIX)) {
+      const run = [...followed.values()].find(
+        (candidate) => candidate.approval?.request.id === body.id,
+      );
+      const waiting = run?.approval;
+      if (!run || !waiting) throw new HttpError(404, "approval_not_found");
+      await operations.answerInteraction(
+        auth,
+        projectId,
+        run.workspaceSessionId,
+        {
+          interactionId: waiting.interactionId,
+          interactionRevision: waiting.interactionRevision,
+          decision: ALLOW_DECISIONS.has(body.decision) ? "allow" : "deny",
+        },
+      );
+      if (run.approval === waiting) run.approval = undefined;
+      const publication = await publishNow();
+      sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
+      return;
+    }
     const pending = pendingInteraction;
     const approval = controller.getPendingApproval();
     if (!pending || !approval || approval.id !== body.id) {
@@ -1179,6 +1278,23 @@ export async function createAskAgentBridge(
     response: ServerResponse,
     auth: AssistantServerAuth,
   ) => {
+    // Stop pressed in a chat a scheduled run is working in: stop the run.
+    const run = followed.get(store.getActiveSessionId());
+    if (run) {
+      if (options.stopRun) await options.stopRun(run.workspaceSessionId);
+      else {
+        await operations
+          .cancel(auth, projectId, run.workspaceSessionId)
+          .catch(() => undefined);
+      }
+      const publication = await publishNow();
+      sendJson(response, 200, {
+        ok: true,
+        stopped: true,
+        snapshot: publication.snapshot,
+      });
+      return;
+    }
     // The running turn may be in another chat (a background result).
     const storeSessionId = runningSession ?? store.getActiveSessionId();
     const stoppedSessionId = workspaceSessionFor(storeSessionId);
@@ -1206,6 +1322,110 @@ export async function createAskAgentBridge(
         ? { ok: true, stopped: true, snapshot: publication.snapshot }
         : { ok: true, stopped: false },
     );
+  };
+
+  /** Open a chat, resuming its live state if a turn or run works in it. */
+  const loadChat = (sessionId: string): boolean => {
+    if (
+      !store.loadSession(sessionId, {
+        streaming:
+          followed.has(sessionId) ||
+          (runningSession === sessionId && controller.hasActiveTurn()),
+      })
+    ) {
+      return false;
+    }
+    markRead(sessionId);
+    const workspaceSessionId = workspaceSessionFor(sessionId);
+    const model = workspaceSessionId
+      ? sessionModels.get(workspaceSessionId)
+      : undefined;
+    if (model) store.setModel(modelKey(model));
+    return true;
+  };
+
+  /** Follow a scheduled run's chat: project its events as they happen. */
+  const followRun = (
+    workspaceSessionId: string,
+    run: { readonly title: string; readonly prompt: string },
+  ) => {
+    const at = now();
+    const session: BrowserGatewayAskAgentPersistedSession = {
+      id: workspaceSessionId,
+      title: run.title,
+      createdAt: at,
+      lastActiveAt: at,
+      messages: [
+        {
+          id: `${workspaceSessionId}-prompt`,
+          role: "user",
+          content: run.prompt,
+          timestamp: at,
+          blocks: [{ type: "text", text: run.prompt }],
+        },
+      ],
+      nextMessageSequence: 1,
+    };
+    store.upsertSession(session);
+    const message = store.startAssistantMessage({
+      now: at,
+      sessionId: workspaceSessionId,
+    });
+    const entry: FollowedRun = {
+      workspaceSessionId,
+      session,
+      messageId: message.id,
+      toolStarts: new Map(),
+      approval: undefined,
+      subscription: undefined,
+    };
+    followed.set(workspaceSessionId, entry);
+
+    const onEvent = ({ event }: SequencedSessionEvent) => {
+      if (followed.get(workspaceSessionId) !== entry) return;
+      if (event.kind === "task") {
+        // Answered (here or on another device): the run goes on.
+        if (event.state === "started" && entry.approval) {
+          entry.approval = undefined;
+          void publishNow();
+        }
+        return;
+      }
+      if (event.kind !== "turn") return;
+      const turnEvent = event.event;
+      if (projectTurnContent(entry.messageId, entry.toolStarts, turnEvent)) {
+        return;
+      }
+      if (turnEvent.type === "interaction.required") {
+        const request = approvalFor(turnEvent);
+        entry.approval = {
+          workspaceSessionId,
+          interactionId: turnEvent.interaction.interactionId,
+          interactionRevision: turnEvent.interactionRevision,
+          request: {
+            ...request,
+            id: `${RUN_APPROVAL_PREFIX}${workspaceSessionId}:${turnEvent.interaction.interactionId}`,
+          },
+        };
+        void publishNow();
+      }
+    };
+    const key = operations.sessionKey(projectId, workspaceSessionId);
+    // From the start: events before this call belong to the run too.
+    const subscription = options.events.subscribe(key, 0, onEvent);
+    entry.subscription = subscription;
+    if (!subscription.reset) {
+      for (const event of subscription.replay) onEvent(event);
+    }
+    void publishNow();
+  };
+
+  /** Stop following a run; its chat stays. */
+  const unfollowRun = (workspaceSessionId: string) => {
+    const entry = followed.get(workspaceSessionId);
+    if (!entry) return;
+    entry.subscription?.unsubscribe();
+    followed.delete(workspaceSessionId);
   };
 
   const readSessionId = async (
@@ -1342,7 +1562,15 @@ export async function createAskAgentBridge(
           sendJson(response, 200, {
             sessions: store.listSessions().map((session) => {
               const activity = activityOf(session.id);
-              return activity ? { ...session, activity } : session;
+              const workspaceSessionId = workspaceSessionFor(session.id);
+              const scheduled =
+                workspaceSessionId !== undefined &&
+                state.scheduled.includes(workspaceSessionId);
+              return {
+                ...session,
+                ...(activity ? { activity } : {}),
+                ...(scheduled ? { scheduled } : {}),
+              };
             }),
           });
           return true;
@@ -1401,22 +1629,9 @@ export async function createAskAgentBridge(
       }
       case "/api/ask-agent/session/load": {
         const { sessionId } = await readSessionId(request, auth);
-        if (
-          !sessionId ||
-          !store.loadSession(sessionId, {
-            // Back to the chat whose turn is still running.
-            streaming:
-              runningSession === sessionId && controller.hasActiveTurn(),
-          })
-        ) {
+        if (!sessionId || !loadChat(sessionId)) {
           throw new HttpError(404, "ask_agent_session_not_found");
         }
-        markRead(sessionId);
-        const workspaceSessionId = workspaceSessionFor(sessionId);
-        const model = workspaceSessionId
-          ? sessionModels.get(workspaceSessionId)
-          : undefined;
-        if (model) store.setModel(modelKey(model));
         const publication = await publishNow();
         sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
         return true;
@@ -1427,9 +1642,10 @@ export async function createAskAgentBridge(
           throw new HttpError(404, "ask_agent_session_not_found");
         }
         if (
-          controller.hasActiveTurn() &&
-          (sessionId === runningSession ||
-            sessionId === store.getActiveSessionId())
+          followed.has(sessionId) ||
+          (controller.hasActiveTurn() &&
+            (sessionId === runningSession ||
+              sessionId === store.getActiveSessionId()))
         ) {
           throw new HttpError(409, "ask_agent_turn_in_progress");
         }
@@ -1517,44 +1733,71 @@ export async function createAskAgentBridge(
     },
     async adoptSession(auth, workspaceSessionId, title) {
       if (closed) return;
+      unfollowRun(workspaceSessionId);
       state.titles[workspaceSessionId] = title.slice(0, MAX_TITLE_LENGTH);
-      if (!state.unread.includes(workspaceSessionId)) {
+      if (!state.scheduled.includes(workspaceSessionId)) {
+        state.scheduled.push(workspaceSessionId);
+      }
+      // Unread unless the owner is watching it finish.
+      const watching =
+        store.getActiveSessionId() === workspaceSessionId && sse.size > 0;
+      if (!watching && !state.unread.includes(workspaceSessionId)) {
         state.unread.push(workspaceSessionId);
       }
       await saveState().catch(() => undefined);
       // Not loaded yet: it loads with every other chat on the first visit.
       if (!loaded) return;
-      // After any running or queued turn: replacing the history mid-turn
-      // would drop that turn's live state.
-      const previous = turnChain;
-      let release!: () => void;
-      turnChain = new Promise<void>((resolve) => {
-        release = resolve;
-      });
       try {
-        await previous;
         await loaded;
-        if (closed || storeSessionFor(workspaceSessionId)) return;
+        if (closed) return;
+        // The run's own record replaces what was streamed live.
         const session = await readHistorySession(
           auth,
           workspaceSessionId,
           undefined,
         );
         if (!session || closed) return;
-        const history = store.getHistorySnapshot();
-        store.loadHistory({
-          ...history,
-          sessions: [session, ...history.sessions],
-        });
+        session.title = state.titles[workspaceSessionId] ?? session.title;
+        store.upsertSession(session);
+        // Watching it: its live state ends with the run.
+        if (
+          store.getActiveSessionId() === workspaceSessionId &&
+          !controller.hasActiveTurn()
+        ) {
+          store.loadSession(workspaceSessionId);
+        }
         await publishNow();
       } catch {
         // It still appears, unread, the next time chats load.
-      } finally {
-        release();
       }
+    },
+    followSession(_auth, workspaceSessionId, run) {
+      if (closed || followed.has(workspaceSessionId)) return;
+      state.titles[workspaceSessionId] = run.title.slice(0, MAX_TITLE_LENGTH);
+      if (!state.scheduled.includes(workspaceSessionId)) {
+        state.scheduled.push(workspaceSessionId);
+      }
+      void saveState().catch(() => undefined);
+      followRun(workspaceSessionId, {
+        title: state.titles[workspaceSessionId]!,
+        prompt: run.prompt,
+      });
+    },
+    async openSession(auth, sessionId) {
+      if (closed) return false;
+      await ensureLoaded(auth);
+      if (!loadChat(sessionId)) return false;
+      watchActiveAgents(auth);
+      await publishNow();
+      return true;
+    },
+    refresh() {
+      if (closed || sse.size === 0) return;
+      void publishNow().catch(() => undefined);
     },
     async close() {
       closed = true;
+      for (const id of followed.keys()) unfollowRun(id);
       agentWatch.subscription?.unsubscribe();
       for (const subscription of delivery.parents.values()) {
         subscription.unsubscribe();
@@ -1575,7 +1818,7 @@ async function readState(file: string): Promise<BridgeState> {
     raw = await fs.readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { aliases: {}, titles: {}, hidden: [], unread: [] };
+      return { aliases: {}, titles: {}, hidden: [], unread: [], scheduled: [] };
     }
     throw error;
   }
@@ -1590,6 +1833,7 @@ async function readState(file: string): Promise<BridgeState> {
     titles: stringRecord(parsed.titles),
     hidden: stringList(parsed.hidden),
     unread: stringList(parsed.unread),
+    scheduled: stringList(parsed.scheduled),
   };
 }
 

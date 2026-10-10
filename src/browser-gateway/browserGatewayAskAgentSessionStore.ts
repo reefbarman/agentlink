@@ -223,6 +223,11 @@ export interface BrowserGatewayAskAgentSnapshot {
    * and command, for a host that offers the choice; absent otherwise.
    */
   approvalMode?: "autonomous" | "ask";
+  /**
+   * The Assistant's unread inbox entries, and a revision that changes when
+   * its inbox or scheduled jobs change; absent for other hosts.
+   */
+  assistant?: { inboxUnread: number; revision: number };
   diffs: [];
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion: 0;
@@ -1188,6 +1193,20 @@ export class BrowserGatewayAskAgentSessionStore {
     session.messages.push(message);
     session.lastActiveAt = params.now;
     return message;
+  }
+
+  /**
+   * Insert or replace a host-projected session (for example a chat a
+   * scheduled job is running) without switching chats or changing the
+   * streaming state. The session object is kept, not copied, so later
+   * message updates through this store reach the caller's copy too.
+   */
+  upsertSession(session: BrowserGatewayAskAgentPersistedSession): void {
+    const index = this.sessions.findIndex(
+      (candidate) => candidate.id === session.id,
+    );
+    if (index >= 0) this.sessions[index] = session;
+    else this.sessions.unshift(session);
   }
 
   startAssistantMessage(params: {

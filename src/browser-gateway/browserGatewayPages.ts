@@ -1,4 +1,4 @@
-import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
+import type { BrowserGatewayDataPlaneMode } from "@agentlink/protocol/browser-gateway-data-plane-mode";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 
 /**

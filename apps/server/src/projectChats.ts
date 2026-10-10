@@ -332,6 +332,15 @@ export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
       if (!available().some((project) => project.id === projectId)) {
         throw new HttpError(404, "project_not_found");
       }
+      // Optionally open one of its chats (a link from the inbox or jobs).
+      const sessionId =
+        typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+      if (
+        sessionId &&
+        !(await bridges.get(projectId)?.openSession(auth, sessionId))
+      ) {
+        throw new HttpError(404, "ask_agent_session_not_found");
+      }
       selectCookie(response, projectId);
       sendJson(response, 200, { ok: true, ...listResponse(projectId) });
       return true;

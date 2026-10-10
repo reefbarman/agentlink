@@ -121,34 +121,40 @@ export function DesktopSidebar({
         </label>
         <h2 class="desktop-sidebar-heading">Your chats</h2>
         <nav class="desktop-chat-list" aria-label="Saved chats">
-          {visibleSessions.map((session) => (
-            <button
-              key={session.id}
-              class={`desktop-chat-link${session.id === currentSessionId ? " active" : ""}`}
-              type="button"
-              aria-current={
-                session.id === currentSessionId ? "page" : undefined
-              }
-              title={
-                session.activity
-                  ? `${session.title || "Untitled chat"} (${ACTIVITY_LABELS[session.activity]})`
-                  : session.title || "Untitled chat"
-              }
-              aria-label={
-                session.activity
-                  ? `${session.title || "Untitled chat"} (${ACTIVITY_LABELS[session.activity]})`
-                  : undefined
-              }
-              onClick={() => onSelect(session.id)}
-            >
-              <span class="desktop-chat-title">
-                {session.title || "Untitled chat"}
-              </span>
-              {session.activity && (
-                <ChatActivityIndicator activity={session.activity} />
-              )}
-            </button>
-          ))}
+          {visibleSessions.map((session) => {
+            const title = session.title || "Untitled chat";
+            const notes = [
+              session.scheduled ? "scheduled run" : undefined,
+              session.activity ? ACTIVITY_LABELS[session.activity] : undefined,
+            ].filter(Boolean);
+            const label = notes.length
+              ? `${title} (${notes.join(", ")})`
+              : undefined;
+            return (
+              <button
+                key={session.id}
+                class={`desktop-chat-link${session.id === currentSessionId ? " active" : ""}`}
+                type="button"
+                aria-current={
+                  session.id === currentSessionId ? "page" : undefined
+                }
+                title={label ?? title}
+                aria-label={label}
+                onClick={() => onSelect(session.id)}
+              >
+                {session.scheduled && (
+                  <i
+                    class="codicon codicon-history desktop-chat-scheduled"
+                    aria-hidden="true"
+                  />
+                )}
+                <span class="desktop-chat-title">{title}</span>
+                {session.activity && (
+                  <ChatActivityIndicator activity={session.activity} />
+                )}
+              </button>
+            );
+          })}
           {visibleSessions.length === 0 && (
             <p class="desktop-sidebar-empty">
               {query

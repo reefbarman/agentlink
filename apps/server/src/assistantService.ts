@@ -55,7 +55,14 @@ import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { createJobRoutes } from "./jobRoutes.js";
 import { createJobRunner } from "./jobRunner.js";
 import { serverTimeZone } from "./jobSchedule.js";
-import { isActiveRun, openJobStore } from "./jobStore.js";
+import {
+  isActiveRun,
+  openJobStore,
+  type JobDefinition,
+  type JobRun,
+} from "./jobStore.js";
+import { createInboxRoutes } from "./inboxRoutes.js";
+import { inboxEntryForRun, openInboxStore } from "./inboxStore.js";
 import {
   DEFAULT_NETWORK_POLICY,
   egressProxyUrl,
@@ -132,6 +139,11 @@ export function serverProjectCatalogFile(
 /** Scheduled job definitions and run history. */
 export function serverJobsDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "jobs");
+}
+
+/** The owner's inbox of job results and approvals waiting. */
+export function serverInboxDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "inbox");
 }
 
 /** git where clones run: the command worker image, or this machine. */
@@ -569,10 +581,23 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  const inbox = await openInboxStore({
+    directory: serverInboxDirectory(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
   /** Chat bridges by project, closed by the server once it exists. */
   const bridges = new Map<string, AskAgentBridge>();
+  /** Changes when the inbox or a job's runs change; open apps refetch. */
+  let assistantRevision = 0;
+  const assistantChanged = () => {
+    assistantRevision += 1;
+    for (const bridge of bridges.values()) bridge.refresh();
+  };
   // Bound once the routes exist; children cannot start before then.
   let agentNotifier:
     | Pick<
@@ -712,6 +737,24 @@ export async function startAssistantService(
           config,
           projectId === legacyChatProject ? undefined : projectId,
         ),
+        assistantStatus: () => ({
+          inboxUnread: inbox.unreadCount(),
+          revision: assistantRevision,
+        }),
+        // Stop in a run's chat stops the run, recorded as cancelled.
+        stopRun: async (workspaceSessionId) => {
+          const job = jobStore
+            .list()
+            .find((candidate) =>
+              jobStore
+                .runs(candidate.id)
+                .some(
+                  (run) =>
+                    isActiveRun(run) && run.sessionId === workspaceSessionId,
+                ),
+            );
+          if (job) await jobs.stopJob(job.id, "cancelled");
+        },
       });
     for (const { id } of hosts) {
       const opened = await openBridge(id);
@@ -751,6 +794,21 @@ export async function startAssistantService(
         return bridge;
       },
     });
+    /** Raise or settle the inbox entry a run's new record calls for. */
+    const recordInInbox = (run: JobRun, job: JobDefinition) => {
+      void (async () => {
+        // Answered: the reminder to approve is done with.
+        if (run.status === "running") {
+          await inbox.markRunRead(run.runId, "needs_approval");
+        }
+        const entry = inboxEntryForRun(run, job);
+        if (entry) await inbox.add(entry, Date.now());
+      })()
+        .catch((error: unknown) => {
+          log(`Could not update the inbox: ${message(error)}`);
+        })
+        .finally(assistantChanged);
+    };
     // Each run is a new chat in its project, acting for the owner.
     const jobs = createJobRunner({
       store: jobStore,
@@ -760,11 +818,25 @@ export async function startAssistantService(
       resolveModel,
       projectDefaults,
       log,
-      onRunChanged: ({ run, auth }) => {
-        if (isActiveRun(run) || !run.sessionId) return;
-        void bridges
-          .get(run.projectId)
-          ?.adoptSession(auth, run.sessionId, run.title ?? "Scheduled run");
+      onRunRecovered: ({ run, job }) => recordInInbox(run, job),
+      onRunChanged: ({ run, job, auth }) => {
+        const bridge = bridges.get(run.projectId);
+        // Live in its chat while it works; a finished chat once it ends.
+        if (bridge && run.sessionId) {
+          if (isActiveRun(run)) {
+            bridge.followSession(auth, run.sessionId, {
+              title: run.title ?? job.name,
+              prompt: job.prompt,
+            });
+          } else {
+            void bridge.adoptSession(
+              auth,
+              run.sessionId,
+              run.title ?? "Scheduled run",
+            );
+          }
+        }
+        recordInInbox(run, job);
       },
     });
     const jobRoutes = createJobRoutes({
@@ -777,6 +849,13 @@ export async function startAssistantService(
       models: configuredModels(config),
       defaultTimeZone: serverTimeZone(),
     });
+    const inboxRoutes = createInboxRoutes({
+      store: inbox,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      onChanged: assistantChanged,
+    });
     const assetVersion = randomUUID();
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
@@ -786,10 +865,12 @@ export async function startAssistantService(
       handleRequest: async (request, response, auth) =>
         (await chat.handleRequest(request, response, auth)) ||
         (await jobRoutes.handleRequest(request, response, auth)) ||
+        (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       onClose: async () => {
         // Before the routes stop turns: open runs are recorded interrupted.
         await jobs.close();
+        await inbox.flush();
         await chat.close();
         await routes.close();
       },

@@ -2188,3 +2188,423 @@ html.quick-ask-document body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* A chat a scheduled job started: a small clock before its title. */
+.browser-shell.browser-shell-desktop .desktop-chat-scheduled {
+  flex: none;
+  color: var(--ag-muted);
+  font-size: 13px;
+}
+
+/* Assistant Jobs and Inbox: sidebar entries and their panels. */
+.browser-shell.browser-shell-desktop .assistant-hub {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-button {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-button:hover {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-button > .codicon {
+  color: var(--ag-accent-text);
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-badge {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog.assistant-panel {
+  width: min(760px, 100%);
+  min-height: min(420px, calc(100vh - 32px));
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog > header {
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog h2 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(
+    .assistant-panel-action,
+    .assistant-job-actions > button:not(.icon-button),
+    .assistant-run > button
+  ) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-action.primary {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(
+    .assistant-panel-action,
+    .assistant-job-actions > button,
+    .assistant-run > button
+  ):disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(
+    .assistant-job-actions > button:not(.icon-button),
+    .assistant-run > button,
+    .assistant-panel-action:not(.primary)
+  ):hover:not(:disabled) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+  color: var(--ag-muted);
+  text-align: center;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-empty .codicon {
+  color: var(--ag-accent-text);
+  font-size: 28px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-empty p {
+  max-width: 420px;
+  margin: 0;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.assistant-job-list, .assistant-run-list, .assistant-inbox-list) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-shell.browser-shell-desktop :is(.assistant-job, .assistant-run) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-main {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-main strong {
+  color: var(--ag-title);
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-meta,
+.browser-shell.browser-shell-desktop .assistant-run-summary {
+  color: var(--ag-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status {
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status.tone-ok {
+  color: #79e2bd;
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status.tone-busy {
+  color: var(--ag-accent-text);
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status.tone-warn {
+  color: #f0b44c;
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status.tone-bad {
+  color: var(--vscode-errorForeground, #ff8f8f);
+}
+
+.browser-shell.browser-shell-desktop .assistant-run-status.tone-muted {
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* An on/off switch over a native checkbox. */
+.browser-shell.browser-shell-desktop .assistant-switch {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-switch span {
+  flex: 1;
+  border-radius: 999px;
+  background: var(--ag-border-2);
+  transition: background 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop .assistant-switch span::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ag-text);
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop .assistant-switch input:checked + span {
+  background: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-switch
+  input:checked
+  + span::after {
+  background: var(--ag-accent-ink);
+  transform: translateX(14px);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-switch
+  input:focus-visible
+  + span {
+  outline: 2px solid var(--ag-accent-a35);
+  outline-offset: 2px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-schedule > * {
+  flex: 1 1 120px;
+  width: auto !important;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  label.assistant-job-day,
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  label.assistant-job-enabled {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--ag-text);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  label.assistant-job-day {
+  padding: 5px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-day:has(input:checked) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-group h3 {
+  margin: 4px 0 8px;
+  color: var(--ag-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-entry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-entry.unread {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-open {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-open:disabled {
+  cursor: default;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-open > .codicon {
+  margin-top: 2px;
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop
+  .kind-run_completed
+  .assistant-inbox-open
+  > .codicon {
+  color: #79e2bd;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.kind-run_failed, .kind-run_blocked)
+  .assistant-inbox-open
+  > .codicon {
+  color: var(--vscode-errorForeground, #ff8f8f);
+}
+
+.browser-shell.browser-shell-desktop
+  .kind-needs_approval
+  .assistant-inbox-open
+  > .codicon {
+  color: #f0b44c;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-inbox-entry:not(.unread)
+  strong {
+  font-weight: 500;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-text > span {
+  color: var(--ag-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-open time {
+  flex: none;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-inbox-entry > .icon-button {
+  margin-right: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-shell.browser-shell-desktop .assistant-switch span,
+  .browser-shell.browser-shell-desktop .assistant-switch span::after {
+    transition: none;
+  }
+}

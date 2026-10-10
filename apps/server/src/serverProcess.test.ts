@@ -612,6 +612,21 @@ describe("agentlink-server process", () => {
         await expect(
           request({ path: `/api/projects/home/sessions/${sessionId}`, cookie }),
         ).resolves.toMatchObject({ status: 200 });
+        // The owner hears about it in the inbox, linked to the run's chat.
+        const inbox = await request({ path: "/api/inbox", cookie });
+        expect(inbox.body).toMatchObject({
+          unread: 1,
+          entries: [
+            {
+              kind: "run_failed",
+              title: "Check in was interrupted",
+              projectId: "home",
+              jobId: job.id,
+              sessionId,
+              read: false,
+            },
+          ],
+        });
       } finally {
         second.child.kill("SIGTERM");
         await second.exited;

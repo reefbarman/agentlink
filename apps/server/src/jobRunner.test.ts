@@ -183,6 +183,7 @@ async function setup(
         : undefined,
     projectDefaults: () => ({ model: DEFAULT_MODEL, reasoningEffort: "low" }),
     onRunChanged: ({ run }) => changes.push(run),
+    onRunRecovered: ({ run }) => changes.push(run),
     ...(options.maxConcurrentRuns
       ? { maxConcurrentRuns: options.maxConcurrentRuns }
       : {}),
@@ -455,6 +456,10 @@ describe("job runner", () => {
       error: "server_restarted",
       sessionId: "old",
     });
+    // Reported, so the owner hears about it.
+    expect(harness.changes).toContainEqual(
+      expect.objectContaining({ runId: "crashed", status: "interrupted" }),
+    );
     expect(harness.fake.turns).toHaveLength(0);
     expect(harness.store.get(jobId)!.nextRunAt).toBe(START + 15 * MINUTE);
   });

@@ -94,6 +94,24 @@ const ERROR_TEXT: Record<string, string> = {
   instructions_too_large: "Instructions can be up to 64 KB.",
   network_preset_invalid: "Choose a network setting.",
   network_allow_invalid: "Check the extra sites.",
+  // Scheduled jobs and the inbox.
+  name_invalid: "Give the job a name (up to 100 characters).",
+  prompt_invalid: "Write what each run should ask (up to 20,000 characters).",
+  project_not_found: "That project is not open on this server.",
+  model_not_available: "That model is not available.",
+  reasoning_effort_not_available: "That model has no such thinking level.",
+  schedule_invalid: "Check the schedule.",
+  schedule_interval_invalid:
+    "Runs can repeat every 15 minutes at most often, and at least weekly.",
+  schedule_time_invalid: "Use a 24-hour time such as 07:30.",
+  schedule_time_zone_invalid: "That time zone is not recognised.",
+  schedule_days_invalid: "Pick at least one day.",
+  job_busy: "This job is already running.",
+  job_limit_reached: "This server has the most jobs it allows (100).",
+  job_not_found: "That job no longer exists.",
+  jobs_forbidden: "Only the Assistant's owner can manage jobs.",
+  inbox_forbidden: "Only the Assistant's owner has an inbox.",
+  ask_agent_session_not_found: "That chat is no longer available.",
 };
 
 export type AssistantNetworkPreset = "open" | "dependencies" | "off";
@@ -135,7 +153,7 @@ export function parseAllowList(text: string): string[] {
     .filter(Boolean);
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   url: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
@@ -164,7 +182,7 @@ async function requestJson<T>(
   return data as T;
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -387,15 +405,21 @@ export function AssistantProjectSwitcher({
   );
 }
 
-function Dialog({
+export function Dialog({
   title,
   onClose,
   busy,
+  wide,
+  actions,
   children,
 }: {
   title: string;
   onClose: () => void;
   busy?: boolean;
+  /** A larger panel, for lists such as jobs and the inbox. */
+  wide?: boolean;
+  /** Extra header buttons, before Close. */
+  actions?: ComponentChildren;
   children: ComponentChildren;
 }) {
   useEffect(() => {
@@ -413,13 +437,14 @@ function Dialog({
       }}
     >
       <div
-        class="assistant-project-dialog"
+        class={`assistant-project-dialog${wide ? " assistant-panel" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
       >
         <header>
           <h2>{title}</h2>
+          <span class="assistant-panel-actions">{actions}</span>
           <button
             class="icon-button"
             type="button"

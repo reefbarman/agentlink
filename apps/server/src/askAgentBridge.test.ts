@@ -1108,6 +1108,7 @@ describe("Ask Agent bridge", () => {
         id: "ws-run",
         title: "Brief · 12 Oct, 07:30",
         activity: "unread",
+        scheduled: true,
       }),
     ]);
     // Twice is harmless; the title and unread flag are kept for restarts.
@@ -1122,6 +1123,194 @@ describe("Ask Agent bridge", () => {
     };
     expect(saved.titles["ws-run"]).toBe("Brief · 12 Oct, 07:30");
     expect(saved.unread).toContain("ws-run");
+  });
+
+  it("follows a scheduled run's chat live and answers its approval", async () => {
+    const { bridge, fake, call } = await startBridge();
+    const jobAuth: AssistantServerAuth = {
+      principal: { tenantId: "agentlink-server", subjectId: "owner" },
+      session: {
+        ownerId: "owner",
+        sessionId: "job-run-2",
+        deviceId: "job-1",
+        deviceLabel: "Job: Brief",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => jobAuth,
+    };
+    const listed = async () =>
+      (await call("/api/ask-agent/sessions")).body.sessions as Array<{
+        id: string;
+        title: string;
+        activity?: string;
+        scheduled?: boolean;
+      }>;
+    await listed();
+    fake.sessions.set("ws-run", { model: MODEL, messages: [] });
+    bridge.followSession(jobAuth, "ws-run", {
+      title: "Brief · now",
+      prompt: "Brief me",
+    });
+    // Following twice is harmless.
+    bridge.followSession(jobAuth, "ws-run", { title: "x", prompt: "x" });
+    fake.turn("ws-run", { type: "text.delta", text: "Checking" });
+    fake.turn("ws-run", {
+      type: "tool.requested",
+      toolCallId: "call-1",
+      toolName: "write_file",
+      displayInput: { path: "a.txt" },
+    });
+    expect(await listed()).toEqual([
+      expect.objectContaining({
+        id: "ws-run",
+        title: "Brief · now",
+        activity: "running",
+        scheduled: true,
+      }),
+    ]);
+    expect(bridge.activity()).toEqual({ running: 1, needsYou: 0, unread: 0 });
+
+    // Opening it shows the run so far; writing to it waits for the run.
+    const opened = await call("/api/ask-agent/session/load", {
+      sessionId: "ws-run",
+    });
+    expect(
+      snapshotOf(opened.body).session.foreground.projectedMessages.map(
+        (message) => [message.role, message.content],
+      ),
+    ).toEqual([
+      ["user", "Brief me"],
+      ["assistant", "Checking"],
+    ]);
+    await expect(
+      call("/api/ask-agent/send", { text: "hello?" }),
+    ).resolves.toMatchObject({ status: 409 });
+    await expect(
+      call("/api/ask-agent/session/delete", { sessionId: "ws-run" }),
+    ).resolves.toMatchObject({ status: 409 });
+
+    // The run waits for an approval: shown in its chat, answered from it.
+    fake.turn("ws-run", {
+      type: "interaction.required",
+      interaction: {
+        interactionId: "int-r",
+        toolName: "write_file",
+        summary: "Write a.txt",
+        displayInput: { path: "a.txt" },
+      },
+      interactionRevision: "rev-r",
+    });
+    const approval = await vi.waitFor(async () => {
+      const pending = snapshotOf((await call("/api/ask-agent/session")).body).ui
+        .approval;
+      expect(pending).not.toBeNull();
+      return pending!;
+    });
+    expect(approval.id).toBe("run:ws-run:int-r");
+    expect((await listed())[0]?.activity).toBe("needs-you");
+    await expect(
+      call("/api/ask-agent/approval", {
+        id: "run:ws-run:other",
+        decision: "accept",
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+    const answered = await call("/api/ask-agent/approval", {
+      id: approval.id,
+      decision: "accept",
+    });
+    expect(answered.status).toBe(200);
+    expect(snapshotOf(answered.body).ui.approval).toBeNull();
+    expect(fake.operations.answerInteraction).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-run",
+      {
+        interactionId: "int-r",
+        interactionRevision: "rev-r",
+        decision: "allow",
+      },
+    );
+
+    // Stop while viewing it stops the run's turn.
+    await expect(call("/api/ask-agent/stop", {})).resolves.toMatchObject({
+      body: { ok: true, stopped: true },
+    });
+    expect(fake.operations.cancel).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-run",
+    );
+
+    // Finished: the run's own record replaces the live view.
+    fake.sessions.get("ws-run")!.messages = [
+      { role: "user", content: "Brief me" },
+      { role: "assistant", content: [{ type: "text", text: "All done" }] },
+    ];
+    await bridge.adoptSession(jobAuth, "ws-run", "Brief · now");
+    expect(await listed()).toEqual([
+      expect.objectContaining({ id: "ws-run", scheduled: true }),
+    ]);
+    expect((await listed())[0]?.activity).not.toBe("running");
+    const done = snapshotOf((await call("/api/ask-agent/session")).body);
+    const last = done.session.foreground.projectedMessages.at(-1);
+    expect(last?.role).toBe("assistant");
+    // The streamed "Checking" is replaced by the recorded reply.
+    expect(JSON.stringify(last)).toContain("All done");
+    expect(JSON.stringify(done.session.foreground)).not.toContain("Checking");
+  });
+
+  it("carries the Assistant's inbox status in every snapshot", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-status-"));
+    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    const events = new SessionEventHub();
+    const fake = createFakeOperations(events);
+    let status = { inboxUnread: 2, revision: 5 };
+    const bridge = await createAskAgentBridge({
+      projectId: "home",
+      operations: fake.operations,
+      events,
+      models: { available: [MODEL], defaultModel: MODEL },
+      stateFile: path.join(dir, "state.json"),
+      assistantStatus: () => status,
+    });
+    cleanup.push(() => bridge.close());
+    const server = http.createServer((request, response) => {
+      const auth: AssistantServerAuth = {
+        principal: { tenantId: "agentlink-server", subjectId: "owner" },
+        session: {
+          ownerId: "owner",
+          sessionId: "s",
+          deviceId: "d",
+          deviceLabel: "Laptop",
+          createdAt: 0,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        signal: new AbortController().signal,
+        revalidate: async () => ({ valid: true }),
+        detach: () => auth,
+      };
+      void bridge.handleRequest(request, response, auth);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", () => resolve()),
+    );
+    cleanup.push(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const port = (server.address() as { port: number }).port;
+    const read = async () =>
+      (
+        (await (
+          await fetch(`http://127.0.0.1:${port}/api/ask-agent/session`)
+        ).json()) as { snapshot: { assistant?: unknown } }
+      ).snapshot.assistant;
+    expect(await read()).toEqual({ inboxUnread: 2, revision: 5 });
+    status = { inboxUnread: 0, revision: 6 };
+    expect(await read()).toEqual({ inboxUnread: 0, revision: 6 });
   });
 
   it("refuses media it cannot handle and ignores other paths", async () => {

@@ -31,6 +31,9 @@ function fakeBridge(projectId: string): AskAgentBridge {
       return true;
     }),
     adoptSession: vi.fn(async () => undefined),
+    followSession: vi.fn(),
+    openSession: vi.fn(async (_auth, sessionId: string) => sessionId === "c1"),
+    refresh: vi.fn(),
     close: vi.fn(async () => undefined),
   };
 }
@@ -189,6 +192,21 @@ describe("project chats", () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  it("selects a project and opens one of its chats", async () => {
+    const { call } = await setup();
+    const opened = await call("/api/ask-agent/projects/select", {
+      body: { projectId: "work", sessionId: "c1" },
+    });
+    expect(opened.status).toBe(200);
+    expect(opened.body.activeProjectId).toBe("work");
+    // An unknown chat: nothing is selected.
+    const missing = await call("/api/ask-agent/projects/select", {
+      body: { projectId: "work", sessionId: "nope" },
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.setCookie).toBeNull();
   });
 
   it("creates a cloned project, opens it, and selects it", async () => {

@@ -20,6 +20,7 @@ describe("chat session history protocol", () => {
       createdAt: 1,
       lastActiveAt: 2,
       activity: "unread",
+      scheduled: true,
     };
 
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
@@ -38,6 +39,7 @@ describe("chat session history protocol", () => {
       | "createdAt"
       | "lastActiveAt"
       | "activity"
+      | "scheduled"
     >();
     expectTypeOf<ChatSessionHistorySummary["activity"]>().toEqualTypeOf<
       "running" | "needs-you" | "unread" | undefined

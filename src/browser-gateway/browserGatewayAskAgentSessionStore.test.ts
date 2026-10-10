@@ -157,6 +157,46 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     });
   });
 
+  it("upserts a host-projected session without switching chats", () => {
+    const store = createStore();
+    store.createSession(100);
+    const active = store.getActiveSessionId();
+    store.appendUserMessage({ text: "hello", now: 110 });
+    const template = store.getHistorySnapshot().sessions[0]!;
+
+    const projected = {
+      ...template,
+      id: "run-chat",
+      title: "Daily check in",
+      messages: [...template.messages],
+      lastActiveAt: 120,
+    };
+    store.upsertSession(projected);
+    expect(store.getActiveSessionId()).toBe(active);
+    expect(store.listSessions().map((session) => session.id)).toContain(
+      "run-chat",
+    );
+
+    // The kept object receives later message updates from the store.
+    store.appendSessionMessage("run-chat", {
+      role: "assistant",
+      content: "run update",
+      blocks: [{ type: "text", text: "run update" }],
+      now: 130,
+    });
+    expect(projected.messages.at(-1)).toMatchObject({ content: "run update" });
+
+    // Replacing by id swaps in the new object without duplicating it.
+    const replacement = { ...projected, title: "Replaced" };
+    store.upsertSession(replacement);
+    const matches = store
+      .getHistorySnapshot()
+      .sessions.filter((session) => session.id === "run-chat");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.title).toBe("Replaced");
+    expect(store.getActiveSessionId()).toBe(active);
+  });
+
   it("drops non-active empty sessions from the history snapshot", () => {
     const store = createStore();
     store.createSession(100);

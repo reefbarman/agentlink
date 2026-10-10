@@ -61,6 +61,11 @@ export interface JobRunnerOptions {
     readonly job: JobDefinition;
     readonly auth: AssistantServerAuth;
   }) => void;
+  /** A run a previous process left open, now recorded as interrupted. */
+  readonly onRunRecovered?: (change: {
+    readonly run: JobRun;
+    readonly job: JobDefinition;
+  }) => void;
   readonly maxConcurrentRuns?: number;
   readonly catchUpMs?: number;
   readonly approvalTimeoutMs?: number;
@@ -474,13 +479,19 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         for (const run of store.runs(job.id)) {
           if (!isActiveRun(run)) continue;
           // Its chat is kept; it is never re-run automatically.
-          await store.saveRun({
+          const interrupted: JobRun = {
             ...run,
             status: "interrupted",
             error: "server_restarted",
             finishedAt: at,
             updatedAt: at,
-          });
+          };
+          await store.saveRun(interrupted);
+          try {
+            options.onRunRecovered?.({ run: interrupted, job });
+          } catch {
+            // A broken listener must not stop the start.
+          }
         }
         await schedule(job);
       }

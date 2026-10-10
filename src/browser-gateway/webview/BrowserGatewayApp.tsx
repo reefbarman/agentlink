@@ -54,6 +54,7 @@ import {
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
+import { AssistantHub } from "./AssistantJobs";
 import { DesktopRemotePane } from "./DesktopRemotePane";
 import { AssistantLauncher } from "./AssistantLauncher";
 import type {
@@ -597,6 +598,8 @@ export type GatewaySnapshot = {
   background: BgSessionInfo[];
   /** The Assistant's per-chat approval mode; absent elsewhere. */
   approvalMode?: "autonomous" | "ask";
+  /** The Assistant's unread inbox count and jobs/inbox revision. */
+  assistant?: { inboxUnread: number; revision: number };
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -9017,7 +9020,15 @@ export function BrowserGatewayApp({
             }
             header={
               product === "assistant" ? (
-                <AssistantProjectSwitcher reloadPage={reloadPage} />
+                <>
+                  <AssistantProjectSwitcher reloadPage={reloadPage} />
+                  <AssistantHub
+                    inboxUnread={snapshot?.assistant?.inboxUnread}
+                    revision={snapshot?.assistant?.revision}
+                    loadSession={(sessionId) => handleLoadSession(sessionId)}
+                    reloadPage={reloadPage}
+                  />
+                </>
               ) : undefined
             }
           />

@@ -17,6 +17,8 @@ export interface ChatSessionHistorySummary {
    * waiting for an approval, or it finished while nobody was viewing it.
    */
   activity?: ChatSessionActivity;
+  /** Started by a scheduled job rather than by someone writing to it. */
+  scheduled?: boolean;
 }
 
 export type ChatSessionActivity = "running" | "needs-you" | "unread";
