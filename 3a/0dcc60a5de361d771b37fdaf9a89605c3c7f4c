@@ -1,0 +1,32 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 17-18
+src/util/interactiveValidator.test.ts
+  h_e08a86bb3a33a2 311-313,329-331
+src/util/interactiveValidator.ts
+  h_e08a86bb3a33a2 650,654-657,660
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1471
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1b200bd5851912::t_744bd3933300d9 17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a0dcc60a5de361d771b37fdaf9a89605c3c7f4c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1b200bd5851912": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74c6f731-776b-483c-bc78-0fbe08a06db6",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
