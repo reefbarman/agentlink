@@ -2200,6 +2200,103 @@ textarea {
   opacity: 1;
 }
 
+/* Read-only file viewer (Assistant file links). */
+.browser-file-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #07060cb0;
+}
+
+.browser-file-viewer {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 100%);
+  height: min(860px, calc(100vh - 32px));
+  height: min(860px, calc(100dvh - 32px));
+  overflow: hidden;
+  border: 1px solid var(--ag-border-2, var(--vscode-panel-border));
+  border-radius: 14px;
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+  color: var(--ag-text, var(--vscode-foreground));
+  box-shadow: 0 24px 64px #00000080;
+}
+
+.browser-file-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--ag-border, var(--vscode-panel-border));
+}
+
+.browser-file-viewer-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-file-viewer-directory {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ag-muted, var(--vscode-descriptionForeground));
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.browser-file-viewer-badge {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--ag-border, var(--vscode-panel-border));
+  border-radius: 999px;
+  color: var(--ag-muted, var(--vscode-descriptionForeground));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.browser-file-viewer-directory + .browser-file-viewer-badge {
+  margin-left: 0;
+}
+
+.browser-file-viewer-note,
+.browser-file-viewer-state {
+  padding: 8px 14px;
+  color: var(--ag-muted, var(--vscode-descriptionForeground));
+  font-size: 12px;
+}
+
+.browser-file-viewer-editor {
+  flex: 1;
+  min-height: 0;
+  opacity: 0;
+}
+
+.browser-file-viewer-editor.ready {
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .browser-file-viewer-backdrop {
+    padding: 0;
+  }
+
+  .browser-file-viewer {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
 /*
  * Diff line/char/gutter backgrounds are intentionally left to Monaco's own
  * diff stylesheet + theme. Monaco maps `.line-insert`/`.line-delete` to

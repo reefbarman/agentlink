@@ -9,6 +9,7 @@ import { modelKey, type AskAgentBridge } from "./askAgentBridge.js";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { writeFileAtomic } from "./atomicFile.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
+import { readProjectFile } from "./projectFiles.js";
 import {
   PROJECT_ID_PATTERN,
   ProjectCloneError,
@@ -34,6 +35,8 @@ const INSTRUCTIONS_FILE = "AGENTS.md";
 const MAX_INSTRUCTIONS_BYTES = 64 * 1024;
 const MAX_CREATE_BODY_BYTES = 64 * 1024;
 const SETTINGS_ROUTE = /^\/api\/ask-agent\/projects\/([^/]+)\/settings$/u;
+/** A text file of the selected project, for the read-only file viewer. */
+const PROJECT_FILE_ROUTE = "/api/ask-agent/project-file";
 
 export interface ProjectChatsOptions {
   readonly catalog: ProjectCatalog;
@@ -351,6 +354,17 @@ export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
     async handleRequest(request, response, auth) {
       const url = new URL(request.url ?? "/", "https://server.invalid");
       const method = (request.method ?? "GET").toUpperCase();
+      if (url.pathname === PROJECT_FILE_ROUTE) {
+        if (method !== "GET") throw new HttpError(405, "method_not_allowed");
+        const project = activeProject(request);
+        if (!project) throw new HttpError(404, "project_not_found");
+        const file = await readProjectFile(
+          project.root,
+          url.searchParams.get("path") ?? "",
+        );
+        sendJson(response, 200, { projectId: project.id, ...file });
+        return true;
+      }
       if (
         url.pathname === "/api/ask-agent/projects" ||
         url.pathname.startsWith("/api/ask-agent/projects/")

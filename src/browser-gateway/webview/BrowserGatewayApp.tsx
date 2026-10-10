@@ -73,6 +73,7 @@ import type { ProviderUsageSnapshot } from "../../shared/providerUsage";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { ModelSetupCard } from "../../agent/webview/components/ModelSetupCard";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
+import { BrowserFileViewer } from "./components/BrowserFileViewer";
 import { LazyAgentPluginManagerPanel } from "./components/LazyAgentPluginManagerPanel";
 import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
 import {
@@ -1573,6 +1574,14 @@ export function BrowserGatewayApp({
     snapshot?.session.projects?.[0]?.projectId;
   const selectedProjectIdRef = useRef<string | undefined>(selectedProjectId);
   selectedProjectIdRef.current = selectedProjectId;
+  // The Assistant has no editor to reveal files in; file links open a
+  // read-only viewer of the selected project's file instead. Ask Agent in
+  // the VS Code gateway keeps file links inert, as before.
+  const [viewedFile, setViewedFile] = useState<{
+    path: string;
+    line?: number;
+  } | null>(null);
+  const closeViewedFile = useCallback(() => setViewedFile(null), []);
 
   function logAskAgentBrowserEvent(
     event: string,
@@ -8204,6 +8213,19 @@ export function BrowserGatewayApp({
     },
   };
 
+  const openFileHandler:
+    | ((filePath: string, line?: number) => void)
+    | undefined = !isAskAgentSelected
+    ? (filePath, line) =>
+        browserVscodeApi.postMessage({
+          command: "agentOpenFile",
+          path: filePath,
+          line,
+        })
+    : product === "assistant"
+      ? (filePath, line) => setViewedFile({ path: filePath, line })
+      : undefined;
+
   quickAskSubmissionHandlerRef.current = (submission) => {
     selectSurfaceMode("ask");
     const started = startAskAgentSession();
@@ -8278,6 +8300,15 @@ export function BrowserGatewayApp({
     <div
       class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" ? " assistant-product" : ""}`}
     >
+      {viewedFile && (
+        <BrowserFileViewer
+          key={`${viewedFile.path}:${viewedFile.line ?? ""}`}
+          path={viewedFile.path}
+          line={viewedFile.line}
+          theme={snapshot?.theme ?? initialTheme}
+          onClose={closeViewedFile}
+        />
+      )}
       {!workspaceOnly && (
         <header class="browser-header">
           {consumerShell && (
@@ -8953,11 +8984,7 @@ export function BrowserGatewayApp({
                   sessions={background}
                   workspaceActionsEnabled={!isAskAgentSelected}
                   onOpenFile={(filePath, line) =>
-                    browserVscodeApi.postMessage({
-                      command: "agentOpenFile",
-                      path: filePath,
-                      line,
-                    })
+                    openFileHandler?.(filePath, line)
                   }
                   onOpenImageInEditor={(image) =>
                     browserVscodeApi.postMessage({
@@ -9758,16 +9785,7 @@ export function BrowserGatewayApp({
                         void handleSend(payload, []);
                       }}
                       onDismissDetectedQuestion={() => undefined}
-                      onOpenFile={
-                        isAskAgentSelected
-                          ? undefined
-                          : (filePath, line) =>
-                              browserVscodeApi.postMessage({
-                                command: "agentOpenFile",
-                                path: filePath,
-                                line,
-                              })
-                      }
+                      onOpenFile={openFileHandler}
                       onOpenImageInEditor={
                         isAskAgentSelected
                           ? undefined
@@ -10377,16 +10395,7 @@ export function BrowserGatewayApp({
                                 questions={visibleQuestion.questions}
                                 backgroundTask={visibleQuestion.backgroundTask}
                                 modes={modes}
-                                onOpenFile={
-                                  isAskAgentSelected
-                                    ? undefined
-                                    : (filePath, line) =>
-                                        browserVscodeApi.postMessage({
-                                          command: "agentOpenFile",
-                                          path: filePath,
-                                          line,
-                                        })
-                                }
+                                onOpenFile={openFileHandler}
                                 attachmentCounts={Object.fromEntries(
                                   Object.entries(activeQuestionAttachments).map(
                                     ([questionId, value]) => [

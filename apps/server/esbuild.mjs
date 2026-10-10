@@ -98,39 +98,65 @@ const webviewOptions = {
   define: { __DEV_BUILD__: "false" },
   write: false,
 };
-// The diff viewer's Monaco editor is a separate, optional bundle that this
-// server does not ship (it has no diff surface); keep the import external.
+// Monaco (used read-only by the file viewer) is a separate bundle loaded on
+// demand from /browser-gateway-monaco.js, as in the gateway; keep the import
+// external to the app and build it, plus its workers, separately below.
 const browserMonacoExternalPlugin = {
   name: "browser-monaco-external",
   setup(build) {
     build.onResolve({ filter: /^\.\/browserMonaco$/ }, (args) => {
-      if (!args.importer.endsWith("BrowserDiffViewer.tsx")) return undefined;
+      if (!args.importer.endsWith("browserMonacoLoader.ts")) return undefined;
       return { path: "/browser-gateway-monaco.js", external: true };
     });
   },
 };
-const [gatewayApp, notificationsWorker] = await Promise.all([
-  esbuild.build({
-    ...webviewOptions,
-    entryPoints: ["src/browser-gateway/webview/index.tsx"],
-    entryNames: "browser-gateway",
-    chunkNames: "browser-gateway-chunks/[name]-[hash]",
-    splitting: true,
-    plugins: [browserMonacoExternalPlugin],
-  }),
-  esbuild.build({
-    ...webviewOptions,
-    entryPoints: [
-      "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
-    ],
-    entryNames: "browser-gateway-notifications",
-  }),
-]);
+const MONACO_WORKERS = {
+  "monaco-editor.worker": "editor/editor.worker.js",
+  "monaco-json.worker": "languages/features/json/json.worker.js",
+  "monaco-css.worker": "languages/features/css/css.worker.js",
+  "monaco-html.worker": "languages/features/html/html.worker.js",
+  "monaco-ts.worker": "languages/features/typescript/ts.worker.js",
+};
+const [gatewayApp, notificationsWorker, monaco, monacoWorkers] =
+  await Promise.all([
+    esbuild.build({
+      ...webviewOptions,
+      entryPoints: ["src/browser-gateway/webview/index.tsx"],
+      entryNames: "browser-gateway",
+      chunkNames: "browser-gateway-chunks/[name]-[hash]",
+      splitting: true,
+      plugins: [browserMonacoExternalPlugin],
+    }),
+    esbuild.build({
+      ...webviewOptions,
+      entryPoints: [
+        "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
+      ],
+      entryNames: "browser-gateway-notifications",
+    }),
+    esbuild.build({
+      ...webviewOptions,
+      entryPoints: ["src/browser-gateway/webview/components/browserMonaco.ts"],
+      entryNames: "browser-gateway-monaco",
+      // Monaco ships its own codicon font; keep it apart from the app's.
+      assetNames: "browser-gateway-monaco-[name]",
+    }),
+    esbuild.build({
+      ...webviewOptions,
+      entryPoints: Object.fromEntries(
+        Object.entries(MONACO_WORKERS).map(([name, file]) => [
+          name,
+          `node_modules/monaco-editor/esm/vs/${file}`,
+        ]),
+      ),
+    }),
+  ]);
 const webAssets = {};
 const addAsset = (urlPath, contents, options = {}) => {
   const extension = path.extname(urlPath);
   const contentType = CONTENT_TYPES[extension];
   if (!contentType) throw new Error(`No content type for web asset ${urlPath}`);
+  if (webAssets[urlPath]) throw new Error(`Duplicate web asset ${urlPath}`);
   const binary = BINARY_EXTENSIONS.has(extension);
   webAssets[urlPath] = {
     contentType,
@@ -142,6 +168,8 @@ const addAsset = (urlPath, contents, options = {}) => {
 for (const file of [
   ...gatewayApp.outputFiles,
   ...notificationsWorker.outputFiles,
+  ...monaco.outputFiles,
+  ...monacoWorkers.outputFiles,
 ]) {
   const urlPath = `/${path.relative(webOutdir, file.path).split(path.sep).join("/")}`;
   addAsset(urlPath, file.contents, {
@@ -197,6 +225,9 @@ for (const required of [
   "/browser-gateway.js",
   "/browser-gateway.css",
   "/browser-gateway-notifications.js",
+  "/browser-gateway-monaco.js",
+  "/browser-gateway-monaco.css",
+  ...Object.keys(MONACO_WORKERS).map((name) => `/${name}.js`),
 ]) {
   if (!webAssets[required]) throw new Error(`Web build is missing ${required}`);
 }

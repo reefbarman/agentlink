@@ -139,7 +139,7 @@ const browserMonacoExternalPlugin = {
   name: "browser-monaco-external",
   setup(build) {
     build.onResolve({ filter: /^\.\/browserMonaco$/ }, (args) => {
-      if (!args.importer.endsWith("BrowserDiffViewer.tsx")) return undefined;
+      if (!args.importer.endsWith("browserMonacoLoader.ts")) return undefined;
       return { path: "/browser-gateway-monaco.js", external: true };
     });
   },

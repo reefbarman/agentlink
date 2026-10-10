@@ -352,6 +352,46 @@ describe("project chats", () => {
     ).toBe(400);
   });
 
+  it("serves files from the selected project to the file viewer", async () => {
+    const { call, home } = await setup();
+    const work = path.join(path.dirname(home), "work");
+    await fs.writeFile(path.join(home, "notes.md"), "home notes");
+    await fs.writeFile(path.join(work, "notes.md"), "work notes");
+
+    const homeFile = await call("/api/ask-agent/project-file?path=notes.md");
+    expect(homeFile).toMatchObject({
+      status: 200,
+      body: {
+        projectId: "home",
+        path: "notes.md",
+        content: "home notes",
+        truncated: false,
+      },
+    });
+    const workFile = await call(
+      `/api/ask-agent/project-file?path=${encodeURIComponent(path.join(work, "notes.md"))}`,
+      { cookie: `${PROJECT_COOKIE}=work` },
+    );
+    expect(workFile.body).toMatchObject({
+      projectId: "work",
+      content: "work notes",
+    });
+    // The other project's files are outside the selected project.
+    expect(
+      (
+        await call(
+          `/api/ask-agent/project-file?path=${encodeURIComponent(path.join(work, "notes.md"))}`,
+        )
+      ).body,
+    ).toEqual({ error: "outside_project" });
+    expect(
+      (await call("/api/ask-agent/project-file?path=missing.md")).status,
+    ).toBe(404);
+    expect(
+      (await call("/api/ask-agent/project-file", { body: {} })).status,
+    ).toBe(405);
+  });
+
   it("closes every project's bridge", async () => {
     const { call, chats } = await setup();
     await call("/api/ask-agent/projects", { body: { name: "Extra" } });
