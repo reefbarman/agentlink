@@ -1,0 +1,18 @@
+src/core/capabilities/terminal.ts
+  h_e08a86bb3a33a2 120-123
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 10628-10629,10697-10699,10704-10706
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 2673-2679,2773,2825,2866
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08bb75d64bec6036ca8ff0cf2845878c1bf13d3c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
