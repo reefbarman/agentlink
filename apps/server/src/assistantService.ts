@@ -52,6 +52,10 @@ import {
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
+import { createJobRoutes } from "./jobRoutes.js";
+import { createJobRunner } from "./jobRunner.js";
+import { serverTimeZone } from "./jobSchedule.js";
+import { isActiveRun, openJobStore } from "./jobStore.js";
 import {
   DEFAULT_NETWORK_POLICY,
   egressProxyUrl,
@@ -123,6 +127,11 @@ export function serverProjectCatalogFile(
   config: AssistantServerConfig,
 ): string {
   return path.join(config.dataRoot, "settings", "projects.json");
+}
+
+/** Scheduled job definitions and run history. */
+export function serverJobsDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "jobs");
 }
 
 /** git where clones run: the command worker image, or this machine. */
@@ -553,6 +562,13 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  const jobStore = await openJobStore({
+    directory: serverJobsDirectory(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
   /** Chat bridges by project, closed by the server once it exists. */
@@ -659,6 +675,27 @@ export async function startAssistantService(
       approvalModes,
     });
     agentNotifier = routes;
+    const resolveModel = (key: string) => {
+      const model = configuredModels(config).find(
+        (choice) => modelKey(choice) === key,
+      );
+      return model
+        ? { providerId: model.providerId, modelId: model.modelId }
+        : undefined;
+    };
+    /** A project's defaults for new chats, including scheduled runs. */
+    const projectDefaults = (projectId: string) => {
+      const settings = catalog.get(projectId)?.settings;
+      const model = settings?.defaultModel
+        ? resolveModel(settings.defaultModel)
+        : undefined;
+      return {
+        ...(model ? { model } : {}),
+        ...(settings?.defaultReasoningEffort
+          ? { reasoningEffort: settings.defaultReasoningEffort }
+          : {}),
+      };
+    };
     // Each project has its own chats; the HTTP API serves them all.
     const legacyChatProject = config.projects[0]?.id;
     const openBridge = (projectId: string) =>
@@ -670,27 +707,7 @@ export async function startAssistantService(
           available: configuredModels(config),
           defaultModel: config.defaultModel,
         },
-        defaults: () => {
-          const settings = catalog.get(projectId)?.settings;
-          const model = settings?.defaultModel
-            ? configuredModels(config).find(
-                (choice) => modelKey(choice) === settings.defaultModel,
-              )
-            : undefined;
-          return {
-            ...(model
-              ? {
-                  model: {
-                    providerId: model.providerId,
-                    modelId: model.modelId,
-                  },
-                }
-              : {}),
-            ...(settings?.defaultReasoningEffort
-              ? { reasoningEffort: settings.defaultReasoningEffort }
-              : {}),
-          };
-        },
+        defaults: () => projectDefaults(projectId),
         stateFile: serverAskAgentStateFile(
           config,
           projectId === legacyChatProject ? undefined : projectId,
@@ -729,8 +746,36 @@ export async function startAssistantService(
       openProject: async (entry) => {
         const host = await openHost(entry);
         routes.addProject(mountFor(entry.id, host));
-        return await openBridge(entry.id);
+        const bridge = await openBridge(entry.id);
+        bridges.set(entry.id, bridge);
+        return bridge;
       },
+    });
+    // Each run is a new chat in its project, acting for the owner.
+    const jobs = createJobRunner({
+      store: jobStore,
+      operations: routes.operations,
+      events: routes.events,
+      ownerId: () => server?.store.ownerId,
+      resolveModel,
+      projectDefaults,
+      log,
+      onRunChanged: ({ run, auth }) => {
+        if (isActiveRun(run) || !run.sessionId) return;
+        void bridges
+          .get(run.projectId)
+          ?.adoptSession(auth, run.sessionId, run.title ?? "Scheduled run");
+      },
+    });
+    const jobRoutes = createJobRoutes({
+      store: jobStore,
+      runner: jobs,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      hasProject: (projectId) => bridges.has(projectId),
+      models: configuredModels(config),
+      defaultTimeZone: serverTimeZone(),
     });
     const assetVersion = randomUUID();
     server = await createAssistantServer({
@@ -740,8 +785,11 @@ export async function startAssistantService(
       listen: config.listen,
       handleRequest: async (request, response, auth) =>
         (await chat.handleRequest(request, response, auth)) ||
+        (await jobRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       onClose: async () => {
+        // Before the routes stop turns: open runs are recorded interrupted.
+        await jobs.close();
         await chat.close();
         await routes.close();
       },
@@ -773,6 +821,7 @@ export async function startAssistantService(
     authorizeProject = ownerProjectAccess(server.store);
     const { port } = await server.start();
     certificates?.watch(server);
+    await jobs.start();
     log(
       `AgentLink server listening on ${config.listen.host}:${port} for ${config.publicOrigins.join(", ")} (${hosts.length} project${hosts.length === 1 ? "" : "s"})`,
     );

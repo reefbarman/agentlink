@@ -481,6 +481,147 @@ describe("agentlink-server process", () => {
     }
   }, 60_000);
 
+  it("runs a job with no browser connected and records a crash as interrupted", async () => {
+    const certificate = createTestCertificate();
+    const root = path.join(workDir, "jobs");
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+    await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+      mode: 0o600,
+    });
+    const model = await startStalledModelServer();
+    const port = await freePort();
+    const origin = `https://localhost:${port}`;
+    const configPath = path.join(root, "server.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [origin],
+        tls: { certFile: "server.crt", keyFile: "server.key" },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: model.baseURL,
+            noAuth: true,
+            allowInsecureHttp: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", label: "Home", root: "projects/home" }],
+      }),
+    );
+    const request = (input: {
+      method?: string;
+      path: string;
+      body?: unknown;
+      form?: Record<string, string>;
+      cookie?: string;
+    }) =>
+      httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: input.method,
+        path: input.path,
+        body: input.body,
+        form: input.form,
+        headers: {
+          ...(input.method && input.method !== "GET" ? { origin } : {}),
+          ...(input.cookie ? { cookie: input.cookie } : {}),
+        },
+      });
+    const first = startProcess(configPath);
+    try {
+      await first.waitFor(/listening on 127\.0\.0\.1/u);
+      const { stdout } = await execFileAsync(process.execPath, [
+        bundle,
+        "pair",
+        "--config",
+        configPath,
+      ]);
+      const code = /Pairing code:\s+([0-9]{3}) ([0-9]{3})/u.exec(stdout)!;
+      const paired = await request({
+        method: "POST",
+        path: "/pair",
+        form: { code: `${code[1]}${code[2]}` },
+      });
+      const cookie = sessionCookieFrom(paired);
+      const created = await request({
+        method: "POST",
+        path: "/api/jobs",
+        cookie,
+        body: {
+          name: "Check in",
+          projectId: "home",
+          prompt: "Anything new?",
+          schedule: { kind: "interval", everyMinutes: 15 },
+        },
+      });
+      expect(created.status).toBe(201);
+      const job = (created.body as { job: { id: string; nextRunAt: number } })
+        .job;
+      expect(job.nextRunAt).toBeGreaterThan(Date.now());
+
+      // Started, then nothing is connected: the run reaches the model anyway.
+      await expect(
+        request({ method: "POST", path: `/api/jobs/${job.id}/run`, cookie }),
+      ).resolves.toMatchObject({ status: 202 });
+      await vi.waitFor(() => expect(model.requests).toHaveLength(1), {
+        timeout: 15_000,
+      });
+      const runs = async () =>
+        (
+          (await request({ path: `/api/jobs/${job.id}/runs`, cookie }))
+            .body as {
+            runs: Array<{ status: string; error?: string; sessionId?: string }>;
+          }
+        ).runs;
+      expect((await runs())[0]).toMatchObject({ status: "running" });
+      const sessionId = (await runs())[0]!.sessionId;
+      expect(sessionId).toBeTruthy();
+
+      first.child.kill("SIGKILL");
+      await first.exited;
+
+      // After the crash the job is still there, its run is interrupted
+      // (never re-run), and its chat is kept.
+      const second = startProcess(configPath);
+      try {
+        await second.waitFor(/listening on 127\.0\.0\.1/u);
+        expect((await runs())[0]).toMatchObject({
+          status: "interrupted",
+          error: "server_restarted",
+          sessionId,
+        });
+        const listed = await request({ path: "/api/jobs", cookie });
+        expect(listed.body).toMatchObject({
+          jobs: [{ id: job.id, enabled: true, nextRunAt: job.nextRunAt }],
+        });
+        expect(model.requests).toHaveLength(1);
+        await expect(
+          request({ path: `/api/projects/home/sessions/${sessionId}`, cookie }),
+        ).resolves.toMatchObject({ status: 200 });
+      } finally {
+        second.child.kill("SIGTERM");
+        await second.exited;
+      }
+    } finally {
+      first.child.kill("SIGKILL");
+      await model.close();
+    }
+  }, 120_000);
+
   it("refuses a TLS key that other users can read", async () => {
     const certificate = createTestCertificate();
     const root = path.join(workDir, "loose-key");

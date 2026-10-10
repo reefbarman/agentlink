@@ -148,6 +148,15 @@ export interface AskAgentBridge {
   readonly theme: BrowserGatewayThemeSnapshot;
   /** How many chats are running, waiting for an approval, or unread. */
   activity(): AskAgentBridgeActivity;
+  /**
+   * Show a chat started outside this UI (a scheduled job's run) in the
+   * chat list, titled and unread, once its work has finished.
+   */
+  adoptSession(
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    title: string,
+  ): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -347,6 +356,55 @@ export async function createAskAgentBridge(
       .catch(() => undefined);
   };
 
+  /**
+   * One workspace session as a UI chat, or undefined when it cannot be read
+   * or has no messages. Records its model, thinking level and approval mode,
+   * and follows its background agents.
+   */
+  const readHistorySession = async (
+    auth: AssistantServerAuth,
+    sessionId: string,
+    alias: string | undefined,
+  ): Promise<BrowserGatewayAskAgentPersistedSession | undefined> => {
+    let read;
+    try {
+      read = await operations.readSession(auth, projectId, sessionId);
+    } catch {
+      return undefined;
+    }
+    sessionModels.set(sessionId, read.model);
+    sessionEfforts.set(sessionId, read.reasoningEffort);
+    sessionApprovalModes.set(sessionId, read.approvalMode);
+    const messages = withAgentResultCards(
+      agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+    );
+    // Agents that ended before this server started are not reported
+    // again; ones still running are, when they finish.
+    try {
+      const agents = await operations.listAgents(auth, projectId, sessionId);
+      for (const agent of agents) {
+        if (isTerminalAgent(agent)) {
+          delivery.handled.add(agent.childSessionId);
+        }
+      }
+      if (agents.some((agent) => !isTerminalAgent(agent))) {
+        trackParent(sessionId);
+      }
+    } catch {
+      // Without background agents enabled there is nothing to report.
+    }
+    if (messages.length === 0) return undefined;
+    const firstPrompt = messages.find((message) => message.role === "user");
+    return {
+      id: alias ?? sessionId,
+      title: state.titles[sessionId] ?? deriveTitle(firstPrompt?.content ?? ""),
+      createdAt: read.createdAt,
+      lastActiveAt: read.updatedAt,
+      messages,
+      nextMessageSequence: 1,
+    };
+  };
+
   /** Load every visible workspace session into the store, once. */
   const ensureLoaded = (auth: AssistantServerAuth) => {
     loaded ??= (async () => {
@@ -358,53 +416,12 @@ export async function createAskAgentBridge(
       const sessions: BrowserGatewayAskAgentPersistedSession[] = [];
       for (const summary of summaries) {
         if (hidden.has(summary.sessionId)) continue;
-        let read;
-        try {
-          read = await operations.readSession(
-            auth,
-            projectId,
-            summary.sessionId,
-          );
-        } catch {
-          continue;
-        }
-        sessionModels.set(summary.sessionId, read.model);
-        sessionEfforts.set(summary.sessionId, read.reasoningEffort);
-        sessionApprovalModes.set(summary.sessionId, read.approvalMode);
-        const messages = withAgentResultCards(
-          agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+        const session = await readHistorySession(
+          auth,
+          summary.sessionId,
+          reverse.get(summary.sessionId),
         );
-        // Agents that ended before this server started are not reported
-        // again; ones still running are, when they finish.
-        try {
-          const agents = await operations.listAgents(
-            auth,
-            projectId,
-            summary.sessionId,
-          );
-          for (const agent of agents) {
-            if (isTerminalAgent(agent)) {
-              delivery.handled.add(agent.childSessionId);
-            }
-          }
-          if (agents.some((agent) => !isTerminalAgent(agent))) {
-            trackParent(summary.sessionId);
-          }
-        } catch {
-          // Without background agents enabled there is nothing to report.
-        }
-        if (messages.length === 0) continue;
-        const firstPrompt = messages.find((message) => message.role === "user");
-        sessions.push({
-          id: reverse.get(summary.sessionId) ?? summary.sessionId,
-          title:
-            state.titles[summary.sessionId] ??
-            deriveTitle(firstPrompt?.content ?? ""),
-          createdAt: read.createdAt,
-          lastActiveAt: read.updatedAt,
-          messages,
-          nextMessageSequence: 1,
-        });
+        if (session) sessions.push(session);
       }
       sessions.sort((left, right) => right.lastActiveAt - left.lastActiveAt);
       store.loadHistory({ sessions });
@@ -1497,6 +1514,44 @@ export async function createAskAgentBridge(
         else if (activity === "unread") unread += 1;
       }
       return { running, needsYou, unread };
+    },
+    async adoptSession(auth, workspaceSessionId, title) {
+      if (closed) return;
+      state.titles[workspaceSessionId] = title.slice(0, MAX_TITLE_LENGTH);
+      if (!state.unread.includes(workspaceSessionId)) {
+        state.unread.push(workspaceSessionId);
+      }
+      await saveState().catch(() => undefined);
+      // Not loaded yet: it loads with every other chat on the first visit.
+      if (!loaded) return;
+      // After any running or queued turn: replacing the history mid-turn
+      // would drop that turn's live state.
+      const previous = turnChain;
+      let release!: () => void;
+      turnChain = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      try {
+        await previous;
+        await loaded;
+        if (closed || storeSessionFor(workspaceSessionId)) return;
+        const session = await readHistorySession(
+          auth,
+          workspaceSessionId,
+          undefined,
+        );
+        if (!session || closed) return;
+        const history = store.getHistorySnapshot();
+        store.loadHistory({
+          ...history,
+          sessions: [session, ...history.sessions],
+        });
+        await publishNow();
+      } catch {
+        // It still appears, unread, the next time chats load.
+      } finally {
+        release();
+      }
     },
     async close() {
       closed = true;

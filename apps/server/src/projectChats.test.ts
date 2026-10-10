@@ -30,6 +30,7 @@ function fakeBridge(projectId: string): AskAgentBridge {
       sendJson(response, 200, { projectId, path: url.pathname });
       return true;
     }),
+    adoptSession: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   };
 }

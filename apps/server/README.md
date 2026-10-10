@@ -369,4 +369,27 @@ Errors: `404 agent_not_found` (unknown, or owned by another session), `409 agent
 
 The event log survives restarts. Each session's events are appended to a file under `<dataRoot>/events` before any client sees them, keeping the newest 1,000 (files are compacted at twice that, between turns). Files and the state marker are synced to disk, so a power loss is detected like a crash. After a clean stop (SIGTERM, `docker compose restart`) the epoch is kept, so a client reconnecting with its cursor replays what it missed, including the final events of turns the shutdown stopped. After a crash, power loss, or a failed write, the next start uses a new epoch: the log may have lost events a client already saw, so old cursors get `reset` (`epoch_changed`) rather than a replay with a gap. A session whose file is missing or damaged keeps its numbering and resets its clients the same way. Either way, a turn that was running when the server stopped is closed in the log with `{ kind: "task", state: "failed", error: "server_restarted" }`, so a replaying client does not wait for it. The durable session repository remains the source of truth.
 
-Not yet provided: passkeys, an installer, and notifications.
+### Scheduled jobs
+
+A job sends a prompt to a new chat on a schedule, with no browser open. There is no Jobs screen in the web app yet; use the API below. Finished runs appear in the project's chat list, titled `<job name> · <date>` and marked unread.
+
+- **Schedules.** `{ "kind": "interval", "everyMinutes": 15 }` (15 minutes to 7 days, counted from when the schedule was set), `{ "kind": "daily", "time": "07:30", "timeZone": "Australia/Sydney" }`, or `{ "kind": "weekly", "days": ["mon", "fri"], "time": "07:30", "timeZone": "…" }`. `timeZone` is an IANA name and defaults to the server's (the container's is UTC unless `TZ` is set). A local time the clocks jump over runs at the next valid minute; one that happens twice runs once.
+- **Runs.** Each run is a new chat in the job's project, on the job's `model` (`"providerId/modelId"`) and `reasoningEffort`, or the project's defaults. It acts for the owner, shown as the device `Job: <name>`. One run per job at a time (an occurrence that comes while a run is still going is recorded as `skipped`, `overlap`) and at most two jobs at once; the rest wait their turn.
+- **Approvals.** `approvalMode` is `autonomous` (default) or `ask`, with the same rules as a chat. Nothing is approved for the owner: a run that needs an approval is `awaiting_approval` and waits up to 12 hours, then is cancelled (`approval_expired`). Answer it through `POST /api/projects/:id/sessions/:sid/interaction`; the chat list does not show a run's approval card yet.
+- **Outcomes.** `completed` (with a `summary`: the final reply, up to 2,000 characters), `failed`, `cancelled`, `blocked_auth` (the provider's sign-in has expired), `blocked_quota` (rate or subscription limits; there is no fallback model), and `interrupted` (the server stopped during the run; it is never re-run, and its chat is kept).
+- **Downtime.** Occurrences missed while the server was down become one `catch_up` run on startup if the latest was within the last 6 hours, and are otherwise recorded as `skipped` (`missed`).
+- **Pausing and deleting.** `PATCH` with `{ "enabled": false }` stops a live run (`cancelled`, `job_paused`). Deleting stops it too and removes the job's run history; the run chats stay. Revoking a device does not stop jobs.
+
+| Route                    | Body                                                                                                          | Result                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `GET /api/jobs`          |                                                                                                               | `{ jobs }`, each with `nextRunAt`, `lastRun`, `activeRun` |
+| `POST /api/jobs`         | `{ name, projectId, prompt, schedule, enabled?, model?, reasoningEffort?, approvalMode? }`                    | `201 { job }`                                             |
+| `GET /api/jobs/:id`      |                                                                                                               | `{ job }`                                                 |
+| `PATCH /api/jobs/:id`    | Any of the fields above; `null` clears `model` or `reasoningEffort`. A new schedule starts counting from now. | `{ job }`                                                 |
+| `DELETE /api/jobs/:id`   |                                                                                                               | `{ ok: true }`                                            |
+| `POST /api/jobs/:id/run` |                                                                                                               | `202 { run }`; `409 job_busy` while a run is going        |
+| `GET /api/jobs/:id/runs` |                                                                                                               | `{ runs }`, newest first, the last 50                     |
+
+Only the owner can use these routes (`403 jobs_forbidden`). Errors: `400 project_not_found`, `model_not_available`, `reasoning_effort_not_available`, `schedule_*`, `job_field_unknown`; `404 job_not_found`; `409 job_limit_reached` (100 jobs). Definitions are stored in `<dataRoot>/jobs/jobs.json` (an unreadable file stops the server from starting) and runs in `<dataRoot>/jobs/runs.jsonl`.
+
+Not yet provided: passkeys, an installer, a Jobs screen and inbox, and notifications.

@@ -1076,6 +1076,54 @@ describe("Ask Agent bridge", () => {
     );
   });
 
+  it("shows a finished scheduled run's chat, titled and unread", async () => {
+    const { bridge, fake, call, file } = await startBridge();
+    const jobAuth: AssistantServerAuth = {
+      principal: { tenantId: "agentlink-server", subjectId: "owner" },
+      session: {
+        ownerId: "owner",
+        sessionId: "job-run-1",
+        deviceId: "job-1",
+        deviceLabel: "Job: Brief",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => jobAuth,
+    };
+    // Chats are loaded already when the run finishes.
+    await call("/api/ask-agent/sessions");
+    fake.sessions.set("ws-run", {
+      model: MODEL,
+      messages: [
+        { role: "user", content: "Brief me" },
+        { role: "assistant", content: [{ type: "text", text: "All quiet" }] },
+      ],
+    });
+    await bridge.adoptSession(jobAuth, "ws-run", "Brief · 12 Oct, 07:30");
+    const listed = await call("/api/ask-agent/sessions");
+    expect(listed.body.sessions).toEqual([
+      expect.objectContaining({
+        id: "ws-run",
+        title: "Brief · 12 Oct, 07:30",
+        activity: "unread",
+      }),
+    ]);
+    // Twice is harmless; the title and unread flag are kept for restarts.
+    await bridge.adoptSession(jobAuth, "ws-run", "Brief · 12 Oct, 07:30");
+    expect(
+      ((await call("/api/ask-agent/sessions")).body.sessions as unknown[])
+        .length,
+    ).toBe(1);
+    const saved = JSON.parse(await fs.readFile(file, "utf8")) as {
+      titles: Record<string, string>;
+      unread: string[];
+    };
+    expect(saved.titles["ws-run"]).toBe("Brief · 12 Oct, 07:30");
+    expect(saved.unread).toContain("ws-run");
+  });
+
   it("refuses media it cannot handle and ignores other paths", async () => {
     const { call } = await startBridge();
     await expect(
