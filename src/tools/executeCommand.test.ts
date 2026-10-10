@@ -10625,7 +10625,8 @@ describe("handleExecuteCommand", () => {
       if (routeContext.requiredAuthority === "sandbox") {
         throw new SandboxAvailabilityError(
           "runtime-unavailable",
-          "Sandbox runtime unavailable",
+          "Sandbox runtime unavailable at /private/secret-host-path",
+          { diagnostic: { category: "runtime_unavailable" } },
         );
       }
       return {
@@ -10693,10 +10694,16 @@ describe("handleExecuteCommand", () => {
           command_sent: false,
           process_launched: false,
           retry_safe: false,
+          failure_stage: "preparation",
+          failure_reason: "runtime-unavailable",
+          sandbox_diagnostic: { category: "runtime_unavailable" },
         },
         { route: "native", process_launched: true },
       ],
     });
+    expect(JSON.stringify(textPayload(result))).not.toContain(
+      "secret-host-path",
+    );
   });
 
   it("does not invite replay when native recovery launch fails with unknown state", async () => {

@@ -2670,6 +2670,13 @@ export async function handleExecuteCommand(
         ) {
           throw error;
         }
+        // Bounded categories only: the error message may carry host paths.
+        const sandboxFailureDetail = {
+          failure_reason: error.reason,
+          ...(error.diagnostic
+            ? { sandbox_diagnostic: { category: error.diagnostic.category } }
+            : {}),
+        };
 
         const nativeRoute = routeContextFor(
           approvalModeFor(providers, sessionId),
@@ -2763,6 +2770,7 @@ export async function handleExecuteCommand(
                     reason:
                       approval.reason ??
                       "Native recovery was not approved for this exact command.",
+                    sandbox_failure: sandboxFailureDetail,
                     command_sent: false,
                     process_launched: false,
                     retry_safe: false,
@@ -2814,6 +2822,7 @@ export async function handleExecuteCommand(
                         retry_safe: false,
                         may_have_side_effects: false,
                         failure_stage: "preparation",
+                        ...sandboxFailureDetail,
                       },
                       {
                         attempt: 2,
@@ -2854,6 +2863,7 @@ export async function handleExecuteCommand(
               retry_safe: false,
               may_have_side_effects: false,
               failure_stage: "preparation",
+              ...sandboxFailureDetail,
             },
             nativeAttempt,
           ];
