@@ -1,0 +1,16 @@
+src/core/model/providers/codex/standaloneWeb.ts
+  h_e08a86bb3a33a2 604-605,607
+src/core/model/providers/codex/standaloneWeb.test.ts
+  h_e08a86bb3a33a2 192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77f364b1ec0bf932fbc3169d71f4312ead3f806d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
