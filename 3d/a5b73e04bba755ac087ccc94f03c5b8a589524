@@ -1,0 +1,81 @@
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 66,68-72,102-103,158-160,606-643,856-868,922-926,938,940-945,950,980-989
+  s_157f5c00e4f4b0::t_39ae2d65158cdc 67,161-162,927
+apps/server/src/webPush.ts
+  h_e08a86bb3a33a2 1-221
+apps/server/src/pushService.test.ts
+  h_e08a86bb3a33a2 1-448
+apps/server/src/accessPages.ts
+  h_e08a86bb3a33a2 71-72,81-82,87,89-97,99,107,157-158
+  s_157f5c00e4f4b0::t_13b28b6f76318c 88,98
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 61-62,65-75,363,516-558
+  s_157f5c00e4f4b0::t_76949ec08752d6 63-64
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 1-582
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 573-610
+apps/server/src/assistantServer.ts
+  h_e08a86bb3a33a2 138-146,420-421,429,434-443,456
+  s_157f5c00e4f4b0::t_fb0f22bbe77fc3 444-445
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 3,13,16-20,143-291
+  s_157f5c00e4f4b0::t_ec90fff3d925ae 15,21,292
+src/browser-gateway/webview/AssistantProjects.tsx
+  h_e08a86bb3a33a2 115-121
+apps/server/src/pushRoutes.ts
+  h_e08a86bb3a33a2 1-116
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 2-7,390-408,1147
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2508-2537
+apps/server/src/testSupport.ts
+  h_e08a86bb3a33a2 1-8,14-74
+  s_157f5c00e4f4b0::t_205c017baa066d 75
+src/browser-gateway/webview/browserGatewayNotificationsWorker.ts
+  h_e08a86bb3a33a2 2,6-7,14,19-24,36,39-45,48-90,94-95,104-106,110
+  s_157f5c00e4f4b0::t_e4be3356676c8a 3-5,91
+apps/server/src/webPush.test.ts
+  h_e08a86bb3a33a2 1-177
+src/browser-gateway/webview/AssistantNotifications.tsx
+  h_e08a86bb3a33a2 1-522
+src/browser-gateway/webview/AssistantNotifications.test.tsx
+  h_e08a86bb3a33a2 1-402
+apps/server/README.md
+  h_e08a86bb3a33a2 96,379,400-420
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 508-533
+CHANGELOG.md
+  h_e08a86bb3a33a2 7
+resources/builtin-skills/documentation/references/release-notes.md
+  s_0aca11d47bd485::t_7f385f4928bf4d 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3da5b73e04bba755ac087ccc94f03c5b8a589524",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0aca11d47bd485": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a9bbcd7-1894-4204-94d9-97c8f997125e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_157f5c00e4f4b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72625a41-e1e6-44d1-ad93-2827702a4387",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
