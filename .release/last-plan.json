@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8b7e1087512f1ab4288534970d936c91794ab055",
-  "createdAt": "2026-10-10T12:32:46.195Z",
+  "sourceSha": "c828cbc504f1fd9e644aedd517074534d5e71791",
+  "createdAt": "2026-10-10T12:47:03.815Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -33,7 +33,10 @@
         "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
         "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
         "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-        "8b7e1087512f1ab4288534970d936c91794ab055"
+        "8b7e1087512f1ab4288534970d936c91794ab055",
+        "ec193cd75140f32079325fcb88df539ffc0949d9",
+        "525d9afac9f8c922a5c3bf875ce1722a71335600",
+        "c828cbc504f1fd9e644aedd517074534d5e71791"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -163,29 +166,63 @@
           "subject": "fix(web): treat Codex 'not accessible via this tool' pages as failed reads",
           "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
           "breaking": false
+        },
+        {
+          "sha": "ec193cd75140f32079325fcb88df539ffc0949d9",
+          "subject": "fix(tools): report sandbox preparation failure reason on native fallback",
+          "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
+          "breaking": false
+        },
+        {
+          "sha": "525d9afac9f8c922a5c3bf875ce1722a71335600",
+          "subject": "feat(tools): allow ssh -t with a remote command in execute_command",
+          "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
+          "breaking": false
+        },
+        {
+          "sha": "c828cbc504f1fd9e644aedd517074534d5e71791",
+          "subject": "docs(skills): let documentation skill defer to a user-named source checkout",
+          "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.16.0",
-      "baselineRef": "desktop-v0.16.0",
-      "reserved": "0.16.0",
-      "commits": ["8b7e1087512f1ab4288534970d936c91794ab055"],
+      "published": "0.16.1",
+      "baselineRef": "desktop-v0.16.1",
+      "reserved": "0.16.1",
+      "commits": [
+        "ec193cd75140f32079325fcb88df539ffc0949d9",
+        "525d9afac9f8c922a5c3bf875ce1722a71335600",
+        "c828cbc504f1fd9e644aedd517074534d5e71791"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.16.1",
-      "effectiveBump": "patch",
+      "version": "0.17.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.16.1",
+      "tag": "desktop-v0.17.0",
       "notes": [
         {
-          "sha": "8b7e1087512f1ab4288534970d936c91794ab055",
-          "subject": "fix(web): treat Codex 'not accessible via this tool' pages as failed reads",
-          "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
+          "sha": "ec193cd75140f32079325fcb88df539ffc0949d9",
+          "subject": "fix(tools): report sandbox preparation failure reason on native fallback",
+          "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
+          "breaking": false
+        },
+        {
+          "sha": "525d9afac9f8c922a5c3bf875ce1722a71335600",
+          "subject": "feat(tools): allow ssh -t with a remote command in execute_command",
+          "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
+          "breaking": false
+        },
+        {
+          "sha": "c828cbc504f1fd9e644aedd517074534d5e71791",
+          "subject": "docs(skills): let documentation skill defer to a user-named source checkout",
+          "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
           "breaking": false
         }
       ]
@@ -372,6 +409,30 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ec193cd75140f32079325fcb88df539ffc0949d9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "525d9afac9f8c922a5c3bf875ce1722a71335600": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c828cbc504f1fd9e644aedd517074534d5e71791": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
