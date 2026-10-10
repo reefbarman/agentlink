@@ -1,0 +1,14 @@
+apps/server/deploy/systemd/agentlink-mdns-alias.service
+  h_e08a86bb3a33a2 9,37-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ecdcc06e049287045f08db9cf9f323e382e5ad75",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
