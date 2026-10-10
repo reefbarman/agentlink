@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "./httpJson.js";
 import {
   ProjectCloneError,
+  ProjectSettingsError,
   openProjectCatalog,
+  projectNetworkPolicy,
   planRepositories,
   slugifyProjectId,
   type CloneRepository,
@@ -188,6 +190,43 @@ describe("project catalog", () => {
     expect((await open()).get("home")?.label).toBe("Everyday");
     await expect(catalog.update("missing", {})).rejects.toMatchObject({
       status: 404,
+    });
+  });
+
+  it("stores a network policy, defaulting to the open web", async () => {
+    const { open } = await setup();
+    const catalog = await open();
+    expect(projectNetworkPolicy(catalog.get("home"))).toEqual({
+      preset: "open",
+      allow: [],
+    });
+    const updated = await catalog.update("home", {
+      network: {
+        preset: "dependencies",
+        allow: [" docs.example.com ", "*.Example.org"],
+      },
+    });
+    expect(projectNetworkPolicy(updated)).toEqual({
+      preset: "dependencies",
+      allow: ["docs.example.com", "*.example.org"],
+    });
+    expect(projectNetworkPolicy((await open()).get("home"))).toEqual(
+      projectNetworkPolicy(updated),
+    );
+    await expect(
+      catalog.update("home", { network: { preset: "everything", allow: [] } }),
+    ).rejects.toBeInstanceOf(ProjectSettingsError);
+    await expect(
+      catalog.update("home", {
+        network: { preset: "open", allow: ["http://bad/"] },
+      }),
+    ).rejects.toBeInstanceOf(ProjectSettingsError);
+    const cleared = await catalog.update("home", {
+      network: { preset: "open" },
+    });
+    expect(projectNetworkPolicy(cleared)).toEqual({
+      preset: "open",
+      allow: [],
     });
   });
 

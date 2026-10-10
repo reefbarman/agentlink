@@ -1,3 +1,4 @@
+import type { HostToolResolver } from "@agentlink/core";
 import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 import {
   createLocalWorkspaceExecutionBackend,
@@ -51,8 +52,17 @@ import {
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
+import {
+  DEFAULT_NETWORK_POLICY,
+  egressProxyUrl,
+  parseNetworkPolicyKey,
+  proxyAuthorizationHeader,
+  type NetworkPolicy,
+} from "./egressPolicy.js";
+import { directConnector, gatewayConnector } from "./webFetch.js";
+import { createWebTools } from "./webTools.js";
 import { createProjectChats } from "./projectChats.js";
-import { openProjectCatalog } from "./projectCatalog.js";
+import { openProjectCatalog, projectNetworkPolicy } from "./projectCatalog.js";
 import { createGitCloner } from "./projectClone.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
@@ -192,11 +202,71 @@ async function commandWorkerClient(
  * Host options that run every process on the command worker, or disable
  * commands when none is configured. Files stay local to this server.
  */
+/**
+ * `web_fetch` and `web_search` for one project. Pages are read through the
+ * egress gateway with the project's signed policy when there is one (the
+ * same rules as its commands), otherwise the server makes the same checks
+ * and connects itself.
+ */
+export function projectWebTools(
+  config: AssistantServerConfig,
+  options: {
+    readonly policy: () => NetworkPolicy;
+    readonly key: Buffer | undefined;
+    readonly codex?: Pick<
+      ReturnType<typeof createServerCodexRuntime>["provider"],
+      "resolveAuth"
+    >;
+  },
+): HostToolResolver {
+  const proxy = config.commandWorker?.egressProxy;
+  const key = options.key;
+  const codex = options.codex;
+  const codexProviderIds = new Set(
+    config.providers
+      .filter((provider) => provider.type === "codex")
+      .map((provider) => provider.id ?? "codex"),
+  );
+  return createWebTools({
+    policy: options.policy,
+    connector: proxy
+      ? gatewayConnector({
+          proxy,
+          authorization: (policy) =>
+            key ? proxyAuthorizationHeader(key, policy) : undefined,
+        })
+      : directConnector(),
+    ...(codex && codexProviderIds.size > 0
+      ? {
+          codex: {
+            providerIds: codexProviderIds,
+            resolveAuth: () =>
+              codex.resolveAuth({
+                context: undefined as never,
+                modelId: "",
+                purpose: "nativeWeb",
+              }),
+          },
+        }
+      : {}),
+    ...(config.web?.searxngUrl ? { searxngUrl: config.web.searxngUrl } : {}),
+  });
+}
+
 export function commandHostOptions(
   config: Pick<AssistantServerConfig, "commandWorker">,
   client: CommandWorkerClientOptions | undefined,
   /** Whether a foreground command in this session may run without asking. */
   autonomous?: (request: { readonly sessionId: string }) => boolean,
+  /**
+   * The project's network policy, read for each command, and the key that
+   * signs it into the proxy credentials. Without a key the gateway's own
+   * allowlist applies.
+   */
+  network?: {
+    readonly policy: () => NetworkPolicy;
+    readonly key: Buffer | undefined;
+  },
 ): Pick<CreateWorkspaceHostOptions, "executionBackend" | "commands"> {
   if (!client || !config.commandWorker) return {};
   return {
@@ -212,8 +282,14 @@ export function commandHostOptions(
     commands: {
       enabled: true,
       shellExecutable: config.commandWorker.shell,
-      resolveEnvironment: () =>
-        commandWorkerEnvironment(config.commandWorker?.egressProxy),
+      resolveEnvironment: () => {
+        const proxy = config.commandWorker?.egressProxy;
+        return commandWorkerEnvironment(
+          proxy && network
+            ? egressProxyUrl(proxy, network.key, network.policy())
+            : proxy,
+        );
+      },
       ...(autonomous
         ? { hasSessionGrant: (_proposal, request) => autonomous(request) }
         : {}),
@@ -429,6 +505,22 @@ export async function startAssistantService(
   if (preflight.codexSignIn) log(preflight.codexSignIn);
   if (preflight.commandWorker) log(preflight.commandWorker);
   const worker = await commandWorkerClient(config, env);
+  const policyKey = config.commandWorker?.egressPolicyKey
+    ? parseNetworkPolicyKey(
+        await (
+          await prepareSecret(
+            config.commandWorker.egressPolicyKey,
+            "commandWorker.egressPolicyKey",
+            env,
+          )
+        )(),
+      )
+    : undefined;
+  if (config.commandWorker?.egressProxy && !policyKey) {
+    log(
+      "No commandWorker.egressPolicyKey: every project's commands get the egress gateway's allowlist, whatever its network preset.",
+    );
+  }
   const providers = await resolveWorkspaceProviders(
     config.providers,
     env,
@@ -491,7 +583,15 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
-        ...commandHostOptions(config, worker, autonomous),
+        ...commandHostOptions(config, worker, autonomous, {
+          policy: () => projectNetworkPolicy(catalog.get(project.id)),
+          key: policyKey,
+        }),
+        hostTools: projectWebTools(config, {
+          policy: () => projectNetworkPolicy(catalog.get(project.id)),
+          key: policyKey,
+          ...(codex ? { codex: codex.provider } : {}),
+        }),
         files: {
           enabled: true,
           // Protected paths always ask, whatever this says.
@@ -612,8 +712,15 @@ export async function startAssistantService(
                 ? createCommandWorkerLauncher(worker)
                 : createLocalWorkspaceExecutionBackend(),
               gitExecutable: GIT_EXECUTABLE,
+              // The owner typed these URLs: clones may reach any public host.
               environment: commandWorkerEnvironment(
-                config.commandWorker?.egressProxy,
+                config.commandWorker?.egressProxy
+                  ? egressProxyUrl(
+                      config.commandWorker.egressProxy,
+                      policyKey,
+                      DEFAULT_NETWORK_POLICY,
+                    )
+                  : undefined,
               ),
               ownerId,
             }),

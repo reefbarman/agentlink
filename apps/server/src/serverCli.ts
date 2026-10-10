@@ -12,6 +12,11 @@ import {
   startEgressGateway,
 } from "./egressGateway.js";
 import {
+  egressPolicyAuthorizer,
+  parseNetworkPolicyKey,
+} from "./egressPolicy.js";
+import { promises as fs } from "node:fs";
+import {
   localTlsHostsFromOrigins,
   readLocalCertificateAuthority,
 } from "./localCertificateAuthority.js";
@@ -58,6 +63,7 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
                                        [--allow-local-peers] [--reap-orphans]
        agentlink-server egress-gateway [--listen <host:port>]
                                        [--allow <host>]... [--no-default-allow]
+                                       [--policy-key-file <path>]
 
 Runs the AgentLink assistant server over HTTPS.
 
@@ -107,6 +113,10 @@ Commands:
                    registries and GitHub hosts, plus each --allow and the
                    comma- or space-separated AGENTLINK_EGRESS_ALLOW
                    variable (host names or *.domain wildcards).
+                   --policy-key-file (or AGENTLINK_EGRESS_POLICY_KEY_FILE)
+                   names the key the server signs per-project network
+                   policies with; requests carrying one follow it, and
+                   requests without credentials keep this allowlist.
                    --no-default-allow drops the built-in set. Anything else,
                    plain HTTP, IP addresses, ports other than 443, and names
                    that resolve to private addresses are refused with a 403
@@ -400,6 +410,7 @@ async function runEgressGateway(
 ): Promise<number> {
   let listen = DEFAULT_EGRESS_GATEWAY_LISTEN;
   let defaults = true;
+  let policyKeyFile = io.env.AGENTLINK_EGRESS_POLICY_KEY_FILE || undefined;
   const extra: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
@@ -412,12 +423,17 @@ async function runEgressGateway(
       defaults = false;
       continue;
     }
-    if (argument !== "--listen" && argument !== "--allow") {
+    if (
+      argument !== "--listen" &&
+      argument !== "--allow" &&
+      argument !== "--policy-key-file"
+    ) {
       return usageError(io, `Unknown argument: ${argument}`);
     }
     if (!value) return usageError(io, `${argument} needs a value`);
     index += 1;
     if (argument === "--listen") listen = value;
+    else if (argument === "--policy-key-file") policyKeyFile = value;
     else extra.push(value);
   }
   const address = parseListen(listen);
@@ -439,14 +455,29 @@ async function runEgressGateway(
   if (entries.length === 0) {
     return usageError(io, "the allowlist is empty: add --allow <host>");
   }
+  let policyKey: Buffer | undefined;
+  if (policyKeyFile) {
+    try {
+      policyKey = parseNetworkPolicyKey(await fs.readFile(policyKeyFile));
+    } catch (error) {
+      return usageError(
+        io,
+        `--policy-key-file: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  const dependencies = parseEgressAllowlist(entries);
   const gateway = await startEgressGateway({
     host: address.host,
     port: address.port,
     allow: entries,
     log: io.log,
+    ...(policyKey
+      ? { authorize: egressPolicyAuthorizer(policyKey, dependencies) }
+      : {}),
   });
   io.log(
-    `AgentLink egress gateway listening on ${address.host}:${gateway.port}; allowing ${entries.join(", ")}`,
+    `AgentLink egress gateway listening on ${address.host}:${gateway.port}; allowing ${entries.join(", ")}${policyKey ? " (and per-project policies from the server)" : ""}`,
   );
   const signal = await io.waitForShutdown();
   io.log(`Received ${signal}; closing tunnels`);

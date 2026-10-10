@@ -21,7 +21,11 @@ export interface AssistantProject {
   origin: "config" | "app";
   path: string;
   repositories: AssistantProjectRepository[];
-  settings: { defaultModel?: string; defaultReasoningEffort?: string };
+  settings: {
+    defaultModel?: string;
+    defaultReasoningEffort?: string;
+    network?: AssistantNetworkPolicy;
+  };
   /** How many of the project's chats are working, need you, or are unread. */
   activity?: AssistantProjectActivity;
 }
@@ -88,7 +92,48 @@ const ERROR_TEXT: Record<string, string> = {
   project_clone_failed: "A repository could not be cloned.",
   invalid_model: "That model is not available.",
   instructions_too_large: "Instructions can be up to 64 KB.",
+  network_preset_invalid: "Choose a network setting.",
+  network_allow_invalid: "Check the extra sites.",
 };
+
+export type AssistantNetworkPreset = "open" | "dependencies" | "off";
+
+export interface AssistantNetworkPolicy {
+  preset: AssistantNetworkPreset;
+  allow: string[];
+}
+
+const NETWORK_CHOICES: ReadonlyArray<{
+  preset: AssistantNetworkPreset;
+  title: string;
+  description: string;
+}> = [
+  {
+    preset: "open",
+    title: "Open web",
+    description:
+      "Commands and web_fetch can reach any public site, and web_search is available.",
+  },
+  {
+    preset: "dependencies",
+    title: "Dependencies only",
+    description:
+      "Package registries and source hosts (npm, PyPI, GitHub, …), plus the sites below. No web search.",
+  },
+  {
+    preset: "off",
+    title: "Off",
+    description: "No network for commands, and no web tools.",
+  },
+];
+
+/** One site per line or comma-separated, blank entries dropped. */
+export function parseAllowList(text: string): string[] {
+  return text
+    .split(/[\n,]/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 async function requestJson<T>(
   url: string,
@@ -520,8 +565,8 @@ export function NewProjectDialog({
               </button>
             )}
             <p class="assistant-project-hint">
-              Public https URLs work out of the box. Hosts other than GitHub
-              need to be on the egress allowlist.
+              Public https URLs only; private repositories are not supported
+              yet.
             </p>
           </div>
         )}
@@ -566,8 +611,11 @@ export function ProjectSettingsDialog({
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [preset, setPreset] = useState<AssistantNetworkPreset>("open");
+  const [allow, setAllow] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -589,6 +637,8 @@ export function ProjectSettingsDialog({
         setModel(settings.project.settings.defaultModel ?? "");
         setEffort(settings.project.settings.defaultReasoningEffort ?? "");
         setInstructions(settings.instructions);
+        setPreset(settings.project.settings.network?.preset ?? "open");
+        setAllow((settings.project.settings.network?.allow ?? []).join("\n"));
       },
       (caught: unknown) => {
         if (!cancelled) setError(errorText(caught));
@@ -609,6 +659,7 @@ export function ProjectSettingsDialog({
     if (!loaded || busy) return;
     setBusy(true);
     setError(null);
+    setDetail(undefined);
     try {
       const result = await requestJson<{ project: AssistantProject }>(
         `/api/ask-agent/projects/${encodeURIComponent(projectId)}/settings`,
@@ -619,12 +670,14 @@ export function ProjectSettingsDialog({
             defaultModel: model || null,
             defaultReasoningEffort: effort || null,
             ...(loaded.instructionsTruncated ? {} : { instructions }),
+            network: { preset, allow: parseAllowList(allow) },
           },
         },
       );
       onSaved(result.project);
     } catch (caught) {
       setError(errorText(caught));
+      setDetail(errorDetail(caught));
       setBusy(false);
     }
   };
@@ -691,6 +744,40 @@ export function ProjectSettingsDialog({
               </small>
             )}
           </label>
+          <fieldset>
+            <legend>Network</legend>
+            {NETWORK_CHOICES.map((choice) => (
+              <label class="assistant-project-choice" key={choice.preset}>
+                <input
+                  type="radio"
+                  name="project-network"
+                  checked={preset === choice.preset}
+                  onChange={() => setPreset(choice.preset)}
+                />
+                <span>
+                  <strong>{choice.title}</strong>
+                  <small>{choice.description}</small>
+                </span>
+              </label>
+            ))}
+            {preset !== "off" && (
+              <label>
+                <span>Extra sites</span>
+                <textarea
+                  rows={3}
+                  value={allow}
+                  placeholder={"docs.example.com\n*.example.org"}
+                  onInput={(event) => setAllow(event.currentTarget.value)}
+                />
+                <small>
+                  {preset === "open"
+                    ? "Kept for when you switch to Dependencies only."
+                    : "One host name per line; *.domain covers its subdomains."}{" "}
+                  Private and local network addresses are always blocked.
+                </small>
+              </label>
+            )}
+          </fieldset>
           <dl class="assistant-project-facts">
             <dt>Folder</dt>
             <dd>
@@ -712,9 +799,10 @@ export function ProjectSettingsDialog({
             )}
           </dl>
           {error && (
-            <p class="assistant-project-error" role="alert">
-              {error}
-            </p>
+            <div class="assistant-project-error" role="alert">
+              <p>{error}</p>
+              {detail && <pre>{detail}</pre>}
+            </div>
           )}
           <footer>
             <button type="button" disabled={busy} onClick={onClose}>

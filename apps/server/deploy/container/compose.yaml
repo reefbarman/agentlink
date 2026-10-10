@@ -5,7 +5,8 @@
 # the host user:
 #   mkdir -m 700 data secrets && mkdir -p projects/home
 #   openssl rand -hex 32 > secrets/command-worker-token
-#   chmod 600 secrets/command-worker-token
+#   openssl rand -hex 32 > secrets/egress-policy-key
+#   chmod 600 secrets/command-worker-token secrets/egress-policy-key
 #   docker compose up -d
 #   docker compose logs assistant          # CA fingerprint
 #   docker compose exec assistant agentlink-server codex-login
@@ -17,9 +18,10 @@
 #   AGENTLINK_UID / AGENTLINK_GID  owner of data/ and projects/ (default 1000)
 #   AGENTLINK_WORKER_MEMORY / AGENTLINK_WORKER_CPUS / AGENTLINK_WORKER_PIDS
 #     command worker limits (default 2g, 2, 512)
-#   AGENTLINK_EGRESS_ALLOW  extra hosts commands may reach over HTTPS,
-#     comma-separated (`api.example.com,*.example.org`); the built-in list
-#     covers npm, GitHub, PyPI and nodejs.org
+#   AGENTLINK_EGRESS_ALLOW  extra hosts for the "Dependencies only" network
+#     preset, comma-separated (`api.example.com,*.example.org`); the
+#     built-in list covers npm, GitHub, PyPI and nodejs.org. Each project
+#     picks its preset (Open web, Dependencies only, Off) in its settings.
 
 name: agentlink-assistant
 
@@ -51,6 +53,8 @@ services:
     secrets:
       - source: command_worker_token
         target: command-worker-token
+      - source: egress_policy_key
+        target: egress-policy-key
     depends_on:
       command-worker:
         condition: service_started
@@ -100,10 +104,13 @@ services:
         max-size: 10m
         max-file: "3"
 
-  # HTTPS-only proxy for commands. It opens tunnels to allowlisted host
-  # names that resolve to public addresses, and refuses everything else
-  # (the LAN, the host, Meridian, plain HTTP) with a 403 naming the host.
-  # It runs the assistant image but has no data, projects, or secrets.
+  # HTTPS-only proxy for commands and web_fetch. It opens tunnels only to
+  # host names that resolve to public addresses, and refuses everything
+  # else (the LAN, the host, Meridian, plain HTTP) with a 403 naming the
+  # host. Which public hosts are allowed comes from the project's network
+  # preset, signed by the assistant with the shared policy key; requests
+  # without a signed policy get the dependency allowlist. It runs the
+  # assistant image but has no data, projects, or other secrets.
   egress-gateway:
     image: agentlink-assistant:local
     pull_policy: never
@@ -120,6 +127,10 @@ services:
     command: ["egress-gateway"]
     environment:
       AGENTLINK_EGRESS_ALLOW: ${AGENTLINK_EGRESS_ALLOW:-}
+      AGENTLINK_EGRESS_POLICY_KEY_FILE: /run/secrets/egress-policy-key
+    secrets:
+      - source: egress_policy_key
+        target: egress-policy-key
     networks:
       - command-worker
       - egress
@@ -145,3 +156,5 @@ networks:
 secrets:
   command_worker_token:
     file: ./secrets/command-worker-token
+  egress_policy_key:
+    file: ./secrets/egress-policy-key

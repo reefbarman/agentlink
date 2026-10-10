@@ -12,6 +12,10 @@ import {
 } from "./assistantService.js";
 import { startCommandWorker, type CommandWorker } from "./commandWorker.js";
 import {
+  verifyNetworkPolicyHeader,
+  type NetworkPolicy,
+} from "./egressPolicy.js";
+import {
   canExecuteOnCommandWorker,
   createCommandWorkerLauncher,
   pingCommandWorker,
@@ -237,6 +241,41 @@ describe("command worker", () => {
       http_proxy: proxy,
     });
     expect(options().resolveEnvironment!()).toEqual(COMMAND_WORKER_ENVIRONMENT);
+  });
+
+  it("signs the project's current network policy into each command's proxy URL", async () => {
+    const key = Buffer.alloc(32, 7);
+    let policy: NetworkPolicy = { preset: "open", allow: [] };
+    const { commands } = commandHostOptions(
+      {
+        commandWorker: {
+          host: "command-worker",
+          port: 7300,
+          token: { file: "/unused" },
+          shell: "/bin/bash",
+          egressProxy: "http://egress-gateway:3128",
+        },
+      },
+      { host: "command-worker", port: 7300, readToken: async () => TOKEN },
+      undefined,
+      { policy: () => policy, key },
+    );
+    const policyOf = async () => {
+      const proxy = new URL(
+        String((await commands!.resolveEnvironment!()).HTTPS_PROXY),
+      );
+      expect(proxy.host).toBe("egress-gateway:3128");
+      return verifyNetworkPolicyHeader(
+        key,
+        `Basic ${Buffer.from(
+          `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`,
+        ).toString("base64")}`,
+      );
+    };
+    await expect(policyOf()).resolves.toEqual(policy);
+    // Read again for every command, so a settings change applies at once.
+    policy = { preset: "dependencies", allow: ["docs.example.com"] };
+    await expect(policyOf()).resolves.toEqual(policy);
   });
 
   it("kills the process when the server connection drops", async () => {

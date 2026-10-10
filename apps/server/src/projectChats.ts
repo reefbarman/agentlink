@@ -12,6 +12,8 @@ import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import {
   PROJECT_ID_PATTERN,
   ProjectCloneError,
+  ProjectSettingsError,
+  parseNetworkPatch,
   type AssistantProjectEntry,
   type AssistantProjectSettingsPatch,
   type CloneRepository,
@@ -247,6 +249,27 @@ export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
         patch.defaultReasoningEffort = body.defaultReasoningEffort;
       } else {
         throw new HttpError(400, "invalid_reasoning_effort");
+      }
+    }
+    if (body.network !== undefined) {
+      const network = body.network as Record<string, unknown> | null;
+      if (!network || typeof network !== "object") {
+        throw new HttpError(400, "network_preset_invalid");
+      }
+      try {
+        patch.network = parseNetworkPatch({
+          preset: network.preset,
+          allow: Array.isArray(network.allow) ? network.allow : [],
+        });
+      } catch (error) {
+        if (error instanceof ProjectSettingsError) {
+          sendJson(response, error.status, {
+            error: error.code,
+            ...(error.detail ? { detail: error.detail } : {}),
+          });
+          return;
+        }
+        throw error;
       }
     }
     let instructions: string | undefined;

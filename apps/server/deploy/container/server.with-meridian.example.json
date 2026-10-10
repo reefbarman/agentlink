@@ -73,6 +73,7 @@
     "port": 7300,
     "token": { "file": "/run/secrets/command-worker-token" },
     "shell": "/bin/bash",
-    "egressProxy": "http://egress-gateway:3128"
+    "egressProxy": "http://egress-gateway:3128",
+    "egressPolicyKey": { "file": "/run/secrets/egress-policy-key" }
   }
 }

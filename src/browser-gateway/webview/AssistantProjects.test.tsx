@@ -1,5 +1,7 @@
 import {
   AssistantProjectSwitcher,
+  ProjectSettingsDialog,
+  parseAllowList,
   summarizeProjectActivity,
 } from "./AssistantProjects";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -85,5 +87,93 @@ describe("AssistantProjectSwitcher", () => {
       screen.getByRole("menuitemradio", { name: "Work (1 needs you)" }),
     );
     screen.getByRole("menuitemradio", { name: "Home (1 working)" });
+  });
+});
+
+describe("ProjectSettingsDialog network", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("splits extra sites by line or comma", () => {
+    expect(parseAllowList(" a.example.com\n\n*.b.org, c.net ,")).toEqual([
+      "a.example.com",
+      "*.b.org",
+      "c.net",
+    ]);
+  });
+
+  it("loads the preset, saves a new one with extra sites, and shows the server's detail", async () => {
+    const posts: unknown[] = [];
+    const loaded = {
+      ...project("home"),
+      settings: { network: { preset: "open", allow: ["docs.example.com"] } },
+    };
+    let reject = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/models")) return json({ models: [] });
+        if (init?.method === "POST") {
+          posts.push(JSON.parse(String(init.body)));
+          return reject
+            ? json(
+                {
+                  error: "network_allow_invalid",
+                  detail: '"http://x/" is not a host name',
+                },
+                400,
+              )
+            : json({ project: loaded });
+        }
+        return json({
+          project: loaded,
+          instructions: "",
+          instructionsTruncated: false,
+        });
+      }),
+    );
+    const onSaved = vi.fn();
+    render(
+      <ProjectSettingsDialog
+        projectId="home"
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+    const open = await screen.findByRole("radio", { name: /Open web/u });
+    expect((open as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: /Dependencies only/u }));
+    const sites = screen.getByRole("textbox", { name: /Extra sites/u });
+    expect((sites as HTMLTextAreaElement).value).toBe("docs.example.com");
+    fireEvent.input(sites, {
+      target: { value: "docs.example.com\n*.example.org" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(posts[0]).toMatchObject({
+      network: {
+        preset: "dependencies",
+        allow: ["docs.example.com", "*.example.org"],
+      },
+    });
+
+    cleanup();
+    reject = true;
+    render(
+      <ProjectSettingsDialog
+        projectId="home"
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("radio", { name: /^Off/u }));
+    expect(screen.queryByRole("textbox", { name: /Extra sites/u })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Check the extra sites.");
+    expect(alert.textContent).toContain("is not a host name");
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createHash } from "node:crypto";
+import { defineTool, type HostTool } from "@agentlink/core";
 import {
   createWorkspaceHost,
   type CreateWorkspaceHostOptions,
@@ -543,6 +544,100 @@ describe("createWorkspaceHost", () => {
         status: "completed",
         text: "artifacts active",
       });
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("offers and runs host-supplied tools, refusing ones that need approval", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const handler = vi.fn(async (input: Record<string, unknown>) => ({
+      modelContent: `looked up ${String(input.topic)}`,
+    }));
+    const lookup = defineTool({
+      name: "host_lookup",
+      description: "Look something up",
+      inputSchema: {
+        type: "object",
+        properties: { topic: { type: "string" } },
+        required: ["topic"],
+      },
+      effect: "read",
+      handler,
+    });
+    const needsApproval = defineTool({
+      name: "host_write",
+      description: "Write something",
+      inputSchema: { type: "object", properties: {} },
+      effect: "write",
+      authorization: "required",
+      handler,
+    });
+    let offered: readonly HostTool[] = [lookup];
+    const toolResults: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: Array<{ role?: string; content?: string }>;
+          tools?: Array<{ function?: { name?: string } }>;
+        };
+        expect(body.tools?.map((tool) => tool.function?.name)).toContain(
+          "host_lookup",
+        );
+        const result = body.messages?.find(
+          (message) => message.role === "tool",
+        );
+        if (result) {
+          toolResults.push(String(result.content));
+          return completion("done");
+        }
+        return toolCall("host_lookup", { topic: "tides" });
+      });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "host-tools",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      hostTools: () => offered,
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      await expect(
+        host.runTurn(sessionId, "look it up"),
+      ).resolves.toMatchObject({ status: "completed", text: "done" });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(toolResults.join("\n")).toContain("looked up tides");
+
+      offered = [lookup, needsApproval];
+      fetch.mockClear();
+      const refused = await host
+        .runTurn(sessionId, "again")
+        .then((result) => result.status)
+        .catch(() => "rejected");
+      expect(refused).not.toBe("completed");
+      expect(fetch).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledTimes(1);
     } finally {
       await host.close();
       await fs.rm(parent, { recursive: true, force: true });

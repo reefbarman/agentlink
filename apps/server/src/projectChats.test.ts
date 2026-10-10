@@ -319,6 +319,39 @@ describe("project chats", () => {
     );
   });
 
+  it("saves network settings and explains invalid sites", async () => {
+    const { call, catalog } = await setup();
+    const saved = await call("/api/ask-agent/projects/home/settings", {
+      body: {
+        network: { preset: "dependencies", allow: ["docs.example.com"] },
+      },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({
+      project: {
+        settings: {
+          network: { preset: "dependencies", allow: ["docs.example.com"] },
+        },
+      },
+    });
+    expect(catalog.get("home")?.settings.network?.preset).toBe("dependencies");
+    const invalid = await call("/api/ask-agent/projects/home/settings", {
+      body: { network: { preset: "open", allow: ["http://bad/"] } },
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({
+      error: "network_allow_invalid",
+      detail: expect.stringContaining("http://bad/"),
+    });
+    expect(
+      (
+        await call("/api/ask-agent/projects/home/settings", {
+          body: { network: { preset: "everything" } },
+        })
+      ).status,
+    ).toBe(400);
+  });
+
   it("closes every project's bridge", async () => {
     const { call, chats } = await setup();
     await call("/api/ask-agent/projects", { body: { name: "Extra" } });

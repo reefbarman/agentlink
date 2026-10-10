@@ -30,7 +30,25 @@ export interface EgressGatewayOptions {
   /** Open client connections of any kind, including refused ones. */
   readonly maxConnections?: number;
   readonly log?: (line: string) => void;
+  /**
+   * Decides each tunnel by host name in place of `allow`, for example from
+   * a signed per-project policy in the proxy credentials. Address checks
+   * (public addresses only) still apply to everything it allows.
+   */
+  readonly authorize?: (request: {
+    readonly hostname: string;
+    readonly proxyAuthorization: string | undefined;
+  }) => EgressAuthorization;
 }
+
+export type EgressAuthorization =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      /** 407 asks for (valid) credentials; 403 refuses. */
+      readonly status: 403 | 407;
+      readonly reason: string;
+    };
 
 export interface ResolvedAddress {
   readonly address: string;
@@ -261,13 +279,20 @@ export async function startEgressGateway(
 
   server.on("connect", (request, client: Socket, head: Buffer) => {
     client.on("error", () => undefined);
-    void openTunnel(request.url ?? "", client, head);
+    const header = request.headers["proxy-authorization"];
+    void openTunnel(
+      request.url ?? "",
+      client,
+      head,
+      Array.isArray(header) ? header[0] : header,
+    );
   });
 
   async function openTunnel(
     authority: string,
     client: Socket,
     head: Buffer,
+    proxyAuthorization: string | undefined,
   ): Promise<void> {
     const target = parseConnectTarget(authority);
     if (!target.ok) {
@@ -283,7 +308,21 @@ export async function startEgressGateway(
       log(`egress: blocked ${label} (port not allowed)`);
       return;
     }
-    if (!allowlist.matches(hostname)) {
+    if (options.authorize) {
+      const decision = options.authorize({ hostname, proxyAuthorization });
+      if (!decision.allowed) {
+        refuse(
+          client,
+          decision.status,
+          `Blocked ${hostname}: ${decision.reason}`,
+          decision.status === 407
+            ? ['Proxy-Authenticate: Basic realm="agentlink-egress"']
+            : [],
+        );
+        log(`egress: blocked ${label} (${decision.reason})`);
+        return;
+      }
+    } else if (!allowlist.matches(hostname)) {
       refuse(
         client,
         403,
@@ -418,7 +457,12 @@ export async function startEgressGateway(
  * destroyed shortly after, so a client that never closes its side cannot
  * hold it open.
  */
-function refuse(client: Socket, status: number, message: string): void {
+function refuse(
+  client: Socket,
+  status: number,
+  message: string,
+  extraHeaders: readonly string[] = [],
+): void {
   if (client.destroyed) return;
   const body = `${message}\n`;
   setTimeout(() => client.destroy(), REFUSAL_LINGER_MS).unref();
@@ -428,6 +472,7 @@ function refuse(client: Socket, status: number, message: string): void {
       "Content-Type: text/plain; charset=utf-8",
       `Content-Length: ${Buffer.byteLength(body)}`,
       "X-AgentLink-Egress: blocked",
+      ...extraHeaders,
       "Connection: close",
       "",
       body,

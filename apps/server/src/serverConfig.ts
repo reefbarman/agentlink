@@ -56,6 +56,17 @@ export interface AssistantServerConfig {
    * itself. Every command still needs the owner's approval.
    */
   readonly commandWorker?: AssistantServerCommandWorkerConfig;
+  /** Web tools (`web_fetch`, `web_search`). */
+  readonly web?: AssistantServerWebConfig;
+}
+
+export interface AssistantServerWebConfig {
+  /**
+   * Base URL of a SearXNG instance (with the JSON format enabled) for
+   * `web_search` in chats on non-Codex models. The server calls it
+   * directly, so it may be on a private network.
+   */
+  readonly searxngUrl?: string;
 }
 
 export interface AssistantServerCommandWorkerConfig {
@@ -71,6 +82,13 @@ export interface AssistantServerCommandWorkerConfig {
    * its HTTP(S) proxy. Without it commands get no proxy settings.
    */
   readonly egressProxy?: string;
+  /**
+   * Key shared with the egress gateway (`--policy-key-file`). With it, each
+   * project's network preset is signed into its commands' proxy
+   * credentials and enforced by the gateway; without it every project gets
+   * the gateway's allowlist.
+   */
+  readonly egressPolicyKey?: AssistantServerSecretSource;
 }
 
 /** Default shell for commands on the worker. */
@@ -326,6 +344,7 @@ export function parseAssistantServerConfig(
     "projectsRoot",
     "ripgrepPath",
     "commandWorker",
+    "web",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -477,7 +496,33 @@ export function parseAssistantServerConfig(
             baseDirectory,
           ),
         }),
+    ...(config.web === undefined ? {} : { web: parseWeb(config.web) }),
   };
+}
+
+function parseWeb(value: unknown): AssistantServerWebConfig {
+  const item = record(value, "web");
+  allowKeys(item, "web", ["searxngUrl"]);
+  if (item.searxngUrl === undefined) return {};
+  const raw = text(item.searxngUrl, "web.searxngUrl");
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("web.searxngUrl must be a URL like http://searxng:8080");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "web.searxngUrl must be an http(s) URL without credentials, query, or fragment",
+    );
+  }
+  return { searxngUrl: url.href.replace(/\/+$/u, "") };
 }
 
 function parseCommandWorker(
@@ -486,7 +531,14 @@ function parseCommandWorker(
 ): AssistantServerCommandWorkerConfig {
   const label = "commandWorker";
   const item = record(value, label);
-  allowKeys(item, label, ["host", "port", "token", "shell", "egressProxy"]);
+  allowKeys(item, label, [
+    "host",
+    "port",
+    "token",
+    "shell",
+    "egressProxy",
+    "egressPolicyKey",
+  ]);
   const host = text(item.host, `${label}.host`);
   // The protocol is plain TCP with a shared token, so it must stay on this
   // machine or a private container network, like Meridian's HTTP.
@@ -514,6 +566,15 @@ function parseCommandWorker(
     ...(item.egressProxy === undefined
       ? {}
       : { egressProxy: parseEgressProxy(item.egressProxy, label) }),
+    ...(item.egressPolicyKey === undefined
+      ? {}
+      : {
+          egressPolicyKey: secretSource(
+            item.egressPolicyKey,
+            `${label}.egressPolicyKey`,
+            baseDirectory,
+          ),
+        }),
   };
 }
 

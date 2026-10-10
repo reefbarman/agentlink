@@ -147,7 +147,8 @@ describe("deployment files", () => {
     );
 
     // The egress gateway: the only way out for commands. Hardened, never
-    // published, and holding no data, projects, or secrets.
+    // published, and holding no data, projects, or secrets other than the
+    // key that verifies project network policies.
     const gatewayService = compose.slice(
       compose.indexOf("\n  egress-gateway:\n"),
       compose.indexOf("\nnetworks:\n"),
@@ -167,7 +168,18 @@ describe("deployment files", () => {
     expect(gatewayService).toMatch(
       /^ {4}networks:\n {6}- command-worker\n {6}- egress\n/mu,
     );
-    expect(gatewayService).not.toMatch(/^\s+(ports|volumes|secrets):/mu);
+    expect(gatewayService).not.toMatch(/^\s+(ports|volumes):/mu);
+    expect(gatewayService).toMatch(
+      /^ {4}secrets:\n {6}- source: egress_policy_key\n {8}target: egress-policy-key\n {4}networks:/mu,
+    );
+    expect(gatewayService).toContain(
+      "AGENTLINK_EGRESS_POLICY_KEY_FILE: /run/secrets/egress-policy-key",
+    );
+    expect(assistantService).toContain("target: egress-policy-key");
+    expect(workerService).not.toContain("egress-policy-key");
+    expect(compose).toMatch(
+      /^ {2}egress_policy_key:\n {4}file: \.\/secrets\/egress-policy-key$/mu,
+    );
     expect(compose).toMatch(/^ {2}egress: \{\}$/mu);
     for (const file of [
       "server.example.json",
@@ -175,11 +187,46 @@ describe("deployment files", () => {
     ]) {
       const example = JSON.parse(
         await fs.readFile(path.join(container, file), "utf8"),
-      ) as { commandWorker?: { egressProxy?: string } };
+      ) as {
+        commandWorker?: {
+          egressProxy?: string;
+          egressPolicyKey?: { file?: string };
+        };
+      };
       expect(example.commandWorker?.egressProxy, file).toBe(
         "http://egress-gateway:3128",
       );
+      expect(example.commandWorker?.egressPolicyKey, file).toEqual({
+        file: "/run/secrets/egress-policy-key",
+      });
     }
+  });
+
+  it("runs SearXNG unpublished and hardened, with JSON results", async () => {
+    const container = path.join(deploy, "container");
+    const overlay = await fs.readFile(
+      path.join(container, "compose.searxng.yaml"),
+      "utf8",
+    );
+    const service = overlay.slice(overlay.indexOf("\n  searxng:\n"));
+    expect(service).not.toMatch(/^\s+ports:/mu);
+    expect(service).not.toMatch(/network_mode|privileged/u);
+    expect(service).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    for (const line of [
+      "- no-new-privileges:true",
+      "- ./searxng/settings.yml:/etc/searxng/settings.yml:ro",
+      "SEARXNG_SECRET: ${SEARXNG_SECRET:?",
+      "mem_limit:",
+      "pids_limit:",
+    ]) {
+      expect(service, line).toContain(line);
+    }
+    const settings = await fs.readFile(
+      path.join(container, "searxng.settings.example.yml"),
+      "utf8",
+    );
+    expect(settings).toMatch(/^ {2}formats:\n {4}- html\n {4}- json$/mu);
+    expect(settings).toMatch(/^ {2}limiter: false$/mu);
   });
 
   it("runs Meridian unpublished and hardened, keyed by a shared secret", async () => {

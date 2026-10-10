@@ -468,6 +468,43 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("parses the egress policy key and a SearXNG URL", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.commandWorker = {
+          host: "command-worker",
+          port: 7300,
+          token: { file: "/run/secrets/command-worker-token" },
+          egressProxy: "http://egress-gateway:3128",
+          egressPolicyKey: { file: "secrets/egress-policy-key" },
+        };
+        value.web = { searxngUrl: "http://searxng:8080/" };
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.commandWorker?.egressPolicyKey).toEqual({
+      file: "/etc/agentlink/secrets/egress-policy-key",
+    });
+    expect(config.web).toEqual({ searxngUrl: "http://searxng:8080" });
+    for (const searxngUrl of [
+      "searxng:8080",
+      "ftp://searxng",
+      "http://user:pw@searxng:8080",
+      "http://searxng:8080/?q=x",
+    ]) {
+      expect(
+        () =>
+          parseAssistantServerConfig(
+            withChange((value) => {
+              value.web = { searxngUrl };
+            }),
+            "/etc/agentlink",
+          ),
+        searxngUrl,
+      ).toThrow("web.searxngUrl");
+    }
+  });
+
   it("resolves projectsRoot, where the app creates projects", () => {
     expect(
       parseAssistantServerConfig(validConfig(), "/etc/agentlink").projectsRoot,

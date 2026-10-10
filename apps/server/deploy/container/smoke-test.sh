@@ -67,6 +67,7 @@ cp "$here/server.example.json" "$work/server.json"
 mkdir -m 700 "$work/data" "$work/secrets"
 mkdir -p "$work/projects/home"
 (umask 077 && openssl rand -hex 32 >"$work/secrets/command-worker-token")
+(umask 077 && openssl rand -hex 32 >"$work/secrets/egress-policy-key")
 cat >"$work/.env" <<EOF
 AGENTLINK_PUBLISH=127.0.0.1:$port
 AGENTLINK_UID=$(id -u)
@@ -129,16 +130,28 @@ fi
 pass "no shell in the running assistant"
 
 echo "# command egress"
-# Ask the gateway for a tunnel from the worker; prints "<status> <reason>".
+# Ask the gateway for a tunnel from the worker, optionally with a
+# Proxy-Authorization header; prints "<status> <reason>".
 probe='
 const http = require("http");
-const req = http.request({ host: "egress-gateway", port: 3128, method: "CONNECT", path: process.argv[1] });
+const headers = process.argv[2] ? { "proxy-authorization": process.argv[2] } : {};
+const req = http.request({ host: "egress-gateway", port: 3128, method: "CONNECT", path: process.argv[1], headers });
 req.on("connect", (res, socket) => { console.log(`${res.statusCode} ${res.statusMessage}`); socket.destroy(); });
 req.on("error", (error) => console.log(`error ${error.code}`));
 req.setTimeout(15000, () => { console.log("timeout"); req.destroy(); });
 req.end();
 '
-egress() { compose exec -T command-worker node -e "$probe" "$1"; }
+egress() { compose exec -T command-worker node -e "$probe" "$1" "${2:-}"; }
+# A project's signed network policy, as the assistant puts it in the
+# proxy credentials (the key is passed in for this check only).
+signed() {
+  compose exec -T -e "KEY=$(cat "$work/secrets/egress-policy-key")" command-worker node -e '
+const crypto = require("crypto");
+const user = "alnp1." + Buffer.from(JSON.stringify({ p: process.argv[1], a: [] })).toString("base64url");
+const pass = crypto.createHmac("sha256", Buffer.from(process.env.KEY.trim(), "hex")).update(user).digest("base64url");
+console.log("Basic " + Buffer.from(user + ":" + pass).toString("base64"));
+' "$1"
+}
 allowed=""
 for _ in $(seq 1 15); do
   allowed="$(egress registry.npmjs.org:443)"
@@ -153,6 +166,18 @@ for target in example.com:443 assistant:8443 meridian:3456 registry.npmjs.org:80
 done
 case "$(egress example.com:443)" in *example.com*) ;; *) fail "the refusal does not name the host" ;; esac
 pass "gateway refuses unlisted hosts, sibling containers, other ports and IP addresses, naming the host"
+open_policy="$(signed open)"
+case "$(egress example.com:443 "$open_policy")" in "200 "*) ;; *) fail "the open-web policy did not reach example.com" ;; esac
+for target in assistant:8443 meridian:3456 1.1.1.1:443 example.com:80; do
+  result="$(egress "$target" "$open_policy")"
+  case "$result" in "403 "*) ;; *) fail "the open-web policy allowed $target: $result" ;; esac
+done
+pass "a signed open-web policy reaches public sites, never private ones"
+case "$(egress registry.npmjs.org:443 "$(signed off)")" in "403 "*) ;; *) fail "the off policy reached npm" ;; esac
+pass "a signed off policy blocks even the dependency hosts"
+forged="Basic $(printf '%s' 'alnp1.eyJwIjoib3BlbiIsImEiOltdfQ:forged' | base64 | tr -d '\n')"
+case "$(egress example.com:443 "$forged")" in "407 "*) ;; *) fail "the gateway accepted a forged policy" ;; esac
+pass "the gateway rejects a policy that is not signed with its key (407)"
 version="$(compose exec -T -e HOME=/tmp -e HTTPS_PROXY=http://egress-gateway:3128 \
   -e npm_config_update_notifier=false \
   command-worker npm view --cache /tmp/npm-cache esbuild@0.25.0 version)"

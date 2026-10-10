@@ -8,6 +8,7 @@ import {
   type AgentTurnResult,
   type CoreReasoningEffort,
   type HostTool,
+  type HostToolResolver,
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
@@ -169,6 +170,12 @@ export interface CreateWorkspaceHostOptions {
       request: { readonly sessionId: string; readonly turnId: string },
     ) => boolean | Promise<boolean>;
   };
+  /**
+   * Extra host-built tools offered every turn, after the built-in ones (for
+   * example web tools). They must not need authorization: they run without
+   * the owner's approval, so only read-only tools belong here.
+   */
+  readonly hostTools?: HostToolResolver;
 }
 
 export interface WorkspaceHostSession {
@@ -697,7 +704,8 @@ export async function createWorkspaceHost(
     sharedMcpTools ||
     backgroundTools ||
     languageTools ||
-    sessionInteractionTools
+    sessionInteractionTools ||
+    options.hostTools
       ? {
           tools: {
             resolveTools: async (request) => {
@@ -724,6 +732,9 @@ export async function createWorkspaceHost(
                     : []),
                   ...(sessionInteractionTools
                     ? await sessionInteractionTools.resolveTools(request)
+                    : []),
+                  ...(options.hostTools
+                    ? requireUnauthorizedTools(await options.hostTools(request))
                     : []),
                 ];
                 return shared
@@ -1323,4 +1334,18 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error
     ? String((error as { code?: unknown }).code)
     : undefined;
+}
+
+/** Host-supplied extra tools run unapproved, so none may ask for approval. */
+function requireUnauthorizedTools(
+  tools: readonly HostTool[],
+): readonly HostTool[] {
+  for (const tool of tools) {
+    if (tool.authorization !== "none") {
+      throw new Error(
+        `Host tool "${tool.definition.name}" needs authorization; hostTools cannot offer it`,
+      );
+    }
+  }
+  return tools;
 }

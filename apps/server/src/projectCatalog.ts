@@ -6,6 +6,12 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { writeFileAtomic } from "./atomicFile.js";
+import {
+  DEFAULT_NETWORK_POLICY,
+  isNetworkPreset,
+  normalizeNetworkAllow,
+  type NetworkPolicy,
+} from "./egressPolicy.js";
 import { HttpError } from "./httpJson.js";
 import type { AssistantServerProjectConfig } from "./serverConfig.js";
 
@@ -33,6 +39,15 @@ export interface AssistantProjectSettings {
   /** `providerId/modelId` new chats start with. */
   readonly defaultModel?: string;
   readonly defaultReasoningEffort?: CoreReasoningEffort;
+  /** Network access for commands and web tools; absent means open web. */
+  readonly network?: NetworkPolicy;
+}
+
+/** A project's effective network policy. */
+export function projectNetworkPolicy(
+  entry: Pick<AssistantProjectEntry, "settings"> | undefined,
+): NetworkPolicy {
+  return entry?.settings.network ?? DEFAULT_NETWORK_POLICY;
 }
 
 export interface AssistantProjectEntry {
@@ -57,6 +72,45 @@ export interface AssistantProjectSettingsPatch {
   /** `null` clears the setting. */
   readonly defaultModel?: string | null;
   readonly defaultReasoningEffort?: CoreReasoningEffort | null;
+  readonly network?: {
+    readonly preset: unknown;
+    readonly allow?: readonly unknown[];
+  };
+}
+
+/** Validate a network settings patch from the app. */
+export function parseNetworkPatch(value: {
+  readonly preset: unknown;
+  readonly allow?: readonly unknown[];
+}): NetworkPolicy {
+  if (!isNetworkPreset(value.preset)) {
+    throw new ProjectSettingsError("network_preset_invalid");
+  }
+  const allow = value.allow ?? [];
+  if (!allow.every((entry) => typeof entry === "string")) {
+    throw new ProjectSettingsError("network_allow_invalid");
+  }
+  try {
+    return {
+      preset: value.preset,
+      allow: normalizeNetworkAllow(allow as string[]),
+    };
+  } catch (error) {
+    throw new ProjectSettingsError(
+      "network_allow_invalid",
+      error instanceof Error ? error.message : undefined,
+    );
+  }
+}
+
+/** A rejected setting, with a detail the app can show. */
+export class ProjectSettingsError extends HttpError {
+  constructor(
+    code: string,
+    readonly detail?: string,
+  ) {
+    super(400, code);
+  }
 }
 
 /** Clone one repository into `directory` inside `cwd`; throws on failure. */
@@ -110,6 +164,7 @@ interface StoredSettings {
   label?: string;
   defaultModel?: string;
   defaultReasoningEffort?: CoreReasoningEffort;
+  network?: NetworkPolicy;
 }
 
 export class ProjectCloneError extends HttpError {
@@ -167,6 +222,7 @@ export async function openProjectCatalog(
         ...(settings.defaultReasoningEffort
           ? { defaultReasoningEffort: settings.defaultReasoningEffort }
           : {}),
+        ...(settings.network ? { network: settings.network } : {}),
       },
     };
   };
@@ -250,6 +306,9 @@ export async function openProjectCatalog(
         delete current.defaultReasoningEffort;
       } else if (patch.defaultReasoningEffort !== undefined) {
         current.defaultReasoningEffort = patch.defaultReasoningEffort;
+      }
+      if (patch.network !== undefined) {
+        current.network = parseNetworkPatch(patch.network);
       }
       stored.settings[projectId] = current;
       await save();
@@ -396,10 +455,28 @@ async function readCatalog(file: string): Promise<StoredCatalog> {
         isCoreReasoningEffort(record.defaultReasoningEffort)
           ? { defaultReasoningEffort: record.defaultReasoningEffort }
           : {}),
+        ...readStoredNetwork(record.network),
       };
     }
   }
   return { created, settings };
+}
+
+/** A stored policy, or nothing (open web) if it no longer validates. */
+function readStoredNetwork(value: unknown): { network?: NetworkPolicy } {
+  if (!value || typeof value !== "object") return {};
+  const { preset, allow } = value as Record<string, unknown>;
+  try {
+    return {
+      network: parseNetworkPatch({
+        preset,
+        allow: Array.isArray(allow) ? allow : [],
+      }),
+    };
+  } catch {
+    // Fail closed: a damaged entry must not widen access.
+    return { network: { preset: "off", allow: [] } };
+  }
 }
 
 function readStoredProject(value: unknown): StoredProject | undefined {
