@@ -468,6 +468,20 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("resolves projectsRoot, where the app creates projects", () => {
+    expect(
+      parseAssistantServerConfig(validConfig(), "/etc/agentlink").projectsRoot,
+    ).toBeUndefined();
+    expect(
+      parseAssistantServerConfig(
+        withChange((config) => {
+          config.projectsRoot = "projects";
+        }),
+        "/etc/agentlink",
+      ).projectsRoot,
+    ).toBe("/etc/agentlink/projects");
+  });
+
   it("accepts a server-managed local CA", () => {
     expect(
       parseAssistantServerConfig(

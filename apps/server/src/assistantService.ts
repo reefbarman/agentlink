@@ -1,5 +1,6 @@
 import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 import {
+  createLocalWorkspaceExecutionBackend,
   createWorkspaceHost,
   type CreateWorkspaceHostOptions,
   type WorkspaceHost,
@@ -10,7 +11,11 @@ import path from "node:path";
 import { createSecureContext } from "node:tls";
 
 import { renderBrowserGatewayIndexHtml } from "../../../src/browser-gateway/browserGatewayPages.js";
-import { createAskAgentBridge, type AskAgentBridge } from "./askAgentBridge.js";
+import {
+  createAskAgentBridge,
+  modelKey,
+  type AskAgentBridge,
+} from "./askAgentBridge.js";
 import {
   createAssistantServer,
   type AssistantServer,
@@ -46,6 +51,9 @@ import {
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
+import { createProjectChats } from "./projectChats.js";
+import { openProjectCatalog } from "./projectCatalog.js";
+import { createGitCloner } from "./projectClone.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
   createAssistantWorkspaceRoutes,
@@ -87,10 +95,28 @@ export function serverApprovalModesFile(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "settings", "approval-modes.json");
 }
 
-/** UI-only state of the chat app (session titles, hidden sessions). */
-export function serverAskAgentStateFile(config: AssistantServerConfig): string {
-  return path.join(config.dataRoot, "settings", "ask-agent-state.json");
+/**
+ * UI-only state of one project's chats (session titles, hidden sessions).
+ * The first configured project keeps the file from before projects existed.
+ */
+export function serverAskAgentStateFile(
+  config: AssistantServerConfig,
+  projectId?: string,
+): string {
+  return projectId === undefined
+    ? path.join(config.dataRoot, "settings", "ask-agent-state.json")
+    : path.join(config.dataRoot, "settings", "chats", `${projectId}.json`);
 }
+
+/** Projects created from the app, and every project's settings. */
+export function serverProjectCatalogFile(
+  config: AssistantServerConfig,
+): string {
+  return path.join(config.dataRoot, "settings", "projects.json");
+}
+
+/** git where clones run: the command worker image, or this machine. */
+const GIT_EXECUTABLE = "/usr/bin/git";
 
 /** Where the server-managed local CA and server certificate live. */
 export function serverTlsDirectory(config: AssistantServerConfig): string {
@@ -437,7 +463,8 @@ export async function startAssistantService(
   });
   const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
-  let bridge: AskAgentBridge | undefined;
+  /** Chat bridges by project, closed by the server once it exists. */
+  const bridges = new Map<string, AskAgentBridge>();
   // Bound once the routes exist; children cannot start before then.
   let agentNotifier:
     | Pick<
@@ -446,7 +473,15 @@ export async function startAssistantService(
       >
     | undefined;
   try {
-    for (const project of config.projects) {
+    const catalog = await openProjectCatalog({
+      file: serverProjectCatalogFile(config),
+      configProjects: config.projects,
+      ...(config.projectsRoot ? { projectsRoot: config.projectsRoot } : {}),
+    });
+    const openHost = async (project: {
+      readonly id: string;
+      readonly root: string;
+    }) => {
       const autonomous = (request: { readonly sessionId: string }) =>
         approvalModes.get(project.id, request.sessionId) === "autonomous";
       const host = await createWorkspaceHost({
@@ -488,17 +523,32 @@ export async function startAssistantService(
       });
       hosts.push({ id: project.id, host });
       await recovery.recoverProject(project.id, host);
+      return host;
+    };
+    for (const project of catalog.list()) {
+      if (project.origin === "config") {
+        await openHost(project);
+        continue;
+      }
+      // A created project whose folder went missing is skipped, not fatal.
+      await openHost(project).catch((error: unknown) => {
+        log(`Skipping project "${project.id}": ${message(error)}`);
+      });
     }
+    const mountFor = (id: string, host: WorkspaceHost) => ({
+      projectId: id,
+      // Read on each request, so a rename in the app applies at once.
+      get label() {
+        return catalog.get(id)?.label;
+      },
+      host,
+    });
 
     // Routes are created first so the server can stop them on close; the
     // owner mapping needs the store, which exists once the server does.
     let authorizeProject: AuthorizeAssistantProject = () => false;
     const routes = createAssistantWorkspaceRoutes({
-      projects: hosts.map(({ id, host }) => ({
-        projectId: id,
-        label: config.projects.find((project) => project.id === id)?.label,
-        host,
-      })),
+      projects: hosts.map(({ id, host }) => mountFor(id, host)),
       authorizeProject: (request) => authorizeProject(request),
       models: {
         available: configuredModels(config),
@@ -509,21 +559,72 @@ export async function startAssistantService(
       approvalModes,
     });
     agentNotifier = routes;
-    // The chat app works in the first project; the HTTP API serves them all.
-    const chatProject = config.projects[0];
-    if (chatProject) {
-      bridge = await createAskAgentBridge({
-        projectId: chatProject.id,
+    // Each project has its own chats; the HTTP API serves them all.
+    const legacyChatProject = config.projects[0]?.id;
+    const openBridge = (projectId: string) =>
+      createAskAgentBridge({
+        projectId,
         operations: routes.operations,
         events: routes.events,
         models: {
           available: configuredModels(config),
           defaultModel: config.defaultModel,
         },
-        stateFile: serverAskAgentStateFile(config),
+        defaults: () => {
+          const settings = catalog.get(projectId)?.settings;
+          const model = settings?.defaultModel
+            ? configuredModels(config).find(
+                (choice) => modelKey(choice) === settings.defaultModel,
+              )
+            : undefined;
+          return {
+            ...(model
+              ? {
+                  model: {
+                    providerId: model.providerId,
+                    modelId: model.modelId,
+                  },
+                }
+              : {}),
+            ...(settings?.defaultReasoningEffort
+              ? { reasoningEffort: settings.defaultReasoningEffort }
+              : {}),
+          };
+        },
+        stateFile: serverAskAgentStateFile(
+          config,
+          projectId === legacyChatProject ? undefined : projectId,
+        ),
       });
+    for (const { id } of hosts) {
+      const opened = await openBridge(id);
+      bridges.set(id, opened);
     }
-    const chat = bridge;
+    const chat = createProjectChats({
+      catalog,
+      bridges,
+      models: configuredModels(config),
+      log,
+      ...(config.projectsRoot
+        ? {
+            clone: createGitCloner({
+              launcher: worker
+                ? createCommandWorkerLauncher(worker)
+                : createLocalWorkspaceExecutionBackend(),
+              gitExecutable: GIT_EXECUTABLE,
+              environment: commandWorkerEnvironment(
+                config.commandWorker?.egressProxy,
+              ),
+              ownerId,
+            }),
+          }
+        : {}),
+      openProject: async (entry) => {
+        const host = await openHost(entry);
+        routes.addProject(mountFor(entry.id, host));
+        return await openBridge(entry.id);
+      },
+    });
     const assetVersion = randomUUID();
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
@@ -531,14 +632,14 @@ export async function startAssistantService(
       publicOrigins: config.publicOrigins,
       listen: config.listen,
       handleRequest: async (request, response, auth) =>
-        (chat ? await chat.handleRequest(request, response, auth) : false) ||
+        (await chat.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       onClose: async () => {
-        await chat?.close();
+        await chat.close();
         await routes.close();
       },
       webAssets: bundledWebAssets(),
-      ...(chat
+      ...(bridges.size > 0
         ? {
             renderAppPage: ({ nonce }: { readonly nonce: string }) =>
               renderBrowserGatewayIndexHtml({
@@ -550,7 +651,8 @@ export async function startAssistantService(
                 nonce,
                 config: {
                   currentInstanceId: "",
-                  workspaceName: chatProject?.label ?? chatProject?.id ?? "",
+                  // The app asks for the selected project once signed in.
+                  workspaceName: "",
                   routeByInstance: false,
                   askAgentOnly: true,
                   product: "assistant",
@@ -594,7 +696,11 @@ export async function startAssistantService(
   } catch (error) {
     recovery.stop();
     await server?.close().catch(() => undefined);
-    if (!server) await bridge?.close().catch(() => undefined);
+    if (!server) {
+      for (const opened of bridges.values()) {
+        await opened.close().catch(() => undefined);
+      }
+    }
     await recovery.settled();
     await closeHosts();
     await eventLog.close();

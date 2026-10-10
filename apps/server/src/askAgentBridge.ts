@@ -90,6 +90,14 @@ export interface AskAgentBridgeOptions {
     readonly available: readonly AssistantServerModelChoice[];
     readonly defaultModel: AgentModelReference;
   };
+  /**
+   * The project's defaults for new chats, read each time one starts so
+   * settings changes apply without recreating the bridge.
+   */
+  readonly defaults?: () => {
+    readonly model?: AgentModelReference;
+    readonly reasoningEffort?: CoreReasoningEffort;
+  };
   /** Where UI-only session metadata (aliases, titles, hidden) is kept. */
   readonly stateFile: string;
   readonly theme?: BrowserGatewayThemeSnapshot;
@@ -193,7 +201,19 @@ export async function createAskAgentBridge(
       authenticated: true,
     })),
   );
-  store.setModel(modelKey(options.models.defaultModel));
+  /** Select the project's default model and thinking level. */
+  const applyDefaults = () => {
+    const defaults = options.defaults?.();
+    const model =
+      defaults?.model && modelsByKey.has(modelKey(defaults.model))
+        ? defaults.model
+        : options.models.defaultModel;
+    store.setModel(modelKey(model));
+    if (defaults?.reasoningEffort) {
+      store.setReasoningEffort(defaults.reasoningEffort);
+    }
+  };
+  applyDefaults();
 
   let pendingInteraction: PendingInteraction | undefined;
   let loaded: Promise<void> | undefined;
@@ -799,6 +819,7 @@ export async function createAskAgentBridge(
           throw new HttpError(400, "ask_agent_session_id_invalid");
         }
         store.createSession(now(), undefined, sessionId || undefined);
+        applyDefaults();
         const publication = await publishNow();
         sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
         return true;

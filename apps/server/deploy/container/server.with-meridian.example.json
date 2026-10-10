@@ -66,6 +66,7 @@
   "projects": [
     { "id": "home", "label": "Home", "root": "/srv/agentlink/projects/home" }
   ],
+  "projectsRoot": "/srv/agentlink/projects",
   "ripgrepPath": "/usr/bin/rg",
   "commandWorker": {
     "host": "command-worker",

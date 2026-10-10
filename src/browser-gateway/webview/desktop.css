@@ -1683,3 +1683,347 @@ html.quick-ask-document body {
   .consumer-starter:nth-child(3) {
   --starter-accent: #79e2bd;
 }
+
+/* Assistant project switcher (top of the sidebar) and its dialogs. */
+.browser-shell.browser-shell-desktop .assistant-projects {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+  background: var(--consumer-surface, #ffffff08);
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-button:hover,
+.browser-shell.browser-shell-desktop
+  .assistant-project-button[aria-expanded="true"] {
+  border-color: var(--ag-accent-a35);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-button
+  > .codicon:first-child {
+  color: var(--ag-accent-text);
+  font-size: 18px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-eyebrow {
+  color: var(--ag-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu {
+  position: absolute;
+  inset: calc(100% + 6px) 0 auto;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 12px;
+  background: var(--ag-panel-2);
+  box-shadow: 0 12px 32px #00000060;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu button:hover,
+.browser-shell.browser-shell-desktop
+  .assistant-project-menu
+  button:focus-visible {
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu button.active {
+  color: var(--ag-title);
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #07060cb0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 18px 20px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 16px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+  box-shadow: 0 24px 64px #00000080;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-dialog h2 {
+  margin: 0;
+  color: var(--ag-title);
+  font-size: 17px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form label,
+.browser-shell.browser-shell-desktop .assistant-project-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  :is(input:not([type="radio"]), select, textarea) {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 9px;
+  background: var(--ag-bg);
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form textarea {
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  :is(input, select, textarea):focus-visible {
+  outline: 2px solid var(--ag-accent-a35);
+  outline-offset: 1px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  label.assistant-project-choice {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+  color: var(--ag-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-choice:has(input:checked) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-choice:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-choice > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-choice small,
+.browser-shell.browser-shell-desktop .assistant-project-hint,
+.browser-shell.browser-shell-desktop .assistant-project-form label > small {
+  margin: 0;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-repos {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-link {
+  align-self: flex-start;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ag-link, var(--ag-accent-text));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-facts ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-error {
+  margin: 6px 0 0;
+  color: var(--vscode-errorForeground, #ff8f8f);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-error p {
+  margin: 0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-error pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--ag-bg);
+  white-space: pre-wrap;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form footer button {
+  padding: 8px 14px;
+  border: 1px solid var(--ag-border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  footer
+  button.primary {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  footer
+  button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 520px) {
+  .assistant-project-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

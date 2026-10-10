@@ -53,6 +53,7 @@ import {
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
+import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { DesktopRemotePane } from "./DesktopRemotePane";
 import type {
   DesktopMode,
@@ -8888,6 +8889,11 @@ export function BrowserGatewayApp({
             onManage={handleShowHistory}
             mode={desktopMode}
             onModeChange={desktopModesAvailable ? selectSurfaceMode : undefined}
+            header={
+              product === "assistant" ? (
+                <AssistantProjectSwitcher reloadPage={reloadPage} />
+              ) : undefined
+            }
           />
         )}
         {desktopModesAvailable && !browserShell && (

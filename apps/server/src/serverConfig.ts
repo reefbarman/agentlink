@@ -40,6 +40,12 @@ export interface AssistantServerConfig {
   readonly providers: readonly AssistantServerProviderConfig[];
   readonly projects: readonly AssistantServerProjectConfig[];
   /**
+   * Absolute directory where projects created from the app are made, one
+   * subdirectory each. Without it, the app cannot create projects. With a
+   * command worker it must be inside the worker's roots (the same path).
+   */
+  readonly projectsRoot?: string;
+  /**
    * Absolute ripgrep binary for `search_files`; built-in search otherwise.
    * With a command worker, ripgrep runs there, so this is the worker's path.
    */
@@ -317,6 +323,7 @@ export function parseAssistantServerConfig(
     "modelRoles",
     "providers",
     "projects",
+    "projectsRoot",
     "ripgrepPath",
     "commandWorker",
   ]);
@@ -456,6 +463,9 @@ export function parseAssistantServerConfig(
     ...(modelRoles ? { modelRoles } : {}),
     providers,
     projects,
+    ...(config.projectsRoot === undefined
+      ? {}
+      : { projectsRoot: resolvePath(config.projectsRoot, "projectsRoot") }),
     ...(config.ripgrepPath === undefined
       ? {}
       : { ripgrepPath: resolvePath(config.ripgrepPath, "ripgrepPath") }),

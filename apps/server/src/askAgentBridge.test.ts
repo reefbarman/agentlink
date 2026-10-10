@@ -140,7 +140,10 @@ function createFakeOperations(events: SessionEventHub) {
 
 async function startBridge(
   stateFile?: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: {
+    readonly signal?: AbortSignal;
+    readonly defaults?: Parameters<typeof createAskAgentBridge>[0]["defaults"];
+  } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
@@ -165,6 +168,7 @@ async function startBridge(
       defaultModel: MODEL,
     },
     stateFile: file,
+    ...(options.defaults ? { defaults: options.defaults } : {}),
   });
   const auth: AssistantServerAuth = {
     principal: { tenantId: "agentlink-server", subjectId: "owner" },
@@ -230,6 +234,32 @@ const snapshotOf = (body: Record<string, unknown>) =>
   body.snapshot as unknown as Snapshot;
 
 describe("Ask Agent bridge", () => {
+  it("starts new chats on the project's default model and thinking level", async () => {
+    let defaults: { model?: AgentModelReference } = {};
+    const { call } = await startBridge(undefined, {
+      defaults: () => ({ ...defaults, reasoningEffort: "max" }),
+    });
+    const first = snapshotOf(
+      await call("/api/ask-agent/session").then((r) => r.body),
+    );
+    expect(first.session.foreground.model).toBe("fixture/fixture-model");
+
+    // A settings change applies to the next new chat.
+    defaults = { model: REVIEW };
+    const created = await call("/api/ask-agent/session/new", {});
+    expect(snapshotOf(created.body).session.foreground.model).toBe(
+      "claude/claude-review",
+    );
+    const session = await call("/api/ask-agent/session");
+    expect(
+      (
+        session.body.snapshot as {
+          session: { foreground: { reasoningEffort?: string } };
+        }
+      ).session.foreground.reasoningEffort,
+    ).toBe("max");
+  });
+
   it("streams a turn into the shared UI's session snapshot", async () => {
     const { fake, call, file } = await startBridge();
     fake.setScript((sessionId, taskId) => {

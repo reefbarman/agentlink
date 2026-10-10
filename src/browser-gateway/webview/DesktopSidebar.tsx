@@ -1,4 +1,5 @@
 import type { ChatSessionHistorySummary } from "@agentlink/protocol/chat-session-history";
+import type { ComponentChildren } from "preact";
 import type { DesktopMode } from "../../shared/desktopBridge";
 import { useState } from "preact/hooks";
 
@@ -10,6 +11,8 @@ interface DesktopSidebarProps {
   onManage: () => void;
   mode?: DesktopMode;
   onModeChange?: (mode: DesktopMode) => void;
+  /** Shown above the chats, for example a product's project switcher. */
+  header?: ComponentChildren;
 }
 
 export function DesktopSidebar({
@@ -20,6 +23,7 @@ export function DesktopSidebar({
   onManage,
   mode = "ask",
   onModeChange,
+  header,
 }: DesktopSidebarProps) {
   const [search, setSearch] = useState("");
   const query = search.trim().toLocaleLowerCase();
@@ -52,6 +56,7 @@ export function DesktopSidebar({
           </button>
         </nav>
       )}
+      {header}
       <div class="desktop-sidebar-history" hidden={mode !== "ask"}>
         <button class="desktop-new-chat" type="button" onClick={onNew}>
           <i class="codicon codicon-new-file" aria-hidden="true" />

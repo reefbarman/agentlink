@@ -217,6 +217,8 @@ export interface AssistantWorkspaceRoutes {
   notifyAgentChange(
     request: WorkspaceBackgroundChange & { readonly projectId: string },
   ): void;
+  /** Mount a project created while the server runs. */
+  addProject(mount: AssistantProjectMount): void;
   /** Resolves once no server-owned task is running for the session. */
   whenIdle(projectId: string, sessionId: string): Promise<void>;
   /** Abort running tasks and wait for them to settle. */
@@ -254,7 +256,7 @@ export function createAssistantWorkspaceRoutes(
   options: CreateAssistantWorkspaceRoutesOptions,
 ): AssistantWorkspaceRoutes {
   const projects = new Map<string, AssistantProjectMount>();
-  for (const mount of options.projects) {
+  const mountProject = (mount: AssistantProjectMount) => {
     if (!PROJECT_ID_PATTERN.test(mount.projectId)) {
       throw new Error(`Invalid project ID: ${mount.projectId}`);
     }
@@ -262,7 +264,8 @@ export function createAssistantWorkspaceRoutes(
       throw new Error(`Duplicate project ID: ${mount.projectId}`);
     }
     projects.set(mount.projectId, mount);
-  }
+  };
+  for (const mount of options.projects) mountProject(mount);
   const models = options.models;
   const isAvailable = (model: AgentModelReference) =>
     models.available.some(
@@ -1151,6 +1154,7 @@ export function createAssistantWorkspaceRoutes(
     handleRequest,
     events: hub,
     operations,
+    addProject: mountProject,
     notifyAgentApproval({ projectId, parentSessionId, childSessionId }) {
       if (!projects.has(projectId)) return;
       hub.publish(sessionKey(projectId, parentSessionId), {
