@@ -6,6 +6,7 @@
 #
 # Install (as root):
 #   apt-get install -y avahi-daemon avahi-utils
+#   useradd --system --no-create-home --shell /usr/sbin/nologin agentlink-mdns
 #   install -m 0644 agentlink-mdns-alias.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now agentlink-mdns-alias
 # Check from another machine:
@@ -33,7 +34,11 @@ ExecStart=/bin/sh -c 'address="$${AGENTLINK_MDNS_ADDRESS:-$$(ip -4 -o route get 
 Restart=always
 RestartSec=10
 
-DynamicUser=yes
+# A fixed system user, not DynamicUser=: Ubuntu's dbus-daemon cannot resolve
+# dynamic users, so avahi-publish fails with "An unexpected D-Bus error".
+User=agentlink-mdns
+Group=agentlink-mdns
+RemoveIPC=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict
