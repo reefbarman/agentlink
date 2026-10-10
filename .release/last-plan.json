@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-  "createdAt": "2026-10-10T12:08:11.990Z",
+  "sourceSha": "8b7e1087512f1ab4288534970d936c91794ab055",
+  "createdAt": "2026-10-10T12:32:46.195Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -32,7 +32,8 @@
         "0a6a81187b725493b453073dd1e708d0f90e96ff",
         "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
         "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-        "f1d93924cec164a16ae05f765e47a4a295e08a8d"
+        "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+        "8b7e1087512f1ab4288534970d936c91794ab055"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -156,80 +157,62 @@
           "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
           "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
           "breaking": false
+        },
+        {
+          "sha": "8b7e1087512f1ab4288534970d936c91794ab055",
+          "subject": "fix(web): treat Codex 'not accessible via this tool' pages as failed reads",
+          "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.15.0",
-      "baselineRef": "desktop-v0.15.0",
-      "reserved": "0.15.0",
-      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
+      "published": "0.16.0",
+      "baselineRef": "desktop-v0.16.0",
+      "reserved": "0.16.0",
+      "commits": ["8b7e1087512f1ab4288534970d936c91794ab055"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.16.0",
-      "effectiveBump": "minor",
+      "version": "0.16.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.16.0",
+      "tag": "desktop-v0.16.1",
       "notes": [
         {
-          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
-          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
+          "sha": "8b7e1087512f1ab4288534970d936c91794ab055",
+          "subject": "fix(web): treat Codex 'not accessible via this tool' pages as failed reads",
+          "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.16.0",
-      "baselineRef": "cli-v0.16.0",
-      "reserved": "0.16.0",
-      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
+      "published": "0.17.0",
+      "baselineRef": "cli-v0.17.0",
+      "reserved": "0.17.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.17.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.17.0",
-      "notes": [
-        {
-          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
-          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.11.0",
-      "baselineRef": "sdk-v0.11.0",
-      "reserved": "0.11.0",
-      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
+      "published": "0.12.0",
+      "baselineRef": "sdk-v0.12.0",
+      "reserved": "0.12.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.12.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.12.0",
-      "notes": [
-        {
-          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
-          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -381,6 +364,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8b7e1087512f1ab4288534970d936c91794ab055": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
