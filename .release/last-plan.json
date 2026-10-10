@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-  "createdAt": "2026-10-10T10:29:29.966Z",
+  "sourceSha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+  "createdAt": "2026-10-10T10:48:11.165Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -27,7 +27,8 @@
         "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
         "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
         "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-        "e3b849eb40e8cea3429e37fcbe70f2a92937edb0"
+        "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+        "776bc1d0d4400d3ab593343e471d3f9de136acfc"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -121,38 +122,20 @@
           "subject": "feat(agent): add Codex voice input to the chat composer",
           "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
           "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.11.0",
-      "baselineRef": "desktop-v0.11.0",
-      "reserved": "0.11.0",
-      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.12.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.12.0",
-      "notes": [
+        },
         {
-          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-          "subject": "feat(agent): add Codex voice input to the chat composer",
-          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
+          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
+          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
           "breaking": false
         }
       ]
     },
-    "cli": {
+    "desktop": {
       "published": "0.12.0",
-      "baselineRef": "cli-v0.12.0",
+      "baselineRef": "desktop-v0.12.0",
       "reserved": "0.12.0",
-      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
+      "commits": ["776bc1d0d4400d3ab593343e471d3f9de136acfc"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -162,39 +145,51 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.13.0",
+      "tag": "desktop-v0.13.0",
       "notes": [
         {
-          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-          "subject": "feat(agent): add Codex voice input to the chat composer",
-          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
+          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
+          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.13.0",
+      "baselineRef": "cli-v0.13.0",
+      "reserved": "0.13.0",
+      "commits": ["776bc1d0d4400d3ab593343e471d3f9de136acfc"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.14.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.14.0",
+      "notes": [
+        {
+          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
+          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
+          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.8.0",
-      "baselineRef": "sdk-v0.8.0",
-      "reserved": "0.8.0",
-      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
+      "published": "0.9.0",
+      "baselineRef": "sdk-v0.9.0",
+      "reserved": "0.9.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.9.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.9.0",
-      "notes": [
-        {
-          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-          "subject": "feat(agent): add Codex voice input to the chat composer",
-          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -306,6 +301,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "776bc1d0d4400d3ab593343e471d3f9de136acfc": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
