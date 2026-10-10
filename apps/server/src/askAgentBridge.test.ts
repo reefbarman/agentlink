@@ -430,6 +430,98 @@ describe("Ask Agent bridge", () => {
     await expect(send).resolves.toMatchObject({ status: 200 });
   });
 
+  it("tracks running, needs-you and unread chats across chat switches", async () => {
+    const { bridge, fake, call } = await startBridge();
+    const activityOf = async () => {
+      const { body } = await call("/api/ask-agent/sessions");
+      return Object.fromEntries(
+        (body.sessions as Array<{ id: string; activity?: string }>).map(
+          (session) => [session.id, session.activity],
+        ),
+      );
+    };
+    // A turn that waits until the test finishes it.
+    fake.setScript((sessionId) => {
+      fake.turn(sessionId, { type: "text.delta", text: "working" });
+    });
+    const first = snapshotOf(
+      await call("/api/ask-agent/session").then((r) => r.body),
+    ).session.foreground.sessionId;
+    const send = call("/api/ask-agent/send", { text: "long job" });
+    await vi.waitFor(async () =>
+      expect(await activityOf()).toEqual({ [first]: "running" }),
+    );
+    expect(bridge.activity()).toEqual({ running: 1, needsYou: 0, unread: 0 });
+
+    // The owner moves to another chat; the turn keeps writing to its own.
+    const created = await call("/api/ask-agent/session/new", {});
+    const second = snapshotOf(created.body).session.foreground.sessionId;
+    expect(second).not.toBe(first);
+    await expect(
+      call("/api/ask-agent/session/delete", { sessionId: first }),
+    ).resolves.toMatchObject({ status: 409 });
+    fake.turn("ws-1", { type: "text.delta", text: " hard" });
+    fake.turn("ws-1", {
+      type: "turn.completed",
+      result: { text: "working hard" },
+    });
+    fake.publish("ws-1", {
+      kind: "task",
+      state: "finished",
+      taskId: "task-2",
+      status: "completed",
+    });
+    await expect(send).resolves.toMatchObject({ status: 200 });
+    expect((await activityOf())[first]).toBe("unread");
+    expect(bridge.activity()).toEqual({ running: 0, needsYou: 0, unread: 1 });
+
+    // Opening it shows the finished reply and clears the flag.
+    const loaded = await call("/api/ask-agent/session/load", {
+      sessionId: first,
+    });
+    expect(
+      snapshotOf(loaded.body).session.foreground.projectedMessages.at(-1),
+    ).toMatchObject({ role: "assistant", content: "working hard" });
+    expect((await activityOf())[first]).toBeUndefined();
+
+    // A pending approval is "needs you" until it is answered.
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, {
+        type: "interaction.required",
+        interaction: {
+          interactionId: "int-9",
+          toolName: "write_file",
+          summary: "Write note.txt",
+          displayInput: { path: "note.txt" },
+        },
+        interactionRevision: "rev-9",
+      });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "suspended",
+      });
+      fake.setScript((resumed, resumeTask) => {
+        fake.turn(resumed, { type: "turn.completed", result: { text: "ok" } });
+        fake.publish(resumed, {
+          kind: "task",
+          state: "finished",
+          taskId: resumeTask,
+          status: "completed",
+        });
+      });
+    });
+    const asking = call("/api/ask-agent/send", { text: "write a note" });
+    await vi.waitFor(async () =>
+      expect((await activityOf())[first]).toBe("needs-you"),
+    );
+    expect(bridge.activity().needsYou).toBe(1);
+    await call("/api/ask-agent/approval", { id: "int-9", decision: "accept" });
+    await expect(asking).resolves.toMatchObject({ status: 200 });
+    expect((await activityOf())[first]).not.toBe("needs-you");
+  });
+
   it("switches the session model, and lists, renames and hides sessions", async () => {
     const { fake, call, file } = await startBridge();
     fake.setScript((sessionId, taskId) => {

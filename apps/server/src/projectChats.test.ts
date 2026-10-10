@@ -19,6 +19,10 @@ afterEach(async () => {
 function fakeBridge(projectId: string): AskAgentBridge {
   return {
     theme: {} as AskAgentBridge["theme"],
+    activity: () =>
+      projectId === "work"
+        ? { running: 1, needsYou: 0, unread: 2 }
+        : { running: 0, needsYou: 0, unread: 0 },
     handleRequest: vi.fn(async (request, response) => {
       const url = new URL(request.url ?? "/", "https://x.invalid");
       if (!url.pathname.startsWith("/api/ask-agent/")) return false;
@@ -163,6 +167,10 @@ describe("project chats", () => {
       activeProjectId: "work",
       canCreate: true,
       canClone: true,
+      projects: [
+        { id: "home", activity: { running: 0, needsYou: 0, unread: 0 } },
+        { id: "work", activity: { running: 1, needsYou: 0, unread: 2 } },
+      ],
     });
     // Unknown or stale selections fall back to the first project.
     expect(

@@ -12,4 +12,11 @@ export interface ChatSessionHistorySummary {
   totalOutputTokens: number;
   createdAt: number;
   lastActiveAt: number;
+  /**
+   * Live state, from hosts that track it: a turn is running, the chat is
+   * waiting for an approval, or it finished while nobody was viewing it.
+   */
+  activity?: ChatSessionActivity;
 }
+
+export type ChatSessionActivity = "running" | "needs-you" | "unread";

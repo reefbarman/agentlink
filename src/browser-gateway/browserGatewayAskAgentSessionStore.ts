@@ -500,12 +500,20 @@ export class BrowserGatewayAskAgentSessionStore {
     return { created: true };
   }
 
-  loadSession(sessionId: string): boolean {
+  /**
+   * Make a session active. `streaming` is for hosts that keep a turn running
+   * while another chat is viewed: switching back to that chat resumes its
+   * streaming state instead of showing it idle.
+   */
+  loadSession(
+    sessionId: string,
+    options: { readonly streaming?: boolean } = {},
+  ): boolean {
     if (!this.sessions.some((session) => session.id === sessionId)) {
       return false;
     }
     this.activeSessionId = sessionId;
-    this.streaming = false;
+    this.streaming = options.streaming === true;
     this.clearEphemeralUiState();
     return true;
   }
@@ -1177,10 +1185,7 @@ export class BrowserGatewayAskAgentSessionStore {
 
   appendAssistantDelta(messageId: string, delta: string): void {
     if (!delta) return;
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === messageId,
-    );
+    const message = this.findMessage(messageId);
     if (!message) return;
     message.content = `${message.content}${delta}`;
     this.appendAssistantTextBlock(message, delta);
@@ -1291,10 +1296,7 @@ export class BrowserGatewayAskAgentSessionStore {
     fallbackText?: string,
     memoryDisclosure?: ChatMessage["memoryDisclosure"],
   ): void {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === messageId,
-    );
+    const message = this.findMessage(messageId);
     if (message && memoryDisclosure) {
       message.memoryDisclosure = memoryDisclosure;
     }
@@ -1313,10 +1315,7 @@ export class BrowserGatewayAskAgentSessionStore {
     actions?: NonNullable<ChatMessage["error"]>["actions"];
     preserveCompletedAskUserBlocks?: boolean;
   }): void {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === params.messageId,
-    );
+    const message = this.findMessage(params.messageId);
     if (message) {
       const preservedBlocks = params.preserveCompletedAskUserBlocks
         ? message.blocks.filter(
@@ -1511,11 +1510,28 @@ export class BrowserGatewayAskAgentSessionStore {
   }
 
   private getAssistantMessage(messageId: string): ChatMessage | undefined {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
+    const message = this.findMessage(messageId);
+    return message?.role === "assistant" ? message : undefined;
+  }
+
+  /**
+   * A message in the active session, or else in any session: a turn keeps
+   * writing to its own chat when the viewer switches to another one.
+   */
+  private findMessage(messageId: string): ChatMessage | undefined {
+    const active = this.getActiveSession();
+    const inActive = active.messages.find(
       (candidate) => candidate.id === messageId,
     );
-    return message?.role === "assistant" ? message : undefined;
+    if (inActive) return inActive;
+    for (const session of this.sessions) {
+      if (session === active) continue;
+      const message = session.messages.find(
+        (candidate) => candidate.id === messageId,
+      );
+      if (message) return message;
+    }
+    return undefined;
   }
 
   private appendQuestionAnswerBlockFromToolResult(

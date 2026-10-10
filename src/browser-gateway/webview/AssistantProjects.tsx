@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 
+import { ChatActivityIndicator } from "./DesktopSidebar";
+import type { ChatSessionActivity } from "@agentlink/protocol/chat-session-history";
 import type { ComponentChildren } from "preact";
 
 /**
@@ -20,6 +22,43 @@ export interface AssistantProject {
   path: string;
   repositories: AssistantProjectRepository[];
   settings: { defaultModel?: string; defaultReasoningEffort?: string };
+  /** How many of the project's chats are working, need you, or are unread. */
+  activity?: AssistantProjectActivity;
+}
+
+export interface AssistantProjectActivity {
+  running: number;
+  needsYou: number;
+  unread: number;
+}
+
+/** How often the switcher refreshes project status while visible. */
+const PROJECT_STATUS_REFRESH_MS = 5_000;
+
+/** The most urgent status across some projects' chats, and a description. */
+export function summarizeProjectActivity(
+  projects: readonly Pick<AssistantProject, "activity">[],
+): { activity: ChatSessionActivity; label: string } | null {
+  const total = { running: 0, needsYou: 0, unread: 0 };
+  for (const { activity } of projects) {
+    total.running += activity?.running ?? 0;
+    total.needsYou += activity?.needsYou ?? 0;
+    total.unread += activity?.unread ?? 0;
+  }
+  const parts = [
+    total.needsYou &&
+      `${total.needsYou} need${total.needsYou === 1 ? "s" : ""} you`,
+    total.running && `${total.running} working`,
+    total.unread &&
+      `${total.unread} new repl${total.unread === 1 ? "y" : "ies"}`,
+  ].filter((part): part is string => Boolean(part));
+  if (parts.length === 0) return null;
+  const activity: ChatSessionActivity = total.needsYou
+    ? "needs-you"
+    : total.running
+      ? "running"
+      : "unread";
+  return { activity, label: parts.join(", ") };
 }
 
 interface AssistantProjectList {
@@ -104,16 +143,29 @@ export function AssistantProjectSwitcher({
 
   useEffect(() => {
     let cancelled = false;
-    requestJson<AssistantProjectList>("/api/ask-agent/projects").then(
-      (next) => {
-        if (!cancelled) setList(next);
-      },
-      (caught: unknown) => {
-        if (!cancelled) setError(errorText(caught));
-      },
-    );
+    let loaded = false;
+    const refresh = () => {
+      if (loaded && document.visibilityState !== "visible") return;
+      requestJson<AssistantProjectList>("/api/ask-agent/projects").then(
+        (next) => {
+          loaded = true;
+          if (!cancelled) setList(next);
+        },
+        (caught: unknown) => {
+          // Status refreshes are best effort; only the first load reports.
+          if (!cancelled && !loaded) setError(errorText(caught));
+        },
+      );
+    };
+    refresh();
+    // Other projects keep working in the background: keep their status
+    // current.
+    const timer = window.setInterval(refresh, PROJECT_STATUS_REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
     };
   }, []);
 
@@ -139,6 +191,11 @@ export function AssistantProjectSwitcher({
   const active = list?.projects.find(
     (project) => project.id === list.activeProjectId,
   );
+  // The current project's chats show their own status in the sidebar.
+  const elsewhere = summarizeProjectActivity(
+    list?.projects.filter((project) => project.id !== list.activeProjectId) ??
+      [],
+  );
 
   const select = async (projectId: string) => {
     setMenuOpen(false);
@@ -161,7 +218,16 @@ export function AssistantProjectSwitcher({
         type="button"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title="Switch project"
+        title={
+          elsewhere
+            ? `Switch project (other projects: ${elsewhere.label})`
+            : "Switch project"
+        }
+        aria-label={
+          elsewhere
+            ? `Project ${active?.label ?? ""} (other projects: ${elsewhere.label})`
+            : undefined
+        }
         onClick={() => setMenuOpen((open) => !open)}
       >
         <i class="codicon codicon-folder-library" aria-hidden="true" />
@@ -169,6 +235,12 @@ export function AssistantProjectSwitcher({
           <span class="assistant-project-eyebrow">Project</span>
           <span>{active?.label ?? (list ? "No project" : "Loading…")}</span>
         </span>
+        {elsewhere && (
+          <ChatActivityIndicator
+            activity={elsewhere.activity}
+            label={`Other projects: ${elsewhere.label}`}
+          />
+        )}
         <i class="codicon codicon-chevron-down" aria-hidden="true" />
       </button>
       {error && (
@@ -178,22 +250,37 @@ export function AssistantProjectSwitcher({
       )}
       {menuOpen && list && (
         <div class="assistant-project-menu" role="menu">
-          {list.projects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={project.id === list.activeProjectId}
-              class={`assistant-project-menu-item${project.id === list.activeProjectId ? " active" : ""}`}
-              onClick={() => void select(project.id)}
-            >
-              <i
-                class={`codicon ${project.id === list.activeProjectId ? "codicon-check" : "codicon-blank"}`}
-                aria-hidden="true"
-              />
-              <span>{project.label}</span>
-            </button>
-          ))}
+          {list.projects.map((project) => {
+            const status = summarizeProjectActivity([project]);
+            return (
+              <button
+                key={project.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={project.id === list.activeProjectId}
+                class={`assistant-project-menu-item${project.id === list.activeProjectId ? " active" : ""}`}
+                title={status ? `${project.label}: ${status.label}` : undefined}
+                aria-label={
+                  status ? `${project.label} (${status.label})` : undefined
+                }
+                onClick={() => void select(project.id)}
+              >
+                <i
+                  class={`codicon ${project.id === list.activeProjectId ? "codicon-check" : "codicon-blank"}`}
+                  aria-hidden="true"
+                />
+                <span class="assistant-project-menu-label">
+                  {project.label}
+                </span>
+                {status && (
+                  <ChatActivityIndicator
+                    activity={status.activity}
+                    label={status.label}
+                  />
+                )}
+              </button>
+            );
+          })}
           <hr />
           {list.canCreate && (
             <button

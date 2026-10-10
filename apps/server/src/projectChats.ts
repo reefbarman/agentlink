@@ -88,6 +88,11 @@ export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
     repositories: project.repositories,
     ...(project.createdAt ? { createdAt: project.createdAt } : {}),
     settings: project.settings,
+    activity: bridges.get(project.id)?.activity() ?? {
+      running: 0,
+      needsYou: 0,
+      unread: 0,
+    },
   });
 
   const listResponse = (activeId: string | undefined) => ({

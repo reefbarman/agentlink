@@ -1,4 +1,8 @@
-import type { ChatSessionHistorySummary } from "@agentlink/protocol/chat-session-history";
+import type {
+  ChatSessionActivity,
+  ChatSessionHistorySummary,
+} from "@agentlink/protocol/chat-session-history";
+
 import type { ComponentChildren } from "preact";
 import type { DesktopMode } from "../../shared/desktopBridge";
 import { useState } from "preact/hooks";
@@ -13,6 +17,33 @@ interface DesktopSidebarProps {
   onModeChange?: (mode: DesktopMode) => void;
   /** Shown above the chats, for example a product's project switcher. */
   header?: ComponentChildren;
+}
+
+const ACTIVITY_LABELS: Record<ChatSessionActivity, string> = {
+  running: "Working",
+  "needs-you": "Needs you",
+  unread: "New reply",
+};
+
+/**
+ * A chat's live status: a spinner, an amber "needs you" dot, or an unread
+ * dot. Decorative: the control it sits in carries the status in its label.
+ */
+export function ChatActivityIndicator({
+  activity,
+  label = ACTIVITY_LABELS[activity],
+}: {
+  activity: ChatSessionActivity;
+  /** Overrides the default description, for example with counts. */
+  label?: string;
+}) {
+  return (
+    <span
+      class={`desktop-chat-activity desktop-chat-activity-${activity}`}
+      aria-hidden="true"
+      title={label}
+    />
+  );
 }
 
 export function DesktopSidebar({
@@ -82,10 +113,24 @@ export function DesktopSidebar({
               aria-current={
                 session.id === currentSessionId ? "page" : undefined
               }
-              title={session.title || "Untitled chat"}
+              title={
+                session.activity
+                  ? `${session.title || "Untitled chat"} (${ACTIVITY_LABELS[session.activity]})`
+                  : session.title || "Untitled chat"
+              }
+              aria-label={
+                session.activity
+                  ? `${session.title || "Untitled chat"} (${ACTIVITY_LABELS[session.activity]})`
+                  : undefined
+              }
               onClick={() => onSelect(session.id)}
             >
-              {session.title || "Untitled chat"}
+              <span class="desktop-chat-title">
+                {session.title || "Untitled chat"}
+              </span>
+              {session.activity && (
+                <ChatActivityIndicator activity={session.activity} />
+              )}
             </button>
           ))}
           {visibleSessions.length === 0 && (

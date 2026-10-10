@@ -59,4 +59,35 @@ describe("DesktopSidebar", () => {
     expect(onNew).toHaveBeenCalledOnce();
     expect(onManage).toHaveBeenCalledOnce();
   });
+
+  it("shows each chat's live status in its accessible name", () => {
+    const summary = {
+      mode: "ask",
+      model: "test-model",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      messageCount: 1,
+      createdAt: 1,
+      lastActiveAt: 1,
+    };
+    render(
+      <DesktopSidebar
+        sessions={[
+          { ...summary, id: "a", title: "Research", activity: "running" },
+          { ...summary, id: "b", title: "Deploy", activity: "needs-you" },
+          { ...summary, id: "c", title: "Notes", activity: "unread" },
+          { ...summary, id: "d", title: "Quiet" },
+        ]}
+        currentSessionId="a"
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+    screen.getByRole("button", { name: "Research (Working)" });
+    screen.getByRole("button", { name: "Deploy (Needs you)" });
+    screen.getByRole("button", { name: "Notes (New reply)" });
+    screen.getByRole("button", { name: "Quiet" });
+    expect(document.querySelectorAll(".desktop-chat-activity")).toHaveLength(3);
+  });
 });

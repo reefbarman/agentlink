@@ -135,6 +135,28 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(reloaded.getTranscriptMessages()).toEqual([]);
   });
 
+  it("keeps writing a reply to its own chat after switching to another", () => {
+    const store = createStore();
+    store.createSession(100);
+    const working = store.getActiveSessionId();
+    store.appendUserMessage({ text: "long job", now: 110 });
+    const reply = store.startAssistantMessage({ now: 120 });
+    store.createSession(200);
+    const other = store.getActiveSessionId();
+    expect(other).not.toBe(working);
+
+    store.appendAssistantDelta(reply.id, "done");
+    store.finishAssistantMessage(reply.id);
+    expect(store.getTranscriptMessages()).toEqual([]);
+
+    expect(store.loadSession(working, { streaming: true })).toBe(true);
+    expect(store.getTranscriptMessages().at(-1)).toMatchObject({
+      id: reply.id,
+      role: "assistant",
+      content: "done",
+    });
+  });
+
   it("drops non-active empty sessions from the history snapshot", () => {
     const store = createStore();
     store.createSession(100);

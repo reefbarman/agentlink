@@ -1,6 +1,7 @@
 import type { AgentModelReference } from "@agentlink/core";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-gateway-ask-agent-identity";
+import type { ChatSessionActivity } from "@agentlink/protocol/chat-session-history";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import {
   isCoreReasoningEffort,
@@ -112,7 +113,15 @@ export interface AskAgentBridge {
     auth: AssistantServerAuth,
   ): Promise<boolean>;
   readonly theme: BrowserGatewayThemeSnapshot;
+  /** How many chats are running, waiting for an approval, or unread. */
+  activity(): AskAgentBridgeActivity;
   close(): Promise<void>;
+}
+
+export interface AskAgentBridgeActivity {
+  readonly running: number;
+  readonly needsYou: number;
+  readonly unread: number;
 }
 
 interface BridgeState {
@@ -120,6 +129,8 @@ interface BridgeState {
   aliases: Record<string, string>;
   titles: Record<string, string>;
   hidden: string[];
+  /** Workspace sessions that finished a turn nobody was viewing. */
+  unread: string[];
 }
 
 interface PendingInteraction {
@@ -216,6 +227,8 @@ export async function createAskAgentBridge(
   applyDefaults();
 
   let pendingInteraction: PendingInteraction | undefined;
+  /** The UI session whose turn is running, if any. */
+  let runningSession: string | undefined;
   let loaded: Promise<void> | undefined;
   let closed = false;
   /** Serializes turns: queued sends wait here for the previous one. */
@@ -303,6 +316,35 @@ export async function createAskAgentBridge(
   const workspaceSessionFor = (storeSessionId: string) =>
     state.aliases[storeSessionId] ??
     (sessionModels.has(storeSessionId) ? storeSessionId : undefined);
+
+  const activityOf = (
+    storeSessionId: string,
+  ): ChatSessionActivity | undefined => {
+    const workspaceSessionId = workspaceSessionFor(storeSessionId);
+    if (
+      workspaceSessionId &&
+      pendingInteraction?.workspaceSessionId === workspaceSessionId
+    ) {
+      return "needs-you";
+    }
+    if (runningSession === storeSessionId && controller.hasActiveTurn()) {
+      return "running";
+    }
+    if (workspaceSessionId && state.unread.includes(workspaceSessionId)) {
+      return "unread";
+    }
+    return undefined;
+  };
+
+  /** The owner is looking at this chat now. */
+  const markRead = (storeSessionId: string) => {
+    const workspaceSessionId = workspaceSessionFor(storeSessionId);
+    if (!workspaceSessionId) return;
+    const index = state.unread.indexOf(workspaceSessionId);
+    if (index < 0) return;
+    state.unread.splice(index, 1);
+    void saveState().catch(() => undefined);
+  };
 
   const selectedModel = (): AgentModelReference => {
     const choice = modelsByKey.get(store.getModel());
@@ -627,10 +669,13 @@ export async function createAskAgentBridge(
         store.targetSession(requestedSessionId, now());
       }
       const workspaceSessionId = await ensureWorkspaceSession(auth);
+      const storeSessionId = store.getActiveSessionId();
+      markRead(storeSessionId);
       store.appendUserMessage({ ...(id ? { id } : {}), text, now: now() });
       const assistant = store.startAssistantMessage({ now: now() });
       const turn = controller.beginTurn(assistant.id);
       if (!turn) throw new HttpError(409, "ask_agent_turn_in_progress");
+      runningSession = storeSessionId;
       try {
         await publishNow();
         await runTurn({
@@ -642,6 +687,16 @@ export async function createAskAgentBridge(
         });
       } finally {
         controller.completeTurn(turn);
+        runningSession = undefined;
+        // Finished while the owner was in another chat, or had no window
+        // open: flag it until they look.
+        if (
+          (store.getActiveSessionId() !== storeSessionId || sse.size === 0) &&
+          !state.unread.includes(workspaceSessionId)
+        ) {
+          state.unread.push(workspaceSessionId);
+          await saveState().catch(() => undefined);
+        }
       }
       const publication = await publishNow();
       if (!response.writableEnded && !response.destroyed) {
@@ -774,10 +829,16 @@ export async function createAskAgentBridge(
     if (method === "GET") {
       switch (pathname) {
         case "/api/ask-agent/session":
+          markRead(store.getActiveSessionId());
           sendJson(response, 200, snapshotResponse());
           return true;
         case "/api/ask-agent/sessions":
-          sendJson(response, 200, { sessions: store.listSessions() });
+          sendJson(response, 200, {
+            sessions: store.listSessions().map((session) => {
+              const activity = activityOf(session.id);
+              return activity ? { ...session, activity } : session;
+            }),
+          });
           return true;
         case "/api/ask-agent/events":
           await handleEvents(request, response, auth);
@@ -826,9 +887,17 @@ export async function createAskAgentBridge(
       }
       case "/api/ask-agent/session/load": {
         const { sessionId } = await readSessionId(request, auth);
-        if (!sessionId || !store.loadSession(sessionId)) {
+        if (
+          !sessionId ||
+          !store.loadSession(sessionId, {
+            // Back to the chat whose turn is still running.
+            streaming:
+              runningSession === sessionId && controller.hasActiveTurn(),
+          })
+        ) {
           throw new HttpError(404, "ask_agent_session_not_found");
         }
+        markRead(sessionId);
         const workspaceSessionId = workspaceSessionFor(sessionId);
         const model = workspaceSessionId
           ? sessionModels.get(workspaceSessionId)
@@ -845,7 +914,8 @@ export async function createAskAgentBridge(
         }
         if (
           controller.hasActiveTurn() &&
-          sessionId === store.getActiveSessionId()
+          (sessionId === runningSession ||
+            sessionId === store.getActiveSessionId())
         ) {
           throw new HttpError(409, "ask_agent_turn_in_progress");
         }
@@ -919,6 +989,18 @@ export async function createAskAgentBridge(
   return {
     handleRequest,
     theme,
+    activity() {
+      let running = 0;
+      let needsYou = 0;
+      let unread = 0;
+      for (const session of store.listSessions()) {
+        const activity = activityOf(session.id);
+        if (activity === "running") running += 1;
+        else if (activity === "needs-you") needsYou += 1;
+        else if (activity === "unread") unread += 1;
+      }
+      return { running, needsYou, unread };
+    },
     async close() {
       closed = true;
       await controller.dispose();
@@ -934,7 +1016,7 @@ async function readState(file: string): Promise<BridgeState> {
     raw = await fs.readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { aliases: {}, titles: {}, hidden: [] };
+      return { aliases: {}, titles: {}, hidden: [], unread: [] };
     }
     throw error;
   }
@@ -947,10 +1029,15 @@ async function readState(file: string): Promise<BridgeState> {
   return {
     aliases: stringRecord(parsed.aliases),
     titles: stringRecord(parsed.titles),
-    hidden: Array.isArray(parsed.hidden)
-      ? parsed.hidden.filter((id): id is string => typeof id === "string")
-      : [],
+    hidden: stringList(parsed.hidden),
+    unread: stringList(parsed.unread),
   };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string")
+    : [];
 }
 
 function stringRecord(value: unknown): Record<string, string> {

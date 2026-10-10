@@ -19,6 +19,7 @@ describe("chat session history protocol", () => {
       totalOutputTokens: 20,
       createdAt: 1,
       lastActiveAt: 2,
+      activity: "unread",
     };
 
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
@@ -36,6 +37,10 @@ describe("chat session history protocol", () => {
       | "totalOutputTokens"
       | "createdAt"
       | "lastActiveAt"
+      | "activity"
+    >();
+    expectTypeOf<ChatSessionHistorySummary["activity"]>().toEqualTypeOf<
+      "running" | "needs-you" | "unread" | undefined
     >();
     expectTypeOf<ChatSessionHistorySummary["project"]>().toEqualTypeOf<
       import("./chatCatalog.js").ChatProjectInfo | undefined

@@ -194,6 +194,8 @@ import {
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
+/** How often the Assistant refreshes chat and project status. */
+const ASSISTANT_STATUS_REFRESH_MS = 5_000;
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
 const SELECTION_CACHE_KEY = "agentlink.browserGateway.selection.v1";
@@ -7435,6 +7437,26 @@ export function BrowserGatewayApp({
   useEffect(() => {
     if (consumerShell && !streaming) void fetchSessions();
   }, [consumerShell, streaming, foreground?.sessionId]);
+
+  // The Assistant runs chats in the background: keep their status
+  // (working, needs you, new reply) current while the page is visible.
+  const fetchSessionsRef = useRef(fetchSessions);
+  fetchSessionsRef.current = fetchSessions;
+  useEffect(() => {
+    if (!consumerShell || product !== "assistant") return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        void fetchSessionsRef.current();
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, ASSISTANT_STATUS_REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [consumerShell, product, streaming]);
 
   useEffect(() => {
     const sessionId =

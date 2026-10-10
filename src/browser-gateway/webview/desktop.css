@@ -886,7 +886,9 @@
 }
 
 .browser-shell.browser-shell-desktop .desktop-chat-link {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   margin: 2px 0;
   padding: 11px 12px;
@@ -916,6 +918,69 @@
     inset 3px 0 var(--ag-accent),
     inset 0 0 0 1px var(--ag-accent-a18);
   font-weight: 500;
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live chat status: a spinner while working, amber when it needs you. */
+.browser-shell.browser-shell-desktop .desktop-chat-activity {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-activity-running {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ag-accent-a18);
+  border-top-color: var(--ag-accent);
+  background: transparent;
+  animation: desktop-chat-activity-spin 900ms linear infinite;
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-activity-needs-you {
+  background: #f0b44c;
+  box-shadow: 0 0 0 3px #f0b44c2e;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-chat-link:has(.desktop-chat-activity-unread) {
+  color: var(--ag-title);
+  font-weight: 500;
+}
+
+@keyframes desktop-chat-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-shell.browser-shell-desktop .desktop-chat-activity-running {
+    animation: none;
+    border-color: var(--ag-accent);
+    border-right-color: transparent;
+  }
+}
+
+@media (forced-colors: active) {
+  .browser-shell.browser-shell-desktop .desktop-chat-activity {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  .browser-shell.browser-shell-desktop .desktop-chat-activity-running {
+    border-color: Highlight;
+    border-top-color: transparent;
+    background: transparent;
+  }
 }
 
 .browser-shell.browser-shell-desktop .desktop-sidebar-empty {
@@ -1784,6 +1849,13 @@ html.quick-ask-document body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-menu
+  .assistant-project-menu-label {
+  flex: 1;
+  min-width: 0;
 }
 
 .browser-shell.browser-shell-desktop .assistant-project-menu hr {
