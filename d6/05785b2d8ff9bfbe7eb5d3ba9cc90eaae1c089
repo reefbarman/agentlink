@@ -1,0 +1,37 @@
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_e08a86bb3a33a2 302-322
+packages/core/package.json
+  h_e08a86bb3a33a2 15-16
+resources/builtin-skills/documentation/SKILL.md
+  h_e08a86bb3a33a2 30
+  h_e08a86bb3a33a2 27-29,31-39
+packages/core/docs/voice-input.md
+  h_e08a86bb3a33a2 1-413
+  h_e08a86bb3a33a2 414-420
+packages/core/README.md
+  h_e08a86bb3a33a2 3,5,143-149,153-162,167,172-179
+  s_c0f9a11d743dbf::t_24ea816bd2947b 150-152,163-166,168-171,180
+resources/builtin-skills/documentation/README.md
+  h_e08a86bb3a33a2 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c0f9a11d743dbf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb98b0ad-b93c-42f3-b78b-ca57b9cbfc4f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
