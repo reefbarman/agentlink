@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.11.0 — 2026-10-10
+
+- web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.
+
 ## 0.10.0 — 2026-10-10
 
 - Adds `@agentlink/core/voice`, a browser-safe entry point for live dictation: `VoiceActivitySegmenter` cuts recorded PCM into utterances at natural pauses, reports meter levels, and signals auto-stop after silence, alongside `resampleToPcm16` and `encodeWavPcm16`. Pair it with `transcribeCodexAudio` to show text as the user speaks.

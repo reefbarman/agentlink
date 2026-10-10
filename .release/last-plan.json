@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6ef16d0b704ec1d200f1d4124025e8c500e0d885",
-  "createdAt": "2026-10-10T11:28:13.398Z",
+  "sourceSha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+  "createdAt": "2026-10-10T11:52:58.985Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -30,7 +30,8 @@
         "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
         "776bc1d0d4400d3ab593343e471d3f9de136acfc",
         "0a6a81187b725493b453073dd1e708d0f90e96ff",
-        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
+        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
+        "b6884d8dc5684f8e48f4fe346aa6b37b4e735818"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -142,50 +143,20 @@
           "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
           "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
           "breaking": false
+        },
+        {
+          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+          "subject": "feat(web): lend Codex OAuth web tools to every model",
+          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.13.0",
-      "baselineRef": "desktop-v0.13.0",
-      "reserved": "0.13.0",
-      "commits": [
-        "0a6a81187b725493b453073dd1e708d0f90e96ff",
-        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.14.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.14.0",
-      "notes": [
-        {
-          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
-          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
-          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
-          "breaking": false
-        },
-        {
-          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
-          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
-          "breaking": false
-        }
-      ]
-    },
-    "cli": {
       "published": "0.14.0",
-      "baselineRef": "cli-v0.14.0",
+      "baselineRef": "desktop-v0.14.0",
       "reserved": "0.14.0",
-      "commits": [
-        "0a6a81187b725493b453073dd1e708d0f90e96ff",
-        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
-      ],
+      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -195,51 +166,60 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.15.0",
+      "tag": "desktop-v0.15.0",
       "notes": [
         {
-          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
-          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
-          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
+          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+          "subject": "feat(web): lend Codex OAuth web tools to every model",
+          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
           "breaking": false
-        },
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.15.0",
+      "baselineRef": "cli-v0.15.0",
+      "reserved": "0.15.0",
+      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.16.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.16.0",
+      "notes": [
         {
-          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
-          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
+          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+          "subject": "feat(web): lend Codex OAuth web tools to every model",
+          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.9.0",
-      "baselineRef": "sdk-v0.9.0",
-      "reserved": "0.9.0",
-      "commits": [
-        "0a6a81187b725493b453073dd1e708d0f90e96ff",
-        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089"
-      ],
+      "published": "0.10.0",
+      "baselineRef": "sdk-v0.10.0",
+      "reserved": "0.10.0",
+      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.10.0",
+      "tag": "sdk-v0.11.0",
       "notes": [
         {
-          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
-          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
-          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
-          "breaking": false
-        },
-        {
-          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
-          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
+          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+          "subject": "feat(web): lend Codex OAuth web tools to every model",
+          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
           "breaking": false
         }
       ]
@@ -378,6 +358,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6884d8dc5684f8e48f4fe346aa6b37b4e735818": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

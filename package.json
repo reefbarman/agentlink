@@ -1231,10 +1231,10 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.7.0",
-    "@agentlink/core": "0.10.0",
-    "@agentlink/node-host": "0.10.0",
-    "@agentlink/protocol": "0.10.0",
-    "@agentlink/workspace-host": "0.10.0",
+    "@agentlink/core": "0.11.0",
+    "@agentlink/node-host": "0.11.0",
+    "@agentlink/protocol": "0.11.0",
+    "@agentlink/workspace-host": "0.11.0",
     "@iarna/toml": "^3.0.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "@lancedb/lancedb": "0.40.0",
@@ -1280,8 +1280,8 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@agentlink/cli": "0.15.0",
-    "@agentlink/desktop": "0.14.0",
+    "@agentlink/cli": "0.16.0",
+    "@agentlink/desktop": "0.15.0",
     "@anthropic-ai/sandbox-runtime": "0.0.79",
     "@electron/osx-sign": "2.7.1",
     "@testing-library/preact": "^3.2.4",
