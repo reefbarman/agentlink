@@ -1,0 +1,70 @@
+apps/server/src/backgroundResultDelivery.ts
+  h_e08a86bb3a33a2 1-178
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 39-46,169-170,195-198,329,333-340,373-387,389-395,487-632,736-749,753-779,856-865,1071-1072,1093,1095-1096,1165-1169,1268-1269,1369-1370,1504-1507
+  s_e3a4b39f2cb875::t_08571fa614d015 341,388,633-634,780-781,1371
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 153,157-163,573,578-582,589-593,1041-1042,1044-1045
+  s_168bab86a019e2::t_57498c42229cdf 583-588,594,1031,1043,1046
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 13,61,98,103-113,542-716
+  s_f0834c2338dbcd::t_13093a8ce9220c 717-718
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 597-598,7053-7090,10645-10649
+  s_e3a4b39f2cb875::t_93354eeb8d4376 10650
+apps/server/README.md
+  h_e08a86bb3a33a2 34-36,244
+apps/server/src/backgroundResultDelivery.test.ts
+  h_e08a86bb3a33a2 1-137
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 222-227,285-286,1721-1744
+  s_25a29ea466f8f3::t_3ca522b34abfe4 1745
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 221-225,1169-1189,1197-1198,1201-1208,1221
+  s_25a29ea466f8f3::t_2f78c661d46b0a 1190-1192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "00b0841975f5f7a7caaa7bf71def091fa35c7ce0",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_168bab86a019e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "315d4e61-609d-4209-b834-480dd440a4a2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_25a29ea466f8f3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5f91059d-bad1-437d-8842-1294889dd099",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_e3a4b39f2cb875": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a896f8c4-1f76-4ade-b5b7-2ebed81191e5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_f0834c2338dbcd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bf12fe72-b342-4e0b-b464-48532f50994f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
