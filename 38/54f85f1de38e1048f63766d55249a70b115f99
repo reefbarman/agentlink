@@ -1,0 +1,50 @@
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 355-394
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 2203-2299
+apps/server/src/projectFiles.ts
+  h_e08a86bb3a33a2 1-105
+apps/server/README.md
+  h_e08a86bb3a33a2 33
+apps/server/src/projectChats.ts
+  h_e08a86bb3a33a2 12,38-39,357-364
+  h_e08a86bb3a33a2 365-367
+src/browser-gateway/webview/components/BrowserDiffViewer.tsx
+  h_e08a86bb3a33a2 2-8
+esbuild.mjs
+  h_e08a86bb3a33a2 142
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 76,1577-1584,8216-8228,8303-8311,8987,9788,10398
+apps/server/src/projectFiles.test.ts
+  h_e08a86bb3a33a2 1-107
+src/browser-gateway/webview/components/BrowserFileViewer.tsx
+  h_e08a86bb3a33a2 1-240
+src/browser-gateway/webview/components/browserMonacoLoader.ts
+  h_e08a86bb3a33a2 1-224
+apps/server/esbuild.mjs
+  h_e08a86bb3a33a2 101-103,108,113-120,135-151,159,171-172,228-230
+  s_fe19c1ac13197e::t_c7c6b3f669f9c0 121-134,152-153
+src/browser-gateway/webview/components/BrowserFileViewer.test.tsx
+  h_e08a86bb3a33a2 1-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3854f85f1de38e1048f63766d55249a70b115f99",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_fe19c1ac13197e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e02092b9-488a-4475-887e-1fefcee2c99c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
