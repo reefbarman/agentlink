@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-  "createdAt": "2026-10-10T11:52:58.985Z",
+  "sourceSha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+  "createdAt": "2026-10-10T12:08:11.990Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.30.0",
       "baselineRef": "v1.30.0",
-      "reserved": "1.30.13",
+      "reserved": "1.30.14",
       "commits": [
         "39a786755f9fd16bc59368d5d8c8001da8016d72",
         "5f5e17d3854f62cb4f1834594835d84149e8074e",
@@ -31,7 +31,8 @@
         "776bc1d0d4400d3ab593343e471d3f9de136acfc",
         "0a6a81187b725493b453073dd1e708d0f90e96ff",
         "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-        "b6884d8dc5684f8e48f4fe346aa6b37b4e735818"
+        "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
+        "f1d93924cec164a16ae05f765e47a4a295e08a8d"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -149,38 +150,20 @@
           "subject": "feat(web): lend Codex OAuth web tools to every model",
           "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
           "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.14.0",
-      "baselineRef": "desktop-v0.14.0",
-      "reserved": "0.14.0",
-      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.15.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.15.0",
-      "notes": [
+        },
         {
-          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-          "subject": "feat(web): lend Codex OAuth web tools to every model",
-          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
+          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
+          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
           "breaking": false
         }
       ]
     },
-    "cli": {
+    "desktop": {
       "published": "0.15.0",
-      "baselineRef": "cli-v0.15.0",
+      "baselineRef": "desktop-v0.15.0",
       "reserved": "0.15.0",
-      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
+      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -190,36 +173,60 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.16.0",
+      "tag": "desktop-v0.16.0",
       "notes": [
         {
-          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-          "subject": "feat(web): lend Codex OAuth web tools to every model",
-          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
+          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
+          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.16.0",
+      "baselineRef": "cli-v0.16.0",
+      "reserved": "0.16.0",
+      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.17.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.17.0",
+      "notes": [
+        {
+          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
+          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.10.0",
-      "baselineRef": "sdk-v0.10.0",
-      "reserved": "0.10.0",
-      "commits": ["b6884d8dc5684f8e48f4fe346aa6b37b4e735818"],
+      "published": "0.11.0",
+      "baselineRef": "sdk-v0.11.0",
+      "reserved": "0.11.0",
+      "commits": ["f1d93924cec164a16ae05f765e47a4a295e08a8d"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.11.0",
+      "tag": "sdk-v0.12.0",
       "notes": [
         {
-          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-          "subject": "feat(web): lend Codex OAuth web tools to every model",
-          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
+          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
+          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
+          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
           "breaking": false
         }
       ]
@@ -366,6 +373,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f1d93924cec164a16ae05f765e47a4a295e08a8d": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

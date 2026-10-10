@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 — 2026-10-10
+
 - `transcribeCodexAudio` now uploads by default through undici with a narrower TLS cipher list, so Electron and other Node hosts no longer hit ChatGPT's Cloudflare challenge (`challenge_blocked`) without a custom `fetch`. Proxy environment variables are honoured. `createCodexTranscriptionFetch()` and `CODEX_TRANSCRIPTION_TLS_CIPHERS` are exported from `@agentlink/core/codex`. Adds `undici` as a dependency, loaded only on first transcription.
 
 ## 0.11.0 — 2026-10-10
