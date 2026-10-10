@@ -308,6 +308,9 @@ describe("validateInteractiveCommand", () => {
       "ssh -o BatchMode=yes user@host uptime",
       "ssh -oBatchMode=yes -p 2222 user@host uptime",
       "ssh -v user@host uptime",
+      "ssh -t user@host 'hostname; sudo ufw status numbered'",
+      "ssh -tt user@host uptime",
+      "ssh -vt -p 2222 user@host 'sudo systemctl restart app'",
     ])("allows one-shot SSH remote commands: %s", (command) => {
       expect(validateInteractiveCommand(command)).toBeNull();
     });
@@ -323,8 +326,9 @@ describe("validateInteractiveCommand", () => {
       "ssh -vN user@host ignored",
       "ssh -f user@host ignored",
       "ssh -vf user@host ignored",
-      "ssh -t user@host ignored",
-      "ssh -tt user@host ignored",
+      "ssh -t user@host",
+      "ssh -tt user@host",
+      "ssh -tN user@host ignored",
       "ssh -W target:22 user@host ignored",
       "ssh -Wtarget:22 user@host ignored",
       "ssh -s user@host sftp",
