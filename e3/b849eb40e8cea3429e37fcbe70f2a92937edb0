@@ -1,0 +1,162 @@
+src/browser-gateway/helper/sharedCodexOAuth.ts
+  h_e08a86bb3a33a2 2,30
+src/agent/webview/styles/voice-input.css
+  h_e08a86bb3a33a2 1-39
+packages/core/src/codex/providerFactory.ts
+  h_e08a86bb3a33a2 657-658
+src/browser-gateway/voiceInputHttp.ts
+  h_e08a86bb3a33a2 1-34
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/voice/voiceRecorderProtocol.ts
+  h_e08a86bb3a33a2 1-26
+src/agent/webview/types.ts
+  h_e08a86bb3a33a2 66-70,408-417
+src/util/httpDispatcher.ts
+  h_e08a86bb3a33a2 234-288
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 7-10,1101-1199
+  s_1a7953b40b4f48::t_5e24372e59a70e 1200-1201
+packages/core/src/codex/transcription.ts
+  h_e08a86bb3a33a2 1-330
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 205-216,362,1851-1854,5830-5937,5939-5942
+  s_1f01fa67486680::t_f87463ac6239a6 204,5938,5943-5945
+src/shared/voiceInputProtocol.ts
+  h_e08a86bb3a33a2 1-30
+src/agent/voice/VoiceInputService.ts
+  h_e08a86bb3a33a2 1-263
+packages/core/src/codex.ts
+  h_e08a86bb3a33a2 20
+esbuild.mjs
+  h_e08a86bb3a33a2 21,53-54,242-256,334,350,367,391,464,476-480
+  s_08d77b97682991::t_59ebf178635b94 49-52,55
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 62-66,203-204,262,434-459,1064-1068,1122-1123,1935-1938,2058-2101
+  s_02a44fc819feef::t_7c189f48ed2f61 1939-1940
+src/agent/webview/useHostVoiceInput.ts
+  h_e08a86bb3a33a2 1-114
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 61-65,447-457,1064-1110
+  s_02a44fc819feef::t_e8783e3c52005d 446,1111-1113
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 230-233,691-695,1391,1523,3605-3674,9482-9502
+  s_08d77b97682991::t_d9c19270e6aea4 696-697,3675-3676,9503-9507
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_e08a86bb3a33a2 142-153,562-569
+src/browser-gateway/webview/useBrowserVoiceInput.ts
+  h_e08a86bb3a33a2 1-222
+src/browser-gateway/voiceInputHttp.test.ts
+  h_e08a86bb3a33a2 1-44
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_e08a86bb3a33a2 202-212,535-632
+  s_14be4e6cc1edbc::t_1bbf8c80ef3a80 633-639
+src/browser-gateway/webview/index.tsx
+  h_e08a86bb3a33a2 2
+src/agent/voice/voiceRecorderWorker.ts
+  h_e08a86bb3a33a2 1-125
+src/extension.ts
+  h_e08a86bb3a33a2 143-147,186,1607-1625,2058
+packages/core/README.md
+  h_e08a86bb3a33a2 114-131
+packages/core/src/codex/credentialResolution.ts
+  h_e08a86bb3a33a2 16
+  s_22f2acaface88f::t_9ae3b69c35f9cf 15
+scripts/package-voice-runtime.mjs
+  h_e08a86bb3a33a2 1-103
+apps/desktop/electron-builder.yml
+  h_e08a86bb3a33a2 23-26
+scripts/package-voice-runtime.test.mjs
+  h_e08a86bb3a33a2 1-108
+.vscodeignore
+  h_e08a86bb3a33a2 17
+packages/core/src/codex/transcription.test.ts
+  h_e08a86bb3a33a2 1-239
+src/agent/webview/components/composerVoiceInput.ts
+  h_e08a86bb3a33a2 1-111
+src/agent/voice/VoiceInputService.test.ts
+  h_e08a86bb3a33a2 1-177
+src/agent/webview/index.tsx
+  h_e08a86bb3a33a2 2
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 50
+package.json
+  h_e08a86bb3a33a2 5,1205,1228
+src/util/httpDispatcher.test.ts
+  h_e08a86bb3a33a2 91-127
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 116,412-413,1681-1685,4993
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 83,1632-1652,8208,10261
+src/agent/voice/wavEncoding.ts
+  h_e08a86bb3a33a2 1-32
+src/browser-gateway/helper/helperRouteFamilies.ts
+  h_e08a86bb3a33a2 59-60,246-251
+package-lock.json
+  h_e08a86bb3a33a2 3,9,25,3762-3770
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02a44fc819feef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1e8636bf-dfbd-408f-8430-ed3ef0ac38f1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_08d77b97682991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc7611fd-404e-4aaf-8e2c-d9eace7dba81",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_14be4e6cc1edbc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f03feb48-cfe6-4547-ad88-1c14d1fe65a0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1a7953b40b4f48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee25c5f1-e1d7-46f0-bea4-b8561da95dd3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1f01fa67486680": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3a776f2-7b84-450f-ac15-44dcfd34e97b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_22f2acaface88f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7892fc14-aaae-4a94-8629-ca5e7ac8ad8a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
