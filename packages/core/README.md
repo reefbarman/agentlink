@@ -111,6 +111,24 @@ const result = await ai.generateObject({
 
 For the public OpenAI Responses API, use `createOpenAIResponsesProvider(...)` from `@agentlink/core/openai-responses`. It fixes the API-key endpoint, sends the exact selected maintained model, maps native schemas to `text.format`, sends `store: false`, and never inherits Codex OAuth remapping or Responses Lite behavior. For ChatGPT/Codex OAuth, use `createCodexOAuthProvider(...)` from `@agentlink/core/codex` with a host-owned `CodexCredentialProvider`. The OAuth endpoint intentionally does not advertise native structured output, temperature, or a provider-enforced output-token cap. Requesting those options fails before model dispatch rather than being silently omitted. Both providers resolve credentials per principal and operation; an operation-level credential resolver suppresses factory credentials even when it returns no credential.
 
+To turn recorded speech into prompt text, call `transcribeCodexAudio(...)` from `@agentlink/core/codex` with the same host-owned `CodexCredentialProvider`. The SDK does not record audio. The host captures a clip with whatever recorder its platform offers (for example `MediaRecorder` in a web UI, or a native or `arecord`/PipeWire capture on a device such as a Steam Deck) and passes the encoded bytes and MIME type. Credentials resolve with purpose `"transcription"` and model ID `CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID`.
+
+```ts
+import {
+  CodexTranscriptionError,
+  transcribeCodexAudio,
+} from "@agentlink/core/codex";
+
+const { text } = await transcribeCodexAudio({
+  credentialProvider,
+  context: principal,
+  audio: { data: wavBytes, mimeType: "audio/wav", filename: "speech.wav" },
+  signal,
+});
+```
+
+ChatGPT/Codex OAuth credentials use ChatGPT's subscription transcription endpoint (`CODEX_TRANSCRIBE_URL`), which Codex dictation uses but OpenAI does not document as a public API. It may change, and it can be blocked by a bot challenge, reported as `CodexTranscriptionError` code `challenge_blocked`. A 401 triggers one credential refresh and retry. Cloudflare also judges the client's TLS handshake: Electron-hosted Node (BoringSSL) is challenged with its default cipher list, while plain Node is accepted. In an Electron host, pass a `fetch` whose TLS connection uses a narrower modern ECDHE/AEAD cipher list (for example an undici `Agent` with `connect.ciphers`) through the `fetch` option. The request body is pre-encoded multipart bytes, so any fetch implementation works. OpenAI API-key credentials use the public Audio API with `gpt-4o-mini-transcribe` (override with `apiKeyModel`). Clips over 25 MiB are rejected before upload. Other error codes are `auth_required`, `audio_empty`, `audio_too_large`, `usage_limited`, `request_failed`, and `invalid_response`. Present the transcript for review rather than sending it automatically.
+
 `streamText(...)` lazily emits `text.delta`, `usage`, and one terminal `completed`, `cancelled`, or `error` event. Consume the generator return value when the terminal result is needed. Closing it early cancels the provider stream and cleans up request listeners and timers.
 
 Use `run(...)` to collect one bounded tool workflow, or `stream(...)` for its safe ordered events. Both use the same headless turn-kernel path. Supply `input` for the current request and optional complete server-owned `history`; AgentLink retains neither after settlement. Tools must be `HostTool` values from `defineTool` or `defineZodTool`. A tool with `authorization: "required"` needs a request-scoped `authorizeToolCall` callback returning only `allow` or `deny`. Stateless workflows never suspend for a later approval.

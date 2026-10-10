@@ -201,7 +201,19 @@ import {
   type PromptProfileResolution,
 } from "@agentlink/protocol/prompt-profile";
 import { resolvePromptProfile } from "@agentlink/core/prompt-profile";
-import { getCodexModelCapabilities } from "@agentlink/core/codex";
+import {
+  CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID,
+  getCodexModelCapabilities,
+  transcribeCodexAudio,
+  type CodexCredentialProvider,
+  type CodexResolvedAuth,
+} from "@agentlink/core/codex";
+import { decodeVoiceTranscribeBody } from "../voiceInputHttp.js";
+import { agentLinkTranscriptionFetch } from "../../util/httpDispatcher.js";
+import type {
+  VoiceInputAvailabilityResponse,
+  VoiceTranscribeResponse,
+} from "../../shared/voiceInputProtocol.js";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 
 import {
@@ -347,6 +359,7 @@ import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomou
 import { BrowserGatewayDerivedSessionRuntime } from "./BrowserGatewayDerivedSessionRuntime.js";
 import {
   createSharedCodexOAuthRuntime,
+  type SharedCodexOAuthContext,
   type SharedCodexOAuthRuntime,
 } from "./sharedCodexOAuth.js";
 import {
@@ -1835,6 +1848,10 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentProjectHandoffApproveRequest(req, res);
       case "thinking":
         return this.handleAskAgentThinkingRequest(req, res);
+      case "voiceInput":
+        return this.handleAskAgentVoiceInputRequest(res);
+      case "transcribe":
+        return this.handleAskAgentTranscribeRequest(req, res);
       case "send":
         return this.handleAskAgentSendRequest(req, res);
       case "retry":
@@ -5807,6 +5824,122 @@ export class BrowserGatewayHelper {
       writeJson(res, invalidJson ? 400 : 500, {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
+    }
+  }
+
+  /**
+   * Codex OAuth for Ask Agent dictation: the shared Keychain pool when present,
+   * otherwise the Codex OAuth credential leased by the model-catalog owner.
+   */
+  private async resolveAskAgentTranscriptionAuth(): Promise<{
+    provider: CodexCredentialProvider<SharedCodexOAuthContext>;
+    context: SharedCodexOAuthContext;
+  } | null> {
+    const context = {
+      sessionId: this.askAgentSessionStore.getActiveSessionId(),
+    };
+    if (this.sharedCodexOAuth) {
+      const provider = this.sharedCodexOAuth.provider;
+      try {
+        const auth = await provider.resolveAuth({
+          context,
+          modelId: CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID,
+          purpose: "transcription",
+        });
+        if (auth?.method === "oauth") return { provider, context };
+      } catch (error) {
+        logHelper(
+          `[voice-input] Shared Codex credential lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const snapshot = this.getModelCatalogSnapshot(this.askAgentModelOwnerId);
+    if (!snapshot) return null;
+    const credential = this.modelCredentialCache.getCredential({
+      grantedByOwnerId: snapshot.publishedByOwnerId,
+      grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+      providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+      modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+      now: Date.now(),
+    });
+    if (credential?.method !== "oauth") return null;
+    const leased: CodexResolvedAuth = {
+      method: "oauth",
+      bearerToken: credential.bearerToken,
+      accountId: credential.accountId,
+      canRefresh: false,
+    };
+    return { provider: { resolveAuth: async () => leased }, context };
+  }
+
+  private async handleAskAgentVoiceInputRequest(
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const auth = await this.resolveAskAgentTranscriptionAuth();
+    writeJson(
+      res,
+      200,
+      (auth
+        ? { available: true }
+        : {
+            available: false,
+            hidden: true,
+            reason:
+              "Sign in with a ChatGPT/Codex subscription to use voice input.",
+          }) satisfies VoiceInputAvailabilityResponse,
+    );
+  }
+
+  private async handleAskAgentTranscribeRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    let decoded: ReturnType<typeof decodeVoiceTranscribeBody>;
+    try {
+      decoded = decodeVoiceTranscribeBody(await readJsonBody(req));
+    } catch {
+      writeJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    if (!decoded.ok) {
+      writeJson(res, decoded.status, { error: decoded.error });
+      return;
+    }
+    const auth = await this.resolveAskAgentTranscriptionAuth();
+    if (!auth) {
+      writeJson(res, 200, {
+        ok: false,
+        error: "Sign in with a ChatGPT/Codex subscription to use voice input.",
+      } satisfies VoiceTranscribeResponse);
+      return;
+    }
+    const started = Date.now();
+    try {
+      const result = await transcribeCodexAudio({
+        credentialProvider: auth.provider,
+        context: auth.context,
+        audio: decoded.audio,
+        fetch: agentLinkTranscriptionFetch,
+      });
+      this.logAskAgentEvent("ask-agent.transcribe", {
+        ok: true,
+        bytes: decoded.audio.data.byteLength,
+        durationMs: Date.now() - started,
+      });
+      writeJson(res, 200, {
+        ok: true,
+        text: result.text,
+      } satisfies VoiceTranscribeResponse);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logAskAgentEvent("ask-agent.transcribe", {
+        ok: false,
+        error: (err as { code?: string } | null)?.code ?? "internal_error",
+      });
+      writeJson(res, 200, {
+        ok: false,
+        error: message,
+      } satisfies VoiceTranscribeResponse);
     }
   }
 

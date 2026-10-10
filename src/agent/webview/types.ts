@@ -63,6 +63,11 @@ export type Question = UserQuestion;
 export type QuestionRequest = StructuredQuestionRequest;
 
 /** Consumption vs. limits for a /btw side question, shown as a visible budget. */
+/** Host voice input state; hidden without a ChatGPT/Codex subscription. */
+export type VoiceInputAvailabilityState =
+  | { available: true }
+  | { available: false; hidden: boolean; reason: string };
+
 export interface BtwBudget {
   apiTurns: number;
   maxApiTurns: number;
@@ -398,6 +403,16 @@ export type ExtensionMessage =
       type: "promptPolishResult";
       requestId: string;
       polished?: string;
+      error?: string;
+    }
+  | {
+      type: "voiceInputAvailability";
+      availability: VoiceInputAvailabilityState;
+    }
+  | {
+      type: "voiceInputResult";
+      requestId: string;
+      text?: string;
       error?: string;
     }
   | ({

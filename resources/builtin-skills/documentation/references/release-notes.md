@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added voice input to the chat composer. When a ChatGPT/Codex account is signed in, a microphone button next to send records speech and inserts the transcript into the draft for review; nothing is sent automatically. VS Code records on the extension host with a bundled native recorder (macOS, Windows, and Linux x64; not Linux arm64). The browser remote, Browser Ask Agent, and Desktop record in the page over HTTPS or `localhost`. Transcription uses ChatGPT's transcription endpoint, which is not a documented public API and may change or be blocked. The button is hidden without a Codex sign-in.
+- `@agentlink/core/codex` now exports `transcribeCodexAudio(...)`, so SDK hosts can transcribe recorded audio with a `CodexCredentialProvider` (ChatGPT OAuth, with a single refresh and retry on 401) or an OpenAI API key. The host supplies its own recorder.
 - Upgrade the standalone CLI to Ink 8 and replace the unsupported textarea dependency with a local controlled multiline editor, preserving completion, history and bracketed paste.
 - Require VS Code 1.140.0 or newer and update the extension API types to match.
 - Upgrade LanceDB to 0.40.0. New VS Code and Desktop releases no longer support Intel Macs; macOS builds require Apple Silicon. Apache Arrow remains at 18.1.0, within LanceDB's supported range.

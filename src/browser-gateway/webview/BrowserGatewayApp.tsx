@@ -80,6 +80,7 @@ import {
   type ComposerMedia,
 } from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
+import { useBrowserVoiceInput } from "./useBrowserVoiceInput";
 import {
   QuestionCard,
   type QuestionComposerState,
@@ -1628,6 +1629,27 @@ export function BrowserGatewayApp({
         : buildApiPathForInstance(pathname, tabId),
     [buildApiPathForInstance],
   );
+  // Dictation records on this device; the selected owner transcribes it with
+  // its ChatGPT/Codex subscription (Ask Agent via the helper).
+  const voiceEndpoints = useMemo(
+    () =>
+      quickAsk || isAskAgentSelected
+        ? {
+            availabilityPath: "/api/ask-agent/voice-input",
+            transcribePath: "/api/ask-agent/transcribe",
+          }
+        : selectedInstanceId
+          ? {
+              availabilityPath: buildApiPath("/api/voice-input"),
+              transcribePath: buildApiPath("/api/transcribe"),
+            }
+          : null,
+    [quickAsk, isAskAgentSelected, selectedInstanceId, buildApiPath],
+  );
+  const voiceInput = useBrowserVoiceInput({
+    endpoints: voiceEndpoints,
+    authToken,
+  });
   const buildSnapshotApiPath = useCallback(
     (
       instanceId = selectedInstanceId,
@@ -8183,6 +8205,7 @@ export function BrowserGatewayApp({
             allowThinkingToggle={true}
             allowExportTranscript={false}
             allowFileMentions={false}
+            voiceInput={voiceInput}
             onComposerEvent={(event, fields) =>
               logAskAgentBrowserEvent(`quick-ask.composer.${event}`, fields)
             }
@@ -10235,6 +10258,7 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    voiceInput={voiceInput}
                     placeholder={
                       isAskAgentSelected ? "Ask AgentLink anything" : undefined
                     }

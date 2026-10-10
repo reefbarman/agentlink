@@ -4,6 +4,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { InputArea, type ComposerContextMode } from "./InputArea";
+import {
+  insertTranscript,
+  type ComposerVoiceInput,
+} from "./composerVoiceInput";
 import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 class ImmediateFileReader {
@@ -1092,5 +1096,106 @@ describe("InputArea slash popup", () => {
       undefined,
       undefined,
     );
+  });
+});
+
+describe("composer voice input", () => {
+  function voiceBackend(overrides: Partial<ComposerVoiceInput> = {}) {
+    return {
+      start: vi.fn(async () => undefined),
+      finish: vi.fn(async () => "open the readme"),
+      cancel: vi.fn(),
+      ...overrides,
+    } satisfies ComposerVoiceInput;
+  }
+
+  it("inserts transcripts at the cursor with word-boundary spacing", () => {
+    expect(insertTranscript("fix bug", 3, 3, "the login")).toEqual({
+      value: "fix the login bug",
+      caret: 13,
+    });
+    expect(insertTranscript("", 0, 0, "  hello  ")).toEqual({
+      value: "hello",
+      caret: 5,
+    });
+    expect(insertTranscript("draft", 5, 5, "   ")).toEqual({
+      value: "draft",
+      caret: 5,
+    });
+  });
+
+  it("hides the mic button without a voice backend", () => {
+    const { container } = renderInputArea([]);
+    expect(container.querySelector(".voice-input-button")).toBeNull();
+  });
+
+  it("records, transcribes, and inserts dictated text into the draft", async () => {
+    const voiceInput = voiceBackend();
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "please";
+    input.setSelectionRange(6, 6);
+    fireEvent.input(input);
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(voiceInput.start).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(mic());
+    await waitFor(() => expect(input.value).toBe("please open the readme"));
+    expect(voiceInput.finish).toHaveBeenCalledTimes(1);
+    expect(mic().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows the backend's reason and disables the mic when unavailable", () => {
+    const { container } = renderInputArea([], {
+      voiceInput: voiceBackend({ disabledReason: "Needs HTTPS." }),
+    });
+    const mic = container.querySelector<HTMLButtonElement>(
+      ".voice-input-button",
+    )!;
+    expect(mic.disabled).toBe(true);
+    expect(mic.title).toBe("Needs HTTPS.");
+  });
+
+  it("cancels an active recording with Escape without transcribing", async () => {
+    const voiceInput = voiceBackend();
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(voiceInput.cancel).toHaveBeenCalledTimes(1);
+    expect(voiceInput.finish).not.toHaveBeenCalled();
+    expect(mic().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("surfaces transcription failures inline", async () => {
+    const voiceInput = voiceBackend({
+      finish: vi.fn(async () => {
+        throw new Error("Sign in again");
+      }),
+    });
+    const { container, findByText } = renderInputArea([], { voiceInput });
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.click(mic());
+
+    expect(await findByText("Voice input failed: Sign in again")).toBeTruthy();
   });
 });

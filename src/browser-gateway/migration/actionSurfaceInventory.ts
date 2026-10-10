@@ -139,6 +139,18 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/polish-prompt",
     "Non-authoritative composer transformation remains HTTP.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
+    "/api/voice-input",
+    "Voice input availability is a non-authoritative composer capability read.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/transcribe",
+    "Non-authoritative composer dictation uploads device audio over HTTP.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",
@@ -546,6 +558,14 @@ function classifyAskAgentRoute(
         method,
         path,
         "Retained during the bounded coexistence period; action inventory blocks Stage 5 until classified as a command or permanent read.",
+      );
+    case "voiceInput":
+    case "transcribe":
+      return retainedHttp(
+        "ask_agent",
+        method,
+        path,
+        "Non-authoritative composer dictation: availability read and device audio upload over HTTP.",
       );
     default:
       return assertNever(handler);

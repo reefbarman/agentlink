@@ -12,7 +12,8 @@ export type CodexCredentialPurpose =
   | "complete"
   | "catalog"
   | "authStatus"
-  | "nativeWeb";
+  | "nativeWeb"
+  | "transcription";
 
 export interface CodexResolvedAuth extends CodexResolvedAuthForClient {
   /** Host-owned identity for one account in an OAuth fallback pool. */

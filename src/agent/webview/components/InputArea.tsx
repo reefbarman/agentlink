@@ -59,6 +59,11 @@ import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";
 import { useFileMentionPopup } from "./useFileMentionPopup";
+import {
+  insertTranscript,
+  useComposerVoiceInput,
+  type ComposerVoiceInput,
+} from "./composerVoiceInput";
 
 export interface ComposerMedia {
   name: string;
@@ -195,6 +200,8 @@ interface InputAreaProps {
   onInterject?: ComposerSubmitHandler;
   onStop: () => void;
   onPolishPrompt?: (draft: string) => Promise<string>;
+  /** Shows a mic button beside send when the surface supports dictation. */
+  voiceInput?: ComposerVoiceInput;
   streaming: boolean;
   reasoningEffort: ReasoningEffort;
   onSetReasoningEffort: (effort: ReasoningEffort) => void;
@@ -252,6 +259,7 @@ export function InputArea({
   onInterject,
   onStop,
   onPolishPrompt,
+  voiceInput,
   streaming,
   reasoningEffort,
   onSetReasoningEffort,
@@ -422,6 +430,32 @@ export function InputArea({
       setPolishing(false);
     }
   }, [onPolishPrompt, polishing, text, onComposerEvent]);
+
+  const handleVoiceTranscript = useCallback((transcript: string) => {
+    const el = textareaRef.current;
+    const value = el?.value ?? "";
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const next = insertTranscript(value, start, end, transcript);
+    setText(next.value);
+    requestAnimationFrame(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.selectionStart = current.selectionEnd = next.caret;
+      autosizeTextarea(current);
+    });
+  }, []);
+  const {
+    status: voiceStatus,
+    error: voiceError,
+    toggle: toggleVoice,
+    cancel: cancelVoice,
+  } = useComposerVoiceInput({
+    voiceInput,
+    onTranscript: handleVoiceTranscript,
+    onEvent: onComposerEvent,
+  });
 
   const handleUndoPolish = useCallback(() => {
     if (!lastPolish) return;
@@ -1027,6 +1061,11 @@ export function InputArea({
       ) {
         return;
       }
+      if (e.key === "Escape" && voiceStatus === "recording") {
+        e.preventDefault();
+        cancelVoice();
+        return;
+      }
       if (
         contextMode?.actions?.hidePrimaryAction &&
         e.key === "Enter" &&
@@ -1080,6 +1119,8 @@ export function InputArea({
       selectNextEmoji,
       selectPreviousEmoji,
       onComposerEvent,
+      voiceStatus,
+      cancelVoice,
     ],
   );
 
@@ -1891,6 +1932,12 @@ export function InputArea({
               <span>Polish failed: {polishError}</span>
             </div>
           )}
+          {voiceError && (
+            <div class="composer-disabled-notice" role="status">
+              <i class="codicon codicon-warning" />
+              <span>Voice input failed: {voiceError}</span>
+            </div>
+          )}
           <ComposerBox
             ref={inputWrapperRef}
             className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${shouldShowSlashPopup ? "slash-popup-open" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
@@ -2008,6 +2055,50 @@ export function InputArea({
               onDrop={handleDrop}
             />
             <div class="composer-action-buttons">
+              {voiceInput && (
+                <button
+                  class={`send-button voice-input-button voice-input-${voiceStatus}`}
+                  onClick={() => void toggleVoice()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelVoice();
+                    }
+                  }}
+                  disabled={
+                    Boolean(voiceInput.disabledReason) ||
+                    (disabled && voiceStatus === "idle") ||
+                    voiceStatus === "starting" ||
+                    voiceStatus === "transcribing"
+                  }
+                  aria-pressed={voiceStatus === "recording"}
+                  aria-busy={
+                    voiceStatus === "starting" || voiceStatus === "transcribing"
+                  }
+                  title={
+                    voiceInput.disabledReason ??
+                    (voiceStatus === "recording"
+                      ? "Stop and transcribe (Esc to cancel)"
+                      : voiceStatus === "transcribing"
+                        ? "Transcribing…"
+                        : voiceStatus === "starting"
+                          ? "Starting microphone…"
+                          : "Dictate with voice (uses your ChatGPT/Codex subscription)")
+                  }
+                  type="button"
+                >
+                  <i
+                    class={`codicon ${
+                      voiceStatus === "transcribing" ||
+                      voiceStatus === "starting"
+                        ? "codicon-loading codicon-modifier-spin"
+                        : voiceStatus === "recording"
+                          ? "codicon-primitive-square"
+                          : "codicon-mic"
+                    }`}
+                  />
+                </button>
+              )}
               {(!contextMode || contextMode.actions) && streaming && (
                 <button
                   class="send-button stop-button"

@@ -227,6 +227,10 @@ import {
   extractPolishedPrompt,
 } from "./promptPolish.js";
 import { getApprovalResultAnnotation } from "./approvalResultAnnotation.js";
+import type {
+  VoiceInputAvailability,
+  VoiceInputService,
+} from "./voice/VoiceInputService.js";
 import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
@@ -682,6 +686,13 @@ export type ExtensionToWebview =
       type: "promptPolishResult";
       requestId: string;
       polished?: string;
+      error?: string;
+    }
+  | { type: "voiceInputAvailability"; availability: VoiceInputAvailability }
+  | {
+      type: "voiceInputResult";
+      requestId: string;
+      text?: string;
       error?: string;
     }
   | {
@@ -1377,6 +1388,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private agentPluginCatalogProvider: AgentPluginCatalogProvider | undefined;
   private mcpPolicyMutationProvider: McpPolicyMutationProvider | undefined;
   private detectRequestInputs = new Map<string, { detectKey: string }>();
+  private voiceInput?: VoiceInputService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -1508,6 +1520,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.voiceInput?.dispose();
     if (this.editorImageTempDirectory) {
       void fs.promises.rm(this.editorImageTempDirectory, {
         recursive: true,
@@ -3587,6 +3600,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       throw new Error("Model returned no usable text");
     }
     return polished;
+  }
+
+  /** Installs host microphone capture and Codex transcription. */
+  public setVoiceInputService(service: VoiceInputService): void {
+    this.voiceInput?.dispose();
+    this.voiceInput = service;
+    this.refreshVoiceInputAvailability();
+  }
+
+  public async getVoiceInputAvailability(options?: {
+    requireRecorder?: boolean;
+  }): Promise<VoiceInputAvailability> {
+    if (!this.voiceInput) {
+      return {
+        available: false,
+        hidden: true,
+        reason: "Voice input is not available.",
+      };
+    }
+    return await this.voiceInput.getAvailability(options);
+  }
+
+  /** Transcribes audio recorded by a remote client, such as the browser. */
+  public async transcribeVoiceAudio(audio: {
+    data: Uint8Array;
+    mimeType: string;
+  }): Promise<string> {
+    if (!this.voiceInput) throw new Error("Voice input is not available.");
+    return await this.voiceInput.transcribeAudio(audio);
+  }
+
+  /** Re-sends voice availability, e.g. after Codex sign-in/sign-out. */
+  public refreshVoiceInputAvailability(): void {
+    void this.getVoiceInputAvailability().then(
+      (availability) =>
+        this.postMessage({ type: "voiceInputAvailability", availability }),
+      (error: unknown) =>
+        this.log(`[voice-input] availability check failed: ${String(error)}`),
+    );
+  }
+
+  private async handleVoiceInputMessage(args: {
+    command: "voiceInputStart" | "voiceInputFinish" | "voiceInputCancel";
+    requestId: string;
+    ownerId: string;
+    connection?: ChatPaneConnection;
+  }): Promise<void> {
+    const reply = (message: ExtensionToWebview) =>
+      args.connection
+        ? args.connection.postMessage(message)
+        : this.postMessage(message);
+    const service = this.voiceInput;
+    try {
+      if (!service) throw new Error("Voice input is not available.");
+      let text: string | undefined;
+      if (args.command === "voiceInputStart") {
+        await service.start(args.ownerId);
+      } else if (args.command === "voiceInputFinish") {
+        text = await service.finish(args.ownerId);
+      } else {
+        service.cancel(args.ownerId);
+      }
+      reply({ type: "voiceInputResult", requestId: args.requestId, text });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`[voice-input] ${args.command} failed: ${message}`);
+      reply({
+        type: "voiceInputResult",
+        requestId: args.requestId,
+        error: message,
+      });
+    }
   }
 
   private async handlePolishPrompt(args: {
@@ -9389,6 +9474,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           subCommand,
           fullCommand,
           sessionId: sourceSessionId,
+          connection: context?.connection,
+        });
+        break;
+      }
+
+      case "voiceInputAvailabilityRequest": {
+        const availability = await this.getVoiceInputAvailability();
+        const message: ExtensionToWebview = {
+          type: "voiceInputAvailability",
+          availability,
+        };
+        if (context?.connection) context.connection.postMessage(message);
+        else this.postMessage(message);
+        break;
+      }
+
+      case "voiceInputStart":
+      case "voiceInputFinish":
+      case "voiceInputCancel": {
+        const requestId = String(msg.requestId ?? "");
+        const ownerId = String(msg.ownerId ?? "");
+        if (!requestId || !ownerId) break;
+        void this.handleVoiceInputMessage({
+          command: msg.command,
+          requestId,
+          ownerId,
           connection: context?.connection,
         });
         break;

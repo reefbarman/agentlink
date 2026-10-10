@@ -1,0 +1,39 @@
+/* Composer mic button. Bundled into chat.css and browser-gateway.css. */
+
+.send-button.voice-input-button {
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+.send-button.voice-input-button:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.send-button.voice-input-button.voice-input-recording {
+  background: var(--vscode-errorForeground, #f44);
+  color: var(--vscode-button-foreground, #fff);
+  animation: voice-input-pulse 1.4s ease-in-out infinite;
+}
+
+.send-button.voice-input-button.voice-input-recording:hover:not(:disabled) {
+  background: var(--vscode-errorForeground, #f44);
+  opacity: 0.9;
+}
+
+@keyframes voice-input-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--vscode-errorForeground, #f44) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px
+      color-mix(in srgb, var(--vscode-errorForeground, #f44) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .send-button.voice-input-button.voice-input-recording {
+    animation: none;
+  }
+}

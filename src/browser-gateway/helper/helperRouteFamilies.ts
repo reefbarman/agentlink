@@ -56,6 +56,8 @@ export type AskAgentRouteHandler =
   | "projectHandoffCancel"
   | "projectHandoffApprove"
   | "thinking"
+  | "voiceInput"
+  | "transcribe"
   | "send"
   | "retry"
   | "stop";
@@ -241,6 +243,12 @@ export const ASK_AGENT_ROUTES = [
     handler: "projectHandoffApprove",
   },
   { method: "POST", path: "/api/ask-agent/thinking", handler: "thinking" },
+  { method: "GET", path: "/api/ask-agent/voice-input", handler: "voiceInput" },
+  {
+    method: "POST",
+    path: "/api/ask-agent/transcribe",
+    handler: "transcribe",
+  },
   { method: "POST", path: "/api/ask-agent/send", handler: "send" },
   { method: "POST", path: "/api/ask-agent/retry", handler: "retry" },
   { method: "POST", path: "/api/ask-agent/stop", handler: "stop" },

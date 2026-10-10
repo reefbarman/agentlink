@@ -20,6 +20,10 @@ mac:
   category: public.app-category.productivity
   icon: ../assets/icon.png
   identity: null # Non-MAS Apple Development is signed by afterPack in development mode.
+  # Required for composer dictation; macOS denies microphone access without it.
+  # A hardened runtime would also need the com.apple.security.device.audio-input entitlement.
+  extendInfo:
+    NSMicrophoneUsageDescription: AgentLink uses the microphone when you dictate a message with the composer mic button.
   target:
     - dmg
     - zip

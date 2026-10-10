@@ -58,6 +58,11 @@ import {
 } from "./browserGatewayHttpRouter.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./dataPlane/limits.js";
 import { readJsonBody } from "./nodeHttpPrimitives.js";
+import { decodeVoiceTranscribeBody } from "./voiceInputHttp.js";
+import type {
+  VoiceInputAvailabilityResponse,
+  VoiceTranscribeResponse,
+} from "../shared/voiceInputProtocol.js";
 import { SseHub, type SsePublication } from "./SseHub.js";
 import {
   getDevelopmentStreamingBaselineMetrics,
@@ -437,6 +442,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/polish-prompt"),
         ({ req, res }) => this.handlePolishPromptAction(req, res),
         json("polish-prompt action failed"),
+      ),
+      route(
+        "GET",
+        pathExact("/api/voice-input"),
+        ({ req, res }) => this.handleVoiceInputAvailabilityRequest(req, res),
+        internal("voice-input availability request failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/transcribe"),
+        ({ req, res }) => this.handleTranscribeAction(req, res),
+        json("transcribe action failed"),
       ),
       route(
         "POST",
@@ -1041,6 +1058,56 @@ export class BrowserGatewayServer implements vscode.Disposable {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.writeJson(res, 200, { ok: false, error: message });
+    }
+  }
+
+  /** Browser voice input availability; recording happens on the device. */
+  private async handleVoiceInputAvailabilityRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const availability = await this.chatViewProvider.getVoiceInputAvailability({
+      requireRecorder: false,
+    });
+    this.writeJson(res, 200, {
+      available: availability.available,
+      ...(availability.available
+        ? {}
+        : { hidden: availability.hidden, reason: availability.reason }),
+    } satisfies VoiceInputAvailabilityResponse);
+  }
+
+  private async handleTranscribeAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const decoded = decodeVoiceTranscribeBody(await readJsonBody(req));
+    if (!decoded.ok) {
+      this.writeJson(res, decoded.status, { error: decoded.error });
+      return;
+    }
+    try {
+      const text = await this.chatViewProvider.transcribeVoiceAudio(
+        decoded.audio,
+      );
+      this.writeJson(res, 200, {
+        ok: true,
+        text,
+      } satisfies VoiceTranscribeResponse);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.writeJson(res, 200, {
+        ok: false,
+        error: message,
+      } satisfies VoiceTranscribeResponse);
     }
   }
 

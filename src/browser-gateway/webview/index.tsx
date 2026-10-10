@@ -1,4 +1,5 @@
 import "../../agent/webview/styles/chat.css";
+import "../../agent/webview/styles/voice-input.css";
 import "./styles.css";
 
 import { BrowserGatewayApp } from "./BrowserGatewayApp";

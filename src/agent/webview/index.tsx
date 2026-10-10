@@ -1,4 +1,5 @@
 import "./styles/chat.css";
+import "./styles/voice-input.css";
 
 import { App } from "./App";
 import { ErrorBoundary } from "../../shared/ui/ErrorBoundary";

@@ -140,6 +140,11 @@ import {
   createCodexUsageAdapter,
 } from "./agent/providers/index.js";
 import { CODEX_OAUTH_CREDENTIALS_STORAGE_KEY } from "./agent/providers/codex/CodexOAuthManager.js";
+import {
+  VoiceInputService,
+  createWorkerVoiceCapture,
+  getBundledRecorderUnavailableReason,
+} from "./agent/voice/VoiceInputService.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
@@ -178,6 +183,7 @@ import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { createFleetAutomationLifecycle } from "./agent/fleetAutomationLifecycle.js";
 import {
   agentLinkFetch,
+  agentLinkTranscriptionFetch,
   installAgentLinkHttpDispatcher,
 } from "./util/httpDispatcher.js";
 import {
@@ -1598,6 +1604,25 @@ export async function activate(
     }
   }
 
+  chatViewProvider.setVoiceInputService(
+    new VoiceInputService({
+      hasCodexSubscription: () => openAiCodexAuthManager.hasOAuth(),
+      credentialProvider: openAiCodexAuthManager.createCredentialProvider(),
+      // chatgpt.com challenges the extension host's default TLS handshake.
+      fetch: agentLinkTranscriptionFetch,
+      recorderUnavailableReason: () =>
+        getBundledRecorderUnavailableReason(context.extensionUri.fsPath),
+      startCapture: createWorkerVoiceCapture(
+        vscode.Uri.joinPath(
+          context.extensionUri,
+          "dist",
+          "voice-recorder-worker.js",
+        ).fsPath,
+      ),
+      log: agentLog,
+    }),
+  );
+
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog, {
     getTextVerbositySetting: () =>
       vscode.workspace
@@ -2030,6 +2055,7 @@ export async function activate(
   // Re-send model list to webview when OpenAI/Codex auth state changes.
   openAiCodexAuthManager.onAuthStateChanged = () => {
     chatViewProvider.refreshModels();
+    chatViewProvider.refreshVoiceInputAvailability();
     void publishBrowserGatewayModelCatalog();
     void grantBrowserGatewayModelCredentials();
   };

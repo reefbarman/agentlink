@@ -113,6 +113,7 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
+import { useHostVoiceInput } from "./useHostVoiceInput";
 import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   resolveOpenFileRequest,
@@ -408,6 +409,8 @@ export function App({
   useEffect(() => {
     vscodeApi.postMessage({ command: "releaseUpdateGet" });
   }, [vscodeApi]);
+  const { voiceInput, handleHostMessage: handleHostVoiceMessage } =
+    useHostVoiceInput(vscodeApi);
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
   const modelSetupState = useMemo(
@@ -1674,6 +1677,11 @@ export function App({
           }
           break;
         }
+
+        case "voiceInputAvailability":
+        case "voiceInputResult":
+          handleHostVoiceMessage(msg);
+          break;
 
         case "promptPolishResult": {
           const pending = pendingPromptPolishRef.current.get(msg.requestId);
@@ -4982,6 +4990,7 @@ export function App({
               onInterject={handleInterject}
               onStop={handleStop}
               onPolishPrompt={handlePolishPrompt}
+              voiceInput={voiceInput}
               streaming={state.streaming}
               reasoningEffort={
                 state.chatState.reasoningEffort ??
