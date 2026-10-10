@@ -32,6 +32,7 @@ import type {
 } from "@agentlink/protocol/chat-catalog";
 
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
@@ -212,7 +213,11 @@ export interface BrowserGatewayAskAgentSnapshot {
       agentWriteApproval: "prompt";
     };
   };
-  background: [];
+  /**
+   * Background agents of the active session. The VS Code gateway's Ask
+   * Agent has none; a host that runs them may fill this in.
+   */
+  background: BgSessionInfo[];
   diffs: [];
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion: 0;

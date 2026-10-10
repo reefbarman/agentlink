@@ -211,6 +211,14 @@ export interface WorkspaceHost {
   listBackgroundAgents(
     parentSessionId: string,
   ): ReturnType<WorkspaceBackgroundSupervisor["list"]>;
+  /**
+   * Read a background child's transcript through its parent. Throws
+   * `background_child_not_owned` unless the child belongs to that parent.
+   */
+  readBackgroundAgentSession(
+    parentSessionId: string,
+    childSessionId: string,
+  ): ReturnType<AgentEngine["sessions"]["hydrate"]>;
   listBackgroundApprovals(
     parentSessionId: string,
   ): ReturnType<WorkspaceBackgroundSupervisor["listPendingApprovals"]>;
@@ -1033,6 +1041,16 @@ export async function createWorkspaceHost(
     isBackgroundSession,
     listBackgroundAgents(parentSessionId) {
       return backgroundSupervisor?.list(parentSessionId) ?? [];
+    },
+    async readBackgroundAgentSession(parentSessionId, childSessionId) {
+      const owned = (backgroundSupervisor?.list(parentSessionId) ?? []).some(
+        (record) => record.childSessionId === childSessionId,
+      );
+      if (!owned) throw new Error("background_child_not_owned");
+      return await engine.sessions.hydrate({
+        principal,
+        sessionId: childSessionId,
+      });
     },
     listBackgroundApprovals(parentSessionId) {
       return backgroundSupervisor?.listPendingApprovals(parentSessionId) ?? [];

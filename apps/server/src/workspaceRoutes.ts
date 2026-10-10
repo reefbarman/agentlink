@@ -8,6 +8,7 @@ import {
 import type { CoreReasoningEffort } from "@agentlink/protocol";
 import type {
   WorkspaceBackgroundChange,
+  WorkspaceBackgroundRecord,
   WorkspaceHost,
 } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
@@ -69,6 +70,7 @@ export type AssistantWorkspaceHost = Pick<
   | "cancel"
   | "isBackgroundSession"
   | "listBackgroundAgents"
+  | "readBackgroundAgentSession"
   | "steerBackgroundAgent"
   | "stopBackgroundAgent"
   | "respondToBackgroundApproval"
@@ -191,6 +193,47 @@ export interface AssistantSessionOperations {
     projectId: string,
     sessionId: string,
   ): Promise<void>;
+  /**
+   * Background children of one foreground session. The parent session is
+   * the unit of access: a child is only reachable through the parent that
+   * owns it, and the host re-checks that ownership.
+   */
+  listAgents(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+  ): Promise<readonly WorkspaceBackgroundRecord[]>;
+  /** A child's task and transcript, read through its parent. */
+  readAgentTranscript(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    childSessionId: string,
+  ): Promise<{ readonly task: string; readonly messages: readonly unknown[] }>;
+  steerAgent(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    childSessionId: string,
+    message: string,
+  ): Promise<unknown>;
+  stopAgent(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    childSessionId: string,
+    reason?: string,
+  ): Promise<WorkspaceBackgroundRecord>;
+  answerAgentApproval(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    childSessionId: string,
+    answer: {
+      readonly interactionId: string;
+      readonly decision: "allow" | "deny";
+    },
+  ): Promise<WorkspaceBackgroundRecord>;
 }
 
 export interface AssistantWorkspaceRoutes {
@@ -648,6 +691,117 @@ export function createAssistantWorkspaceRoutes(
         await mount.host.cancel(sessionId, "cancelled_by_owner");
       }
     },
+    async listAgents(auth, projectId, sessionId) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "read");
+      await readSnapshot(mount, sessionId);
+      return callAgent(async () => mount.host.listBackgroundAgents(sessionId));
+    },
+    async readAgentTranscript(auth, projectId, sessionId, childSessionId) {
+      assertSessionId(sessionId);
+      assertAgentId(childSessionId);
+      const mount = await authorize(auth, projectId, "read");
+      await readSnapshot(mount, sessionId);
+      // Ownership: only a child of this parent is readable through it.
+      const agent = (
+        await callAgent(async () => mount.host.listBackgroundAgents(sessionId))
+      ).find((candidate) => candidate.childSessionId === childSessionId);
+      if (!agent) throw new HttpError(404, "agent_not_found");
+      const { record } = await callAgent(async () =>
+        mount.host.readBackgroundAgentSession(sessionId, childSessionId),
+      );
+      return { task: agent.task, messages: record.messages };
+    },
+    async steerAgent(auth, projectId, sessionId, childSessionId, message) {
+      assertSessionId(sessionId);
+      assertAgentId(childSessionId);
+      const mount = await authorize(auth, projectId, "write");
+      // The supervisor bounds steering by UTF-8 bytes.
+      if (
+        !message.trim() ||
+        Buffer.byteLength(message, "utf8") > MAX_STEERING_BYTES
+      ) {
+        throw new HttpError(400, "message_invalid");
+      }
+      if (closing) throw new HttpError(503, "server_closing");
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth);
+      const result = await callAgent(() =>
+        mount.host.steerBackgroundAgent({
+          callerSessionId: sessionId,
+          childSessionId,
+          message,
+        }),
+      );
+      hub.publish(sessionKey(projectId, sessionId), {
+        kind: "agent",
+        state: "steered",
+        childSessionId,
+        actor: actorOf(auth),
+      });
+      return result;
+    },
+    async stopAgent(auth, projectId, sessionId, childSessionId, reason) {
+      assertSessionId(sessionId);
+      assertAgentId(childSessionId);
+      const mount = await authorize(auth, projectId, "write");
+      if (
+        reason !== undefined &&
+        (!reason.trim() || reason.length > MAX_STOP_REASON_LENGTH)
+      ) {
+        throw new HttpError(400, "reason_invalid");
+      }
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth);
+      const agent = await callAgent(() =>
+        mount.host.stopBackgroundAgent({
+          callerSessionId: sessionId,
+          childSessionId,
+          reason: reason ?? "cancelled_by_owner",
+        }),
+      );
+      hub.publish(sessionKey(projectId, sessionId), {
+        kind: "agent",
+        state: "stopped",
+        childSessionId,
+        actor: actorOf(auth),
+      });
+      return agent;
+    },
+    async answerAgentApproval(
+      auth,
+      projectId,
+      sessionId,
+      childSessionId,
+      { interactionId, decision },
+    ) {
+      assertSessionId(sessionId);
+      assertAgentId(childSessionId);
+      // Same bar as a foreground approval.
+      const mount = await authorize(auth, projectId, "approve");
+      if (decision !== "allow" && decision !== "deny") {
+        throw new HttpError(400, "decision_invalid");
+      }
+      if (closing) throw new HttpError(503, "server_closing");
+      await readSnapshot(mount, sessionId);
+      await assertStillAuthorized(auth);
+      // The supervisor binds the decision to this exact pending interaction.
+      const agent = await callAgent(() =>
+        mount.host.respondToBackgroundApproval({
+          callerSessionId: sessionId,
+          childSessionId,
+          interactionId,
+          decision,
+        }),
+      );
+      hub.publish(sessionKey(projectId, sessionId), {
+        kind: "agent",
+        state: "approval_answered",
+        childSessionId,
+        actor: actorOf(auth),
+      });
+      return agent;
+    },
   };
 
   const handleRequest = async (
@@ -900,128 +1054,69 @@ export function createAssistantWorkspaceRoutes(
     if (!SESSION_ID_PATTERN.test(sessionId)) {
       throw new HttpError(404, "session_not_found");
     }
-    if (
-      childSessionId !== undefined &&
-      !SESSION_ID_PATTERN.test(childSessionId)
-    ) {
-      throw new HttpError(404, "agent_not_found");
-    }
-    const key = sessionKey(projectId, sessionId);
-    const actor = {
-      subjectId: auth.principal.subjectId,
-      deviceId: auth.session.deviceId,
-    };
-    const callAgent = async <T>(run: () => Promise<T>): Promise<T> => {
-      try {
-        return await run();
-      } catch (error) {
-        throw agentError(error);
-      }
-    };
+    if (childSessionId !== undefined) assertAgentId(childSessionId);
 
     if (operation === undefined) {
       if (method !== "GET") throw new HttpError(405, "method_not_allowed");
-      const mount = await authorize(auth, projectId, "read");
-      await readSnapshot(mount, sessionId);
-      const agents = await callAgent(async () =>
-        mount.host.listBackgroundAgents(sessionId),
-      );
+      const agents = await operations.listAgents(auth, projectId, sessionId);
       sendJson(response, 200, { agents });
       return;
     }
     if (method !== "POST") throw new HttpError(405, "method_not_allowed");
-    const target = {
-      callerSessionId: sessionId,
-      childSessionId: childSessionId!,
-    };
+    const child = childSessionId!;
 
     if (operation === "steer") {
-      const mount = await authorize(auth, projectId, "write");
+      await authorize(auth, projectId, "write");
       const body = await readJsonBody(request, 128 * 1024, auth.signal);
-      const message = stringField(body, "message");
-      // The supervisor bounds steering by UTF-8 bytes.
-      if (
-        !message.trim() ||
-        Buffer.byteLength(message, "utf8") > MAX_STEERING_BYTES
-      ) {
-        throw new HttpError(400, "message_invalid");
-      }
-      if (closing) throw new HttpError(503, "server_closing");
-      await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth);
-      const result = await callAgent(() =>
-        mount.host.steerBackgroundAgent({ ...target, message }),
+      const result = await operations.steerAgent(
+        auth,
+        projectId,
+        sessionId,
+        child,
+        stringField(body, "message"),
       );
-      hub.publish(key, {
-        kind: "agent",
-        state: "steered",
-        childSessionId: target.childSessionId,
-        actor,
-      });
       sendJson(response, 202, result);
       return;
     }
 
     if (operation === "stop") {
-      const mount = await authorize(auth, projectId, "write");
+      await authorize(auth, projectId, "write");
       let reason: string | undefined;
       if (hasRequestBody(request)) {
         const body = await readJsonBody(request, undefined, auth.signal);
         const value = body.reason;
         if (value !== undefined) {
-          if (
-            typeof value !== "string" ||
-            !value.trim() ||
-            value.length > MAX_STOP_REASON_LENGTH
-          ) {
+          if (typeof value !== "string") {
             throw new HttpError(400, "reason_invalid");
           }
           reason = value;
         }
       }
-      await readSnapshot(mount, sessionId);
-      await assertStillAuthorized(auth);
-      const agent = await callAgent(() =>
-        mount.host.stopBackgroundAgent({
-          ...target,
-          reason: reason ?? "cancelled_by_owner",
-        }),
+      const agent = await operations.stopAgent(
+        auth,
+        projectId,
+        sessionId,
+        child,
+        reason,
       );
-      hub.publish(key, {
-        kind: "agent",
-        state: "stopped",
-        childSessionId: target.childSessionId,
-        actor,
-      });
       sendJson(response, 200, { agent });
       return;
     }
 
-    // operation === "approval": same bar as a foreground approval.
-    const mount = await authorize(auth, projectId, "approve");
+    // operation === "approval"
+    await authorize(auth, projectId, "approve");
     const body = await readJsonBody(request, undefined, auth.signal);
-    const interactionId = stringField(body, "interactionId");
     const decision = stringField(body, "decision");
     if (decision !== "allow" && decision !== "deny") {
       throw new HttpError(400, "decision_invalid");
     }
-    if (closing) throw new HttpError(503, "server_closing");
-    await readSnapshot(mount, sessionId);
-    await assertStillAuthorized(auth);
-    // The supervisor binds the decision to this exact pending interaction.
-    const agent = await callAgent(() =>
-      mount.host.respondToBackgroundApproval({
-        ...target,
-        interactionId,
-        decision,
-      }),
+    const agent = await operations.answerAgentApproval(
+      auth,
+      projectId,
+      sessionId,
+      child,
+      { interactionId: stringField(body, "interactionId"), decision },
     );
-    hub.publish(key, {
-      kind: "agent",
-      state: "approval_answered",
-      childSessionId: target.childSessionId,
-      actor,
-    });
     sendJson(response, 200, { agent });
   };
 
@@ -1192,6 +1287,28 @@ export function createAssistantWorkspaceRoutes(
       }
       await Promise.all(running.map((task) => task.done));
     },
+  };
+}
+
+/** Run a background supervisor call, mapping its failures to HTTP errors. */
+async function callAgent<T>(run: () => T | Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw agentError(error);
+  }
+}
+
+function assertAgentId(childSessionId: string): void {
+  if (!SESSION_ID_PATTERN.test(childSessionId)) {
+    throw new HttpError(404, "agent_not_found");
+  }
+}
+
+function actorOf(auth: AssistantServerAuth) {
+  return {
+    subjectId: auth.principal.subjectId,
+    deviceId: auth.session.deviceId,
   };
 }
 

@@ -27,8 +27,15 @@ import {
   type SsePublication,
 } from "../../../src/browser-gateway/SseHub.js";
 import { agentMessagesToChatMessages } from "../../../src/shared/chatProjection.js";
+import type { WorkspaceBackgroundRecord } from "@agentlink/workspace-host";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { writeFileAtomic } from "./atomicFile.js";
+import {
+  agentApprovalRequest,
+  isActiveAgent,
+  parseAgentApprovalId,
+  toAgentCard,
+} from "./backgroundAgentCards.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type {
@@ -51,6 +58,12 @@ const MAX_TITLE_LENGTH = 200;
 const MAX_APPROVAL_DETAIL_LENGTH = 4_000;
 const MAX_TOOL_RESULT_LENGTH = 20_000;
 const SSE_REVALIDATE_MS = 60_000;
+/**
+ * How often running background agents are re-read while one is active:
+ * their output preview changes without a lifecycle event.
+ */
+const AGENT_REFRESH_MS = 2_000;
+const MAX_STEERING_BYTES = 64 * 1024;
 const CREDENTIAL_STATUS: BrowserGatewayModelCredentialStatus = {
   state: "not_required",
   providerId: "agentlink-server",
@@ -103,6 +116,8 @@ export interface AskAgentBridgeOptions {
   readonly stateFile: string;
   readonly theme?: BrowserGatewayThemeSnapshot;
   readonly now?: () => number;
+  /** Background agent refresh interval while one is active (tests). */
+  readonly agentRefreshMs?: number;
 }
 
 export interface AskAgentBridge {
@@ -249,14 +264,47 @@ export async function createAskAgentBridge(
     return stateWrite;
   };
 
-  const project = () =>
-    controller.projectState({
+  /**
+   * Background agents of the open chat's workspace session. Only that chat
+   * is watched: the Agent Fleet strip shows the chat on screen.
+   */
+  const agentWatch: {
+    sessionId: string | undefined;
+    subscription: { unsubscribe(): void } | undefined;
+    auth: AssistantServerAuth | undefined;
+    records: readonly WorkspaceBackgroundRecord[];
+    refreshing: Promise<void> | undefined;
+    again: boolean;
+    timer: ReturnType<typeof setTimeout> | undefined;
+  } = {
+    sessionId: undefined,
+    subscription: undefined,
+    auth: undefined,
+    records: [],
+    refreshing: undefined,
+    again: false,
+    timer: undefined,
+  };
+
+  const project = () => {
+    const state = controller.projectState({
       now: now(),
       theme,
       modelCredentialStatus: CREDENTIAL_STATUS,
-      approval: controller.getPendingApproval(),
+      // A chat's own approval first; then a background agent's.
+      approval:
+        controller.getPendingApproval() ??
+        agentApprovalRequest(agentWatch.records),
       memoryCandidateNudge: null,
     });
+    return {
+      ...state,
+      snapshot: {
+        ...state.snapshot,
+        background: agentWatch.records.map(toAgentCard),
+      },
+    };
+  };
   const snapshotResponse = () => ({ ok: true as const, ...project() });
   const publishNow = () => controller.publishSnapshot(project().snapshot);
   const schedule = () => {
@@ -317,6 +365,85 @@ export async function createAskAgentBridge(
     state.aliases[storeSessionId] ??
     (sessionModels.has(storeSessionId) ? storeSessionId : undefined);
 
+  /** Re-read the watched chat's agents; overlapping calls coalesce. */
+  const refreshAgents = (): Promise<void> => {
+    if (agentWatch.refreshing) {
+      agentWatch.again = true;
+      return agentWatch.refreshing;
+    }
+    agentWatch.refreshing = (async () => {
+      do {
+        agentWatch.again = false;
+        const sessionId = agentWatch.sessionId;
+        const auth = agentWatch.auth;
+        if (!sessionId || !auth || closed) return;
+        let records: readonly WorkspaceBackgroundRecord[];
+        try {
+          records = await operations.listAgents(auth, projectId, sessionId);
+        } catch {
+          // Keep the last known cards; a later event or request retries.
+          return;
+        }
+        // The chat changed while reading: read the new one.
+        if (agentWatch.sessionId !== sessionId) {
+          agentWatch.again = true;
+          continue;
+        }
+        agentWatch.records = records;
+        schedule();
+      } while (agentWatch.again);
+    })().finally(() => {
+      agentWatch.refreshing = undefined;
+      if (agentWatch.timer) clearTimeout(agentWatch.timer);
+      agentWatch.timer = undefined;
+      if (!closed && agentWatch.records.some(isActiveAgent)) {
+        agentWatch.timer = setTimeout(
+          () => void refreshAgents(),
+          options.agentRefreshMs ?? AGENT_REFRESH_MS,
+        );
+        agentWatch.timer.unref?.();
+      }
+    });
+    return agentWatch.refreshing;
+  };
+
+  /** Follow the open chat's workspace session, if it has one. */
+  const watchActiveAgents = (auth: AssistantServerAuth) => {
+    // Agent reads only need project read access, which the principal keeps
+    // for its lifetime; the latest signed-in request is used.
+    agentWatch.auth = auth;
+    const sessionId = workspaceSessionFor(store.getActiveSessionId());
+    if (sessionId === agentWatch.sessionId) return;
+    agentWatch.subscription?.unsubscribe();
+    agentWatch.subscription = undefined;
+    agentWatch.sessionId = sessionId;
+    agentWatch.records = [];
+    if (!sessionId || closed) return;
+    const key = operations.sessionKey(projectId, sessionId);
+    agentWatch.subscription = options.events.subscribe(
+      key,
+      options.events.latestSequence(key),
+      ({ event }) => {
+        if (event.kind === "agent") void refreshAgents();
+      },
+    );
+    void refreshAgents();
+  };
+
+  /** The watched chat's agent with this ID, or a 404. */
+  const watchedAgent = (childSessionId: string) => {
+    const parent = agentWatch.sessionId;
+    if (
+      !parent ||
+      !agentWatch.records.some(
+        (record) => record.childSessionId === childSessionId,
+      )
+    ) {
+      throw new HttpError(404, "agent_not_found");
+    }
+    return parent;
+  };
+
   const activityOf = (
     storeSessionId: string,
   ): ChatSessionActivity | undefined => {
@@ -327,7 +454,21 @@ export async function createAskAgentBridge(
     ) {
       return "needs-you";
     }
+    const watched =
+      workspaceSessionId !== undefined &&
+      workspaceSessionId === agentWatch.sessionId;
+    if (
+      watched &&
+      agentWatch.records.some(
+        (record) => record.lifecycle === "awaiting_approval",
+      )
+    ) {
+      return "needs-you";
+    }
     if (runningSession === storeSessionId && controller.hasActiveTurn()) {
+      return "running";
+    }
+    if (watched && agentWatch.records.some(isActiveAgent)) {
       return "running";
     }
     if (workspaceSessionId && state.unread.includes(workspaceSessionId)) {
@@ -670,6 +811,8 @@ export async function createAskAgentBridge(
       }
       const workspaceSessionId = await ensureWorkspaceSession(auth);
       const storeSessionId = store.getActiveSessionId();
+      // A new chat's session exists now: watch it for agents it starts.
+      watchActiveAgents(auth);
       markRead(storeSessionId);
       store.appendUserMessage({ ...(id ? { id } : {}), text, now: now() });
       const assistant = store.startAssistantMessage({ now: now() });
@@ -715,6 +858,27 @@ export async function createAskAgentBridge(
     const body = await readJsonBody(request, undefined, auth.signal);
     if (typeof body.id !== "string" || typeof body.decision !== "string") {
       throw new HttpError(400, "invalid_request");
+    }
+    const agentApproval = parseAgentApprovalId(body.id);
+    if (agentApproval) {
+      const shown = agentApprovalRequest(agentWatch.records);
+      if (!shown || shown.id !== body.id) {
+        throw new HttpError(404, "approval_not_found");
+      }
+      await operations.answerAgentApproval(
+        auth,
+        projectId,
+        watchedAgent(agentApproval.childSessionId),
+        agentApproval.childSessionId,
+        {
+          interactionId: agentApproval.interactionId,
+          decision: ALLOW_DECISIONS.has(body.decision) ? "allow" : "deny",
+        },
+      );
+      await refreshAgents();
+      const publication = await publishNow();
+      sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
+      return;
     }
     const pending = pendingInteraction;
     const approval = controller.getPendingApproval();
@@ -811,7 +975,73 @@ export async function createAskAgentBridge(
     if (auth.signal.aborted) stop();
   };
 
+  /** The open chat's background agents: transcript, stop, and steer. */
+  const handleBackground = async (
+    pathname: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    auth: AssistantServerAuth,
+  ) => {
+    const body = await readJsonBody(
+      request,
+      MAX_STEERING_BYTES * 2,
+      auth.signal,
+    );
+    const childSessionId =
+      typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+    // Through the open chat only, as in the VS Code fleet.
+    if (!childSessionId) throw new HttpError(400, "invalid_request");
+    const parent = watchedAgent(childSessionId);
+    switch (pathname) {
+      case "/api/ask-agent/background/transcript": {
+        const transcript = await operations.readAgentTranscript(
+          auth,
+          projectId,
+          parent,
+          childSessionId,
+        );
+        sendJson(response, 200, {
+          ok: true,
+          transcript: { sessionId: childSessionId, ...transcript },
+        });
+        return;
+      }
+      case "/api/ask-agent/background/stop":
+        await operations.stopAgent(auth, projectId, parent, childSessionId);
+        break;
+      case "/api/ask-agent/background/steer": {
+        const message = typeof body.message === "string" ? body.message : "";
+        await operations.steerAgent(
+          auth,
+          projectId,
+          parent,
+          childSessionId,
+          message,
+        );
+        break;
+      }
+      default:
+        throw new HttpError(404, "not_found");
+    }
+    await refreshAgents();
+    await publishNow();
+    sendJson(response, 200, { ok: true });
+  };
+
   const handleRequest = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    auth: AssistantServerAuth,
+  ): Promise<boolean> => {
+    try {
+      return await routeRequest(request, response, auth);
+    } finally {
+      // Follow chat switches, new chats, and deletions.
+      if (!closed) watchActiveAgents(auth);
+    }
+  };
+
+  const routeRequest = async (
     request: IncomingMessage,
     response: ServerResponse,
     auth: AssistantServerAuth,
@@ -861,6 +1091,11 @@ export async function createAskAgentBridge(
       throw new HttpError(404, "not_found");
     }
     if (method !== "POST") throw new HttpError(405, "method_not_allowed");
+
+    if (pathname.startsWith("/api/ask-agent/background/")) {
+      await handleBackground(pathname, request, response, auth);
+      return true;
+    }
 
     switch (pathname) {
       case "/api/ask-agent/send":
@@ -1003,6 +1238,9 @@ export async function createAskAgentBridge(
     },
     async close() {
       closed = true;
+      agentWatch.subscription?.unsubscribe();
+      if (agentWatch.timer) clearTimeout(agentWatch.timer);
+      await agentWatch.refreshing;
       await controller.dispose();
       sse.dispose();
       await stateWrite.catch(() => undefined);

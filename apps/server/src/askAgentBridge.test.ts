@@ -17,6 +17,7 @@ import {
   type AssistantSessionEvent,
 } from "./SessionEventHub.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
+import type { WorkspaceBackgroundRecord } from "@agentlink/workspace-host";
 
 const MODEL: AgentModelReference = {
   providerId: "fixture",
@@ -59,6 +60,7 @@ function createFakeOperations(events: SessionEventHub) {
       messages: unknown[];
     }
   >();
+  const agents = new Map<string, WorkspaceBackgroundRecord[]>();
   let next = 0;
   const key = (projectId: string, sessionId: string) =>
     `${projectId}/${sessionId}`;
@@ -126,10 +128,52 @@ function createFakeOperations(events: SessionEventHub) {
       run(sessionId),
     ),
     cancel: vi.fn(async () => undefined),
+    listAgents: vi.fn(
+      async (_auth, _projectId, sessionId: string) =>
+        agents.get(sessionId) ?? [],
+    ),
+    readAgentTranscript: vi.fn(
+      async (_auth, _projectId, sessionId: string, childSessionId: string) => {
+        const agent = (agents.get(sessionId) ?? []).find(
+          (record) => record.childSessionId === childSessionId,
+        );
+        if (!agent) throw new HttpError(404, "agent_not_found");
+        return {
+          task: agent.task,
+          messages: [{ role: "assistant", content: "child says hi" }],
+        };
+      },
+    ),
+    steerAgent: vi.fn(async () => ({ queued: 1 })),
+    stopAgent: vi.fn(
+      async (_auth, _projectId, sessionId: string, childSessionId: string) =>
+        updateAgent(sessionId, childSessionId, { lifecycle: "cancelled" }),
+    ),
+    answerAgentApproval: vi.fn(
+      async (_auth, _projectId, sessionId: string, childSessionId: string) =>
+        updateAgent(sessionId, childSessionId, {
+          lifecycle: "running",
+          approval: undefined,
+        }),
+    ),
   } satisfies AssistantSessionOperations;
+  function updateAgent(
+    sessionId: string,
+    childSessionId: string,
+    patch: Partial<WorkspaceBackgroundRecord>,
+  ): WorkspaceBackgroundRecord {
+    const list = agents.get(sessionId) ?? [];
+    const index = list.findIndex(
+      (record) => record.childSessionId === childSessionId,
+    );
+    const updated = { ...list[index]!, ...patch };
+    list[index] = updated;
+    return updated;
+  }
   return {
     operations,
     sessions,
+    agents,
     turn,
     publish,
     setScript(next: (sessionId: string, taskId: string) => void) {
@@ -143,6 +187,7 @@ async function startBridge(
   options: {
     readonly signal?: AbortSignal;
     readonly defaults?: Parameters<typeof createAskAgentBridge>[0]["defaults"];
+    readonly agentRefreshMs?: number;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -169,6 +214,9 @@ async function startBridge(
     },
     stateFile: file,
     ...(options.defaults ? { defaults: options.defaults } : {}),
+    ...(options.agentRefreshMs
+      ? { agentRefreshMs: options.agentRefreshMs }
+      : {}),
   });
   const auth: AssistantServerAuth = {
     principal: { tenantId: "agentlink-server", subjectId: "owner" },
@@ -316,6 +364,165 @@ describe("Ask Agent bridge", () => {
       "ws-1",
       "again",
     );
+  });
+
+  it("shows the open chat's background agents, their approvals and transcripts", async () => {
+    const { fake, call } = await startBridge(undefined, {
+      agentRefreshMs: 20,
+    });
+    const child = (
+      patch: Partial<WorkspaceBackgroundRecord> = {},
+    ): WorkspaceBackgroundRecord =>
+      ({
+        schemaVersion: 1,
+        childSessionId: "child-1",
+        parentSessionId: "ws-1",
+        parentTurnId: "turn-1",
+        rootSessionId: "ws-1",
+        projectId: "home",
+        depth: 1,
+        task: "Review the change",
+        scopes: [],
+        model: REVIEW,
+        lifecycle: "running",
+        phase: "responding",
+        resultState: "running",
+        createdAt: 10,
+        updatedAt: 20,
+        startedAt: 11,
+        partialOutput: "Looking at notes.md",
+        steeringQueued: 0,
+        ...patch,
+      }) as WorkspaceBackgroundRecord;
+    fake.setScript((sessionId, taskId) => {
+      // The turn starts a child, which outlives it.
+      fake.agents.set(sessionId, [child()]);
+      fake.publish(sessionId, {
+        kind: "agent",
+        state: "updated",
+        childSessionId: "child-1",
+        lifecycle: "running",
+        phase: "responding",
+      });
+      fake.turn(sessionId, {
+        type: "turn.completed",
+        result: { text: "Started a review" },
+      });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    await call("/api/ask-agent/send", { text: "get a review" });
+
+    const card = await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      const background = (body.snapshot as { background: unknown[] })
+        .background;
+      expect(background).toHaveLength(1);
+      return background[0];
+    });
+    expect(card).toMatchObject({
+      id: "child-1",
+      task: "Review the change",
+      status: "streaming",
+      resolvedModel: "claude-review",
+      streamingText: "Looking at notes.md",
+      canKill: true,
+    });
+    // The chat reports as running while its agent works.
+    const listed = await call("/api/ask-agent/sessions");
+    expect(
+      (listed.body.sessions as Array<{ activity?: string }>)[0]?.activity,
+    ).toBe("running");
+
+    // A child waiting for the owner gets the normal approval card,
+    // attributed to the agent; the decision goes to that child.
+    fake.agents.set("ws-1", [
+      child({
+        lifecycle: "awaiting_approval",
+        approval: {
+          interactionId: "int-7",
+          source: "durable_interaction",
+          toolName: "execute_command",
+          summary: "Run npm test",
+          createdAt: 30,
+        },
+      }),
+    ]);
+    const approval = await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      const pending = (
+        body.snapshot as {
+          ui: { approval: { id: string; backgroundTask?: string } | null };
+        }
+      ).ui.approval;
+      expect(pending?.id).toBe("agent-approval:child-1:int-7");
+      return pending!;
+    });
+    expect(approval.backgroundTask).toBe("Review the change");
+    const answered = await call("/api/ask-agent/approval", {
+      id: approval.id,
+      decision: "accept",
+    });
+    expect(answered.status).toBe(200);
+    expect(fake.operations.answerAgentApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      "child-1",
+      { interactionId: "int-7", decision: "allow" },
+    );
+    expect(snapshotOf(answered.body).ui.approval).toBeNull();
+
+    const transcript = await call("/api/ask-agent/background/transcript", {
+      sessionId: "child-1",
+    });
+    expect(transcript.body).toEqual({
+      ok: true,
+      transcript: {
+        sessionId: "child-1",
+        task: "Review the change",
+        messages: [{ role: "assistant", content: "child says hi" }],
+      },
+    });
+    expect(
+      (
+        await call("/api/ask-agent/background/steer", {
+          sessionId: "child-1",
+          message: "wrap up",
+        })
+      ).status,
+    ).toBe(200);
+    expect(fake.operations.steerAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      "child-1",
+      "wrap up",
+    );
+    await call("/api/ask-agent/background/stop", { sessionId: "child-1" });
+    const stopped = await call("/api/ask-agent/session");
+    expect(
+      (stopped.body.snapshot as { background: Array<{ status: string }> })
+        .background[0]?.status,
+    ).toBe("cancelled");
+
+    // Only the open chat's agents are reachable.
+    expect(
+      (
+        await call("/api/ask-agent/background/transcript", {
+          sessionId: "someone-else",
+        })
+      ).status,
+    ).toBe(404);
+    await call("/api/ask-agent/session/new", {});
+    const fresh = await call("/api/ask-agent/session");
+    expect(
+      (fresh.body.snapshot as { background: unknown[] }).background,
+    ).toEqual([]);
   });
 
   it("surfaces an approval and resumes the turn with the decision", async () => {

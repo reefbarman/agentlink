@@ -7,7 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createAssistantServer } from "./assistantServer.js";
+import {
+  createAssistantServer,
+  type AssistantServerAuth,
+} from "./assistantServer.js";
 import { commandHostOptions } from "./assistantService.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { startCommandWorker } from "./commandWorker.js";
@@ -1145,6 +1148,40 @@ describe("assistant workspace routes", () => {
     await expect(
       fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
     ).resolves.toBe("from child\n");
+
+    // The child's transcript is readable through its parent only.
+    const auth: AssistantServerAuth = {
+      principal: {
+        tenantId: "agentlink-server",
+        subjectId: harness.server.store.ownerId!,
+      },
+      session: {
+        ownerId: harness.server.store.ownerId!,
+        sessionId: "s",
+        deviceId: owner.deviceId,
+        deviceLabel: "Laptop",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+    };
+    const transcript = await harness.routes.operations.readAgentTranscript(
+      auth,
+      "home",
+      sessionId,
+      agent.childSessionId,
+    );
+    expect(transcript.task).toBe("Write child.txt");
+    expect(JSON.stringify(transcript.messages)).toContain("write child.txt");
+    await expect(
+      harness.routes.operations.readAgentTranscript(
+        auth,
+        "home",
+        agent.childSessionId,
+        sessionId,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
   });
 
   it("steers and stops a running agent, scoped to its parent", async () => {

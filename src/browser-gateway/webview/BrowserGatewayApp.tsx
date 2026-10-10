@@ -3008,23 +3008,49 @@ export function BrowserGatewayApp({
         : undefined,
     [background, transcriptView],
   );
+  // The Assistant reaches the open chat's background agents through its Ask
+  // Agent bridge (cookie auth): transcript, stop and steer only. Workspace
+  // tabs use the mirrored VS Code window's background API.
+  const assistantFleet = product === "assistant" && isAskAgentSelected;
+  const postBackground = useCallback(
+    (
+      endpoint: "stop" | "open-transcript" | "action",
+      body: Record<string, unknown>,
+    ): Promise<Response> => {
+      if (assistantFleet) {
+        const route =
+          endpoint === "open-transcript"
+            ? "transcript"
+            : endpoint === "action"
+              ? "steer"
+              : "stop";
+        return fetch(`/api/ask-agent/background/${route}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+      return fetch(buildApiPath(`/api/background/${endpoint}`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+    },
+    [assistantFleet, authToken, buildApiPath],
+  );
   useEffect(() => {
     if (!transcriptView?.visible || !openTranscriptBackground) return;
     let cancelled = false;
     const sessionId = transcriptView.sessionId;
     void (async () => {
       try {
-        const response = await fetch(
-          buildApiPath("/api/background/open-transcript"),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ sessionId }),
-          },
-        );
+        const response = await postBackground("open-transcript", {
+          sessionId,
+        });
         const body = (await response.json()) as {
           ok?: boolean;
           transcript?: {
@@ -3058,8 +3084,7 @@ export function BrowserGatewayApp({
       cancelled = true;
     };
   }, [
-    authToken,
-    buildApiPath,
+    postBackground,
     openTranscriptBackground?.completedAt,
     openTranscriptBackground?.errorMessage,
     openTranscriptBackground?.lastActiveAt,
@@ -7026,14 +7051,7 @@ export function BrowserGatewayApp({
   const handleStopBackground = (sessionId: string): void => {
     void (async () => {
       try {
-        const response = await fetch(buildApiPath("/api/background/stop"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({ sessionId }),
-        });
+        const response = await postBackground("stop", { sessionId });
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
@@ -7065,17 +7083,9 @@ export function BrowserGatewayApp({
     }
     void (async () => {
       try {
-        const response = await fetch(
-          buildApiPath("/api/background/open-transcript"),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ sessionId }),
-          },
-        );
+        const response = await postBackground("open-transcript", {
+          sessionId,
+        });
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
@@ -7124,21 +7134,21 @@ export function BrowserGatewayApp({
     sessionId: string,
     message?: string,
   ): void => {
-    void fetch(buildApiPath("/api/background/action"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
+    // The Assistant's agents support steering only.
+    if (assistantFleet && action !== "steer") return;
+    void postBackground("action", { action, sessionId, message }).then(
+      async (response) => {
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+        };
+        setModeStatus(
+          body.ok
+            ? `Background ${action} accepted`
+            : `${action} failed: ${body.error ?? response.status}`,
+        );
       },
-      body: JSON.stringify({ action, sessionId, message }),
-    }).then(async (response) => {
-      const body = (await response.json()) as { ok?: boolean; error?: string };
-      setModeStatus(
-        body.ok
-          ? `Background ${action} accepted`
-          : `${action} failed: ${body.error ?? response.status}`,
-      );
-    });
+    );
   };
 
   const handleAskAgentExecuteBuiltinCommand = (
@@ -8983,6 +8993,7 @@ export function BrowserGatewayApp({
                   )}
                   sessions={background}
                   workspaceActionsEnabled={!isAskAgentSelected}
+                  fleetActionsEnabled={!isAskAgentSelected || assistantFleet}
                   onOpenFile={(filePath, line) =>
                     openFileHandler?.(filePath, line)
                   }
@@ -10311,6 +10322,18 @@ export function BrowserGatewayApp({
                     className="browser-streaming-row"
                   />
                 ) : null}
+                {assistantFleet && !mobileReviewOpen && (
+                  <BackgroundSessionStrip
+                    key={foreground?.sessionId ?? selectedTabId}
+                    sessions={background}
+                    showFleetRequest={showFleetRequest}
+                    onStop={handleStopBackground}
+                    onOpenTranscript={handleOpenBgTranscript}
+                    onSteer={(sessionId, message) =>
+                      handleBackgroundAction("steer", sessionId, message)
+                    }
+                  />
+                )}
                 {!isAskAgentSelected && !mobileReviewOpen && (
                   <BackgroundSessionStrip
                     key={foreground?.sessionId ?? selectedTabId}
