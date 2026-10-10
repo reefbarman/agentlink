@@ -53,6 +53,8 @@ export interface BrowserGatewayBootConfig {
   readonly workspaceName: string;
   readonly routeByInstance: boolean;
   readonly askAgentOnly: boolean;
+  /** Present the Ask Agent shell as another product (its name, copy, accent). */
+  readonly product?: "assistant";
   readonly initialTheme: BrowserGatewayThemeSnapshot;
   readonly dataPlaneMode: BrowserGatewayDataPlaneMode;
 }
@@ -67,6 +69,10 @@ export function renderBrowserGatewayIndexHtml(options: {
   readonly assetVersion: string;
   readonly applicationName?: string;
   readonly title?: string;
+  /** Home-screen name; defaults to AgentLink. */
+  readonly shortName?: string;
+  /** Browser chrome color; defaults to the AgentLink teal. */
+  readonly themeColor?: string;
   readonly config: BrowserGatewayBootConfig;
   /** CSP nonce for the inline boot script, when the page sets a CSP. */
   readonly nonce?: string;
@@ -81,9 +87,9 @@ export function renderBrowserGatewayIndexHtml(options: {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="application-name" content="${htmlEscape(options.applicationName ?? "AgentLink Remote")}">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="AgentLink">
+  <meta name="apple-mobile-web-app-title" content="${htmlEscape(options.shortName ?? "AgentLink")}">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#4EC9B0">
+  <meta name="theme-color" content="${htmlEscape(options.themeColor ?? "#4EC9B0")}">
   <title>${htmlEscape(options.title ?? "AgentLink Browser Gateway")}</title>
   ${renderThemeStyleTag(config.initialTheme)}
   <link rel="icon" type="image/svg+xml" href="${AGENTLINK_ICON_SVG_PATH}?v=${assetVersion}">
@@ -101,7 +107,7 @@ export function renderBrowserGatewayIndexHtml(options: {
       currentInstanceId: ${inlineScriptJson(config.currentInstanceId)},
       workspaceName: ${inlineScriptJson(config.workspaceName)},
       routeByInstance: ${inlineScriptJson(config.routeByInstance)},
-      askAgentOnly: ${inlineScriptJson(config.askAgentOnly)},
+      askAgentOnly: ${inlineScriptJson(config.askAgentOnly)},${config.product ? `\n      product: ${inlineScriptJson(config.product)},` : ""}
       initialTheme: ${inlineScriptJson(config.initialTheme)},
       dataPlaneMode: ${inlineScriptJson(config.dataPlaneMode)}
     };
@@ -111,6 +117,22 @@ export function renderBrowserGatewayIndexHtml(options: {
 </html>`;
 }
 
+/** Name and accent colours for a server-rendered pairing page. */
+export interface PairingPageBrand {
+  readonly name: string;
+  readonly accent: string;
+  readonly accentHover: string;
+  /** Focus ring around the code input, usually the accent at low alpha. */
+  readonly accentRing: string;
+}
+
+const AGENTLINK_PAIRING_BRAND: PairingPageBrand = {
+  name: "AgentLink",
+  accent: "#4EC9B0",
+  accentHover: "#5ed7bf",
+  accentRing: "rgba(78,201,176,0.2)",
+};
+
 export function renderBrowserGatewayPairingHtml(options: {
   readonly errorMessage: string | null;
   /** Where the user finds the code. */
@@ -118,7 +140,10 @@ export function renderBrowserGatewayPairingHtml(options: {
   readonly footnote?: string;
   /** Prefills the code, for a sign-in link that carries it. */
   readonly code?: string;
+  /** Product name and accent; defaults to AgentLink teal. */
+  readonly brand?: PairingPageBrand;
 }): string {
+  const brand = options.brand ?? AGENTLINK_PAIRING_BRAND;
   const errorBlock = options.errorMessage
     ? `<p class="pair-error" role="alert">${htmlEscape(options.errorMessage)}</p>`
     : "";
@@ -137,9 +162,14 @@ export function renderBrowserGatewayPairingHtml(options: {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pair with AgentLink</title>
+  <title>Pair with ${htmlEscape(brand.name)}</title>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --accent: ${cssValueEscape(brand.accent)};
+      --accent-hover: ${cssValueEscape(brand.accentHover)};
+      --accent-ring: ${cssValueEscape(brand.accentRing)};
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: #1e1e1e;
@@ -166,10 +196,10 @@ export function renderBrowserGatewayPairingHtml(options: {
       gap: 10px;
       font-weight: 600;
       letter-spacing: 0.02em;
-      color: #4EC9B0;
+      color: var(--accent);
       margin-bottom: 18px;
     }
-    .pair-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: #4EC9B0; }
+    .pair-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
     h1 { margin: 0 0 6px; font-size: 20px; }
     p { margin: 8px 0 16px; line-height: 1.5; font-size: 14px; color: #bbb; }
     .pair-error {
@@ -194,26 +224,26 @@ export function renderBrowserGatewayPairingHtml(options: {
     }
     input[name="code"]:focus {
       outline: none;
-      border-color: #4EC9B0;
-      box-shadow: 0 0 0 3px rgba(78,201,176,0.2);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-ring);
     }
     button {
       font-size: 15px;
       padding: 12px;
       border-radius: 10px;
       border: 0;
-      background: #4EC9B0;
+      background: var(--accent);
       color: #111;
       font-weight: 600;
       cursor: pointer;
     }
-    button:hover { background: #5ed7bf; }
+    button:hover { background: var(--accent-hover); }
     .pair-footnote { margin-top: 12px; font-size: 12px; color: #888; }
   </style>
 </head>
 <body>
   <main class="pair-card">
-    <div class="pair-brand"><span class="dot"></span>AgentLink</div>
+    <div class="pair-brand"><span class="dot"></span>${htmlEscape(brand.name)}</div>
     <h1>Pair this device</h1>
     <p>${htmlEscape(instructions)}</p>
     ${errorBlock}

@@ -20,12 +20,13 @@ RUN sed '1s|^#!.*$|#!/nodejs/bin/node|' /bundle/agentlink-server.js \
     && install -d -m 0755 /bundle/projects
 
 # Command worker: runs owner-approved commands, plus ripgrep and git for the
-# file tools. It has a shell and tools but none of the assistant's data,
-# credentials, or keys. Add the tools your commands need in a derived image.
+# file tools. It has a shell and common tools (curl, wget, jq, python3) but
+# none of the assistant's data, credentials, or keys. Add the tools your
+# commands need in a derived image.
 FROM node:22-bookworm-slim AS command-worker
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    bash ca-certificates git ripgrep \
+    bash ca-certificates curl git jq python3 ripgrep wget \
     && rm -rf /var/lib/apt/lists/*
 COPY --chmod=0755 dist/agentlink-server.js /usr/local/bin/agentlink-server
 RUN install -d -o node -g node -m 0755 /srv/agentlink/projects

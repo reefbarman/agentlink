@@ -1023,6 +1023,11 @@ interface BrowserGatewayAppProps {
   workspaceName: string;
   routeByInstance?: boolean;
   askAgentOnly?: boolean;
+  /**
+   * Which product the Ask Agent shell presents as. The standalone AgentLink
+   * Assistant reuses this UI with its own name, copy and violet accent.
+   */
+  product?: BrowserGatewayProduct;
   /** Desktop quick-ask panel: renders only the composer and hands sends to the main window. */
   quickAsk?: boolean;
   workspaceOnly?: boolean;
@@ -1273,6 +1278,20 @@ function safeTranscriptFilename(title: string): string {
   return `${base || "ask-agent"}-${stamp}.md`;
 }
 
+export type BrowserGatewayProduct = "ask-agent" | "assistant";
+
+interface ProductCopy {
+  readonly name: string;
+  readonly placeholder: string;
+  readonly welcomeTitle: string;
+  readonly welcomeCopy: string;
+  readonly starters: readonly {
+    readonly icon: string;
+    readonly title: string;
+    readonly prompt: string;
+  }[];
+}
+
 const ASK_AGENT_STARTERS = [
   {
     icon: "sparkle",
@@ -1291,12 +1310,52 @@ const ASK_AGENT_STARTERS = [
   },
 ] as const;
 
+const PRODUCT_COPY: Record<BrowserGatewayProduct, ProductCopy> = {
+  "ask-agent": {
+    name: "AgentLink",
+    placeholder: "Ask AgentLink anything",
+    welcomeTitle: "What can I help you with?",
+    welcomeCopy:
+      "Think, research, create, and work through the details together.",
+    starters: ASK_AGENT_STARTERS,
+  },
+  assistant: {
+    name: "AgentLink Assistant",
+    placeholder: "Message your assistant",
+    welcomeTitle: "What should we work on?",
+    welcomeCopy:
+      "Your own assistant, running on your machine. It can work in your projects, run commands and keep going while you are away.",
+    starters: [
+      {
+        icon: "folder",
+        title: "Get to know this project",
+        prompt:
+          "Look around this project and tell me what is here and what state it is in.",
+      },
+      {
+        icon: "checklist",
+        title: "Plan a task",
+        prompt:
+          "Help me plan a task, then break it into steps you can work through.",
+      },
+      {
+        icon: "search",
+        title: "Research a topic",
+        prompt:
+          "Research a topic with me and separate facts from open questions.",
+      },
+    ],
+  },
+};
+
 function AskAgentWelcome({
   onStart,
   desktop = false,
+  copy = PRODUCT_COPY["ask-agent"],
 }: {
   onStart: (prompt: string) => void;
   desktop?: boolean;
+  copy?: ProductCopy;
 }): JSX.Element {
   return (
     <section class="consumer-welcome" aria-labelledby="consumer-welcome-title">
@@ -1310,13 +1369,11 @@ function AskAgentWelcome({
           </>
         )}
       </div>
-      <p class="consumer-welcome-eyebrow">AgentLink</p>
-      <h1 id="consumer-welcome-title">What can I help you with?</h1>
-      <p class="consumer-welcome-copy">
-        Think, research, create, and work through the details together.
-      </p>
+      <p class="consumer-welcome-eyebrow">{copy.name}</p>
+      <h1 id="consumer-welcome-title">{copy.welcomeTitle}</h1>
+      <p class="consumer-welcome-copy">{copy.welcomeCopy}</p>
       <div class="consumer-starters" aria-label="Conversation starters">
-        {ASK_AGENT_STARTERS.map((starter) => (
+        {copy.starters.map((starter) => (
           <button
             key={starter.title}
             class="consumer-starter"
@@ -1338,6 +1395,7 @@ export function BrowserGatewayApp({
   workspaceName: _workspaceName,
   routeByInstance = false,
   askAgentOnly = false,
+  product = "ask-agent",
   quickAsk = false,
   workspaceOnly = false,
   browserShell = false,
@@ -1347,6 +1405,7 @@ export function BrowserGatewayApp({
   reloadPage = () => window.location.reload(),
 }: BrowserGatewayAppProps) {
   const consumerShell = askAgentOnly || browserShell;
+  const productCopy = PRODUCT_COPY[product];
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("ask");
   const [browserWorkspaceMounted, setBrowserWorkspaceMounted] = useState(false);
   const desktopModesAvailable =
@@ -8161,7 +8220,7 @@ export function BrowserGatewayApp({
         <div class="browser-chat-composer">
           <InputArea
             onSend={submitQuickAsk}
-            placeholder="Ask AgentLink anything"
+            placeholder={productCopy.placeholder}
             onStop={() => undefined}
             streaming={false}
             submitOnEnter={true}
@@ -8194,7 +8253,7 @@ export function BrowserGatewayApp({
 
   return (
     <div
-      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}`}
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" ? " assistant-product" : ""}`}
     >
       {!workspaceOnly && (
         <header class="browser-header">
@@ -8224,7 +8283,9 @@ export function BrowserGatewayApp({
             {isAskAgentSelected && !consumerShell && (
               <span class="consumer-brand-mark" aria-hidden="true" />
             )}
-            <span>{isAskAgentSelected ? "AgentLink" : "AgentLink Remote"}</span>
+            <span>
+              {isAskAgentSelected ? productCopy.name : "AgentLink Remote"}
+            </span>
             {isAskAgentSelected && !consumerShell && (
               <span class="consumer-brand-mode">Ask</span>
             )}
@@ -9657,6 +9718,7 @@ export function BrowserGatewayApp({
                         ) : (
                           <AskAgentWelcome
                             desktop={consumerShell}
+                            copy={productCopy}
                             onStart={(prompt) => {
                               void handleSend(prompt, []);
                             }}
@@ -10236,7 +10298,7 @@ export function BrowserGatewayApp({
                   <InputArea
                     onSend={handleSend}
                     placeholder={
-                      isAskAgentSelected ? "Ask AgentLink anything" : undefined
+                      isAskAgentSelected ? productCopy.placeholder : undefined
                     }
                     contextMode={
                       visibleQuestion && activeQuestionContextMode

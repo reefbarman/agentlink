@@ -44,30 +44,38 @@ There are no passwords. Every device signs in with a single-use 6-digit pairing 
 
 One JSON file. Relative paths resolve against its directory, and unknown keys are rejected so a typo cannot silently drop a setting. Examples: [`deploy/server.linux.example.json`](deploy/server.linux.example.json) and [`deploy/server.macos.example.json`](deploy/server.macos.example.json).
 
-| Key             | Meaning                                                                                                                                                                                                                                                                                                                                                               |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), session event logs (`events/`), and the local CA (`tls/`). Created `0700`.                                                                                                                                                                                                                           |
-| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                                                                                                                                                                                                                                                 |
-| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                                                                                                                                                                                                              |
-| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                                                                                                                                                                                                           |
-| `providers`     | `codex` (`modelIds`, ChatGPT sign-in), `openai` (`modelIds`, `apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). Remote providers must use HTTPS; see [Meridian](#claude-models-meridian) for the container exception.                                                                                                           |
-| `defaultModel`  | `{ providerId, modelId }`. The model must be declared by that provider.                                                                                                                                                                                                                                                                                               |
-| `modelRoles`    | Optional. `{ "review": { providerId, modelId } }` names the model a client gets when it creates a session with `{ "role": "review" }`, for example Claude through [Meridian](#claude-models-meridian). The model must be declared.                                                                                                                                    |
-| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands run only when `commandWorker` is set.                                                                                                                                                                                                                             |
-| `commandWorker` | Optional. `{ host, port, token, shell?, egressProxy? }`: the [command worker](#command-worker) that runs approved commands. `host` is loopback or a container name; `token` is a secret source; `shell` defaults to `/bin/bash`; `egressProxy` is the [egress gateway](#egress-gateway) (`http://<loopback or container>:<port>`). Without it, commands are disabled. |
-| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`. With a command worker, this is the worker's path (`/usr/bin/rg` in its image).                                                                                                                                                                                                                                      |
+| Key             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataRoot`      | Access state (`server/`), workspace session data (`workspace/`), session event logs (`events/`), and the local CA (`tls/`). Created `0700`.                                                                                                                                                                                                                                                                                   |
+| `listen`        | `{ host, port }`. Bind a LAN address explicitly; there is no default.                                                                                                                                                                                                                                                                                                                                                         |
+| `publicOrigins` | Exact `https://` origins browsers use. The `Host` header must match one.                                                                                                                                                                                                                                                                                                                                                      |
+| `tls`           | `{ "localCa": true }` (see [Device trust](#device-trust)), or `{ certFile, keyFile }` with a key not readable by others (`0600` or `0640`).                                                                                                                                                                                                                                                                                   |
+| `providers`     | `codex` (ChatGPT sign-in), `openai` (`apiKey`), or `openai-compatible` (`baseURL`, `models`, and `apiKey` or `noAuth: true`). `codex` and `openai` offer AgentLink's full model catalog, the same list as the extension's picker; `modelIds` narrows it. Remote providers must use HTTPS; see [Meridian](#claude-models-meridian) for the container exception. See [Models and thinking levels](#models-and-thinking-levels). |
+| `defaultModel`  | `{ providerId, modelId }`. The model must be declared by that provider.                                                                                                                                                                                                                                                                                                                                                       |
+| `modelRoles`    | Optional. `{ "review": { providerId, modelId } }` names the model a client gets when it creates a session with `{ "role": "review" }`, for example Claude through [Meridian](#claude-models-meridian). The model must be declared.                                                                                                                                                                                            |
+| `projects`      | `[{ id, label?, root }]`. Each is mounted at `/api/projects/<id>` with file tools enabled. Commands run only when `commandWorker` is set.                                                                                                                                                                                                                                                                                     |
+| `commandWorker` | Optional. `{ host, port, token, shell?, egressProxy? }`: the [command worker](#command-worker) that runs approved commands. `host` is loopback or a container name; `token` is a secret source; `shell` defaults to `/bin/bash`; `egressProxy` is the [egress gateway](#egress-gateway) (`http://<loopback or container>:<port>`). Without it, commands are disabled.                                                         |
+| `ripgrepPath`   | Optional absolute `rg` binary for `search_files`. With a command worker, this is the worker's path (`/usr/bin/rg` in its image).                                                                                                                                                                                                                                                                                              |
 
 API keys are never inline. `{ "file": "/path" }` reads a file that must not be readable by group or others. `{ "credential": "name" }` reads `$CREDENTIALS_DIRECTORY/name`, which systemd provides through `LoadCredential=` or `LoadCredentialEncrypted=` (use `systemd-creds encrypt` to bind the key to the TPM). Keys are reread on each use, so rotation needs no restart.
 
 ### ChatGPT sign-in (Codex)
 
-A `{ "type": "codex", "modelIds": ["gpt-6.1-sol"] }` provider uses a ChatGPT subscription instead of an API key. The server has no browser, so `codex-login` prints a sign-in link to open on any device. After signing in, that browser is sent to an `http://localhost:1455/auth/callback?...` address that does not load; paste that address back into the command. The pasted address must carry the state of the flow the command started, so an address from another sign-in is refused.
+A `{ "type": "codex", "id": "codex" }` provider uses a ChatGPT subscription instead of an API key. The server has no browser, so `codex-login` prints a sign-in link to open on any device. After signing in, that browser is sent to an `http://localhost:1455/auth/callback?...` address that does not load; paste that address back into the command. The pasted address must carry the state of the flow the command started, so an address from another sign-in is refused.
 
 Tokens are stored in `<dataRoot>/credentials/codex-sign-in.json` (directory `0700`, file `0600`; the server refuses a file others can read) and refreshed automatically. Run the command as the service account. The running server and the command share the file under a lock, so signing in or out takes effect without a restart. A server with no sign-in still starts; `--check` and the startup log say whether it is signed in, and model requests fail until it is. Signing in again with the same account updates it; a different account is added and becomes active. `codex-logout` removes every stored sign-in.
 
+### Models and thinking levels
+
+The model picker shows every model the providers declare, each with its own thinking levels.
+
+- **Codex and OpenAI.** Without `modelIds` the provider offers the full catalog, with each model's context window, image support, and thinking levels taken from AgentLink's catalog. `"modelIds": ["gpt-6.1-sol"]` limits the list; unknown IDs are refused at startup.
+- **OpenAI-compatible.** Each entry in `models` declares its own limits: `contextWindow`, `maxOutputTokens`, `supportsToolUse`, `supportsThinking`, `supportsImages`, and optionally `reasoningEfforts` (any of `low`, `medium`, `high`, `xhigh`, `max`) with a `defaultReasoningEffort` from that list. A model without `reasoningEfforts` has no thinking control. The provider's `reasoningEffortMode` says how the level is sent: `reasoning_effort` (Meridian and most OpenAI-compatible servers), `reasoning.effort` (OpenRouter), `output_config.effort`, or `none`. `timeoutMs` raises the request timeout for slow models.
+- These match the extension's `agentlink.openaiCompatible.connections` settings, so a connection can be copied across: `baseUrl` becomes `baseURL`, and the API key moves to a file (`"apiKey": { "file": "/run/secrets/<name>" }`) instead of the extension's secret storage.
+
 ### Container (Docker)
 
-The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds two images from one bundle: the assistant on a distroless Node 22 base (no shell, no package manager, no git), and the [command worker](#command-worker) (Debian slim with bash, git, and ripgrep). [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs both as non-root users with read-only root filesystems, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible. The same images run on Linux and on macOS with Docker Desktop.
+The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds two images from one bundle: the assistant on a distroless Node 22 base (no shell, no package manager, no git), and the [command worker](#command-worker) (Debian slim with bash, git, ripgrep, curl, wget, jq, and python3). [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs both as non-root users with read-only root filesystems, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible. The same images run on Linux and on macOS with Docker Desktop.
 
 ```sh
 # Build (from the repository root)
@@ -115,7 +123,7 @@ The assistant never runs commands itself; its image has no shell. When `commandW
 
 ### Claude models (Meridian)
 
-[Meridian](https://github.com/rynfar/meridian) serves Claude models through your own Claude sign-in as an OpenAI-compatible endpoint. [`deploy/container/compose.meridian.yaml`](deploy/container/compose.meridian.yaml) runs it as a second service beside the assistant:
+[Meridian](https://github.com/rynfar/meridian) serves Claude models through your own Claude sign-in as an OpenAI-compatible endpoint. [`deploy/container/compose.meridian.yaml`](deploy/container/compose.meridian.yaml) runs it as a second service beside the assistant. Setting it up, all below: build the image, create the key, start it, sign in to Claude, install the AgentLink plugin, then declare the models in `server.json`.
 
 - **Not published.** Meridian has no `ports:`; only containers in this compose project can connect, as `http://meridian:3456`. The host's LAN address does not answer on 3456.
 - **Keyed.** Every request needs the shared key in `secrets/meridian-api-key`. Compose mounts it into both containers at `/run/secrets/meridian-api-key`; Meridian loads it into `MERIDIAN_API_KEY` inside its own process, so it is not in the container configuration.
@@ -152,6 +160,8 @@ Then add the provider to `server.json` (full example: [`deploy/container/server.
   "allowInsecureHttp": true,
   "apiKey": { "file": "/run/secrets/meridian-api-key" },
   "meridianSessionAffinity": true,
+  "reasoningEffortMode": "reasoning_effort",
+  "timeoutMs": 600000,
   "models": [
     {
       "id": "claude-opus-5-5",
@@ -159,15 +169,24 @@ Then add the provider to `server.json` (full example: [`deploy/container/server.
       "maxOutputTokens": 32000,
       "supportsToolUse": true,
       "supportsThinking": true,
+      "supportsImages": true,
+      "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultReasoningEffort": "high",
       "promptProfile": "reasoning"
     }
   ]
 }
 ```
 
+Add one entry per Claude model you want in the picker; Meridian's `GET /v1/models` lists the IDs your plan offers.
+
 To run reviews on Claude while everything else uses the default model, add `"modelRoles": { "review": { "providerId": "claude", "modelId": "claude-opus-5-5" } }` and create review sessions with `{ "role": "review" }` (see [Model selection](#model-selection)).
 
 `meridianSessionAffinity` lets Meridian resume each conversation's Claude session. Use the context window Meridian's `/v1/models` reports for your plan; 200k is safe for every plan. Requests use your Claude subscription's limits. To rotate the key, replace the file and `docker compose up -d --force-recreate`.
+
+### Finding the server on the LAN (mDNS)
+
+Ubuntu answers to `<hostname>.local` through Avahi. [`deploy/systemd/agentlink-mdns-alias.service`](deploy/systemd/agentlink-mdns-alias.service) adds `agentlink-assistant.local` for the machine's LAN address, so devices can use `https://agentlink-assistant.local:8443` whatever the machine is called (the file header lists the install commands). It works with the container and the systemd install alike. Keep the name in `publicOrigins`, and give the machine a DHCP reservation: the alias is published for the address found when the service starts. On macOS, set the machine's name in Sharing (for example `agentlink-assistant`) to get the same `.local` name.
 
 ### Ubuntu (systemd)
 
@@ -259,7 +278,8 @@ State lives in `<dataRoot>/access-state.json` (directory `0700`, file `0600`). O
 
 Each session has its own model, chosen from the models `server.json` declares. Nothing outside that list is accepted, so a client cannot point a session at another endpoint.
 
-- `GET /api/projects/:id/models` (read access) returns `{ models, defaultModel, roles }`. Each model is `{ providerId, modelId, displayName?, providerDisplayName? }`.
+- `GET /api/projects/:id/models` (read access) returns `{ models, defaultModel, roles }`. Each model is `{ providerId, modelId, displayName?, providerDisplayName?, contextWindow?, maxInputTokens?, supportsImages?, reasoningEfforts?, defaultReasoningEffort? }`.
+- Each session also keeps its own thinking level. It must be one of the model's `reasoningEfforts` (`400 reasoning_effort_not_available` otherwise); a model without levels has no thinking control.
 - `POST /api/projects/:id/sessions` takes an optional body: `{ "model": { providerId, modelId } }` or `{ "role": "review" }`, not both. No body uses `defaultModel`. Errors: `400 model_not_available`, `model_role_not_configured`, `model_selection_invalid`, or `model_invalid`.
 - `POST .../sessions/:sid/model` (write access) changes the model between turns with the same body. It returns `409 session_busy` while a turn runs and `409 interaction_pending` while an approval waits.
 - Session reads and lists include `model`: the session's own choice, or `defaultModel` if it has none.

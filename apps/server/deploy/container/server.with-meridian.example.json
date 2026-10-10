@@ -12,7 +12,7 @@
     "review": { "providerId": "claude", "modelId": "claude-opus-5-5" }
   },
   "providers": [
-    { "type": "codex", "modelIds": ["gpt-6.1-sol"] },
+    { "type": "codex" },
     {
       "type": "openai-compatible",
       "id": "claude",
@@ -21,6 +21,8 @@
       "allowInsecureHttp": true,
       "apiKey": { "file": "/run/secrets/meridian-api-key" },
       "meridianSessionAffinity": true,
+      "reasoningEffortMode": "reasoning_effort",
+      "timeoutMs": 600000,
       "models": [
         {
           "id": "claude-opus-5-5",
@@ -29,6 +31,9 @@
           "maxOutputTokens": 32000,
           "supportsToolUse": true,
           "supportsThinking": true,
+          "supportsImages": true,
+          "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+          "defaultReasoningEffort": "high",
           "promptProfile": "reasoning"
         },
         {
@@ -38,6 +43,9 @@
           "maxOutputTokens": 32000,
           "supportsToolUse": true,
           "supportsThinking": true,
+          "supportsImages": true,
+          "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+          "defaultReasoningEffort": "high",
           "promptProfile": "reasoning"
         },
         {
@@ -47,6 +55,9 @@
           "maxOutputTokens": 32000,
           "supportsToolUse": true,
           "supportsThinking": true,
+          "supportsImages": true,
+          "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+          "defaultReasoningEffort": "high",
           "promptProfile": "reasoning"
         }
       ]

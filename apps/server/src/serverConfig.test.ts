@@ -76,14 +76,117 @@ describe("parseAssistantServerConfig", () => {
     expect(config.modelRoles).toEqual({
       review: { providerId: "local", modelId: "fixture" },
     });
-    expect(configuredModels(config)).toEqual([
-      { providerId: "local", modelId: "fixture" },
-      {
-        providerId: "codex",
-        modelId: "gpt-6.1-sol",
-        providerDisplayName: "ChatGPT",
-      },
-    ]);
+    const models = configuredModels(config);
+    expect(models).toHaveLength(2);
+    expect(models[0]).toMatchObject({
+      providerId: "local",
+      modelId: "fixture",
+    });
+    expect(models[0]?.reasoningEfforts).toBeUndefined();
+    // Codex models carry the catalog's name and thinking levels.
+    expect(models[1]).toMatchObject({
+      providerId: "codex",
+      modelId: "gpt-6.1-sol",
+      providerDisplayName: "ChatGPT",
+      displayName: expect.any(String),
+      defaultReasoningEffort: "low",
+    });
+    expect(models[1]?.reasoningEfforts).toContain("ultra");
+  });
+
+  it("offers the full Codex catalog when modelIds is omitted", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        (value.providers as unknown[]).push({ type: "codex" });
+      }),
+      "/etc/agentlink",
+    );
+    const codex = configuredModels(config).filter(
+      (model) => model.providerId === "codex",
+    );
+    expect(codex.map((model) => model.modelId)).toEqual(
+      expect.arrayContaining(["gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.5"]),
+    );
+    expect(codex.length).toBeGreaterThan(3);
+    expect(codex.every((model) => model.reasoningEfforts?.length)).toBe(true);
+    expect(() =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          (value.providers as unknown[]).push({
+            type: "codex",
+            modelIds: ["gpt-nope"],
+          });
+        }),
+        "/etc/agentlink",
+      ),
+    ).toThrow(/not a known model/u);
+  });
+
+  it("accepts thinking levels, images, and timeouts on compatible models", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        (value.providers as unknown[]).push({
+          type: "openai-compatible",
+          id: "claude",
+          baseURL: "http://127.0.0.1:3456/v1",
+          noAuth: true,
+          reasoningEffortMode: "reasoning_effort",
+          timeoutMs: 600000,
+          models: [
+            {
+              id: "claude-opus-5",
+              contextWindow: 1000000,
+              maxOutputTokens: 64000,
+              supportsToolUse: true,
+              supportsThinking: true,
+              supportsImages: true,
+              reasoningEfforts: ["low", "high", "max"],
+              defaultReasoningEffort: "high",
+            },
+          ],
+        });
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.providers[1]).toMatchObject({
+      reasoningEffortMode: "reasoning_effort",
+      timeoutMs: 600000,
+    });
+    expect(
+      configuredModels(config).find((model) => model.providerId === "claude"),
+    ).toMatchObject({
+      contextWindow: 1000000,
+      supportsImages: true,
+      reasoningEfforts: ["low", "high", "max"],
+      defaultReasoningEffort: "high",
+    });
+    const withModel = (model: Record<string, unknown>) => () =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          (value.providers as unknown[]).push({
+            type: "openai-compatible",
+            id: "bad",
+            baseURL: "https://example.com/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "m",
+                contextWindow: 1000,
+                maxOutputTokens: 10,
+                supportsToolUse: true,
+                ...model,
+              },
+            ],
+          });
+        }),
+        "/etc/agentlink",
+      );
+    expect(withModel({ reasoningEfforts: ["turbo"] })).toThrow(
+      /reasoningEfforts/u,
+    );
+    expect(
+      withModel({ reasoningEfforts: ["low"], defaultReasoningEffort: "high" }),
+    ).toThrow(/defaultReasoningEffort/u);
   });
 
   it("resolves relative paths against the configuration directory", () => {

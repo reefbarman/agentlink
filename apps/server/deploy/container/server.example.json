@@ -8,7 +8,7 @@
   ],
   "tls": { "localCa": true },
   "defaultModel": { "providerId": "codex", "modelId": "gpt-6.1-sol" },
-  "providers": [{ "type": "codex", "modelIds": ["gpt-6.1-sol"] }],
+  "providers": [{ "type": "codex" }],
   "projects": [
     { "id": "home", "label": "Home", "root": "/srv/agentlink/projects/home" }
   ],

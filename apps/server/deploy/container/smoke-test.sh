@@ -57,9 +57,9 @@ docker run --rm "$assistant_image" --help >/dev/null ||
   fail "assistant image cannot run agentlink-server"
 pass "assistant image runs agentlink-server"
 docker run --rm --entrypoint /bin/bash "$worker_image" \
-  -c 'git --version && rg --version >/dev/null && [ "$(id -u)" != 0 ]' >/dev/null ||
-  fail "worker image needs bash, git and ripgrep, as a non-root user"
-pass "worker image has bash, git and ripgrep"
+  -c 'for tool in git rg curl wget jq python3; do command -v "$tool" >/dev/null || exit 1; done && [ "$(id -u)" != 0 ]' >/dev/null ||
+  fail "worker image needs bash, git, ripgrep, curl, wget, jq and python3, as a non-root user"
+pass "worker image has bash, git, ripgrep, curl, wget, jq and python3"
 
 echo "# compose deployment ($project on 127.0.0.1:$port)"
 cp "$here/compose.yaml" "$work/compose.yaml"

@@ -2,7 +2,11 @@ import type { AgentModelReference } from "@agentlink/core";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-gateway-ask-agent-identity";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
-import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
+import {
+  isCoreReasoningEffort,
+  type CoreReasoningEffort,
+  type EmbeddedAgentTurnEvent,
+} from "@agentlink/protocol";
 import { promises as fs } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -132,6 +136,8 @@ export async function createAskAgentBridge(
   const state = await readState(options.stateFile);
   /** Last known model of each workspace session. */
   const sessionModels = new Map<string, AgentModelReference>();
+  /** Last known thinking level of each workspace session. */
+  const sessionEfforts = new Map<string, CoreReasoningEffort | undefined>();
 
   const sse = new SseHub<AskAgentControllerSnapshot>({
     serialize: (snapshot) => JSON.stringify(snapshot),
@@ -168,8 +174,22 @@ export async function createAskAgentBridge(
       ...(model.providerDisplayName
         ? { providerDisplayName: model.providerDisplayName }
         : {}),
-      contextWindow: 200_000,
+      contextWindow: model.contextWindow ?? 200_000,
+      ...(model.maxInputTokens === undefined
+        ? {}
+        : { maxInputTokens: model.maxInputTokens }),
       supportsToolUse: true,
+      ...(model.supportsImages === undefined
+        ? {}
+        : { supportsImages: model.supportsImages }),
+      ...(model.reasoningEfforts?.length
+        ? {
+            reasoningEfforts: [...model.reasoningEfforts],
+            ...(model.defaultReasoningEffort
+              ? { defaultReasoningEffort: model.defaultReasoningEffort }
+              : {}),
+          }
+        : {}),
       authenticated: true,
     })),
   );
@@ -234,6 +254,7 @@ export async function createAskAgentBridge(
           continue;
         }
         sessionModels.set(summary.sessionId, read.model);
+        sessionEfforts.set(summary.sessionId, read.reasoningEffort);
         const messages = agentMessagesToChatMessages([...read.messages], {
           baseIndex: 0,
         });
@@ -270,6 +291,13 @@ export async function createAskAgentBridge(
       : options.models.defaultModel;
   };
 
+  /** The thinking level picked in the UI, if the selected model has one. */
+  const selectedEffort = (): CoreReasoningEffort | undefined => {
+    const choice = modelsByKey.get(modelKey(selectedModel()));
+    const effort = store.getReasoningEffort();
+    return choice?.reasoningEfforts?.includes(effort) ? effort : undefined;
+  };
+
   /** The workspace session behind the active UI session, created on demand. */
   const ensureWorkspaceSession = async (
     auth: AssistantServerAuth,
@@ -277,11 +305,16 @@ export async function createAskAgentBridge(
     const storeSessionId = store.getActiveSessionId();
     const existing = workspaceSessionFor(storeSessionId);
     const model = selectedModel();
+    const effort = selectedEffort();
     if (existing) {
       const current = sessionModels.get(existing);
       if (!current || modelKey(current) !== modelKey(model)) {
         await operations.setModel(auth, projectId, existing, model);
         sessionModels.set(existing, model);
+      }
+      if (effort && sessionEfforts.get(existing) !== effort) {
+        await operations.setReasoningEffort(auth, projectId, existing, effort);
+        sessionEfforts.set(existing, effort);
       }
       return existing;
     }
@@ -289,8 +322,10 @@ export async function createAskAgentBridge(
       auth,
       projectId,
       model,
+      effort,
     );
     sessionModels.set(sessionId, model);
+    sessionEfforts.set(sessionId, effort);
     state.aliases[storeSessionId] = sessionId;
     await saveState();
     return sessionId;
@@ -906,20 +941,8 @@ function stringRecord(value: unknown): Record<string, string> {
   );
 }
 
-const REASONING_EFFORTS = [
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-function isReasoningEffort(
-  value: string,
-): value is (typeof REASONING_EFFORTS)[number] {
-  return (REASONING_EFFORTS as readonly string[]).includes(value);
+function isReasoningEffort(value: string): value is CoreReasoningEffort {
+  return isCoreReasoningEffort(value);
 }
 
 function hasItems(value: unknown): boolean {

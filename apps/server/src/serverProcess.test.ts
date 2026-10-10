@@ -217,6 +217,10 @@ describe("agentlink-server process", () => {
       expect(shell.headers["content-type"]).toBe("text/html; charset=utf-8");
       expect(String(shell.body)).toContain("/browser-gateway.js");
       expect(String(shell.body)).toContain("askAgentOnly: true");
+      expect(String(shell.body)).toContain('product: "assistant"');
+      expect(String(shell.body)).toContain(
+        "<title>AgentLink Assistant</title>",
+      );
       const created = await request({
         method: "POST",
         path: "/api/projects/home/sessions",

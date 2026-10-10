@@ -1,5 +1,8 @@
 import type { AgentModelReference } from "@agentlink/core";
-import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
+import type {
+  CoreReasoningEffort,
+  EmbeddedAgentTurnEvent,
+} from "@agentlink/protocol";
 import { promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -50,7 +53,11 @@ interface Snapshot {
 function createFakeOperations(events: SessionEventHub) {
   const sessions = new Map<
     string,
-    { model: AgentModelReference; messages: unknown[] }
+    {
+      model: AgentModelReference;
+      reasoningEffort?: CoreReasoningEffort;
+      messages: unknown[];
+    }
   >();
   let next = 0;
   const key = (projectId: string, sessionId: string) =>
@@ -83,18 +90,35 @@ function createFakeOperations(events: SessionEventHub) {
       return {
         messages: session.messages,
         model: session.model,
+        reasoningEffort: session.reasoningEffort,
         createdAt: 1,
         updatedAt: 2,
       };
     }),
-    createSession: vi.fn(async (_auth, _projectId, model) => {
-      const sessionId = `ws-${(next += 1)}`;
-      sessions.set(sessionId, { model: model ?? MODEL, messages: [] });
-      return { sessionId };
-    }),
+    createSession: vi.fn(
+      async (
+        _auth,
+        _projectId,
+        model,
+        reasoningEffort?: CoreReasoningEffort,
+      ) => {
+        const sessionId = `ws-${(next += 1)}`;
+        sessions.set(sessionId, {
+          model: model ?? MODEL,
+          reasoningEffort,
+          messages: [],
+        });
+        return { sessionId };
+      },
+    ),
     setModel: vi.fn(async (_auth, _projectId, sessionId: string, model) => {
       sessions.get(sessionId)!.model = model;
     }),
+    setReasoningEffort: vi.fn(
+      async (_auth, _projectId, sessionId: string, effort) => {
+        sessions.get(sessionId)!.reasoningEffort = effort;
+      },
+    ),
     startTurn: vi.fn(async (_auth, _projectId, sessionId: string) =>
       run(sessionId),
     ),
@@ -128,7 +152,16 @@ async function startBridge(
     operations: fake.operations,
     events,
     models: {
-      available: [MODEL, { ...REVIEW, displayName: "Claude review" }] as never,
+      available: [
+        MODEL,
+        {
+          ...REVIEW,
+          displayName: "Claude review",
+          contextWindow: 1_000_000,
+          reasoningEfforts: ["low", "high", "max"],
+          defaultReasoningEffort: "high",
+        },
+      ],
       defaultModel: MODEL,
     },
     stateFile: file,
@@ -395,6 +428,10 @@ describe("Ask Agent bridge", () => {
       { providerId: "claude", modelId: "claude-review" },
     );
     expect(fake.sessions.get("ws-1")?.model.modelId).toBe("claude-review");
+    // A thinking level the new model supports is applied with the switch.
+    expect(["low", "high", "max"]).toContain(
+      fake.sessions.get("ws-1")?.reasoningEffort,
+    );
 
     const listed = await call("/api/ask-agent/sessions");
     const [session] = listed.body.sessions as Array<{ id: string }>;
@@ -406,6 +443,55 @@ describe("Ask Agent bridge", () => {
     const saved = JSON.parse(await fs.readFile(file, "utf8"));
     expect(saved.titles).toEqual({ "ws-1": "Renamed" });
     expect(saved.hidden).toEqual(["ws-1"]);
+  });
+
+  it("offers each model's thinking levels and applies the chosen one", async () => {
+    const { fake, call } = await startBridge();
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, { type: "turn.completed", result: { text: "ok" } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    const models = (await call("/api/ask-agent/models")).body.models as Array<{
+      id: string;
+      reasoningEfforts?: string[];
+      contextWindow: number;
+    }>;
+    expect(models[0]?.reasoningEfforts).toBeUndefined();
+    expect(models[1]).toMatchObject({
+      id: "claude/claude-review",
+      reasoningEfforts: ["low", "high", "max"],
+      contextWindow: 1_000_000,
+    });
+
+    await call("/api/ask-agent/model", { model: "claude/claude-review" });
+    await expect(
+      call("/api/ask-agent/thinking", { effort: "medium" }),
+    ).resolves.toMatchObject({ status: 400 });
+    await expect(
+      call("/api/ask-agent/thinking", { effort: "max" }),
+    ).resolves.toMatchObject({ status: 200 });
+    await call("/api/ask-agent/send", { text: "think hard" });
+    expect(fake.operations.createSession).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      REVIEW,
+      "max",
+    );
+
+    await call("/api/ask-agent/thinking", { effort: "low" });
+    await call("/api/ask-agent/send", { text: "less" });
+    expect(fake.operations.setReasoningEffort).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      "low",
+    );
+    expect(fake.sessions.get("ws-1")?.reasoningEffort).toBe("low");
   });
 
   it("restores durable sessions on first use and skips hidden ones", async () => {

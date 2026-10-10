@@ -1,3 +1,13 @@
+import {
+  CODEX_MODEL_MAP,
+  getCodexModelCapabilities,
+  listCodexModels,
+  type CoreModelCapabilities,
+} from "@agentlink/core";
+import {
+  isCoreReasoningEffort,
+  type CoreReasoningEffort,
+} from "@agentlink/protocol";
 import type {
   WorkspaceCodexProviderConfig,
   WorkspaceProviderConfig,
@@ -81,6 +91,32 @@ export type AssistantServerModelRole =
 export interface AssistantServerModelChoice extends AssistantServerModelReference {
   readonly displayName?: string;
   readonly providerDisplayName?: string;
+  readonly contextWindow?: number;
+  readonly maxInputTokens?: number;
+  readonly supportsImages?: boolean;
+  /** Thinking levels the model accepts; absent means no thinking control. */
+  readonly reasoningEfforts?: readonly CoreReasoningEffort[];
+  readonly defaultReasoningEffort?: CoreReasoningEffort;
+}
+
+/**
+ * The model IDs a `codex` or `openai` provider serves: the configured list,
+ * or AgentLink's full maintained catalog (the same one the extension's
+ * picker shows) when `modelIds` is omitted.
+ */
+export function responsesProviderModelIds(
+  provider: Extract<
+    AssistantServerProviderConfig,
+    { type: "codex" | "openai" }
+  >,
+): readonly string[] {
+  return (
+    provider.modelIds ??
+    listCodexModels(
+      provider.id ?? provider.type,
+      provider.type === "codex" ? "oauth" : "apiKey",
+    ).map((model) => model.id)
+  );
 }
 
 /** Every model the configuration declares, in configuration order. */
@@ -100,11 +136,54 @@ export function configuredModels(
           modelId: model.id,
           ...(model.displayName ? { displayName: model.displayName } : {}),
           ...providerDisplayName,
+          contextWindow: model.contextWindow,
+          ...(model.maxInputTokens === undefined
+            ? {}
+            : { maxInputTokens: model.maxInputTokens }),
+          ...(model.supportsImages ? { supportsImages: true } : {}),
+          ...(model.supportsThinking && model.reasoningEfforts?.length
+            ? {
+                reasoningEfforts: [...model.reasoningEfforts],
+                defaultReasoningEffort:
+                  model.defaultReasoningEffort ?? model.reasoningEfforts[0]!,
+              }
+            : {}),
         });
       }
     } else {
-      for (const modelId of provider.modelIds) {
-        choices.push({ providerId, modelId, ...providerDisplayName });
+      const authMethod = provider.type === "codex" ? "oauth" : "apiKey";
+      const catalog = new Map(
+        listCodexModels(providerId, authMethod).map((model) => [
+          model.id,
+          model.displayName,
+        ]),
+      );
+      for (const modelId of responsesProviderModelIds(provider)) {
+        const capabilities: CoreModelCapabilities = getCodexModelCapabilities(
+          modelId,
+          authMethod,
+        );
+        const displayName = catalog.get(modelId);
+        choices.push({
+          providerId,
+          modelId,
+          ...(displayName ? { displayName } : {}),
+          ...providerDisplayName,
+          contextWindow: capabilities.contextWindow,
+          ...(capabilities.maxInputTokens === undefined
+            ? {}
+            : { maxInputTokens: capabilities.maxInputTokens }),
+          supportsImages: capabilities.supportsImages,
+          ...(capabilities.supportsThinking &&
+          capabilities.reasoningEfforts?.length
+            ? {
+                reasoningEfforts: [...capabilities.reasoningEfforts],
+                defaultReasoningEffort:
+                  capabilities.defaultReasoningEffort ??
+                  capabilities.reasoningEfforts[0]!,
+              }
+            : {}),
+        });
       }
     }
   }
@@ -142,8 +221,18 @@ export interface AssistantServerCompatibleModelConfig {
   readonly maxOutputTokens: number;
   readonly supportsToolUse: boolean;
   readonly supportsThinking?: boolean;
+  readonly reasoningEfforts?: readonly CoreReasoningEffort[];
+  readonly defaultReasoningEffort?: CoreReasoningEffort;
+  readonly supportsImages?: boolean;
   readonly promptProfile?: "compatibility" | "reasoning";
 }
+
+export const COMPATIBLE_REASONING_EFFORT_MODES = [
+  "none",
+  "reasoning_effort",
+  "reasoning.effort",
+  "output_config.effort",
+] as const;
 
 export type AssistantServerProviderConfig =
   | {
@@ -152,6 +241,9 @@ export type AssistantServerProviderConfig =
       readonly displayName?: string;
       readonly baseURL: string;
       readonly profile?: "generic" | "openrouter";
+      /** How a thinking level is sent upstream (the extension's setting). */
+      readonly reasoningEffortMode?: (typeof COMPATIBLE_REASONING_EFFORT_MODES)[number];
+      readonly timeoutMs?: number;
       readonly apiKey?: AssistantServerSecretSource;
       readonly noAuth?: true;
       readonly allowInsecureHttp?: true;
@@ -162,7 +254,8 @@ export type AssistantServerProviderConfig =
       readonly type: "openai";
       readonly id?: string;
       readonly displayName?: string;
-      readonly modelIds: readonly string[];
+      /** Omit for the full maintained catalog. */
+      readonly modelIds?: readonly string[];
       readonly apiKey: AssistantServerSecretSource;
     }
   | {
@@ -173,7 +266,8 @@ export type AssistantServerProviderConfig =
       readonly type: "codex";
       readonly id?: string;
       readonly displayName?: string;
-      readonly modelIds: readonly string[];
+      /** Omit for the full maintained catalog. */
+      readonly modelIds?: readonly string[];
     };
 
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
@@ -464,17 +558,32 @@ function parseProvider(
       "modelIds",
       ...(item.type === "openai" ? ["apiKey"] : []),
     ]);
-    if (!Array.isArray(item.modelIds) || item.modelIds.length === 0) {
-      throw new Error(`${label}.modelIds must be a non-empty array`);
+    if (
+      item.modelIds !== undefined &&
+      (!Array.isArray(item.modelIds) || item.modelIds.length === 0)
+    ) {
+      throw new Error(
+        `${label}.modelIds must be a non-empty array, or omitted for every model`,
+      );
     }
     const common = {
       ...(item.id === undefined
         ? {}
         : { id: identifier(item.id, `${label}.id`) }),
       ...optionalDisplayName(item, label),
-      modelIds: item.modelIds.map((id, index) =>
-        text(id, `${label}.modelIds[${index}]`),
-      ),
+      ...(item.modelIds === undefined
+        ? {}
+        : {
+            modelIds: (item.modelIds as unknown[]).map((id, index) => {
+              const modelId = text(id, `${label}.modelIds[${index}]`);
+              if (!CODEX_MODEL_MAP.has(modelId)) {
+                throw new Error(
+                  `${label}.modelIds[${index}] "${modelId}" is not a known model`,
+                );
+              }
+              return modelId;
+            }),
+          }),
     };
     return item.type === "codex"
       ? { type: "codex", ...common }
@@ -499,8 +608,20 @@ function parseProvider(
     "noAuth",
     "allowInsecureHttp",
     "meridianSessionAffinity",
+    "reasoningEffortMode",
+    "timeoutMs",
     "models",
   ]);
+  if (
+    item.reasoningEffortMode !== undefined &&
+    !(COMPATIBLE_REASONING_EFFORT_MODES as readonly unknown[]).includes(
+      item.reasoningEffortMode,
+    )
+  ) {
+    throw new Error(
+      `${label}.reasoningEffortMode must be one of ${COMPATIBLE_REASONING_EFFORT_MODES.join(", ")}`,
+    );
+  }
   for (const key of [
     "noAuth",
     "allowInsecureHttp",
@@ -536,6 +657,15 @@ function parseProvider(
     ...(item.profile === undefined
       ? {}
       : { profile: item.profile as "generic" | "openrouter" }),
+    ...(item.reasoningEffortMode === undefined
+      ? {}
+      : {
+          reasoningEffortMode:
+            item.reasoningEffortMode as (typeof COMPATIBLE_REASONING_EFFORT_MODES)[number],
+        }),
+    ...(item.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: positiveInteger(item.timeoutMs, `${label}.timeoutMs`) }),
     ...(noAuth
       ? { noAuth: true as const }
       : {
@@ -567,6 +697,9 @@ function compatibleModel(
     "maxOutputTokens",
     "supportsToolUse",
     "supportsThinking",
+    "reasoningEfforts",
+    "defaultReasoningEffort",
+    "supportsImages",
     "promptProfile",
   ]);
   const contextWindow = positiveInteger(
@@ -584,10 +717,36 @@ function compatibleModel(
   if (maxInputTokens === undefined && contextWindow <= maxOutputTokens) {
     throw new Error(`${label}.contextWindow must exceed maxOutputTokens`);
   }
-  for (const key of ["supportsToolUse", "supportsThinking"] as const) {
+  for (const key of [
+    "supportsToolUse",
+    "supportsThinking",
+    "supportsImages",
+  ] as const) {
     if (item[key] !== undefined && typeof item[key] !== "boolean") {
       throw new Error(`${label}.${key} must be a boolean`);
     }
+  }
+  let reasoningEfforts: CoreReasoningEffort[] | undefined;
+  if (item.reasoningEfforts !== undefined) {
+    if (
+      !Array.isArray(item.reasoningEfforts) ||
+      item.reasoningEfforts.length === 0 ||
+      !item.reasoningEfforts.every(isCoreReasoningEffort)
+    ) {
+      throw new Error(
+        `${label}.reasoningEfforts must be a non-empty array of thinking levels`,
+      );
+    }
+    reasoningEfforts = [...new Set(item.reasoningEfforts)];
+  }
+  if (
+    item.defaultReasoningEffort !== undefined &&
+    (!isCoreReasoningEffort(item.defaultReasoningEffort) ||
+      !reasoningEfforts?.includes(item.defaultReasoningEffort))
+  ) {
+    throw new Error(
+      `${label}.defaultReasoningEffort must be one of its reasoningEfforts`,
+    );
   }
   if (
     item.promptProfile !== undefined &&
@@ -607,6 +766,14 @@ function compatibleModel(
     maxOutputTokens,
     supportsToolUse: item.supportsToolUse === true,
     ...(item.supportsThinking === true ? { supportsThinking: true } : {}),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    ...(item.defaultReasoningEffort === undefined
+      ? {}
+      : {
+          defaultReasoningEffort:
+            item.defaultReasoningEffort as CoreReasoningEffort,
+        }),
+    ...(item.supportsImages === true ? { supportsImages: true } : {}),
     ...(item.promptProfile === undefined
       ? {}
       : {
@@ -751,7 +918,7 @@ export async function resolveWorkspaceProviders(
         type: "codex",
         ...(provider.id ? { id: provider.id } : {}),
         ...(provider.displayName ? { displayName: provider.displayName } : {}),
-        modelIds: provider.modelIds,
+        modelIds: responsesProviderModelIds(provider),
         credentialProvider: options.codexCredentialProvider,
       });
       continue;
@@ -761,7 +928,7 @@ export async function resolveWorkspaceProviders(
         type: "openai",
         ...(provider.id ? { id: provider.id } : {}),
         ...(provider.displayName ? { displayName: provider.displayName } : {}),
-        modelIds: provider.modelIds,
+        modelIds: responsesProviderModelIds(provider),
         resolveApiKey: await prepareSecret(provider.apiKey, label, env),
       });
       continue;
@@ -770,7 +937,12 @@ export async function resolveWorkspaceProviders(
     resolved.push({
       type: "openai-compatible",
       ...compatible,
-      models: models.map((model) => ({ ...model })),
+      models: models.map(({ reasoningEfforts, ...model }) => ({
+        ...model,
+        ...(reasoningEfforts
+          ? { reasoningEfforts: [...reasoningEfforts] }
+          : {}),
+      })),
       ...(apiKey
         ? { resolveApiKey: await prepareSecret(apiKey, label, env) }
         : {}),

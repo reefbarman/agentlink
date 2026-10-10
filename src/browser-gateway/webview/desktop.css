@@ -8,8 +8,8 @@
   overflow: hidden;
   padding: 48px 24px 20px;
   --vscode-button-background: var(--ag-accent);
-  --vscode-button-foreground: #102521;
-  --vscode-button-hoverBackground: #76dac4;
+  --vscode-button-foreground: var(--ag-accent-ink);
+  --vscode-button-hoverBackground: var(--ag-accent-hover);
   --vscode-button-secondaryBackground: var(--ag-panel-2);
   --vscode-button-secondaryForeground: var(--ag-text);
   --vscode-button-secondaryHoverBackground: #2a3b40;
@@ -67,8 +67,8 @@
 .browser-shell.browser-shell-desktop.desktop-mcp-manager
   .mcp-manager-button.active {
   border-color: var(--ag-accent-2);
-  background: #4ec9b01c;
-  color: #91edda;
+  background: var(--ag-accent-a1c);
+  color: var(--ag-accent-text);
 }
 
 .browser-shell.browser-shell-desktop.desktop-mcp-manager
@@ -322,8 +322,39 @@
   --ag-border-2: #41545a;
   --ag-text: #edf6f4;
   --ag-muted: #a2b8b7;
-  --ag-accent: #4ec9b0;
+  /*
+   * Accent tokens. Products restyle the shell by overriding these (see
+   * .assistant-product at the end of this file).
+   */
+  --ag-accent-rgb: 78 201 176;
+  --ag-accent: rgb(var(--ag-accent-rgb));
   --ag-accent-2: #337d6e;
+  --ag-accent-light: #78d8bc;
+  --ag-accent-text: #91edda;
+  --ag-accent-text-strong: #b9efdc;
+  --ag-accent-hover: #76dac4;
+  --ag-accent-ink: #102521;
+  --ag-title: #c3f6e9;
+  --ag-link: #76d7c2;
+  --ag-link-active: #a0e8d8;
+  /* Tinted surfaces that carry the accent hue. */
+  --ag-user-bubble: linear-gradient(125deg, #263735, #293237);
+  --ag-composer-bg: linear-gradient(120deg, #222d2c, #252b31);
+  --ag-new-chat-bg: linear-gradient(115deg, #24473d, #223a37);
+  --ag-accent-a09: rgb(var(--ag-accent-rgb) / 0.035);
+  --ag-accent-a0c: rgb(var(--ag-accent-rgb) / 0.047);
+  --ag-accent-a10: rgb(var(--ag-accent-rgb) / 0.063);
+  --ag-accent-a12: rgb(var(--ag-accent-rgb) / 0.071);
+  --ag-accent-a15: rgb(var(--ag-accent-rgb) / 0.082);
+  --ag-accent-a16: rgb(var(--ag-accent-rgb) / 0.086);
+  --ag-accent-a18: rgb(var(--ag-accent-rgb) / 0.094);
+  --ag-accent-a19: rgb(var(--ag-accent-rgb) / 0.098);
+  --ag-accent-a1a: rgb(var(--ag-accent-rgb) / 0.102);
+  --ag-accent-a1c: rgb(var(--ag-accent-rgb) / 0.11);
+  --ag-accent-a20: rgb(var(--ag-accent-rgb) / 0.125);
+  --ag-accent-a30: rgb(var(--ag-accent-rgb) / 0.188);
+  --ag-accent-a35: rgb(var(--ag-accent-rgb) / 0.208);
+  --ag-accent-a45: rgb(var(--ag-accent-rgb) / 0.271);
   --ag-code-bg: #182225;
   --consumer-canvas: var(--ag-bg);
   --consumer-surface: #202d31;
@@ -346,8 +377,8 @@
   --vscode-input-border: var(--ag-border-2);
   --vscode-input-placeholderForeground: #999999;
   --vscode-textCodeBlock-background: var(--ag-code-bg);
-  --vscode-textLink-foreground: #76d7c2;
-  --vscode-textLink-activeForeground: #a0e8d8;
+  --vscode-textLink-foreground: var(--ag-link);
+  --vscode-textLink-activeForeground: var(--ag-link-active);
   --vscode-focusBorder: var(--ag-accent);
   --vscode-button-background: #e8e8e8;
   --vscode-button-foreground: #181818;
@@ -358,8 +389,12 @@
   --desktop-sidebar-width: 264px;
   --desktop-column-width: 760px;
   background:
-    radial-gradient(ellipse at 25% 0%, #4ec9b010, transparent 48%),
-    radial-gradient(ellipse at 100% 90%, #9d83ff09, transparent 48%),
+    radial-gradient(ellipse at 25% 0%, var(--ag-accent-a10), transparent 48%),
+    radial-gradient(
+      ellipse at 100% 90%,
+      var(--ag-glow-2, #9d83ff09),
+      transparent 48%
+    ),
     var(--ag-bg);
   color: var(--ag-text);
   font-family: var(--vscode-font-family);
@@ -389,7 +424,7 @@
   font-size: 16px;
   font-weight: 550;
   letter-spacing: -0.025em;
-  color: #c3f6e9;
+  color: var(--ag-title);
 }
 
 .browser-shell.browser-shell-desktop .desktop-brand-logo {
@@ -423,7 +458,7 @@
 
 .browser-shell.browser-shell-desktop .desktop-mcp-button:hover {
   border-color: var(--ag-accent);
-  color: #91edda;
+  color: var(--ag-accent-text);
 }
 
 .browser-shell.browser-shell-desktop .desktop-more-actions {
@@ -478,8 +513,8 @@
 .browser-shell.browser-shell-desktop .desktop-more-trigger:hover,
 .browser-shell.browser-shell-desktop
   .desktop-more-trigger[aria-expanded="true"] {
-  background: #4ec9b015;
-  color: #b9efdc;
+  background: var(--ag-accent-a15);
+  color: var(--ag-accent-text-strong);
 }
 
 .browser-shell.browser-shell-desktop .browser-header .icon-button {
@@ -553,8 +588,8 @@
   .release-update-dialog
   .release-update-channel {
   border-color: var(--ag-accent-2);
-  color: #91edda;
-  background: #4ec9b012;
+  color: var(--ag-accent-text);
+  background: var(--ag-accent-a12);
 }
 
 .browser-shell.browser-shell-desktop
@@ -571,8 +606,8 @@
   .release-update-dialog
   .release-update-button:hover:not(:disabled) {
   border-color: var(--ag-accent-2);
-  background: #4ec9b015;
-  color: #b9efdc;
+  background: var(--ag-accent-a15);
+  color: var(--ag-accent-text-strong);
 }
 
 .browser-shell.browser-shell-desktop
@@ -580,15 +615,15 @@
   .release-update-button-primary {
   border-color: transparent;
   background: var(--ag-accent);
-  color: #102521;
+  color: var(--ag-accent-ink);
 }
 
 .browser-shell.browser-shell-desktop
   .release-update-dialog
   .release-update-button-primary:hover:not(:disabled) {
   border-color: transparent;
-  background: #76dac4;
-  color: #102521;
+  background: var(--ag-accent-hover);
+  color: var(--ag-accent-ink);
 }
 
 .browser-shell.browser-shell-desktop
@@ -648,8 +683,8 @@
 
 .browser-shell.browser-shell-desktop button:not([class]):hover:not(:disabled) {
   border-color: var(--ag-accent-2);
-  background: #4ec9b015;
-  color: #b9efdc;
+  background: var(--ag-accent-a15);
+  color: var(--ag-accent-text-strong);
 }
 
 .browser-shell.browser-shell-desktop button:not([class]):disabled {
@@ -659,8 +694,8 @@
 
 .browser-shell.browser-shell-desktop .browser-header .icon-button:hover,
 .browser-shell.browser-shell-desktop .browser-header .icon-button.active {
-  color: #91edda;
-  background: #4ec9b01a;
+  color: var(--ag-accent-text);
+  background: var(--ag-accent-a1a);
 }
 
 .browser-shell.browser-shell-desktop
@@ -713,8 +748,8 @@
   .desktop-mode-navigation
   button[aria-current="page"],
 .browser-shell.browser-shell-desktop .desktop-mode-navigation button:hover {
-  color: #b9efdc;
-  background: #4ec9b015;
+  color: var(--ag-accent-text-strong);
+  background: var(--ag-accent-a15);
 }
 
 .browser-shell.browser-shell-desktop .desktop-sidebar-history {
@@ -763,9 +798,9 @@
 
 .browser-shell.browser-shell-desktop .desktop-remote-placeholder button {
   padding: 9px 16px;
-  border: 1px solid #4ec9b030;
+  border: 1px solid var(--ag-accent-a30);
   border-radius: 10px;
-  background: #4ec9b018;
+  background: var(--ag-accent-a18);
   color: var(--ag-text);
   cursor: pointer;
 }
@@ -783,9 +818,9 @@
   gap: 8px;
   min-height: 0;
   padding: 10px 12px 16px;
-  border-right: 1px solid #4ec9b016;
+  border-right: 1px solid var(--ag-accent-a16);
   background:
-    radial-gradient(ellipse at 0% 0%, #4ec9b012, transparent 65%),
+    radial-gradient(ellipse at 0% 0%, var(--ag-accent-a12), transparent 65%),
     var(--ag-panel);
 }
 
@@ -875,11 +910,11 @@
 }
 
 .browser-shell.browser-shell-desktop .desktop-chat-link.active {
-  background: linear-gradient(100deg, #4ec9b019, #71baff06);
-  color: #c3f6e9;
+  background: linear-gradient(100deg, var(--ag-accent-a19), #71baff06);
+  color: var(--ag-title);
   box-shadow:
     inset 3px 0 var(--ag-accent),
-    inset 0 0 0 1px #4ec9b018;
+    inset 0 0 0 1px var(--ag-accent-a18);
   font-weight: 500;
 }
 
@@ -899,7 +934,7 @@
 .browser-shell.browser-shell-desktop .approval-panel-embed {
   margin: 8px 2px 12px;
   padding: 14px 18px 16px;
-  border: 1px solid #4ec9b030;
+  border: 1px solid var(--ag-accent-a30);
   border-radius: 20px;
   background: linear-gradient(125deg, #202d2c, #222a30);
   box-shadow: 0 6px 24px #00000020;
@@ -963,7 +998,7 @@
 }
 
 .browser-shell.browser-shell-desktop .approval-panel-embed .btn-primary {
-  background: #4ec9b0;
+  background: var(--ag-accent);
   color: #102c28;
   border-color: transparent;
 }
@@ -1011,8 +1046,8 @@
   margin-left: auto;
   padding: 3px 7px;
   border-radius: 6px;
-  background: #4ec9b020;
-  color: #91edda;
+  background: var(--ag-accent-a20);
+  color: var(--ag-accent-text);
   font-size: 10px;
   line-height: 14px;
 }
@@ -1079,8 +1114,8 @@
 
 .browser-shell.browser-shell-desktop .mcp-rule-row .mode-btn.active {
   border-color: var(--ag-accent-2);
-  background: #4ec9b01c;
-  color: #91edda;
+  background: var(--ag-accent-a1c);
+  color: var(--ag-accent-text);
 }
 
 .browser-shell.browser-shell-desktop .mcp-rule-row .mode-btn:disabled {
@@ -1125,9 +1160,9 @@
   padding: 11px 18px;
   border: 0;
   border-radius: 22px;
-  background: linear-gradient(125deg, #263735, #293237);
+  background: var(--ag-user-bubble);
   box-shadow:
-    inset 0 0 0 1px #8cebd519,
+    inset 0 0 0 1px var(--ag-accent-a19),
     0 4px 16px #00000014;
   font-size: 15px;
   line-height: 1.6;
@@ -1154,11 +1189,12 @@
   border: 1px solid transparent;
   border-radius: 24px;
   background:
-    linear-gradient(120deg, #222d2c, #252b31) padding-box,
-    linear-gradient(110deg, #4ec9b045, #71baff1a 55%, #b59aff30) border-box;
+    var(--ag-composer-bg) padding-box,
+    linear-gradient(110deg, var(--ag-accent-a45), #71baff1a 55%, #b59aff30)
+      border-box;
   box-shadow:
     0 8px 32px #00000030,
-    0 0 32px #4ec9b009;
+    0 0 32px var(--ag-accent-a09);
   backdrop-filter: none;
   transition: box-shadow 180ms ease;
 }
@@ -1167,7 +1203,7 @@
   box-shadow:
     0 8px 32px #00000030,
     0 0 0 2px var(--ag-accent),
-    0 0 24px #4ec9b00c;
+    0 0 24px var(--ag-accent-a0c);
 }
 
 .browser-shell.browser-shell-desktop .input-area .chat-input:focus-visible {
@@ -1190,8 +1226,8 @@
   width: 32px;
   height: 32px;
   color: #102c28;
-  background: linear-gradient(135deg, #78d8bc, #4ec9b0);
-  box-shadow: 0 3px 10px #4ec9b018;
+  background: linear-gradient(135deg, var(--ag-accent-light), var(--ag-accent));
+  box-shadow: 0 3px 10px var(--ag-accent-a18);
 }
 
 .browser-shell.browser-shell-desktop .send-button:disabled {
@@ -1215,10 +1251,10 @@
   width: 68px;
   height: 68px;
   margin-bottom: 24px;
-  border: 1px solid #4ec9b030;
+  border: 1px solid var(--ag-accent-a30);
   border-radius: 20px;
   background: linear-gradient(145deg, #243e37, #223137);
-  box-shadow: 0 8px 32px #4ec9b00c;
+  box-shadow: 0 8px 32px var(--ag-accent-a0c);
   transform: none;
 }
 
@@ -1311,16 +1347,16 @@
 
 .browser-shell.browser-shell-desktop .desktop-sidebar .desktop-new-chat {
   margin-bottom: 8px;
-  border: 1px solid #4ec9b035;
+  border: 1px solid var(--ag-accent-a35);
   border-radius: 13px;
-  background: linear-gradient(115deg, #24473d, #223a37);
-  color: #b9efdc;
+  background: var(--ag-new-chat-bg);
+  color: var(--ag-accent-text-strong);
   box-shadow: none;
   font-weight: 600;
 }
 
 .browser-shell.browser-shell-desktop .desktop-sidebar .desktop-new-chat:hover {
-  box-shadow: 0 4px 18px #4ec9b010;
+  box-shadow: 0 4px 18px var(--ag-accent-a10);
   filter: brightness(1.08);
   transform: translateY(-1px);
 }
@@ -1544,10 +1580,10 @@ html.quick-ask-document body {
   border-radius: 24px;
   background: conic-gradient(
     from var(--quick-ask-glow-angle),
-    #4ec9b0,
+    var(--ag-accent),
     #71baff,
     #b59aff,
-    #4ec9b0
+    var(--ag-accent)
   );
   filter: blur(16px);
   opacity: 0.4;
@@ -1567,10 +1603,10 @@ html.quick-ask-document body {
     linear-gradient(120deg, #222d2c, #252b31) padding-box,
     conic-gradient(
         from var(--quick-ask-glow-angle),
-        #4ec9b0,
+        var(--ag-accent),
         #71baff,
         #b59aff,
-        #4ec9b0
+        var(--ag-accent)
       )
       border-box;
   box-shadow: 0 12px 40px #00000066;
@@ -1580,4 +1616,70 @@ html.quick-ask-document body {
   .browser-shell.browser-shell-desktop.quick-ask-panel .browser-chat-composer {
     animation: none;
   }
+}
+
+/*
+ * AgentLink Assistant: the same shell in violet (the third colour of the
+ * Ask Agent glow), with violet-tinted neutrals so the two products are easy
+ * to tell apart at a glance.
+ */
+.browser-shell.browser-shell-desktop.assistant-product {
+  --ag-bg: #131219;
+  --ag-panel: #15131d;
+  --ag-panel-2: #24212f;
+  --ag-border: #36314a;
+  --ag-border-2: #4a445e;
+  --ag-text: #f2f0f8;
+  --ag-muted: #b1abc4;
+  --ag-accent-rgb: 181 154 255;
+  --ag-accent-2: #6a55b8;
+  --ag-accent-light: #c6b2ff;
+  --ag-accent-text: #d4c6ff;
+  --ag-accent-text-strong: #e3d9ff;
+  --ag-accent-hover: #c4adff;
+  --ag-accent-ink: #1c1530;
+  --ag-title: #ece6ff;
+  --ag-link: #c0a9ff;
+  --ag-link-active: #dccfff;
+  --ag-user-bubble: linear-gradient(125deg, #2e2942, #2a2b3a);
+  --ag-composer-bg: linear-gradient(120deg, #26233a, #25263a);
+  --ag-new-chat-bg: linear-gradient(115deg, #3a2f63, #2d2848);
+  --ag-glow-2: #71baff09;
+  --ag-code-bg: #1b1925;
+  --consumer-surface: #232030;
+  --consumer-surface-strong: #2c2840;
+}
+
+.browser-shell.browser-shell-desktop.assistant-product .consumer-welcome-mark {
+  background: linear-gradient(145deg, #352c58, #262338);
+}
+
+.browser-shell.browser-shell-desktop.assistant-product
+  .consumer-welcome-eyebrow {
+  color: var(--ag-accent-text);
+}
+
+.browser-shell.browser-shell-desktop.assistant-product .consumer-welcome h1 {
+  color: var(--ag-title);
+  background: linear-gradient(105deg, #f3efff, #d6c9ff 60%, #bfd9ff);
+  background-clip: text;
+}
+
+.browser-shell.browser-shell-desktop.assistant-product .consumer-starter {
+  --starter-accent: var(--ag-accent);
+  background: linear-gradient(
+    140deg,
+    color-mix(in srgb, var(--starter-accent) 6%, #1d1b27),
+    #1d1b27
+  );
+}
+
+.browser-shell.browser-shell-desktop.assistant-product
+  .consumer-starter:nth-child(2) {
+  --starter-accent: #85cbff;
+}
+
+.browser-shell.browser-shell-desktop.assistant-product
+  .consumer-starter:nth-child(3) {
+  --starter-accent: #79e2bd;
 }

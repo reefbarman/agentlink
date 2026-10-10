@@ -5,6 +5,7 @@ import {
   type AgentTurnEvent,
   type AgentTurnResult,
 } from "@agentlink/core";
+import type { CoreReasoningEffort } from "@agentlink/protocol";
 import type {
   WorkspaceBackgroundChange,
   WorkspaceHost,
@@ -62,6 +63,7 @@ export type AssistantWorkspaceHost = Pick<
   | "listSessions"
   | "readSession"
   | "setSessionModel"
+  | "setSessionReasoningEffort"
   | "runTurn"
   | "resumeInteraction"
   | "cancel"
@@ -145,6 +147,7 @@ export interface AssistantSessionOperations {
   ): Promise<{
     readonly messages: readonly unknown[];
     readonly model: AgentModelReference;
+    readonly reasoningEffort: CoreReasoningEffort | undefined;
     readonly createdAt: number;
     readonly updatedAt: number;
   }>;
@@ -152,12 +155,20 @@ export interface AssistantSessionOperations {
     auth: AssistantServerAuth,
     projectId: string,
     model?: AgentModelReference,
+    reasoningEffort?: CoreReasoningEffort,
   ): Promise<{ readonly sessionId: string }>;
   setModel(
     auth: AssistantServerAuth,
     projectId: string,
     sessionId: string,
     model: AgentModelReference,
+  ): Promise<void>;
+  /** Change the session's thinking level between turns. */
+  setReasoningEffort(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    reasoningEffort: CoreReasoningEffort,
   ): Promise<void>;
   startTurn(
     auth: AssistantServerAuth,
@@ -471,6 +482,21 @@ export function createAssistantWorkspaceRoutes(
     if (!isAvailable(model)) throw new HttpError(400, "model_not_available");
   };
 
+  /** The level must be one the model declares; no list means no control. */
+  const assertSupportedEffort = (
+    model: AgentModelReference,
+    reasoningEffort: CoreReasoningEffort,
+  ) => {
+    const choice = models.available.find(
+      (candidate) =>
+        candidate.providerId === model.providerId &&
+        candidate.modelId === model.modelId,
+    );
+    if (!choice?.reasoningEfforts?.includes(reasoningEffort)) {
+      throw new HttpError(400, "reasoning_effort_not_available");
+    }
+  };
+
   const operations: AssistantSessionOperations = {
     sessionKey,
     async listSessions(auth, projectId) {
@@ -489,19 +515,47 @@ export function createAssistantWorkspaceRoutes(
       return {
         messages: record.messages,
         model: effectiveModel(record.selectedModel),
+        reasoningEffort: record.reasoningEffort,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       };
     },
-    async createSession(auth, projectId, model) {
+    async createSession(auth, projectId, model, reasoningEffort) {
       const mount = await authorize(auth, projectId, "write");
       if (model) assertAvailableModel(model);
+      if (reasoningEffort !== undefined) {
+        assertSupportedEffort(model ?? models.defaultModel, reasoningEffort);
+      }
       if (closing) throw new HttpError(503, "server_closing");
       await assertStillAuthorized(auth);
       const created = await mount.host.createSession(
-        model ? { model: { ...model } } : undefined,
+        model || reasoningEffort
+          ? {
+              ...(model ? { model: { ...model } } : {}),
+              ...(reasoningEffort ? { reasoningEffort } : {}),
+            }
+          : undefined,
       );
       return { sessionId: created.sessionId };
+    },
+    async setReasoningEffort(auth, projectId, sessionId, reasoningEffort) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "write");
+      const key = sessionKey(projectId, sessionId);
+      assertStartable(key);
+      await assertRunnable(mount, sessionId);
+      const { record } = await readSnapshot(mount, sessionId);
+      assertSupportedEffort(
+        effectiveModel(record.selectedModel),
+        reasoningEffort,
+      );
+      await assertStillAuthorized(auth);
+      assertStartable(key);
+      try {
+        await mount.host.setSessionReasoningEffort(sessionId, reasoningEffort);
+      } catch (error) {
+        throw mapSessionUpdateError(error);
+      }
     },
     async setModel(auth, projectId, sessionId, model) {
       assertSessionId(sessionId);
@@ -518,19 +572,7 @@ export function createAssistantWorkspaceRoutes(
           modelId: model.modelId,
         });
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "session_not_found") {
-          throw new HttpError(404, "session_not_found");
-        }
-        if (
-          code === "session_busy" ||
-          code === "turn_lease_held" ||
-          code === "turn_lease_lost" ||
-          code === "session_revision_conflict"
-        ) {
-          throw new HttpError(409, "session_busy");
-        }
-        throw error;
+        throw mapSessionUpdateError(error);
       }
     },
     async startTurn(auth, projectId, sessionId, text) {
@@ -1209,6 +1251,23 @@ function readCursor(
 
 function parseSequence(value: string): number {
   return /^\d{1,15}$/u.test(value) ? Number(value) : -1;
+}
+
+/** Map a host failure while changing a session's settings between turns. */
+function mapSessionUpdateError(error: unknown): unknown {
+  const code = errorCode(error);
+  if (code === "session_not_found") {
+    return new HttpError(404, "session_not_found");
+  }
+  if (
+    code === "session_busy" ||
+    code === "turn_lease_held" ||
+    code === "turn_lease_lost" ||
+    code === "session_revision_conflict"
+  ) {
+    return new HttpError(409, "session_busy");
+  }
+  return error;
 }
 
 /** Public error code only; never a message that could carry private detail. */

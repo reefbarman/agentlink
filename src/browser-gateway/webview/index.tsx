@@ -22,6 +22,7 @@ declare global {
       workspaceName: string;
       routeByInstance?: boolean;
       askAgentOnly?: boolean;
+      product?: string;
       initialTheme?: BrowserGatewayThemeSnapshot;
       dataPlaneMode?: BrowserGatewayDataPlaneMode;
     };
@@ -65,6 +66,7 @@ function BrowserGatewayRoot() {
       workspaceName={config.workspaceName}
       routeByInstance={config.routeByInstance === true}
       askAgentOnly={config.askAgentOnly === true}
+      product={config.product === "assistant" ? "assistant" : "ask-agent"}
       quickAsk={
         config.askAgentOnly === true &&
         Boolean(window.agentlinkDesktopShell) &&

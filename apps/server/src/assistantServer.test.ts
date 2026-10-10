@@ -182,6 +182,8 @@ describe("assistant server access layer", () => {
     await expect(plainHttpRequest(harness.port)).rejects.toThrow();
     const pair = await harness.request({ path: "/pair" });
     expect(pair.status).toBe(200);
+    expect(String(pair.body)).toContain("Pair with AgentLink Assistant");
+    expect(String(pair.body)).toContain("--accent: #B59AFF");
     expect(pair.headers).toMatchObject({
       "strict-transport-security": "max-age=31536000",
       "x-content-type-options": "nosniff",
