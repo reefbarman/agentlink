@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-10-10
+
+- Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.
+
 ## 0.8.0 — 2026-10-09
 
 - Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.

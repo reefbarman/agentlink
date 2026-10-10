@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-  "createdAt": "2026-10-09T12:31:58.378Z",
+  "sourceSha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+  "createdAt": "2026-10-10T10:29:29.966Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.30.0",
       "baselineRef": "v1.30.0",
-      "reserved": "1.30.8",
+      "reserved": "1.30.12",
       "commits": [
         "39a786755f9fd16bc59368d5d8c8001da8016d72",
         "5f5e17d3854f62cb4f1834594835d84149e8074e",
@@ -26,7 +26,8 @@
         "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
         "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
         "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
-        "8b30ef6e3912defc9d9e852e84e111da99fdac14"
+        "8b30ef6e3912defc9d9e852e84e111da99fdac14",
+        "e3b849eb40e8cea3429e37fcbe70f2a92937edb0"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -114,38 +115,20 @@
           "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
           "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
           "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.10.1",
-      "baselineRef": "desktop-v0.10.1",
-      "reserved": "0.10.1",
-      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.11.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.11.0",
-      "notes": [
+        },
         {
-          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
-          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+          "subject": "feat(agent): add Codex voice input to the chat composer",
+          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
           "breaking": false
         }
       ]
     },
-    "cli": {
+    "desktop": {
       "published": "0.11.0",
-      "baselineRef": "cli-v0.11.0",
+      "baselineRef": "desktop-v0.11.0",
       "reserved": "0.11.0",
-      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
+      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -155,36 +138,60 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.12.0",
+      "tag": "desktop-v0.12.0",
       "notes": [
         {
-          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
-          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+          "subject": "feat(agent): add Codex voice input to the chat composer",
+          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.12.0",
+      "baselineRef": "cli-v0.12.0",
+      "reserved": "0.12.0",
+      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.13.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.13.0",
+      "notes": [
+        {
+          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+          "subject": "feat(agent): add Codex voice input to the chat composer",
+          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.7.1",
-      "baselineRef": "sdk-v0.7.1",
-      "reserved": "0.7.1",
-      "commits": ["8b30ef6e3912defc9d9e852e84e111da99fdac14"],
+      "published": "0.8.0",
+      "baselineRef": "sdk-v0.8.0",
+      "reserved": "0.8.0",
+      "commits": ["e3b849eb40e8cea3429e37fcbe70f2a92937edb0"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.8.0",
+      "tag": "sdk-v0.9.0",
       "notes": [
         {
-          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
-          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
+          "subject": "feat(agent): add Codex voice input to the chat composer",
+          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
           "breaking": false
         }
       ]
@@ -291,6 +298,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e3b849eb40e8cea3429e37fcbe70f2a92937edb0": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
