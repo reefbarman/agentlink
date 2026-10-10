@@ -1,4 +1,10 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
+import {
+  NotificationSettings,
+  useLocalInboxNotifications,
+  useNotificationLinks,
+  type OpenTarget,
+} from "./AssistantNotifications";
 import { useEffect, useState } from "preact/hooks";
 
 /**
@@ -381,6 +387,25 @@ export function AssistantHub({
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
     setView(null);
   };
+  // A notification (or its link) marks its entry read and opens its chat,
+  // or the inbox when it has none.
+  const openTarget = (target: OpenTarget) => {
+    void (async () => {
+      if (target.entryId) {
+        await requestJson("/api/inbox/read", {
+          method: "POST",
+          body: { ids: [target.entryId] },
+        }).catch(() => undefined);
+      }
+      if (target.projectId && target.sessionId) {
+        await openChat(target.projectId, target.sessionId);
+      } else {
+        setView("inbox");
+      }
+    })().catch(() => setView("inbox"));
+  };
+  useNotificationLinks(openTarget);
+  useLocalInboxNotifications(revision, openTarget);
   return (
     <>
       <nav class="assistant-hub" aria-label="Assistant">
@@ -1119,6 +1144,7 @@ export function InboxPanel({
         ) : undefined
       }
     >
+      <NotificationSettings />
       {error && (
         <p class="assistant-project-error" role="alert">
           {error}

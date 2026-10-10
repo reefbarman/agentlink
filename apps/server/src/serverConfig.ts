@@ -58,6 +58,21 @@ export interface AssistantServerConfig {
   readonly commandWorker?: AssistantServerCommandWorkerConfig;
   /** Web tools (`web_fetch`, `web_search`). */
   readonly web?: AssistantServerWebConfig;
+  /** Push notifications to devices that turn them on. */
+  readonly notifications?: AssistantServerNotificationsConfig;
+}
+
+export interface AssistantServerNotificationsConfig {
+  /**
+   * Contact the push services may use (the VAPID `sub`): a `mailto:` or
+   * `https:` URL. Defaults to the AgentLink project page.
+   */
+  readonly contact?: string;
+  /**
+   * Put a finished run's first reply line in its notification. Off by
+   * default: notifications carry the job name and a fixed description.
+   */
+  readonly includeSummary?: boolean;
 }
 
 export interface AssistantServerWebConfig {
@@ -345,6 +360,7 @@ export function parseAssistantServerConfig(
     "ripgrepPath",
     "commandWorker",
     "web",
+    "notifications",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -497,6 +513,49 @@ export function parseAssistantServerConfig(
           ),
         }),
     ...(config.web === undefined ? {} : { web: parseWeb(config.web) }),
+    ...(config.notifications === undefined
+      ? {}
+      : { notifications: parseNotifications(config.notifications) }),
+  };
+}
+
+function parseNotifications(
+  value: unknown,
+): AssistantServerNotificationsConfig {
+  const item = record(value, "notifications");
+  allowKeys(item, "notifications", ["contact", "includeSummary"]);
+  if (
+    item.includeSummary !== undefined &&
+    typeof item.includeSummary !== "boolean"
+  ) {
+    throw new Error("notifications.includeSummary must be true or false");
+  }
+  let contact: string | undefined;
+  if (item.contact !== undefined) {
+    const raw = text(item.contact, "notifications.contact");
+    let url: URL | undefined;
+    try {
+      url = new URL(raw);
+    } catch {
+      url = undefined;
+    }
+    if (
+      !url ||
+      (url.protocol === "mailto:"
+        ? !/^[^@\s]+@[^@\s]+$/u.test(url.pathname)
+        : url.protocol !== "https:")
+    ) {
+      throw new Error(
+        "notifications.contact must be a mailto: or https: URL, like mailto:you@example.com",
+      );
+    }
+    contact = raw;
+  }
+  return {
+    ...(contact ? { contact } : {}),
+    ...(item.includeSummary === undefined
+      ? {}
+      : { includeSummary: item.includeSummary }),
   };
 }
 

@@ -570,6 +570,44 @@ describe("assistant server access layer", () => {
     expect(self.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
 
+  it("shows and turns off device notifications on /devices", async () => {
+    const notifying = new Set<string>();
+    const harness = await startHarness(undefined, {
+      deviceNotifications: {
+        isOn: (deviceId) => notifying.has(deviceId),
+        turnOff: async (deviceId) => {
+          notifying.delete(deviceId);
+        },
+      },
+    });
+    const owner = await pairDevice(harness, "Laptop");
+    const phone = await pairDevice(harness, "Phone");
+    notifying.add(phone.deviceId);
+
+    const list = await harness.request({
+      path: "/devices",
+      headers: { cookie: owner.cookie },
+    });
+    expect(list.body).toContain("Notifications on");
+    expect(list.body).toContain("Notifications off");
+    expect(list.body).toContain(`/devices/${phone.deviceId}/notifications/off`);
+    expect(list.body).not.toContain(
+      `/devices/${owner.deviceId}/notifications/off`,
+    );
+
+    await expect(
+      harness.request({
+        method: "POST",
+        path: `/devices/${phone.deviceId}/notifications/off`,
+        headers: authHeaders(harness, owner),
+      }),
+    ).resolves.toMatchObject({
+      status: 303,
+      headers: { location: "/devices" },
+    });
+    expect(notifying.has(phone.deviceId)).toBe(false);
+  });
+
   it("expires pairing codes", async () => {
     const harness = await startHarness();
     const { code } = harness.server.store.createPairing();

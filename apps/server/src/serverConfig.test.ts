@@ -505,6 +505,32 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("parses notification settings", () => {
+    const parse = (notifications: unknown) =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          value.notifications = notifications;
+        }),
+        "/etc/agentlink",
+      ).notifications;
+    expect(parse({})).toEqual({});
+    expect(
+      parse({ contact: "mailto:me@example.com", includeSummary: true }),
+    ).toEqual({ contact: "mailto:me@example.com", includeSummary: true });
+    expect(parse({ contact: "https://example.com/about" })).toEqual({
+      contact: "https://example.com/about",
+    });
+    for (const contact of ["me@example.com", "mailto:nobody", "http://x.io"]) {
+      expect(() => parse({ contact }), contact).toThrow(
+        "notifications.contact",
+      );
+    }
+    expect(() => parse({ includeSummary: "yes" })).toThrow(
+      "notifications.includeSummary",
+    );
+    expect(() => parse({ sound: true })).toThrow("sound");
+  });
+
   it("resolves projectsRoot, where the app creates projects", () => {
     expect(
       parseAssistantServerConfig(validConfig(), "/etc/agentlink").projectsRoot,

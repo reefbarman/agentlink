@@ -68,6 +68,8 @@ export function renderNewPairingPage(options: {
 export function renderDevicesPage(options: {
   readonly devices: readonly ServerAccessDevice[];
   readonly currentDeviceId: string;
+  /** Whether a device has push notifications on. */
+  readonly notificationsOn?: (deviceId: string) => boolean;
   readonly errorMessage?: string;
 }): string {
   const active = options.devices
@@ -76,21 +78,33 @@ export function renderDevicesPage(options: {
   const rows = active
     .map((device) => {
       const current = device.deviceId === options.currentDeviceId;
+      const notifying = options.notificationsOn?.(device.deviceId) === true;
+      const id = encodeURIComponent(device.deviceId);
       return `<li>
         <div>
           <div class="label">${htmlEscape(device.label)}${current ? ' <span class="badge">This device</span>' : ""}</div>
           <div class="muted">Paired ${htmlEscape(new Date(device.createdAt).toUTCString())}</div>
+          <div class="muted">Notifications ${notifying ? "on" : "off"}</div>
         </div>
-        <form method="post" action="/devices/${encodeURIComponent(device.deviceId)}/revoke">
-          <button class="danger" type="submit">${current ? "Sign out" : "Revoke"}</button>
-        </form>
+        <div class="actions">
+          ${
+            notifying
+              ? `<form method="post" action="/devices/${id}/notifications/off">
+            <button class="secondary" type="submit">Turn off notifications</button>
+          </form>`
+              : ""
+          }
+          <form method="post" action="/devices/${id}/revoke">
+            <button class="danger" type="submit">${current ? "Sign out" : "Revoke"}</button>
+          </form>
+        </div>
       </li>`;
     })
     .join("\n");
   return page(
     "Devices",
     `<h1>Devices</h1>
-    <p>Browsers and phones signed in to this assistant.</p>
+    <p>Browsers and phones signed in to this assistant. Turn notifications on from the Inbox in the app on each device.</p>
     ${options.errorMessage ? `<p class="error" role="alert">${htmlEscape(options.errorMessage)}</p>` : ""}
     <ul class="devices">${rows}</ul>
     <form method="post" action="/devices/pair">
@@ -140,6 +154,8 @@ function page(title: string, body: string): string {
     .badge { font-size: 11px; color: #111; background: var(--accent); border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
     button { font-size: 14px; padding: 10px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #111; font-weight: 600; cursor: pointer; }
     button.danger { background: transparent; color: #f48771; border: 1px solid rgba(244,71,71,0.5); padding: 6px 10px; }
+    button.secondary { background: transparent; color: inherit; border: 1px solid #5a5a5a; padding: 6px 10px; }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   </style>
 </head>
 <body>

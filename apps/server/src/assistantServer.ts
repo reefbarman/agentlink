@@ -135,6 +135,15 @@ export interface CreateAssistantServerOptions {
    * inline boot script must carry. Signed-out browsers go to `/pair`.
    */
   readonly renderAppPage?: (page: { readonly nonce: string }) => string;
+  /**
+   * Push notification state for the `/devices` page, which shows which
+   * devices have notifications on and can turn them off. Turning them on
+   * needs the browser, so it happens in the app.
+   */
+  readonly deviceNotifications?: {
+    isOn(deviceId: string): boolean;
+    turnOff(deviceId: string): Promise<void>;
+  };
   readonly now?: () => number;
 }
 
@@ -408,6 +417,8 @@ export async function createAssistantServer(
       response.end(method === "HEAD" ? undefined : html);
       return;
     }
+    const notificationsOn = (deviceId: string) =>
+      options.deviceNotifications?.isOn(deviceId) === true;
     if ((method === "GET" || method === "HEAD") && pathname === "/devices") {
       sendPage(
         response,
@@ -415,8 +426,21 @@ export async function createAssistantServer(
         renderDevicesPage({
           devices: store.listDevices(),
           currentDeviceId: auth.session.deviceId,
+          notificationsOn,
         }),
       );
+      return;
+    }
+    const notificationsOffMatch =
+      /^\/devices\/([0-9a-f-]{36})\/notifications\/off$/u.exec(pathname);
+    if (
+      method === "POST" &&
+      notificationsOffMatch &&
+      options.deviceNotifications
+    ) {
+      request.resume();
+      await options.deviceNotifications.turnOff(notificationsOffMatch[1]!);
+      redirect(response, "/devices");
       return;
     }
     if (method === "POST" && pathname === "/devices/pair") {
@@ -429,6 +453,7 @@ export async function createAssistantServer(
           renderDevicesPage({
             devices: store.listDevices(),
             currentDeviceId: auth.session.deviceId,
+            notificationsOn,
             errorMessage:
               "Too many unused pairing codes. Wait a few minutes and try again.",
           }),

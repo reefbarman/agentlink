@@ -2505,6 +2505,36 @@ html.quick-ask-document body {
   background: var(--ag-accent-a12);
 }
 
+.browser-shell.browser-shell-desktop .assistant-notifications {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-notifications-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-notifications-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ag-text);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-notifications-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-notifications p {
+  margin: 8px 0 0;
+}
+
 .browser-shell.browser-shell-desktop .assistant-inbox-group h3 {
   margin: 4px 0 8px;
   color: var(--ag-muted);

@@ -63,6 +63,13 @@ import {
 } from "./jobStore.js";
 import { createInboxRoutes } from "./inboxRoutes.js";
 import { inboxEntryForRun, openInboxStore } from "./inboxStore.js";
+import { createPushRoutes } from "./pushRoutes.js";
+import {
+  connectorPushTransport,
+  openPushService,
+  pushMessageForEntry,
+  type PushTransport,
+} from "./pushService.js";
 import {
   DEFAULT_NETWORK_POLICY,
   egressProxyUrl,
@@ -92,6 +99,8 @@ export interface AssistantServiceOptions {
   readonly now?: () => number;
   /** How often the local server certificate is re-checked (default 12h). */
   readonly certificateCheckIntervalMs?: number;
+  /** Replaces sending to the push services; tests only. */
+  readonly pushTransport?: PushTransport;
 }
 
 export interface AssistantService {
@@ -144,6 +153,11 @@ export function serverJobsDirectory(config: AssistantServerConfig): string {
 /** The owner's inbox of job results and approvals waiting. */
 export function serverInboxDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "inbox");
+}
+
+/** VAPID keys and the devices' push subscriptions. */
+export function serverPushDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "push");
 }
 
 /** git where clones run: the command worker image, or this machine. */
@@ -588,8 +602,45 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
-  const recovery = createSessionRecovery(log);
   let server: AssistantServer | undefined;
+  /** Devices still signed in, once the access store is open. */
+  const activeDeviceIds = () =>
+    server
+      ? new Set(
+          server.store
+            .listDevices()
+            .filter((device) => device.revokedAt === undefined)
+            .map((device) => device.deviceId),
+        )
+      : undefined;
+  const egressProxy = config.commandWorker?.egressProxy;
+  // Through the egress gateway when there is one, to the push services only.
+  const push = await openPushService({
+    directory: serverPushDirectory(config),
+    transport:
+      options.pushTransport ??
+      connectorPushTransport(
+        egressProxy
+          ? gatewayConnector({
+              proxy: egressProxy,
+              authorization: (policy) =>
+                policyKey
+                  ? proxyAuthorizationHeader(policyKey, policy)
+                  : undefined,
+            })
+          : directConnector(),
+      ),
+    ...(config.notifications?.contact
+      ? { subject: config.notifications.contact }
+      : {}),
+    activeDevices: activeDeviceIds,
+    log,
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  const recovery = createSessionRecovery(log);
   /** Chat bridges by project, closed by the server once it exists. */
   const bridges = new Map<string, AskAgentBridge>();
   /** Changes when the inbox or a job's runs change; open apps refetch. */
@@ -802,7 +853,19 @@ export async function startAssistantService(
           await inbox.markRunRead(run.runId, "needs_approval");
         }
         const entry = inboxEntryForRun(run, job);
-        if (entry) await inbox.add(entry, Date.now());
+        const added = entry ? await inbox.add(entry, Date.now()) : undefined;
+        // Best effort, never awaited: the inbox entry is the record.
+        if (added) {
+          push
+            .notifyAll(
+              pushMessageForEntry(added, {
+                includeSummary: config.notifications?.includeSummary === true,
+              }),
+            )
+            .catch((error: unknown) => {
+              log(`Push: could not send a notification: ${message(error)}`);
+            });
+        }
       })()
         .catch((error: unknown) => {
           log(`Could not update the inbox: ${message(error)}`);
@@ -856,6 +919,12 @@ export async function startAssistantService(
         auth.principal.subjectId === server.store.ownerId,
       onChanged: assistantChanged,
     });
+    const pushRoutes = createPushRoutes({
+      push,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
     const assetVersion = randomUUID();
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
@@ -866,11 +935,19 @@ export async function startAssistantService(
         (await chat.handleRequest(request, response, auth)) ||
         (await jobRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
+        (await pushRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
+      deviceNotifications: {
+        isOn: (deviceId) => push.isSubscribed(deviceId),
+        turnOff: async (deviceId) => {
+          await push.unsubscribe(deviceId);
+        },
+      },
       onClose: async () => {
         // Before the routes stop turns: open runs are recorded interrupted.
         await jobs.close();
         await inbox.flush();
+        await push.close();
         await chat.close();
         await routes.close();
       },
@@ -900,6 +977,16 @@ export async function startAssistantService(
         : {}),
     });
     authorizeProject = ownerProjectAccess(server.store);
+    // Revoking a device turns its notifications off, now and at startup.
+    const retainSignedInDevices = () => {
+      const active = activeDeviceIds();
+      if (!active) return;
+      push.retainDevices(active).catch((error: unknown) => {
+        log(`Push: could not update subscriptions: ${message(error)}`);
+      });
+    };
+    server.store.onSessionsRevoked(retainSignedInDevices);
+    retainSignedInDevices();
     const { port } = await server.start();
     certificates?.watch(server);
     await jobs.start();

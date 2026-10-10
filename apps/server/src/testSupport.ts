@@ -1,8 +1,77 @@
+import {
+  createDecipheriv,
+  createECDH,
+  generateKeyPairSync,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
+
 import forge from "node-forge";
-import { generateKeyPairSync } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+
+/**
+ * What a browser does with a Web Push message: the receiving side of
+ * RFC 8291 (one `aes128gcm` record).
+ */
+export function decryptPushMessage(
+  body: Buffer,
+  uaPrivate: Buffer,
+  auth: Buffer,
+): Buffer {
+  const salt = body.subarray(0, 16);
+  const idLength = body[20]!;
+  const asPublic = body.subarray(21, 21 + idLength);
+  const ciphertext = body.subarray(21 + idLength);
+  const ecdh = createECDH("prime256v1");
+  ecdh.setPrivateKey(uaPrivate);
+  const keyInfo = Buffer.concat([
+    Buffer.from("WebPush: info\0"),
+    ecdh.getPublicKey(),
+    asPublic,
+  ]);
+  const ikm = Buffer.from(
+    hkdfSync("sha256", ecdh.computeSecret(asPublic), auth, keyInfo, 32),
+  );
+  const cek = Buffer.from(
+    hkdfSync("sha256", ikm, salt, "Content-Encoding: aes128gcm\0", 16),
+  );
+  const nonce = Buffer.from(
+    hkdfSync("sha256", ikm, salt, "Content-Encoding: nonce\0", 12),
+  );
+  const decipher = createDecipheriv("aes-128-gcm", cek, nonce);
+  decipher.setAuthTag(ciphertext.subarray(-16));
+  const padded = Buffer.concat([
+    decipher.update(ciphertext.subarray(0, -16)),
+    decipher.final(),
+  ]);
+  if (padded.at(-1) !== 0x02) throw new Error("missing last-record delimiter");
+  return padded.subarray(0, -1);
+}
+
+/** A browser's push subscription keys, and a way to read its messages. */
+export function createTestPushSubscriber(
+  endpoint = "https://fcm.googleapis.com/fcm/send/test-device",
+) {
+  const ecdh = createECDH("prime256v1");
+  ecdh.generateKeys();
+  const auth = randomBytes(16);
+  return {
+    subscription: {
+      endpoint,
+      keys: {
+        p256dh: ecdh.getPublicKey().toString("base64url"),
+        auth: auth.toString("base64url"),
+      },
+    },
+    read(body: Buffer): unknown {
+      return JSON.parse(
+        decryptPushMessage(body, ecdh.getPrivateKey(), auth).toString("utf8"),
+      );
+    },
+  };
+}
 
 /** Self-signed `localhost` / `127.0.0.1` certificate for tests only. */
 export function createTestCertificate(): { cert: string; key: string } {

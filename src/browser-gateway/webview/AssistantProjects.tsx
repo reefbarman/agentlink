@@ -112,6 +112,13 @@ const ERROR_TEXT: Record<string, string> = {
   jobs_forbidden: "Only the Assistant's owner can manage jobs.",
   inbox_forbidden: "Only the Assistant's owner has an inbox.",
   ask_agent_session_not_found: "That chat is no longer available.",
+  // Push notifications.
+  push_forbidden: "Only the Assistant's owner can turn notifications on.",
+  push_endpoint_not_allowed:
+    "This browser's push service is not one the Assistant can send to.",
+  push_subscription_invalid: "This browser gave an unusable subscription.",
+  push_subscription_limit: "Too many devices have notifications on.",
+  push_not_subscribed: "Notifications are off on this device.",
 };
 
 export type AssistantNetworkPreset = "open" | "dependencies" | "off";
