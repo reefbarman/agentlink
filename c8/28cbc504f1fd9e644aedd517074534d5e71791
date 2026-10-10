@@ -1,0 +1,26 @@
+resources/builtin-skills/documentation/SKILL.md
+  h_e08a86bb3a33a2 23-24
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_0e7a5e64481884::t_e7ea96c4eabd87 13,30,47,64,81,92,103,114,125,142,159,176,193,204,215,226,237,254,271,288,305,316,327,338,349,366,383,400,417,428,439,450,461,478,495,512,529,540,551,562,573,590,607,624,641,652,663,674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c828cbc504f1fd9e644aedd517074534d5e71791",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0e7a5e64481884": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e4ee7866-d3a6-4064-b9b4-e4648f4288ae",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
