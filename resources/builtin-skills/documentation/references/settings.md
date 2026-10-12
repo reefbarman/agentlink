@@ -27,7 +27,7 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 ## Context condensing
 
 - `autoCondense` — condense automatically when context fills
-- `modelCondenseThresholds` — per-model thresholds as a fraction of the model's usable input. Base defaults are GPT-5.6 0.65, other 1M+ context models 0.85, legacy frontier models 0.8 when capabilities are unavailable, and remaining models 0.9. Defaults assume a 256k usable-input window: models with larger usable input have their default fraction scaled down so they condense at the same absolute point a 256k model would (for example roughly 0.25 on a 1M-context model), and the warm-cache headroom bonus is scaled the same way. Explicit model-ID overrides take precedence and are never scaled, so raising the percentage in the model picker uses more of the real window
+- `modelCondenseThresholds` — per-model thresholds as a fraction of the model's usable input. Base defaults are GPT-5.6 0.65, other 1M+ context models 0.85, legacy frontier models 0.8 when capabilities are unavailable, and remaining models 0.9. Defaults assume a 256k usable-input window: models with larger usable input have their default fraction scaled down so they condense at the same absolute point a 256k model would (for example roughly 0.25 on a 1M-context model), and the warm-cache headroom bonus is scaled the same way. GPT-6.1 Sol instead targets Codex's 500k default window with a base of 0.9, so it condenses at about 450k input tokens like Codex auto-compaction. Explicit model-ID overrides take precedence and are never scaled, so raising the percentage in the model picker uses more of the real window
 
 ## Autonomous memory
 

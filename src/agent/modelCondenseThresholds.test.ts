@@ -51,6 +51,17 @@ describe("modelCondenseThresholds", () => {
     );
   });
 
+  it("condenses GPT-6.1 Sol at 90% of Codex's 500k default window", () => {
+    expect(getDefaultAutoCondenseThreshold("gpt-6.1-sol")).toBe(0.9);
+    const fraction = getDefaultAutoCondenseThreshold("gpt-6.1-sol", CODEX_1M);
+    expect(Math.round(fraction * CODEX_1M_USABLE)).toBe(450_000);
+    // Other GPT-6 models keep the 256k target.
+    expect(getDefaultAutoCondenseThreshold("gpt-6-luna", CODEX_1M)).toBeCloseTo(
+      (0.85 * TARGET_USABLE_INPUT_TOKENS) / CODEX_1M_USABLE,
+      6,
+    );
+  });
+
   it("condenses 1m models at the same absolute point a 256k model would", () => {
     const fraction = getDefaultAutoCondenseThreshold(
       "claude-sonnet-4-6",

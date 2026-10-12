@@ -17,7 +17,10 @@ export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 // These fractions are relative to a 256k usable-input target rather than the
 // model's real window (see condenseTargetWindow.ts): quality degrades well
 // before a 1M window fills, so the default scales down for larger models.
+// GPT-6.1 Sol targets Codex's 500k default window instead, and condenses at
+// 90% of it like Codex auto-compaction (~450k input tokens).
 const GPT_5_6_DEFAULT_THRESHOLD = 0.65;
+const GPT_6_1_SOL_DEFAULT_THRESHOLD = 0.9;
 const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
 const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
 const OTHER_MODELS_DEFAULT_THRESHOLD = 0.9;
@@ -47,6 +50,10 @@ function isGpt56Model(modelId: string): boolean {
   return /^gpt-5\.6(?:-|$)/i.test(modelId);
 }
 
+function isGpt61SolModel(modelId: string): boolean {
+  return /^gpt-6\.1-sol(?:-|$)/i.test(modelId);
+}
+
 /** Frontier models historically treated as large when capabilities are unavailable. */
 function isLegacyLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
@@ -63,6 +70,7 @@ function getBaseAutoCondenseThreshold(
   capabilities?: CondenseWindowCapabilities,
 ): number {
   if (isGpt56Model(modelId)) return GPT_5_6_DEFAULT_THRESHOLD;
+  if (isGpt61SolModel(modelId)) return GPT_6_1_SOL_DEFAULT_THRESHOLD;
   if (
     typeof capabilities?.contextWindow === "number" &&
     capabilities.contextWindow >= LARGE_CONTEXT_WINDOW_TOKENS
@@ -80,7 +88,7 @@ export function getDefaultAutoCondenseThreshold(
 ): number {
   return clampCondenseThreshold(
     getBaseAutoCondenseThreshold(modelId, capabilities) *
-      getTargetWindowScale(capabilities),
+      getTargetWindowScale(capabilities, modelId),
   );
 }
 

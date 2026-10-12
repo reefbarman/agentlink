@@ -725,11 +725,11 @@ function getCondenseBudgetSnapshot(
     session.lastInputTokens > 0
       ? session.lastCacheReadTokens / session.lastInputTokens
       : 0;
-  // The warm-cache bonus is relative to the 256k target window, not the real
-  // one, so a 1M model gets the same absolute headroom a 256k model would.
+  // The warm-cache bonus is relative to the model's target window (256k by
+  // default), not the real one, so a 1M model gets the same absolute headroom.
   const effectiveThreshold = Math.min(
     session.autoCondenseThreshold +
-      cacheHitRatio * 0.1 * getTargetWindowScale(caps),
+      cacheHitRatio * 0.1 * getTargetWindowScale(caps, model),
     0.95,
   );
   const softThresholdBudget = Math.floor(maxInputTokens * effectiveThreshold);
