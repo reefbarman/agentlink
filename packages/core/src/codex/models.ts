@@ -27,6 +27,8 @@ export interface CodexModelDef {
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens: number;
+  /** See CoreModelCapabilities.condenseTargetInputTokens. */
+  condenseTargetInputTokens?: number;
   supportsImages: boolean;
   supportsThinking: boolean;
   defaultReasoningEffort: CoreReasoningEffort;
@@ -364,6 +366,7 @@ const CODEX_400K_INPUT_TOKENS = 272_000;
 const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
 const CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS = 872_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
+const CODEX_OAUTH_GPT_6_1_SOL_DEFAULT_WINDOW_TOKENS = 500_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
   {
@@ -639,6 +642,7 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
       | "contextWindow"
       | "maxInputTokens"
       | "maxOutputTokens"
+      | "condenseTargetInputTokens"
       | "reasoningEfforts"
       | "defaultReasoningEffort"
     >
@@ -651,9 +655,13 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
   },
   // Codex's bundled catalog (rust-v0.159.1): Responses Lite, 872K max window,
   // `ultra` preset, and a low default effort over the ChatGPT backend.
+  // Codex raised the ChatGPT-backed default window to 500K (Oct 2026), with no
+  // long-context fee on subscription usage. API keys keep the host's default
+  // target because API prompts above 272K bill at 2x input / 1.5x output.
   "gpt-6.1-sol": {
     contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
     maxInputTokens: undefined,
+    condenseTargetInputTokens: CODEX_OAUTH_GPT_6_1_SOL_DEFAULT_WINDOW_TOKENS,
     reasoningEfforts: [...GPT_6_1_SOL_OAUTH_REASONING_EFFORTS],
     defaultReasoningEffort: "low",
   },
@@ -699,6 +707,9 @@ export function getCodexModelCapabilities(
     contextWindow: def?.contextWindow ?? 400_000,
     ...(typeof maxInputTokens === "number" ? { maxInputTokens } : {}),
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,
+    ...(typeof def?.condenseTargetInputTokens === "number"
+      ? { condenseTargetInputTokens: def.condenseTargetInputTokens }
+      : {}),
     reasoningEfforts: def?.reasoningEfforts ?? [...GPT_5_REASONING_EFFORTS],
     defaultReasoningEffort: def?.defaultReasoningEffort ?? "medium",
     ...(def?.serviceTiers?.length ? { serviceTiers: def.serviceTiers } : {}),

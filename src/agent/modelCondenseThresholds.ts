@@ -2,8 +2,11 @@ import * as vscode from "vscode";
 
 import {
   getTargetWindowScale,
+  isAnthropicFrontierModel,
   type CondenseWindowCapabilities,
 } from "./condenseTargetWindow.js";
+
+export { isAnthropicFrontierModel };
 import { getUserSessionPreference } from "./sharedSessionPreferences.js";
 
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
@@ -14,13 +17,16 @@ export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 // caching, large contexts are cheap per-request — condense near the limit
 // (like Claude Code/Codex auto-compaction), not as routine hygiene.
 //
-// These fractions are relative to a 256k usable-input target rather than the
+// These fractions are relative to a target usable-input window rather than the
 // model's real window (see condenseTargetWindow.ts): quality degrades well
-// before a 1M window fills, so the default scales down for larger models.
-// GPT-6.1 Sol targets Codex's 500k default window instead, and condenses at
-// 90% of it like Codex auto-compaction (~450k input tokens).
-const GPT_5_6_DEFAULT_THRESHOLD = 0.65;
-const GPT_6_1_SOL_DEFAULT_THRESHOLD = 0.9;
+// before a 1M window fills, so the default scales down for larger models. The
+// target is 256k by default, 500k for Claude 1M frontier models and GPT-6.1
+// Sol on a ChatGPT sign-in, and 100k for Haiku 5.5.
+//
+// Codex-aligned models condense at 90% of their target, like Codex
+// auto-compaction (90% of its window): ~236k for GPT-5.6 and GPT-6.1 Sol on an
+// API key (under the 272k API long-context price tier), ~450k on 500k targets.
+const CODEX_ALIGNED_DEFAULT_THRESHOLD = 0.9;
 const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
 const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
 const OTHER_MODELS_DEFAULT_THRESHOLD = 0.9;
@@ -33,17 +39,6 @@ export type ModelCondenseThresholdMap = Record<string, number>;
 export function clampCondenseThreshold(value: number): number {
   if (!Number.isFinite(value)) return OTHER_MODELS_DEFAULT_THRESHOLD;
   return Math.min(MAX_THRESHOLD, Math.max(MIN_THRESHOLD, value));
-}
-
-export function isAnthropicFrontierModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  return (
-    lower.startsWith("claude-") &&
-    (lower.includes("sonnet") ||
-      lower.includes("opus") ||
-      lower.includes("fable") ||
-      lower.includes("mythos"))
-  );
 }
 
 function isGpt56Model(modelId: string): boolean {
@@ -69,13 +64,16 @@ function getBaseAutoCondenseThreshold(
   modelId: string,
   capabilities?: CondenseWindowCapabilities,
 ): number {
-  if (isGpt56Model(modelId)) return GPT_5_6_DEFAULT_THRESHOLD;
-  if (isGpt61SolModel(modelId)) return GPT_6_1_SOL_DEFAULT_THRESHOLD;
+  if (isGpt56Model(modelId) || isGpt61SolModel(modelId)) {
+    return CODEX_ALIGNED_DEFAULT_THRESHOLD;
+  }
   if (
     typeof capabilities?.contextWindow === "number" &&
     capabilities.contextWindow >= LARGE_CONTEXT_WINDOW_TOKENS
   ) {
-    return LARGE_CONTEXT_DEFAULT_THRESHOLD;
+    return isAnthropicFrontierModel(modelId)
+      ? CODEX_ALIGNED_DEFAULT_THRESHOLD
+      : LARGE_CONTEXT_DEFAULT_THRESHOLD;
   }
   return isLegacyLargeContextFrontierModel(modelId)
     ? LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD

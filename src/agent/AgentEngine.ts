@@ -48,6 +48,12 @@ import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisc
 import { measureComposeRequestOccupancy } from "./composeEfficiency.js";
 import { getTargetWindowScale } from "./condenseTargetWindow.js";
 import {
+  appendPreCondenseNudge,
+  buildPreCondenseNudgeText,
+  hasPreCondenseNudge,
+  shouldIssuePreCondenseNudge,
+} from "./preCondenseNudge.js";
+import {
   buildContextLedger,
   DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO,
   getContextLedgerLayer,
@@ -3385,6 +3391,44 @@ export class AgentEngine {
             retainedToolResults,
           );
           toolResultContents.push(tr.historyContent);
+        }
+
+        // One-shot pre-condense notice, persisted with these tool results so
+        // it stays in the cached prefix and drops out when history condenses.
+        if (toolResultContents.length > 0 && session.autoCondense) {
+          const budget = getCondenseBudgetSnapshot(
+            session,
+            provider,
+            activeModel,
+          );
+          const projectedTokens =
+            budget.usedTokens +
+            toolResultContents.reduce(
+              (sum, content) =>
+                sum +
+                measureToolResultContentForAttribution(content).estimatedTokens,
+              0,
+            );
+          if (
+            shouldIssuePreCondenseNudge({
+              autoCondense: session.autoCondense,
+              hasPriorUsage: session.lastInputTokens > 0,
+              projectedTokens,
+              softThresholdBudget: budget.softThresholdBudget,
+              alreadyIssued: hasPreCondenseNudge(session.getMessages()),
+            })
+          ) {
+            const lastIndex = toolResultContents.length - 1;
+            const nudged = appendPreCondenseNudge(
+              toolResultContents[lastIndex]!,
+              buildPreCondenseNudgeText(budget.softThresholdBudget),
+            );
+            toolResultContents[lastIndex] = nudged;
+            toolResults[lastIndex]!.historyContent = nudged;
+            this.log?.(
+              `[agent] pre-condense notice issued at ~${projectedTokens} of ${budget.softThresholdBudget} tokens`,
+            );
+          }
         }
 
         // Append assistant turn + tool results atomically — no async gap between

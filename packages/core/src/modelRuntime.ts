@@ -183,6 +183,12 @@ export interface CoreModelCapabilities {
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens: number;
+  /**
+   * Usable-input window that default auto-condense thresholds should target on
+   * this endpoint, when the provider's own default working window differs from
+   * the host's general target (for example a subscription-only larger default).
+   */
+  condenseTargetInputTokens?: number;
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
   /** Premium service tiers the model accepts; omitted when none. */
