@@ -53,7 +53,8 @@ import {
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { createJobRoutes } from "./jobRoutes.js";
-import { createJobRunner } from "./jobRunner.js";
+import { createJobRunner, type JobRunner } from "./jobRunner.js";
+import { createJobTools } from "./jobTools.js";
 import { serverTimeZone } from "./jobSchedule.js";
 import {
   isActiveRun,
@@ -662,12 +663,37 @@ export async function startAssistantService(
       configProjects: config.projects,
       ...(config.projectsRoot ? { projectsRoot: config.projectsRoot } : {}),
     });
+    // Bound once the runner exists; no turn can start before then.
+    let jobRunner: JobRunner | undefined;
     const openHost = async (project: {
       readonly id: string;
       readonly root: string;
     }) => {
       const autonomous = (request: { readonly sessionId: string }) =>
         approvalModes.get(project.id, request.sessionId) === "autonomous";
+      const webTools = projectWebTools(config, {
+        policy: () => projectNetworkPolicy(catalog.get(project.id)),
+        key: policyKey,
+        ...(codex ? { codex: codex.provider } : {}),
+      });
+      // Chats can propose jobs; the owner approves each exact change.
+      const jobTools = createJobTools({
+        projectId: project.id,
+        store: jobStore,
+        runner: {
+          jobChanged: async (jobId) => {
+            await jobRunner?.jobChanged(jobId);
+          },
+          stopJob: async (jobId, reason) => {
+            await jobRunner?.stopJob(jobId, reason);
+          },
+        },
+        projectIds: () => [...bridges.keys()],
+        projectLabel: (projectId) => catalog.get(projectId)?.label,
+        models: configuredModels(config),
+        defaultTimeZone: serverTimeZone(),
+        onChanged: () => assistantChanged(),
+      });
       const host = await createWorkspaceHost({
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
@@ -679,11 +705,11 @@ export async function startAssistantService(
           policy: () => projectNetworkPolicy(catalog.get(project.id)),
           key: policyKey,
         }),
-        hostTools: projectWebTools(config, {
-          policy: () => projectNetworkPolicy(catalog.get(project.id)),
-          key: policyKey,
-          ...(codex ? { codex: codex.provider } : {}),
-        }),
+        hostTools: async (request) => [
+          ...(await webTools(request)),
+          ...(await jobTools.readTools(request)),
+        ],
+        approvalHostTools: jobTools.approvalTools,
         files: {
           enabled: true,
           // Protected paths always ask, whatever this says.
@@ -902,6 +928,7 @@ export async function startAssistantService(
         recordInInbox(run, job);
       },
     });
+    jobRunner = jobs;
     const jobRoutes = createJobRoutes({
       store: jobStore,
       runner: jobs,

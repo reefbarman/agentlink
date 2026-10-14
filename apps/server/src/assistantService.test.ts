@@ -141,6 +141,209 @@ describe("assistant service local certificates", () => {
   }, 30_000);
 });
 
+describe("assistant service chat-created jobs", () => {
+  it("creates a job a chat proposed only once the owner approves its card", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-jobs-"));
+    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    const certificate = createTestCertificate();
+    await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+    await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+      mode: 0o600,
+    });
+    const offered: string[][] = [];
+    const toolResults: string[] = [];
+    // Proposes a job, then reports what the tool said.
+    const model = http.createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+      request.on("end", () => {
+        const body = JSON.parse(raw) as {
+          messages: Array<{ role: string; content?: unknown }>;
+          tools?: Array<{ function: { name: string } }>;
+        };
+        offered.push((body.tools ?? []).map((tool) => tool.function.name));
+        const last = body.messages.at(-1);
+        const delta =
+          last?.role === "tool"
+            ? (toolResults.push(String(last.content)), { content: "Done." })
+            : {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call-job",
+                    type: "function",
+                    function: {
+                      name: "schedule_job",
+                      arguments: JSON.stringify({
+                        name: "Morning brief",
+                        prompt: "Brief me on today.",
+                        schedule: {
+                          kind: "daily",
+                          time: "07:30",
+                          timeZone: "Australia/Sydney",
+                        },
+                      }),
+                    },
+                  },
+                ],
+              };
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            id: "r",
+            choices: [
+              {
+                index: 0,
+                delta,
+                finish_reason: "tool_calls" in delta ? "tool_calls" : "stop",
+              },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
+    });
+    await new Promise<void>((resolve) =>
+      model.listen(0, "127.0.0.1", () => resolve()),
+    );
+    cleanup.push(
+      () => new Promise<void>((resolve) => model.close(() => resolve())),
+    );
+    const modelPort = (model.address() as { port: number }).port;
+    const port = await freePort();
+    const origin = `https://localhost:${port}`;
+    const config = parseAssistantServerConfig(
+      {
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [origin],
+        tls: { certFile: "server.crt", keyFile: "server.key" },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: `http://127.0.0.1:${modelPort}/v1`,
+            noAuth: true,
+            allowInsecureHttp: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", label: "Home", root: "projects/home" }],
+      },
+      root,
+    );
+    const service = await startAssistantService({
+      config,
+      log: () => undefined,
+    });
+    cleanup.push(() => service.close());
+    const request = (input: {
+      method?: string;
+      path: string;
+      body?: unknown;
+      cookie?: string;
+    }) =>
+      httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: input.method,
+        path: input.path,
+        body: input.body,
+        headers: {
+          ...(input.method && input.method !== "GET" ? { origin } : {}),
+          ...(input.cookie ? { cookie: input.cookie } : {}),
+        },
+      });
+    const { code } = service.server.store.createPairing();
+    const cookie = sessionCookieFrom(
+      await request({
+        method: "POST",
+        path: "/api/auth/pairings/redeem",
+        body: { code, deviceLabel: "Laptop" },
+      }),
+    );
+
+    // Settles when the turn does, or fails when the service closes.
+    void request({
+      method: "POST",
+      path: "/api/ask-agent/send",
+      body: { text: "Brief me every morning at 7:30" },
+      cookie,
+    }).catch(() => undefined);
+    type Approval = { id: string; filePath: string; detail: string };
+    const approval = await vi.waitFor(
+      async () => {
+        const { body } = await request({
+          path: "/api/ask-agent/session",
+          cookie,
+        });
+        const pending = (
+          body as { snapshot: { ui: { approval: Approval | null } } }
+        ).snapshot.ui.approval;
+        expect(pending).not.toBeNull();
+        return pending!;
+      },
+      { timeout: 20_000, interval: 50 },
+    );
+    expect(offered[0]).toEqual(
+      expect.arrayContaining(["list_jobs", "schedule_job", "delete_job"]),
+    );
+    expect(approval.filePath).toBe(
+      'Schedule "Morning brief": every day at 07:30 (Australia/Sydney)?',
+    );
+    expect(approval.detail).toContain("Project: Home (home)");
+    expect(approval.detail).toContain("Brief me on today.");
+    // The chat is autonomous by default; the job still waited for the owner.
+    const before = await request({ path: "/api/jobs", cookie });
+    expect((before.body as { jobs: unknown[] }).jobs).toEqual([]);
+
+    // The card can show a moment before the turn has finished pausing.
+    await vi.waitFor(
+      async () => {
+        const answered = await request({
+          method: "POST",
+          path: "/api/ask-agent/approval",
+          body: { id: approval.id, decision: "accept" },
+          cookie,
+        });
+        expect(answered.status).toBe(200);
+      },
+      { timeout: 10_000, interval: 100 },
+    );
+    const jobs = await vi.waitFor(
+      async () => {
+        const { body } = await request({ path: "/api/jobs", cookie });
+        const list = (body as { jobs: Array<Record<string, unknown>> }).jobs;
+        expect(list).toHaveLength(1);
+        expect(list[0]!.nextRunAt).toEqual(expect.any(Number));
+        return list;
+      },
+      { timeout: 20_000, interval: 50 },
+    );
+    expect(jobs[0]).toMatchObject({
+      name: "Morning brief",
+      projectId: "home",
+      prompt: "Brief me on today.",
+      enabled: true,
+      schedule: { kind: "daily", time: "07:30", timeZone: "Australia/Sydney" },
+    });
+    await vi.waitFor(() =>
+      expect(toolResults.join("\n")).toContain(
+        'Created the scheduled job "Morning brief"',
+      ),
+    );
+  }, 40_000);
+});
+
 describe("assistant service notifications", () => {
   it("pushes a job run's inbox entry to subscribed devices until they are revoked", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-push-"));

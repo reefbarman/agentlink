@@ -1,6 +1,8 @@
 import type { AgentModelReference } from "@agentlink/core";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-gateway-ask-agent-identity";
+
+import { isJobChangeDisplay } from "./jobChangeDisplay.js";
 import type { ChatSessionActivity } from "@agentlink/protocol/chat-session-history";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import {
@@ -858,6 +860,27 @@ export async function createAskAgentBridge(
     event: Extract<EmbeddedAgentTurnEvent, { type: "interaction.required" }>,
   ): ApprovalRequest => {
     const { interaction } = event;
+    // A job change describes itself in full: schedule, project and prompt.
+    if (isJobChangeDisplay(interaction.displayContent)) {
+      return {
+        kind: "write",
+        id: interaction.interactionId,
+        filePath: truncate(
+          interaction.summary || `Allow ${interaction.toolName}?`,
+          MAX_TITLE_LENGTH,
+        ),
+        writeOperation:
+          interaction.displayContent.action === "create" ? "create" : "modify",
+        detail: truncate(
+          interaction.displayContent.text,
+          MAX_APPROVAL_DETAIL_LENGTH,
+        ),
+        writeChoices: [
+          { label: "Allow", value: "accept", isPrimary: true },
+          { label: "Deny", value: "reject", isDanger: true },
+        ],
+      };
+    }
     const input =
       interaction.displayInput === undefined
         ? ""

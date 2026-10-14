@@ -820,6 +820,51 @@ describe("Ask Agent bridge", () => {
     });
   });
 
+  it("shows a proposed job change in full on its approval card", async () => {
+    const { fake, call } = await startBridge();
+    const text = [
+      "Create a scheduled job:",
+      "",
+      "Name: Morning brief",
+      "Schedule: every weekday at 07:30 (Australia/Sydney)",
+      "Prompt for each run:",
+      "Brief me.",
+    ].join("\n");
+    fake.setScript((sessionId) => {
+      fake.turn(sessionId, {
+        type: "interaction.required",
+        interaction: {
+          interactionId: "int-job",
+          toolName: "schedule_job",
+          summary: 'Schedule "Morning brief": every weekday at 07:30?',
+          displayContent: {
+            kind: "assistant_job_change",
+            action: "create",
+            jobName: "Morning brief",
+            text,
+          },
+        },
+        interactionRevision: "rev-job",
+      });
+    });
+    // Never answered here: the turn stays paused until the bridge closes.
+    void call("/api/ask-agent/send", { text: "brief me every weekday" }).catch(
+      () => undefined,
+    );
+    const approval = await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      const pending = snapshotOf(body).ui.approval;
+      expect(pending).not.toBeNull();
+      return pending!;
+    });
+    expect(approval).toMatchObject({
+      id: "int-job",
+      filePath: 'Schedule "Morning brief": every weekday at 07:30?',
+      writeOperation: "create",
+      detail: text,
+    });
+  });
+
   it("stops a running turn and cancels the workspace task", async () => {
     const { fake, call } = await startBridge();
     // A turn that never finishes on its own.

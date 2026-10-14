@@ -50,12 +50,53 @@ export interface JobRoutes {
   ): Promise<boolean>;
 }
 
+/**
+ * Why a job could not run here, as an error code: its project is not open,
+ * or its model or thinking level is not offered. Undefined when it can.
+ */
+export function jobRunnableError(
+  fields: {
+    readonly projectId: string;
+    readonly model?: string;
+    readonly reasoningEffort?: string;
+  },
+  options: {
+    readonly hasProject: (projectId: string) => boolean;
+    readonly models: ReadonlyMap<string, AssistantServerModelChoice>;
+  },
+):
+  | "project_not_found"
+  | "model_not_available"
+  | "reasoning_effort_not_available"
+  | undefined {
+  if (!options.hasProject(fields.projectId)) return "project_not_found";
+  if (fields.model === undefined) return undefined;
+  const model = options.models.get(fields.model);
+  if (!model) return "model_not_available";
+  if (
+    fields.reasoningEffort !== undefined &&
+    !model.reasoningEfforts?.includes(
+      fields.reasoningEffort as NonNullable<
+        AssistantServerModelChoice["reasoningEfforts"]
+      >[number],
+    )
+  ) {
+    return "reasoning_effort_not_available";
+  }
+  return undefined;
+}
+
+/** Configured models by `providerId/modelId`. */
+export function modelsByKey(
+  models: readonly AssistantServerModelChoice[],
+): ReadonlyMap<string, AssistantServerModelChoice> {
+  return new Map(models.map((model) => [modelKey(model), model]));
+}
+
 export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
   const { store, runner } = options;
   const now = options.now ?? Date.now;
-  const models = new Map(
-    options.models.map((model) => [modelKey(model), model]),
-  );
+  const models = modelsByKey(options.models);
 
   const describe = (job: JobDefinition) => {
     const runs = store.runs(job.id);
@@ -73,22 +114,11 @@ export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
     readonly model?: string;
     readonly reasoningEffort?: string;
   }) => {
-    if (!options.hasProject(fields.projectId)) {
-      throw new HttpError(400, "project_not_found");
-    }
-    if (fields.model === undefined) return;
-    const model = models.get(fields.model);
-    if (!model) throw new HttpError(400, "model_not_available");
-    if (
-      fields.reasoningEffort !== undefined &&
-      !model.reasoningEfforts?.includes(
-        fields.reasoningEffort as NonNullable<
-          AssistantServerModelChoice["reasoningEfforts"]
-        >[number],
-      )
-    ) {
-      throw new HttpError(400, "reasoning_effort_not_available");
-    }
+    const error = jobRunnableError(fields, {
+      hasProject: options.hasProject,
+      models,
+    });
+    if (error) throw new HttpError(400, error);
   };
 
   const requireValid = async (auth: AssistantServerAuth) => {

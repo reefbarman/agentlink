@@ -1,0 +1,687 @@
+import {
+  defineTool,
+  type HostTool,
+  type HostToolResolver,
+  type HostToolResult,
+} from "@agentlink/core";
+import type {
+  WorkspaceApprovalHostTools,
+  WorkspaceHostToolApproval,
+} from "@agentlink/workspace-host";
+
+import {
+  JOB_CHANGE_DISPLAY_KIND,
+  type JobChangeDisplay,
+} from "./jobChangeDisplay.js";
+import { jobRunnableError, modelsByKey } from "./jobRoutes.js";
+import type { JobRunner } from "./jobRunner.js";
+import {
+  MIN_INTERVAL_MINUTES,
+  MAX_INTERVAL_MINUTES,
+  WEEKDAYS,
+  nextOccurrence,
+  type JobSchedule,
+} from "./jobSchedule.js";
+import {
+  JobInputError,
+  MAX_JOBS,
+  MAX_JOB_NAME_LENGTH,
+  parseJobFields,
+  type JobDefinition,
+  type JobFields,
+  type JobPatch,
+  type JobStore,
+} from "./jobStore.js";
+import { SESSION_APPROVAL_MODES } from "./SessionApprovalModes.js";
+import type { AssistantServerModelChoice } from "./serverConfig.js";
+
+/**
+ * Chat tools for scheduled jobs:
+ *
+ * - `list_jobs` reads the jobs, with no approval.
+ * - `schedule_job` creates or changes a job, and `delete_job` deletes one.
+ *   Both always stop for the owner's approval, whatever the chat's approval
+ *   mode: the card shows the exact project, schedule, settings and prompt,
+ *   and exactly that change is applied once approved. Nothing is stored
+ *   before then. A job changed or deleted elsewhere in the meantime is not
+ *   touched.
+ */
+
+export const JOB_TOOL_NAMES = ["schedule_job", "delete_job"] as const;
+/** Shorter than the API's limit so the approval card shows all of it. */
+export const MAX_TOOL_PROMPT_LENGTH = 3_000;
+const MAX_LISTED_MODELS = 20;
+
+export interface JobToolsOptions {
+  /** The chat's project: new jobs go here unless another is named. */
+  readonly projectId: string;
+  readonly store: JobStore;
+  readonly runner: Pick<JobRunner, "jobChanged" | "stopJob">;
+  /** Projects open on this server. */
+  readonly projectIds: () => readonly string[];
+  readonly projectLabel?: (projectId: string) => string | undefined;
+  readonly models: readonly AssistantServerModelChoice[];
+  /** For daily and weekly schedules that name no time zone. */
+  readonly defaultTimeZone: string;
+  /** After a job is created, changed or deleted. */
+  readonly onChanged?: () => void;
+  readonly now?: () => number;
+}
+
+export interface JobTools {
+  /** `list_jobs`: read-only, offered every turn. */
+  readonly readTools: HostToolResolver;
+  /** `schedule_job` and `delete_job`: each call needs the owner. */
+  readonly approvalTools: WorkspaceApprovalHostTools;
+}
+
+/** The exact change the owner approved; what the tool then applies. */
+type PreparedChange =
+  | { readonly action: "create"; readonly fields: JobFields }
+  | {
+      readonly action: "update";
+      readonly jobId: string;
+      readonly expectedUpdatedAt: number;
+      readonly patch: JobPatch;
+    }
+  | {
+      readonly action: "delete";
+      readonly jobId: string;
+      readonly expectedUpdatedAt: number;
+    };
+
+export function createJobTools(options: JobToolsOptions): JobTools {
+  const { store, runner } = options;
+  const now = options.now ?? Date.now;
+  const models = modelsByKey(options.models);
+  const hasProject = (projectId: string) =>
+    options.projectIds().includes(projectId);
+  const projectName = (projectId: string) => {
+    const label = options.projectLabel?.(projectId);
+    return label && label !== projectId ? `${label} (${projectId})` : projectId;
+  };
+
+  const explain = (code: string, projectId?: string): string => {
+    switch (code) {
+      case "name_required":
+      case "prompt_required":
+      case "schedule_required":
+        return `${code.replace("_required", "")} is required for a new job`;
+      case "name_invalid":
+        return `name must be 1 to ${MAX_JOB_NAME_LENGTH} characters`;
+      case "prompt_invalid":
+        return "prompt must not be empty";
+      case "project_invalid":
+      case "project_not_found":
+        return `project${projectId ? ` "${projectId}"` : ""} is not open on this server; open projects: ${options.projectIds().join(", ") || "none"}`;
+      case "schedule_invalid":
+        return 'schedule must be {"kind":"interval","everyMinutes":N}, {"kind":"daily","time":"HH:MM","timeZone"?}, or {"kind":"weekly","days":["mon",…],"time":"HH:MM","timeZone"?}';
+      case "schedule_interval_invalid":
+        return `everyMinutes must be a whole number from ${MIN_INTERVAL_MINUTES} to ${MAX_INTERVAL_MINUTES} (7 days)`;
+      case "schedule_days_invalid":
+        return `days must be a non-empty list of ${WEEKDAYS.map((day) => `"${day}"`).join(", ")}`;
+      case "schedule_time_invalid":
+        return 'time must be 24-hour "HH:MM", for example "07:30"';
+      case "schedule_time_zone_invalid":
+        return 'timeZone must be an IANA name such as "Australia/Sydney"';
+      case "model_invalid":
+      case "model_not_available":
+        return `model must be one of: ${[...models.keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it to use the project's default`;
+      case "reasoning_effort_invalid":
+      case "reasoning_effort_not_available":
+        return "that reasoning effort is not offered for this model; omit it to use the default";
+      case "approval_mode_invalid":
+        return `approvalMode must be ${SESSION_APPROVAL_MODES.map((mode) => `"${mode}"`).join(" or ")}`;
+      case "enabled_invalid":
+        return "enabled must be true or false";
+      case "job_field_unknown":
+        return "unknown field";
+      case "job_limit_reached":
+        return `there are already ${MAX_JOBS} jobs; delete one first`;
+      case "job_not_found":
+        return "no job has that jobId; call list_jobs for the current ones";
+      case "job_changed":
+        return "the job was changed or deleted after this was proposed; call list_jobs and propose the change again";
+      case "nothing_to_change":
+        return "the change sets no field; pass the fields to change";
+      default:
+        return code;
+    }
+  };
+
+  /** Throws `JobInputError` when the job could not run here. */
+  const assertRunnable = (fields: {
+    readonly projectId: string;
+    readonly model?: string;
+    readonly reasoningEffort?: string;
+  }) => {
+    const error = jobRunnableError(fields, { hasProject, models });
+    if (error) throw new JobInputError(error);
+  };
+
+  const requireJob = (jobId: unknown): JobDefinition => {
+    const job = typeof jobId === "string" ? store.get(jobId) : undefined;
+    if (!job) throw new JobInputError("job_not_found");
+    return job;
+  };
+
+  /** The job a change would leave, to check it can still run. */
+  const merged = (current: JobDefinition, patch: JobPatch) => {
+    const model =
+      patch.model === null ? undefined : (patch.model ?? current.model);
+    const reasoningEffort =
+      patch.reasoningEffort === null
+        ? undefined
+        : (patch.reasoningEffort ?? current.reasoningEffort);
+    return {
+      projectId: patch.projectId ?? current.projectId,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
+  };
+
+  const describeJob = (fields: JobFields, at: number): string[] => [
+    `Name: ${fields.name}`,
+    `Project: ${projectName(fields.projectId)}`,
+    `Schedule: ${describeSchedule(fields.schedule)}`,
+    fields.enabled
+      ? `First run: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+      : "Paused: it will not run until it is turned on",
+    `Approvals: ${describeApprovalMode(fields.approvalMode)}`,
+    `Model: ${fields.model ?? "the project's default"}${fields.reasoningEffort ? `, reasoning ${fields.reasoningEffort}` : ""}`,
+    "Prompt for each run:",
+    fields.prompt,
+  ];
+
+  const describeChanges = (
+    current: JobDefinition,
+    patch: JobPatch,
+    at: number,
+  ): string[] => {
+    const lines: string[] = [];
+    const change = (label: string, from: string, to: string) => {
+      if (from !== to) lines.push(`${label}: ${from} → ${to}`);
+    };
+    if (patch.name !== undefined) change("Name", current.name, patch.name);
+    if (patch.projectId !== undefined) {
+      change(
+        "Project",
+        projectName(current.projectId),
+        projectName(patch.projectId),
+      );
+    }
+    if (patch.schedule !== undefined) {
+      change(
+        "Schedule",
+        describeSchedule(current.schedule),
+        describeSchedule(patch.schedule),
+      );
+    }
+    if (patch.enabled !== undefined) {
+      change(
+        "State",
+        current.enabled ? "on" : "paused",
+        patch.enabled ? "on" : "paused",
+      );
+    }
+    if (patch.approvalMode !== undefined) {
+      change(
+        "Approvals",
+        describeApprovalMode(current.approvalMode),
+        describeApprovalMode(patch.approvalMode),
+      );
+    }
+    if (patch.model !== undefined) {
+      change(
+        "Model",
+        current.model ?? "project default",
+        patch.model ?? "project default",
+      );
+    }
+    if (patch.reasoningEffort !== undefined) {
+      change(
+        "Reasoning",
+        current.reasoningEffort ?? "default",
+        patch.reasoningEffort ?? "default",
+      );
+    }
+    if (patch.prompt !== undefined && patch.prompt !== current.prompt) {
+      lines.push("New prompt for each run:", patch.prompt);
+    }
+    const schedule = patch.schedule ?? current.schedule;
+    const enabled = patch.enabled ?? current.enabled;
+    if (lines.length > 0 && enabled && patch.schedule !== undefined) {
+      lines.push(
+        `Next run: ${formatInstant(firstRun(schedule, at), timeZoneOf(schedule, options.defaultTimeZone))}`,
+      );
+    }
+    return lines;
+  };
+
+  const prepare = (
+    toolName: string,
+    input: Readonly<Record<string, unknown>>,
+  ): WorkspaceHostToolApproval => {
+    const at = now();
+    try {
+      if (toolName === "delete_job") {
+        const job = requireJob(input.jobId);
+        const display: JobChangeDisplay = {
+          kind: JOB_CHANGE_DISPLAY_KIND,
+          action: "delete",
+          jobName: job.name,
+          text: [
+            "Delete this scheduled job and its run history (its run chats stay).",
+            "",
+            ...describeJob(job, at).slice(0, 3),
+          ].join("\n"),
+        };
+        return {
+          decision: "require_user",
+          summary: `Delete the scheduled job "${job.name}"?`,
+          displayContent: display,
+          preparedInput: preparedInput({
+            action: "delete",
+            jobId: job.id,
+            expectedUpdatedAt: job.updatedAt,
+          }),
+        };
+      }
+      const { jobId, ...body } = input;
+      if (jobId !== undefined) {
+        const current = requireJob(jobId);
+        const patch = parseJobFields(body, {
+          partial: true,
+          defaultTimeZone: options.defaultTimeZone,
+        });
+        assertRunnable(merged(current, patch));
+        const changes = describeChanges(current, patch, at);
+        if (changes.length === 0) throw new JobInputError("nothing_to_change");
+        const display: JobChangeDisplay = {
+          kind: JOB_CHANGE_DISPLAY_KIND,
+          action: "update",
+          jobName: current.name,
+          text: [
+            `Change the scheduled job "${current.name}":`,
+            "",
+            ...changes,
+          ].join("\n"),
+        };
+        return {
+          decision: "require_user",
+          summary: `Change the scheduled job "${current.name}"?`,
+          displayContent: display,
+          preparedInput: preparedInput({
+            action: "update",
+            jobId: current.id,
+            expectedUpdatedAt: current.updatedAt,
+            patch,
+          }),
+        };
+      }
+      const fields = parseJobFields(
+        { projectId: options.projectId, ...body },
+        { partial: false, defaultTimeZone: options.defaultTimeZone },
+      );
+      assertRunnable(fields);
+      if (store.list().length >= MAX_JOBS) {
+        throw new JobInputError("job_limit_reached");
+      }
+      const display: JobChangeDisplay = {
+        kind: JOB_CHANGE_DISPLAY_KIND,
+        action: "create",
+        jobName: fields.name,
+        text: ["Create a scheduled job:", "", ...describeJob(fields, at)].join(
+          "\n",
+        ),
+      };
+      return {
+        decision: "require_user",
+        summary: `Schedule "${fields.name}": ${describeSchedule(fields.schedule)}?`,
+        displayContent: display,
+        preparedInput: preparedInput({ action: "create", fields }),
+      };
+    } catch (error) {
+      if (error instanceof JobInputError) {
+        return {
+          decision: "deny",
+          reason: explain(
+            error.code,
+            typeof input.projectId === "string" ? input.projectId : undefined,
+          ),
+        };
+      }
+      throw error;
+    }
+  };
+
+  /** Whether an approved change still applies to the jobs as they are. */
+  const stillApplies = (change: PreparedChange): string | undefined => {
+    if (change.action === "create") {
+      if (store.list().length >= MAX_JOBS) return explain("job_limit_reached");
+      const error = jobRunnableError(change.fields, { hasProject, models });
+      return error ? explain(error, change.fields.projectId) : undefined;
+    }
+    const current = store.get(change.jobId);
+    if (!current || current.updatedAt !== change.expectedUpdatedAt) {
+      return explain("job_changed");
+    }
+    if (change.action === "update") {
+      const error = jobRunnableError(merged(current, change.patch), {
+        hasProject,
+        models,
+      });
+      return error ? explain(error) : undefined;
+    }
+    return undefined;
+  };
+
+  const apply = async (change: PreparedChange): Promise<HostToolResult> => {
+    const stale = stillApplies(change);
+    if (stale) return failure(`Not applied: ${stale}`);
+    try {
+      switch (change.action) {
+        case "create": {
+          const job = await store.create(change.fields, now());
+          await runner.jobChanged(job.id);
+          options.onChanged?.();
+          return applied(store.get(job.id) ?? job, "Created");
+        }
+        case "update": {
+          const job = await store.update(change.jobId, change.patch, now());
+          // Pausing stops a live run; a new schedule starts counting now.
+          await runner.jobChanged(job.id);
+          options.onChanged?.();
+          return applied(store.get(job.id) ?? job, "Changed");
+        }
+        case "delete": {
+          const job = store.get(change.jobId);
+          await runner.stopJob(change.jobId, "job_deleted");
+          await store.delete(change.jobId);
+          await runner.jobChanged(change.jobId);
+          options.onChanged?.();
+          return {
+            modelContent: `Deleted the scheduled job "${job?.name ?? change.jobId}".`,
+            displayContent: { jobId: change.jobId, action: "delete" },
+          };
+        }
+      }
+    } catch (error) {
+      if (error instanceof JobInputError) {
+        return failure(`Not applied: ${explain(error.code)}`);
+      }
+      throw error;
+    }
+  };
+
+  const applied = (job: JobDefinition, verb: string): HostToolResult => ({
+    modelContent: [
+      `${verb} the scheduled job "${job.name}" (jobId ${job.id}).`,
+      `Schedule: ${describeSchedule(job.schedule)}.`,
+      job.enabled
+        ? job.nextRunAt !== undefined
+          ? `Next run: ${formatInstant(job.nextRunAt, timeZoneOf(job.schedule, options.defaultTimeZone))}.`
+          : "Next run: not scheduled."
+        : "It is paused.",
+      "Each run is a new chat in its project; the owner sees results in the Inbox.",
+    ].join("\n"),
+    displayContent: { jobId: job.id, action: verb.toLowerCase() },
+  });
+
+  const listJobs = defineTool({
+    name: "list_jobs",
+    description:
+      "List the owner's scheduled jobs: id, name, project, schedule, whether it is on, next run, and the last run's outcome.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    effect: "read",
+    parallelSafe: true,
+    presentation: { title: "List scheduled jobs" },
+    handler: async () => {
+      const jobs = store.list();
+      if (jobs.length === 0) {
+        return { modelContent: "There are no scheduled jobs." };
+      }
+      return {
+        modelContent: jobs
+          .map((job) => {
+            const last = store.runs(job.id)[0];
+            const zone = timeZoneOf(job.schedule, options.defaultTimeZone);
+            return [
+              `- ${job.name} (jobId ${job.id})`,
+              `  Project: ${projectName(job.projectId)}`,
+              `  Schedule: ${describeSchedule(job.schedule)}${job.enabled ? "" : " (paused)"}`,
+              ...(job.enabled && job.nextRunAt !== undefined
+                ? [`  Next run: ${formatInstant(job.nextRunAt, zone)}`]
+                : []),
+              ...(last
+                ? [
+                    `  Last run: ${last.status}${last.finishedAt ? `, ${formatInstant(last.finishedAt, zone)}` : ""}`,
+                  ]
+                : []),
+              `  Approvals: ${job.approvalMode}; model: ${job.model ?? "project default"}`,
+              `  Prompt: ${oneLine(job.prompt, 300)}`,
+            ].join("\n");
+          })
+          .join("\n"),
+        displayContent: { jobs: jobs.length },
+      };
+    },
+  });
+
+  const scheduleSchema = {
+    type: "object",
+    additionalProperties: false,
+    description: `When it runs. Interval: {"kind":"interval","everyMinutes":N} (${MIN_INTERVAL_MINUTES} to ${MAX_INTERVAL_MINUTES}). Daily: {"kind":"daily","time":"HH:MM","timeZone"?}. Weekly: {"kind":"weekly","days":["mon","fri"],"time":"HH:MM","timeZone"?}. timeZone is an IANA name; without one the server's (${options.defaultTimeZone}) is used, so name the owner's when you know it.`,
+    properties: {
+      kind: { type: "string", enum: ["interval", "daily", "weekly"] },
+      everyMinutes: {
+        type: "integer",
+        minimum: MIN_INTERVAL_MINUTES,
+        maximum: MAX_INTERVAL_MINUTES,
+      },
+      time: { type: "string", description: '24-hour "HH:MM"' },
+      days: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string", enum: [...WEEKDAYS] },
+      },
+      timeZone: { type: "string" },
+    },
+    required: ["kind"],
+  };
+
+  const scheduleJob = defineTool({
+    name: "schedule_job",
+    description: `Create a scheduled job, or change one by passing its jobId (from list_jobs) with only the fields to change. Each run sends the prompt to a new chat in the job's project, with no one watching, and the result lands in the owner's Inbox. Write the prompt as a complete, self-contained instruction for that future chat. The owner always approves the exact job before it is saved, so propose it directly rather than asking first. Runs use the job's approval mode: "autonomous" (default) lets runs edit files and run commands without asking; "ask" pauses a run for the owner on each such action.`,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        jobId: {
+          type: "string",
+          description: "Change this job; omit to create a new one",
+        },
+        name: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_JOB_NAME_LENGTH,
+          description: "Short name shown in the Jobs list and the Inbox",
+        },
+        prompt: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_TOOL_PROMPT_LENGTH,
+          description: "The message each run sends to its new chat",
+        },
+        schedule: scheduleSchema,
+        projectId: {
+          type: "string",
+          description: `Project the runs work in (default: this chat's, ${options.projectId})`,
+        },
+        enabled: {
+          type: "boolean",
+          description: "false pauses the job (default true for a new job)",
+        },
+        approvalMode: { type: "string", enum: [...SESSION_APPROVAL_MODES] },
+        model: {
+          type: "string",
+          description:
+            '"providerId/modelId"; omit for the project\'s default model',
+        },
+        reasoningEffort: {
+          type: "string",
+          description: "Reasoning effort for that model; omit for its default",
+        },
+      },
+    },
+    effect: "write",
+    authorization: "required",
+    presentation: { title: "Schedule a job" },
+    handler: async (input) => applyPrepared(input),
+  });
+
+  const deleteJob = defineTool({
+    name: "delete_job",
+    description:
+      "Delete a scheduled job (from list_jobs) and its run history; its run chats stay. The owner approves it first. To stop a job for a while instead, use schedule_job with enabled false.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { jobId: { type: "string", minLength: 1 } },
+      required: ["jobId"],
+    },
+    effect: "write",
+    authorization: "required",
+    presentation: { title: "Delete a scheduled job" },
+    handler: async (input) => applyPrepared(input),
+  });
+
+  /** Only a change prepared here and approved by the owner is applied. */
+  const applyPrepared = async (
+    input: Record<string, unknown>,
+  ): Promise<HostToolResult> => {
+    const change = input[PREPARED_KEY];
+    if (!isPreparedChange(change)) {
+      return failure("This change was not approved by the owner");
+    }
+    return await apply(change);
+  };
+
+  const approvalTools: HostTool[] = [scheduleJob, deleteJob];
+  return {
+    readTools: () => [listJobs],
+    approvalTools: {
+      toolNames: JOB_TOOL_NAMES,
+      resolveTools: () => approvalTools,
+      prepare: (request) => prepare(request.toolName, request.input),
+      validatePending: ({ input }) => {
+        const change = input[PREPARED_KEY];
+        if (!isPreparedChange(change)) {
+          return { ok: false, reason: "The job change is not available" };
+        }
+        const stale = stillApplies(change);
+        return stale ? { ok: false, reason: stale } : { ok: true };
+      },
+    },
+  };
+}
+
+/** Model input never has this key: the schemas refuse unknown fields. */
+const PREPARED_KEY = "preparedJobChange";
+
+function preparedInput(change: PreparedChange): Record<string, unknown> {
+  return { [PREPARED_KEY]: change };
+}
+
+function isPreparedChange(value: unknown): value is PreparedChange {
+  if (!value || typeof value !== "object") return false;
+  const change = value as Record<string, unknown>;
+  switch (change.action) {
+    case "create":
+      return !!change.fields && typeof change.fields === "object";
+    case "update":
+      return (
+        typeof change.jobId === "string" &&
+        typeof change.expectedUpdatedAt === "number" &&
+        !!change.patch &&
+        typeof change.patch === "object"
+      );
+    case "delete":
+      return (
+        typeof change.jobId === "string" &&
+        typeof change.expectedUpdatedAt === "number"
+      );
+    default:
+      return false;
+  }
+}
+
+const DAY_NAMES: Record<(typeof WEEKDAYS)[number], string> = {
+  sun: "Sun",
+  mon: "Mon",
+  tue: "Tue",
+  wed: "Wed",
+  thu: "Thu",
+  fri: "Fri",
+  sat: "Sat",
+};
+
+/** A schedule in plain words, for approval cards and tool results. */
+export function describeSchedule(schedule: JobSchedule): string {
+  if (schedule.kind === "interval") {
+    const minutes = schedule.everyMinutes;
+    if (minutes % 1_440 === 0) {
+      return minutes === 1_440 ? "every day" : `every ${minutes / 1_440} days`;
+    }
+    if (minutes % 60 === 0) {
+      return minutes === 60 ? "every hour" : `every ${minutes / 60} hours`;
+    }
+    return `every ${minutes} minutes`;
+  }
+  const at = `at ${schedule.time} (${schedule.timeZone})`;
+  if (schedule.kind === "daily") return `every day ${at}`;
+  const days = schedule.days.join(",");
+  if (days === "mon,tue,wed,thu,fri") return `every weekday ${at}`;
+  if (days === "sun,sat") return `every weekend ${at}`;
+  if (schedule.days.length === 7) return `every day ${at}`;
+  return `every ${schedule.days.map((day) => DAY_NAMES[day]).join(", ")} ${at}`;
+}
+
+function describeApprovalMode(mode: string): string {
+  return mode === "ask"
+    ? "ask (a run pauses for you before editing files or running commands)"
+    : "autonomous (runs edit files and run commands without asking; protected files and background actions still ask)";
+}
+
+function firstRun(schedule: JobSchedule, at: number): number {
+  return nextOccurrence(schedule, at, at);
+}
+
+function timeZoneOf(schedule: JobSchedule, fallback: string): string {
+  return schedule.kind === "interval" ? fallback : schedule.timeZone;
+}
+
+export function formatInstant(instant: number, timeZone: string): string {
+  return `${new Intl.DateTimeFormat("en-AU", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(instant)} (${timeZone})`;
+}
+
+function oneLine(text: string, max: number): string {
+  const line = text.replace(/\s+/gu, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+function failure(message: string): HostToolResult {
+  return { modelContent: message, isError: true };
+}

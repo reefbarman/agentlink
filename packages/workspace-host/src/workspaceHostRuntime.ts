@@ -6,6 +6,7 @@ import {
   type AgentTurnAttachment,
   type AgentTurnEvent,
   type AgentTurnResult,
+  type AuthorizeToolCallRequest,
   type CoreReasoningEffort,
   type HostTool,
   type HostToolResolver,
@@ -176,7 +177,51 @@ export interface CreateWorkspaceHostOptions {
    * the owner's approval, so only read-only tools belong here.
    */
   readonly hostTools?: HostToolResolver;
+  /**
+   * Host-built tools that always need the owner's approval, whatever the
+   * session's approval mode (for example scheduling a job).
+   */
+  readonly approvalHostTools?: WorkspaceApprovalHostTools;
 }
+
+/**
+ * Tools whose every call is checked and described by the host, then
+ * approved or denied by the owner. The host can refuse a call but never
+ * allow one by itself.
+ */
+export interface WorkspaceApprovalHostTools {
+  /** Names of the tools `resolveTools` offers, known before any turn. */
+  readonly toolNames: readonly string[];
+  /** Each tool must have `authorization: "required"`. */
+  readonly resolveTools: HostToolResolver;
+  /**
+   * Check a call and describe it for the approval card. `preparedInput`,
+   * when given, is what runs after approval, unchanged.
+   */
+  readonly prepare: (
+    request: AuthorizeToolCallRequest,
+  ) => WorkspaceHostToolApproval | Promise<WorkspaceHostToolApproval>;
+  /** Before an approved call runs: whether it still applies. */
+  readonly validatePending?: (request: {
+    readonly sessionId: string;
+    readonly toolName: string;
+    readonly input: Readonly<Record<string, unknown>>;
+  }) =>
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: string }
+    | Promise<
+        { readonly ok: true } | { readonly ok: false; readonly reason: string }
+      >;
+}
+
+export type WorkspaceHostToolApproval =
+  | { readonly decision: "deny"; readonly reason: string }
+  | {
+      readonly decision: "require_user";
+      readonly summary: string;
+      readonly displayContent?: unknown;
+      readonly preparedInput?: Readonly<Record<string, unknown>>;
+    };
 
 export interface WorkspaceHostSession {
   readonly sessionId: string;
@@ -314,9 +359,12 @@ export async function createWorkspaceHost(
     options.commands ||
     options.mcp ||
     options.sharedMcp ||
-    options.background
+    options.background ||
+    options.approvalHostTools
       ? await readOrCreateApprovalKey(projectDataRoot)
       : undefined;
+  const approvalHostTools = options.approvalHostTools;
+  const approvalToolNames = new Set(approvalHostTools?.toolNames ?? []);
   const responsesConversationStates = new Map<
     string,
     ResponsesConversationState
@@ -693,7 +741,11 @@ export async function createWorkspaceHost(
     ? createWorkspaceSessionInteractionTools(options.sessionInteractions)
     : undefined;
   const interactionTokens =
-    options.files || options.commands || options.mcp || options.sharedMcp
+    options.files ||
+    options.commands ||
+    options.mcp ||
+    options.sharedMcp ||
+    approvalHostTools
       ? createTurnInteractionTokenService({
           secret: approvalSecret!,
         })
@@ -713,7 +765,8 @@ export async function createWorkspaceHost(
     backgroundTools ||
     languageTools ||
     sessionInteractionTools ||
-    options.hostTools
+    options.hostTools ||
+    approvalHostTools
       ? {
           tools: {
             resolveTools: async (request) => {
@@ -744,6 +797,12 @@ export async function createWorkspaceHost(
                   ...(options.hostTools
                     ? requireUnauthorizedTools(await options.hostTools(request))
                     : []),
+                  ...(approvalHostTools
+                    ? requireApprovalTools(
+                        await approvalHostTools.resolveTools(request),
+                        approvalToolNames,
+                      )
+                    : []),
                 ];
                 return shared
                   ? {
@@ -770,6 +829,25 @@ export async function createWorkspaceHost(
             interactions: persistence.interactions,
             interactionTokens,
             authorizeToolCall: async (request) => {
+              // Never allowed by the host: refused, or the owner decides.
+              if (
+                approvalHostTools &&
+                approvalToolNames.has(request.toolName)
+              ) {
+                const approval = await approvalHostTools.prepare(request);
+                return approval.decision === "require_user"
+                  ? {
+                      decision: "require_user" as const,
+                      summary: approval.summary,
+                      ...(approval.displayContent !== undefined
+                        ? { displayContent: approval.displayContent }
+                        : {}),
+                      ...(approval.preparedInput
+                        ? { preparedInput: approval.preparedInput }
+                        : {}),
+                    }
+                  : { decision: "deny" as const, reason: approval.reason };
+              }
               if (request.toolName === "execute_command") {
                 return commandTools
                   ? await commandTools.authorizeToolCall(request)
@@ -909,7 +987,13 @@ export async function createWorkspaceHost(
   ): Promise<
     { readonly ok: true } | { readonly ok: false; reason: string }
   > => {
-    if (!fileTools && !commandTools && !mcpTools && !sharedMcpTools) {
+    if (
+      !fileTools &&
+      !commandTools &&
+      !mcpTools &&
+      !sharedMcpTools &&
+      !approvalHostTools
+    ) {
       return { ok: false, reason: "Approval tools are not enabled" };
     }
     const pending = await engine.sessions.inspect({ principal, sessionId });
@@ -948,6 +1032,15 @@ export async function createWorkspaceHost(
       input: call.input,
       displayContent: stored.record.request.displayContent,
     };
+    if (approvalHostTools && approvalToolNames.has(call.name)) {
+      return approvalHostTools.validatePending
+        ? await approvalHostTools.validatePending({
+            sessionId,
+            toolName: call.name,
+            input: call.input,
+          })
+        : { ok: true };
+    }
     if (isWorkspaceSharedMcpToolApproval(validationRequest.displayContent)) {
       return sharedMcpTools &&
         sameWorkspaceSharedMcpToolApproval(
@@ -1355,6 +1448,20 @@ function errorCode(error: unknown): string | undefined {
 }
 
 /** Host-supplied extra tools run unapproved, so none may ask for approval. */
+function requireApprovalTools(
+  tools: readonly HostTool[],
+  names: ReadonlySet<string>,
+): readonly HostTool[] {
+  for (const tool of tools) {
+    if (tool.authorization !== "required" || !names.has(tool.definition.name)) {
+      throw new Error(
+        `Host tool "${tool.definition.name}" must need authorization and be named in approvalHostTools.toolNames`,
+      );
+    }
+  }
+  return tools;
+}
+
 function requireUnauthorizedTools(
   tools: readonly HostTool[],
 ): readonly HostTool[] {

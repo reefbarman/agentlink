@@ -644,6 +644,196 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("always asks the owner for approval host tools and runs the prepared input", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const handler = vi.fn(async (input: Record<string, unknown>) => ({
+      modelContent: `saved ${String(input.prepared)}`,
+    }));
+    const remind = defineTool({
+      name: "host_remind",
+      description: "Set a reminder",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { when: { type: "string" } },
+        required: ["when"],
+      },
+      effect: "write",
+      authorization: "required",
+      handler,
+    });
+    let stale = false;
+    const prepare = vi.fn(
+      (request: { readonly input: Readonly<Record<string, unknown>> }) =>
+        request.input.when === "never"
+          ? { decision: "deny" as const, reason: "never is not a time" }
+          : {
+              decision: "require_user" as const,
+              summary: `Remind at ${String(request.input.when)}?`,
+              displayContent: { kind: "reminder" },
+              preparedInput: { prepared: `${String(request.input.when)}!` },
+            },
+    );
+    const results: string[] = [];
+    let call: Record<string, unknown> = { when: "7am" };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: Array<{ role?: string; content?: string }>;
+        };
+        const result = body.messages?.findLast(
+          (message) => message.role === "tool",
+        );
+        const last = body.messages?.at(-1);
+        if (result && last?.role === "tool") {
+          results.push(String(result.content));
+          return completion("done");
+        }
+        return toolCall("host_remind", call);
+      });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "approval-host-tools",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      // A session grant for files must not extend to these tools.
+      files: {
+        enabled: true,
+        approvalPolicy: { hasSessionGrant: () => true },
+      },
+      approvalHostTools: {
+        toolNames: ["host_remind"],
+        resolveTools: () => [remind],
+        prepare,
+        validatePending: () =>
+          stale ? { ok: false, reason: "changed meanwhile" } : { ok: true },
+      },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      await expect(host.runTurn(sessionId, "remind me")).resolves.toMatchObject(
+        {
+          status: "suspended",
+          interaction: {
+            toolName: "host_remind",
+            summary: "Remind at 7am?",
+            displayContent: { kind: "reminder" },
+          },
+        },
+      );
+      expect(handler).not.toHaveBeenCalled();
+      await expect(
+        host.revalidatePendingInteraction(sessionId),
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        host.resumeInteraction(sessionId, "allow"),
+      ).resolves.toMatchObject({ status: "completed", text: "done" });
+      // The host-prepared value runs, not the model's input.
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]![0]).toEqual({ prepared: "7am!" });
+      expect(results.at(-1)).toContain("saved 7am!");
+
+      // Refused by the host: the reason reaches the model, nothing runs.
+      call = { when: "never" };
+      await expect(host.runTurn(sessionId, "again")).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(results.at(-1)).toContain("never is not a time");
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Changed before the owner answered: allowing does not run it.
+      call = { when: "8am" };
+      await expect(host.runTurn(sessionId, "later")).resolves.toMatchObject({
+        status: "suspended",
+      });
+      stale = true;
+      await expect(
+        host.revalidatePendingInteraction(sessionId),
+      ).resolves.toEqual({ ok: false, reason: "changed meanwhile" });
+      await expect(
+        host.resumeInteraction(sessionId, "allow"),
+      ).rejects.toThrow();
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses approval host tools that do not need authorization", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const open = defineTool({
+      name: "host_open",
+      description: "No approval",
+      inputSchema: { type: "object", properties: {} },
+      effect: "write",
+      handler: async () => ({ modelContent: "ran" }),
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "approval-host-tools-refused",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      approvalHostTools: {
+        toolNames: ["host_open"],
+        resolveTools: () => [open],
+        prepare: () => ({ decision: "deny", reason: "no" }),
+      },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      const status = await host
+        .runTurn(sessionId, "go")
+        .then((result) => result.status)
+        .catch(() => "rejected");
+      expect(status).not.toBe("completed");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("denies a reviewed file proposal without writing", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");
