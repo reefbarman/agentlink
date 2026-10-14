@@ -7,6 +7,7 @@ import {
   imageDownloadName,
   type OpenImageInEditor,
 } from "./ImagePreview";
+import { ImageSourceCaption } from "./ImageSourceCaption";
 import {
   ToolCallGroup,
   getToolGroupLabel,
@@ -94,7 +95,9 @@ function placeAssistantDisplayMedia(
       );
       if (matchingImage) {
         matchingImage.used = true;
-        return matchingImage.image;
+        return matchingImage.image.attribution || !image.attribution
+          ? matchingImage.image
+          : { ...matchingImage.image, attribution: image.attribution };
       }
 
       fallbackImageIndex += 1;
@@ -102,6 +105,7 @@ function placeAssistantDisplayMedia(
         name: `${toolName === "present_images" ? "presented-image" : "generated-image"}-${fallbackImageIndex}.${imageExtensionForMimeType(image.mimeType)}`,
         mimeType: image.mimeType,
         src,
+        ...(image.attribution ? { attribution: image.attribution } : {}),
       };
     });
     promotedByToolCallId.set(block.id, { images, documents: [] });
@@ -1038,6 +1042,7 @@ function UserImagePreviewCard({
   onOpenImageInEditor?: OpenImageInEditor;
 }) {
   const { image, loading, error } = useRemoteDisplayImage(projectedImage);
+  const attribution = projectedImage.attribution;
   if (!image.src) {
     return (
       <div
@@ -1052,6 +1057,7 @@ function UserImagePreviewCard({
             {loading ? `Loading ${label}…` : (error ?? label)}
           </span>
         </span>
+        <ImageSourceCaption attribution={attribution} />
       </div>
     );
   }
@@ -1076,6 +1082,7 @@ function UserImagePreviewCard({
       >
         <i class="codicon codicon-save" />
       </a>
+      <ImageSourceCaption attribution={attribution} />
     </div>
   );
 }

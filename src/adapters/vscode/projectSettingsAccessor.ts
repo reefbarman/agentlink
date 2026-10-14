@@ -60,6 +60,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
   "webAccess.nativeSearchMode",
+  "webAccess.imageRetrieval",
   "webAccess.allowedDomains",
   "webAccess.blockedDomains",
   "webAccess.maxSearchUsesPerTurn",

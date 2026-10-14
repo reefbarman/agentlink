@@ -304,6 +304,62 @@ function makeAdapter(
 }
 
 describe("BrowserGatewayOwnerProjectionAdapter", () => {
+  it("forwards bounded web image attribution only to helpers that advertise it", () => {
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-assistant", "assistant", "here it is", 800),
+          displayMedia: {
+            images: [
+              {
+                name: "cover.jpg",
+                mimeType: "image/jpeg",
+                src: "data:image/jpeg;base64,AAAA",
+                attribution: {
+                  origin: "web_page",
+                  sourceUrl: "https://example.com/album",
+                  imageUrl: "https://user:pass@cdn.example.com/cover.jpg",
+                  title: "Album\u0000cover",
+                },
+              },
+            ],
+            documents: [],
+          },
+        },
+      ],
+    };
+
+    const withoutAttribution = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: [
+        "transcript-block-detail-v1",
+        "transcript-display-media-v1",
+      ],
+    }).getCheckpoint().transcript.messages[0];
+    expect(withoutAttribution?.displayMedia?.images[0]).toEqual({
+      name: "cover.jpg",
+      mimeType: "image/jpeg",
+    });
+
+    const withAttribution = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: [
+        "transcript-block-detail-v1",
+        "transcript-display-media-v1",
+        "transcript-image-attribution-v1",
+      ],
+    }).getCheckpoint().transcript.messages[0];
+    expect(withAttribution?.displayMedia?.images[0]).toEqual({
+      name: "cover.jpg",
+      mimeType: "image/jpeg",
+      attribution: {
+        origin: "web_page",
+        sourceUrl: "https://example.com/album",
+        title: "Album cover",
+      },
+    });
+  });
+
   it("projects byte-free display media and serves images through display-image detail", () => {
     const imageSrc = "data:image/png;base64,U0NSRUVOU0hPVA==";
     const source = readSet();

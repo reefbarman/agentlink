@@ -2,11 +2,15 @@ import type { CoreWebAccessBackend, CoreWebToolKind } from "./webActivity.js";
 
 export type CoreWebAccessSelection = "native" | "mcp" | "disabled";
 export type CoreWebSearchMode = "cached" | "indexed" | "live";
+/** Host-side public image/page retrieval used by inspect_page_images, present_images and Markdown images. */
+export type CoreWebImageRetrievalMode = "prompt" | "enabled" | "disabled";
 
 export interface CoreWebAccessSettings {
   searchBackend: CoreWebAccessSelection;
   fetchBackend: CoreWebAccessSelection;
   nativeSearchMode: CoreWebSearchMode;
+  /** Optional on the wire for older peers; normalization always sets it. */
+  imageRetrieval?: CoreWebImageRetrievalMode;
   allowedDomains: string[];
   blockedDomains: string[];
   maxSearchUsesPerTurn: number;

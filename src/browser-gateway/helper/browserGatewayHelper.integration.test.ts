@@ -1591,6 +1591,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "typed-background-results-v1",
         "transcript-block-detail-v1",
         "transcript-display-media-v1",
+        "transcript-image-attribution-v1",
       ],
     });
 
@@ -1663,6 +1664,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "typed-background-results-v1",
         "transcript-block-detail-v1",
         "transcript-display-media-v1",
+        "transcript-image-attribution-v1",
       ],
       ownerRegistration: {
         owner: {
@@ -5275,6 +5277,103 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
+  it("edits, removes, and steers helper-owned Ask Agent queued messages", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ signal }) => {
+      calls += 1;
+      if (calls > 1) return { text: "Steered reply", toolCalls: [] };
+      resolveStarted();
+      return await new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("browser_gateway_ask_agent_model_aborted")),
+          { once: true },
+        );
+      });
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const firstSend = post("/api/ask-agent/send", { text: "Long running" });
+    await started;
+    for (const [id, text] of [
+      ["queued-a", "Queued A"],
+      ["queued-b", "Queued B"],
+      ["queued-c", "Queued C"],
+    ]) {
+      const queued = await post("/api/ask-agent/send", { id, text });
+      await expect(queued.json()).resolves.toMatchObject({ queued: true });
+    }
+
+    const edit = await post("/api/ask-agent/queue", {
+      action: "update",
+      id: "queued-c",
+      text: "Edited C",
+    });
+    expect(edit.ok).toBe(true);
+    const remove = await post("/api/ask-agent/queue", {
+      action: "remove",
+      id: "queued-a",
+    });
+    const removeBody = (await remove.json()) as {
+      snapshot: {
+        session: { foreground: { messageQueue: Array<{ id: string }> } };
+      };
+    };
+    expect(
+      removeBody.snapshot.session.foreground.messageQueue.map((q) => q.id),
+    ).toEqual(["queued-b", "queued-c"]);
+    const missing = await post("/api/ask-agent/queue", {
+      action: "remove",
+      id: "queued-a",
+    });
+    expect(missing.status).toBe(404);
+
+    const steer = await post("/api/ask-agent/queue", {
+      action: "steer",
+      id: "queued-c",
+    });
+    expect(steer.ok).toBe(true);
+    await firstSend;
+
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      const body = (await session.json()) as {
+        snapshot: {
+          session: {
+            foreground: {
+              messageQueue: Array<{ id: string }>;
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      const userTexts = body.snapshot.session.foreground.projectedMessages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content);
+      // The steered message runs right after the stopped turn, before B.
+      expect(userTexts.slice(0, 2)).toEqual(["Long running", "Edited C"]);
+      expect(userTexts).not.toContain("Queued A");
+    });
   });
 
   it("awaits an in-flight cancellation publication before helper shutdown", async () => {
@@ -10472,6 +10571,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       "recall_memory",
       "generate_image",
       "present_images",
+      "inspect_page_images",
     ]);
     expect(JSON.stringify(discovered)).not.toContain("execute_command");
     expect(JSON.stringify(discovered)).not.toContain("get_hover");

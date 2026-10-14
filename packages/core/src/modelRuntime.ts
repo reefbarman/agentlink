@@ -126,6 +126,11 @@ export interface CoreModelImageBlock {
     media_type: CoreModelImageMediaType;
     data: string;
   };
+  /**
+   * Host-retained web provenance. Provider serializers map image blocks
+   * explicitly and never forward this field on the wire.
+   */
+  attribution?: import("@agentlink/protocol/tool-result").ImageAttribution;
 }
 
 export interface CoreModelDocumentBlock {

@@ -5,6 +5,7 @@ import {
   handleToolError,
   jsonResult,
   successResult,
+  type ImageAttribution,
   type McpApprovalPromotionMeta,
   type McpContentAnnotations,
   type McpResultContentMeta,
@@ -22,7 +23,12 @@ describe("tool result protocol", () => {
   it("keeps the serializable tool and MCP metadata closure stable", () => {
     expectTypeOf<ToolResult["content"][number]>().toEqualTypeOf<
       | { type: "text"; text: string }
-      | { type: "image"; data: string; mimeType: string }
+      | {
+          type: "image";
+          data: string;
+          mimeType: string;
+          attribution?: ImageAttribution;
+        }
       | { type: "document"; data: string; mimeType: string; name: string }
     >();
     expectTypeOf<McpApprovalPromotionMeta["mutationTarget"]>().toEqualTypeOf<

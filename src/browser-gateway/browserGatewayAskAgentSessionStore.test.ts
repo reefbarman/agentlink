@@ -248,6 +248,25 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(store.dequeueMessage()).toBeNull();
   });
 
+  it("removes, edits, and promotes queued messages by id", () => {
+    const store = createStore();
+    for (const id of ["q-1", "q-2", "q-3"]) {
+      store.enqueueMessage({ id, text: `Message ${id}`, source: "browser" });
+    }
+
+    expect(store.updateQueuedMessageText("q-2", "  Edited  ")).toBe(true);
+    expect(store.updateQueuedMessageText("q-2", "   ")).toBe(false);
+    expect(store.updateQueuedMessageText("missing", "x")).toBe(false);
+    expect(store.promoteQueuedMessage("q-3")).toBe(true);
+    expect(store.promoteQueuedMessage("missing")).toBe(false);
+    expect(store.removeQueuedMessage("q-1")).toBe(true);
+    expect(store.removeQueuedMessage("q-1")).toBe(false);
+
+    expect(store.dequeueMessage()).toMatchObject({ id: "q-3" });
+    expect(store.dequeueMessage()).toMatchObject({ id: "q-2", text: "Edited" });
+    expect(store.dequeueMessage()).toBeNull();
+  });
+
   it("treats repeated client message ids as idempotent sends", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {

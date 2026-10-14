@@ -18,6 +18,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "read_session_excerpt",
     "diagnose_activity",
     "present_images",
+    "inspect_page_images",
     "recall_memory",
     "compose",
   ],

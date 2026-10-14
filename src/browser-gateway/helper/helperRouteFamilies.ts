@@ -10,6 +10,7 @@ interface HelperExactRoute<
 }
 
 export type AskAgentRouteHandler =
+  | "markdownImage"
   | "session"
   | "sessions"
   | "sessionNew"
@@ -60,7 +61,8 @@ export type AskAgentRouteHandler =
   | "transcribe"
   | "send"
   | "retry"
-  | "stop";
+  | "stop"
+  | "queue";
 
 export const ASK_AGENT_ROUTES = [
   {
@@ -251,7 +253,13 @@ export const ASK_AGENT_ROUTES = [
   },
   { method: "POST", path: "/api/ask-agent/send", handler: "send" },
   { method: "POST", path: "/api/ask-agent/retry", handler: "retry" },
+  {
+    method: "POST",
+    path: "/api/ask-agent/markdown-image",
+    handler: "markdownImage",
+  },
   { method: "POST", path: "/api/ask-agent/stop", handler: "stop" },
+  { method: "POST", path: "/api/ask-agent/queue", handler: "queue" },
 ] as const satisfies readonly HelperExactRoute<AskAgentRouteHandler>[];
 
 export function matchAskAgentRoute(

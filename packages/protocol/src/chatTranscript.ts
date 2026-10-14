@@ -1,9 +1,13 @@
+import type {
+  ImageAttribution,
+  McpApprovalPromotionMeta,
+} from "./toolResult.js";
+
 import type { BackgroundResultState } from "./backgroundResult.js";
 import type { ChatReasoningEffort } from "./chatCatalog.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ComposeTrace } from "./compose.js";
 import type { FinalMessageMarker } from "./finalStatus.js";
-import type { McpApprovalPromotionMeta } from "./toolResult.js";
 import type { RequestContextBreakdown } from "./contextDiagnostics.js";
 
 export interface RemoteTranscriptBlockDetail {
@@ -33,7 +37,11 @@ export type ContentBlock =
       name: string;
       inputJson: string;
       result: string;
-      resultImages?: Array<{ mimeType: string; data: string }>;
+      resultImages?: Array<{
+        mimeType: string;
+        data: string;
+        attribution?: ImageAttribution;
+      }>;
       resultDocuments?: Array<{
         name: string;
         mimeType: string;
@@ -190,6 +198,8 @@ export interface ChatMessage {
       src: string;
       /** Relay reference used by remote surfaces to fetch the image lazily. */
       remoteDetail?: RemoteDisplayImageDetail;
+      /** Host-observed web provenance for images retrieved from the web. */
+      attribution?: ImageAttribution;
     }>;
     documents: Array<{ name: string; mimeType: string }>;
   };

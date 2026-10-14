@@ -1,5 +1,6 @@
 import type { BrowserGatewayTranscriptBlock } from "./browserGatewayTranscriptBlock.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
+import type { ImageAttribution } from "./toolResult.js";
 
 /** Block id used by `display-image` detail requests for message display media. */
 export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
@@ -10,7 +11,15 @@ export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
  */
 export interface BrowserGatewayTranscriptDisplayMedia {
   contentRevision: number;
-  images: Array<{ name: string; mimeType: string }>;
+  /**
+   * `attribution` is sent only to helpers advertising
+   * `transcript-image-attribution-v1`, so older strict validators never see it.
+   */
+  images: Array<{
+    name: string;
+    mimeType: string;
+    attribution?: ImageAttribution;
+  }>;
   documents: Array<{ name: string; mimeType: string }>;
 }
 

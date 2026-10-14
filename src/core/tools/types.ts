@@ -52,6 +52,8 @@ export interface SessionImageReference {
   base64: string;
   messageIndex: number;
   imageIndex: number;
+  /** Host-observed web provenance for images retrieved from the web. */
+  attribution?: import("@agentlink/protocol/tool-result").ImageAttribution;
 }
 
 export interface AdvertisedSkillReference {

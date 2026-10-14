@@ -1849,6 +1849,126 @@ body.chat-activity-shelf-resizing * {
   min-width: 0;
 }
 
+/* Web image provenance shown under presented/fetched images. */
+.image-source-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 0.85em;
+  line-height: 1.35;
+  color: var(--vscode-descriptionForeground);
+  min-width: 0;
+}
+
+.image-source-title {
+  color: var(--vscode-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-source-link-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.image-source-link-row a {
+  color: var(--vscode-textLink-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-source-link-row a:hover {
+  color: var(--vscode-textLink-activeForeground);
+}
+
+.image-source-details {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Markdown ![alt](source) images, resolved by the host. */
+.markdown-image-slot {
+  display: block;
+  margin: 6px 0;
+}
+
+.markdown-image {
+  display: inline-flex;
+  flex-direction: column;
+  max-width: min(100%, 520px);
+  min-width: 0;
+  vertical-align: top;
+}
+
+.markdown-image-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.markdown-image-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.markdown-image-img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.markdown-image-loading,
+.markdown-image-blocked,
+.markdown-image-unavailable {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px dashed
+    color-mix(in srgb, var(--vscode-foreground) 25%, transparent);
+  border-radius: 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
+.markdown-image-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.markdown-image-unavailable a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.markdown-image-load {
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+  font: inherit;
+}
+
+.markdown-image-load:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
 .user-image-preview-button {
   display: flex;
   align-items: center;
@@ -1985,6 +2105,9 @@ body.chat-activity-shelf-resizing * {
   padding: 24px;
   background: color-mix(in srgb, #000 72%, transparent);
   cursor: zoom-out;
+  /* Desktop's title bar is a native drag region that would otherwise swallow
+     clicks on lightbox controls rendered over it. */
+  -webkit-app-region: no-drag;
 }
 
 .user-image-lightbox-content {
@@ -2023,7 +2146,8 @@ body.chat-activity-shelf-resizing * {
 }
 
 .user-image-lightbox-open-editor,
-.user-image-lightbox-copy {
+.user-image-lightbox-copy,
+.user-image-lightbox-print {
   flex-shrink: 0;
 }
 
@@ -2193,19 +2317,17 @@ body.chat-activity-shelf-resizing * {
   position: relative;
   min-width: 0;
   margin: 6px 0;
-  padding-bottom: 28px;
-  border-radius: 4px;
-  background: var(--vscode-textCodeBlock-background);
 }
 
 .markdown-body .copyable-code-block > pre {
   margin: 0;
 }
 
+/* Floats over the block's bottom-right corner; never reserves layout space. */
 .code-block-copy-button {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  right: 6px;
+  bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -193,6 +193,7 @@ export class AskAgentOwnerAdapter {
         dataPlaneFeatures: [
           "transcript-block-detail-v1",
           "transcript-display-media-v1",
+          "transcript-image-attribution-v1",
         ],
       },
     );

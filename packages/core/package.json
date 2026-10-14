@@ -16,6 +16,42 @@
     "docs/**/*.md"
   ],
   "exports": {
+    "./browser-runtime": {
+      "browser": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "edge": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "import": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserRuntime.d.cts",
+        "default": "./dist/cjs/browserRuntime.cjs"
+      }
+    },
+    "./codex-device-auth": {
+      "browser": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "edge": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "import": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "require": {
+        "types": "./dist/cjs/codexDeviceAuth.d.cts",
+        "default": "./dist/cjs/codexDeviceAuth.cjs"
+      }
+    },
     ".": {
       "browser": null,
       "edge": null,

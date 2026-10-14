@@ -159,6 +159,14 @@ const toolCapabilities = [
     "never",
     true,
   ),
+  metadata(
+    "inspect_page_images",
+    "media",
+    ["web.fetch", "media.discover", "network.external"],
+    "external",
+    "policy",
+    true,
+  ),
 
   // Read/search/context
   metadata(
@@ -313,9 +321,16 @@ const toolCapabilities = [
   metadata(
     "present_images",
     "media",
-    ["media.present", "session.images.read", "ui.chat.display"],
-    "control",
-    "never",
+    [
+      "media.present",
+      "session.images.read",
+      "ui.chat.display",
+      "web.fetch",
+      "media.import",
+      "network.external",
+    ],
+    "external",
+    "policy",
     false,
   ),
   metadata(

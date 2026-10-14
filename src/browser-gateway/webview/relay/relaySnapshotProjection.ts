@@ -449,6 +449,7 @@ function projectDisplayMedia(
         contentRevision: displayMedia.contentRevision,
         index,
       },
+      ...(image.attribution ? { attribution: image.attribution } : {}),
     })),
     documents: displayMedia.documents.map((document) => ({
       name: document.name,

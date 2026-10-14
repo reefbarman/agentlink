@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.30.16",
+  "version": "1.30.25",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -460,6 +460,22 @@
           ],
           "default": "native",
           "description": "Choose whether AgentLink exposes its native web_fetch tool. Native provider use can incur additional charges and sends URLs and fetched content to the selected provider. Web content is untrusted model input."
+        },
+        "agentlink.webAccess.imageRetrieval": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "prompt",
+            "enabled",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Ask before inspect_page_images or present_images contacts a new website, and show a Load image button for every web image in chat Markdown.",
+            "Default. Retrieve public pages and images without asking, like web_search and web_fetch. A Markdown image loads automatically when its URL already appeared in the chat (for example in search results); other image URLs show a Load image button. Private/local addresses, proxies and blocked domains stay blocked.",
+            "Hide inspect_page_images, reject web sources in present_images, and do not load web images in chat Markdown."
+          ],
+          "default": "enabled",
+          "description": "Control host-side retrieval of public web pages and images used to find and show real images (for example product photos, album covers or existing art). Agents show images with Markdown; AgentLink downloads them, never the chat view itself. Requests come directly from this computer without cookies, private/local network addresses are always blocked, and allowedDomains/blockedDomains apply to every page, image and redirect. Images the agent looks at with present_images may be sent to the selected model. Setting fetchBackend to disabled also disables image retrieval."
         },
         "agentlink.webAccess.nativeSearchMode": {
           "scope": "window",
@@ -1258,6 +1274,7 @@
     "multicast-dns": "^7.2.5",
     "node-forge": "^1.4.0",
     "openai": "^7.30.1",
+    "parse5": "^8.0.1",
     "picomatch": "^4.0.5",
     "pngjs": "^7.0.0",
     "preact": "^11.0.1",

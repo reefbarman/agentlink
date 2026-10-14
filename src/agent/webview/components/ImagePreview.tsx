@@ -2,6 +2,7 @@ import {
   canCopyImageToClipboard,
   copyImageToClipboard,
 } from "../imageClipboard";
+import { canPrintImage, printImage } from "../imagePrint";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import { createPortal } from "preact/compat";
@@ -47,6 +48,7 @@ export function ImagePreview({
   const dialogRef = useRef<HTMLDivElement>(null);
   const label = image.name || alt;
   const canCopy = canCopyImageToClipboard();
+  const canPrint = showDownload && canPrintImage();
 
   useEffect(() => {
     if (copyState === "idle") return;
@@ -154,6 +156,39 @@ export function ImagePreview({
                             : "codicon-copy"
                       }`}
                     />
+                  </button>
+                )}
+                {canPrint && (
+                  <button
+                    class="icon-button user-image-lightbox-print"
+                    type="button"
+                    title="Print image"
+                    aria-label="Print image"
+                    onClick={() => {
+                      printImage(image.src, label).catch((error: unknown) => {
+                        console.warn(
+                          "[AgentLink] Failed to print image",
+                          error,
+                        );
+                      });
+                    }}
+                  >
+                    {/* The bundled codicon font has no printer glyph. */}
+                    <svg
+                      class="image-print-icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1"
+                      aria-hidden="true"
+                    >
+                      <path d="M4.5 5.5v-3h7v3" />
+                      <rect x="1.5" y="5.5" width="13" height="6" rx="1" />
+                      <rect x="4.5" y="9.5" width="7" height="4" />
+                      <circle cx="12" cy="7.5" r="0.5" fill="currentColor" />
+                    </svg>
                   </button>
                 )}
                 {showDownload && (

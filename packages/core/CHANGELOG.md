@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `@agentlink/node-host` adds `createNodeHostWebImageTools(...)`: `inspect_page_images` lists a public page's images and `present_images` retrieves image URLs or candidates so the model can see them and the host can show them with source attribution. Agents show images with Markdown; `resolveImageSource(sessionId, src)` resolves `![alt](source)` in agent output to bytes and attribution (automatically for URLs seen in the session, otherwise after user confirmation), so hosts never load remote URLs in their UI. Retrieval is public-address-only with byte, pixel and per-turn limits; `getImage(...)` returns retained bytes. Adds `undici` and `parse5` as node-host dependencies.
+- Adds the browser/edge-safe `browser-runtime` entry for the existing tool loop, execution limits, web contracts and Codex Responses request/stream processing. Full engines and provider factories remain Node-only. Responses byte limits now use the shared platform-neutral UTF-8 helper.
+- Adds `codex-device-auth` protocol helpers for Codex's documented device-code flow, including fixed endpoints, bounded challenge/poll parsing and expiry/cancellation checks. Hosts still own polling, token exchange, refresh and secure storage; existing desktop PKCE is unchanged.
+- Extends packed-consumer browser/edge checks and adds browser-like multi-step/parser and device-auth fixtures.
+
 ## 0.12.0 — 2026-10-10
 
 - `transcribeCodexAudio` now uploads by default through undici with a narrower TLS cipher list, so Electron and other Node hosts no longer hit ChatGPT's Cloudflare challenge (`challenge_blocked`) without a custom `fetch`. Proxy environment variables are honoured. `createCodexTranscriptionFetch()` and `CODEX_TRANSCRIPTION_TLS_CIPHERS` are exported from `@agentlink/core/codex`. Adds `undici` as a dependency, loaded only on first transcription.

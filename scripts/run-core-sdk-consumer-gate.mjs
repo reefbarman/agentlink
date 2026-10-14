@@ -19,8 +19,12 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = join(ROOT, "fixtures", "core-sdk-consumer");
 const PACKAGES = ["protocol", "core", "node-host"];
-/** Dependency-free core entry points that must also bundle for browsers. */
-const BROWSER_SAFE_CORE_EXPORTS = new Set(["./voice"]);
+/** Audited host-injected core entries that must also bundle for browsers. */
+const BROWSER_SAFE_CORE_EXPORTS = new Set([
+  "./voice",
+  "./browser-runtime",
+  "./codex-device-auth",
+]);
 
 async function run(command, args, options = {}) {
   try {
@@ -149,6 +153,10 @@ async function writeExportContracts(consumerDirectory, corePack) {
     writeFile(
       join(consumerDirectory, "core-voice-browser.mjs"),
       'import { VoiceActivitySegmenter, encodeWavPcm16 } from "@agentlink/core/voice";\nconst segmenter = new VoiceActivitySegmenter({ sampleRate: 16000 });\nconsole.log(segmenter.push(new Int16Array(160)).level, encodeWavPcm16(new Int16Array(1), 16000).length);\n',
+    ),
+    writeFile(
+      join(consumerDirectory, "core-mobile-browser.mjs"),
+      'import { runAgentToolLoop, buildCodexStreamRequestBody, parseCodexResponseStreamEvents } from "@agentlink/core/browser-runtime";\nimport { parseCodexDeviceAuthChallenge } from "@agentlink/core/codex-device-auth";\nif (typeof runAgentToolLoop !== "function" || typeof parseCodexResponseStreamEvents !== "function" || !buildCodexStreamRequestBody({ model: "fixture", input: [], store: false }).stream || !parseCodexDeviceAuthChallenge({ device_auth_id: "fixture", user_code: "CODE", interval: "5" }).userCode) throw new Error("Mobile exports unavailable");\n',
     ),
   ]);
   return {
@@ -546,6 +554,23 @@ async function main() {
       ],
       { cwd: consumerDirectory },
     );
+    for (const target of ["browser", "edge"]) {
+      await run(
+        bin("esbuild"),
+        [
+          "core-mobile-browser.mjs",
+          "--bundle",
+          "--format=esm",
+          "--platform=browser",
+          `--conditions=${target}`,
+          `--outfile=core-mobile-${target}.js`,
+        ],
+        { cwd: consumerDirectory },
+      );
+      await run("node", [`core-mobile-${target}.js`], {
+        cwd: consumerDirectory,
+      });
+    }
     await Promise.all(
       ["browser", "edge"].map((target) =>
         assertUnsupportedCondition(

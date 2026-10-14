@@ -181,6 +181,16 @@ Only `https:` Streamable HTTP and SSE endpoints are accepted. The host must expl
 
 Remote and stdio options may supply `onElicitation` for host-owned form interaction. Node-host advertises form elicitation only when that callback exists, normalizes and bounds the server schema, validates/coerces accepted values, binds the request to the current principal/session/turn, and cancels promptly with the turn. URL-mode elicitation is always declined in this adapter; it is distinct from the explicit OAuth provider/browser callback flow.
 
+## Web image discovery and presentation
+
+`createNodeHostWebImageTools(...)` returns `{ resolveTools, getImage, resolveImageSource, clearSession, dispose }` for two tools: `inspect_page_images` (list a public page's main images and their URLs) and `present_images` (retrieve image `urls` or `candidate_ids`, send them to the model with source attribution, retain them as `web_image_N`, and emit `displayContent` of kind `agentlink.presented_images` so the host shows them with their source). It does not search the web.
+
+Agents show images with Markdown `![alt](src)`. `resolveImageSource(sessionId, src, { userConfirmed?, signal? })` resolves `src` (a `web_image_N` ID, a `data:image/...` URL, or a public http(s) URL) to base64 bytes and attribution, so the host UI never loads remote URLs. A web URL resolves automatically only when it already appeared in the session through user input, `inspect_page_images` or `present_images`; otherwise the result is `needs_confirmation` until the caller passes `userConfirmed: true`. Results are cached in process.
+
+Retrieval uses a dedicated undici pool with a public-only connection-time DNS lookup. Private, loopback, link-local, and other local addresses, IP-literal and local hostnames, credentials in URLs, non-default ports, and HTTPS-to-HTTP redirects are refused, and every redirect hop is re-authorized. Configured proxies fail closed. Pages are read up to 4 MiB, images must be static PNG/JPEG/WebP up to 4 MiB and 16 megapixels (verified from bytes), and per-turn budgets cap inspections, fetches, and imported bytes. Displayed and stored URLs drop query strings and token-like path segments.
+
+`resolvePolicy` runs per turn and may return `mode` (`enabled` default, `prompt`, `disabled`) plus `allowedDomains`/`blockedDomains`; `resolveImageSource` applies the latest policy resolved for the session, and `prompt` mode always needs `userConfirmed`. `prompt` requires `requestApproval` for tool retrieval. Images are kept in process memory (16 per session, 64 sessions); `getImage` and `resolveImageSource` do not check principals, so authorize session access first.
+
 ## Validation
 
 ```sh

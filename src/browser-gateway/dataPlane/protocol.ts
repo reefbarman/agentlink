@@ -1,4 +1,5 @@
 import type { BackgroundResultState } from "@agentlink/protocol/background-result";
+import { boundedImageAttribution } from "./imageAttribution.js";
 import type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
 import {
   BROWSER_GATEWAY_CAPABILITY_STATES,
@@ -2584,11 +2585,27 @@ function parseDisplayMedia(
       fail("resource_limit", `${path}.${key}`, "too many display media items");
     return items.map((item, index) => {
       const itemPath = `${path}.${key}[${index}]`;
-      const entry = strictRecord(item, itemPath, ["name", "mimeType"]);
-      return {
+      const entry = strictRecord(
+        item,
+        itemPath,
+        key === "images"
+          ? ["name", "mimeType", "attribution"]
+          : ["name", "mimeType"],
+      );
+      const parsed = {
         name: boundedString(entry.name, `${itemPath}.name`, 1_000),
         mimeType: nonEmptyString(entry.mimeType, `${itemPath}.mimeType`, 256),
       };
+      if (entry.attribution === undefined) return parsed;
+      const attribution = boundedImageAttribution(entry.attribution);
+      if (!attribution) {
+        fail(
+          "invalid_value",
+          `${itemPath}.attribution`,
+          "invalid image attribution",
+        );
+      }
+      return { ...parsed, attribution };
     });
   };
   return {
@@ -2597,7 +2614,10 @@ function parseDisplayMedia(
       `${path}.contentRevision`,
     ),
     images: parseItems("images"),
-    documents: parseItems("documents"),
+    documents: parseItems("documents") as Array<{
+      name: string;
+      mimeType: string;
+    }>,
   };
 }
 

@@ -1,8 +1,8 @@
 # @agentlink/core
 
-`@agentlink/core` is a **private, pre-release Node.js SDK** for embedding AgentLink's bounded conversational engine in a server application. It is not a browser, Edge, React client-component, or VS Code extension API. The one exception is `@agentlink/core/voice`, a dependency-free set of dictation helpers that also runs in browser and edge bundles (see [Voice input](#voice-input)).
+`@agentlink/core` is a **private, pre-release SDK**. Its full engine, provider factories and durable-session infrastructure require Node.js. Three focused entries support browser and edge bundles: `browser-runtime`, `codex-device-auth` and `voice`. They do not supply authentication, native networking, durable storage or a complete mobile host.
 
-Current package version: `0.9.0`.
+Current package version: `0.12.0`. Browser/device-auth additions are unreleased; consume a pinned matched artifact set from the reviewed checkout.
 
 ## Status and compatibility
 
@@ -43,7 +43,7 @@ It packs protocol, core, and Node-host as one exact-version set, installs them o
 
 ## Reviewed entry points
 
-The private contract currently exposes these entry points. All are Node-only except `voice`, which is dependency-free and also bundles for browser and edge runtimes. The packed-consumer gate type-checks and runtime-loads every one under ESM and CommonJS, rejects the Node-only ones under browser and Edge conditions, and bundles `voice` for the browser. Prefer the root entry point unless a focused subpath is needed for an adapter or test.
+The private contract currently exposes these entry points. All are Node-only except `voice`, `browser-runtime` and `codex-device-auth`. The packed-consumer gate checks ESM/CommonJS imports, rejects Node-only entries under browser/edge conditions, and bundles the portable entries. Browser hosts must use the focused portable entries, not the root engine or provider factories.
 
 | Entry point                                                                                   | Purpose                                                                                                                 |
 | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -64,6 +64,16 @@ The private contract currently exposes these entry points. All are Node-only exc
 | `voice`                                                                                       | Browser-safe dictation helpers: pause-based utterance segmentation, auto-stop, meter levels, resampling, WAV encoding.  |
 
 Do not import unexported files under `dist/` or rely on root `src/` compatibility facades. Any addition, rename, or removal must update the packed-consumer fixture before another consumer relies on it.
+
+## Browser and native-WebView hosts
+
+Import `runAgentToolLoop`, execution limits, model-message types, web contracts, existing Codex Responses request translation and `parseCodexResponseStreamEvents` from `@agentlink/core/browser-runtime`. The same implementation backs Node and browser hosts; there are no Node polyfills, credential resolution or built-in transport in this entry.
+
+The host supplies bounded `callModel` and `runTool` handlers, schemas, authority, exact replay persistence and UI. Limits are opt-in, and in-flight HTTP needs host cancellation. Parse with termination evidence enabled and reject refusal, truncation or missing authoritative completion rather than treating transport EOF as success. Web definitions/helpers are not a network service.
+
+`@agentlink/core/codex-device-auth` provides the verified Codex device-code URLs, request builders, bounded challenge/poll parsing, expiry/cancellation checks and token-exchange form. This is not a generic OAuth device grant or an automatic sign-in manager. Trusted hosts own polling, token exchange, refresh and secure storage. A native app should expose only the user code, verification URL, opaque operation ID and safe status to its WebView, never authorization codes, PKCE verifiers or tokens. Existing desktop/CLI PKCE remains unchanged.
+
+The browser-like unit fixture runs the shared loop/parser without Node globals. Clean packed-consumer checks cover the new subpaths. These are portability proofs, not evidence of a live account, iPhone lifecycle correctness or a complete durable mobile engine.
 
 ## Generate content and run tools without sessions
 

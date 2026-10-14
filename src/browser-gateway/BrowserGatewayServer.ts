@@ -632,6 +632,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/markdown-image"),
+        ({ req, res }) => this.handleMarkdownImageAction(req, res),
+        json("markdown image action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/project/default"),
         ({ req, res }) => this.handleDefaultProjectAction(req, res),
         json("default project action failed"),
@@ -2160,6 +2166,36 @@ export class BrowserGatewayServer implements vscode.Disposable {
       mimeType: typeof body.mimeType === "string" ? body.mimeType : undefined,
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleMarkdownImageAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as {
+      src?: unknown;
+      sessionId?: unknown;
+      userConfirmed?: unknown;
+    };
+    if (
+      typeof body?.src !== "string" ||
+      body.src.length > 8192 ||
+      (body.sessionId !== undefined && typeof body.sessionId !== "string")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.resolveBrowserMarkdownImage({
+      src: body.src,
+      sessionId:
+        typeof body.sessionId === "string" ? body.sessionId : undefined,
+      userConfirmed: body.userConfirmed === true,
+    });
+    this.writeJson(res, 200, result);
   }
 
   private async handleOpenFileAction(

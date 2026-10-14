@@ -328,6 +328,11 @@ export type ExtensionMessage =
       error?: "not_found" | "open_failed";
     }
   | {
+      type: "agentMarkdownImageResolved";
+      requestId: string;
+      result: import("../../shared/markdownImageSource").MarkdownImageResolution;
+    }
+  | {
       type: "agentDetectQuestionResult";
       requestId: string;
       messageId: string;

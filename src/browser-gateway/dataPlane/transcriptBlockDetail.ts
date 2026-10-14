@@ -137,11 +137,15 @@ export function displayMediaContentRevision(
   if (cached !== undefined) return cached;
   const revision = hashString(
     JSON.stringify({
-      images: displayMedia.images.map(({ name, mimeType, src }) => ({
-        name,
-        mimeType,
-        src,
-      })),
+      images: displayMedia.images.map(
+        ({ name, mimeType, src, attribution }) => ({
+          name,
+          mimeType,
+          src,
+          // Metadata-only changes must invalidate cached descriptors.
+          ...(attribution ? { attribution } : {}),
+        }),
+      ),
       documents: displayMedia.documents,
     }),
   );

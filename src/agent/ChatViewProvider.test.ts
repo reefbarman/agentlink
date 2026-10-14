@@ -904,6 +904,61 @@ describe("tool-block file links", () => {
     }
   });
 
+  it("resolves a Markdown image_N source from the requested session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-md",
+      getAllMessages: () => [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "QUJD" },
+            },
+          ],
+        },
+      ],
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+      getDefaultProjectScope: () => undefined,
+      getSession: (id: string) => (id === session.id ? session : undefined),
+    };
+    const connectionPostMessage = vi.fn();
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(
+          message: Record<string, unknown>,
+          context: Record<string, unknown>,
+        ): Promise<void>;
+      }
+    ).handleWebviewMessage(
+      {
+        command: "agentResolveMarkdownImage",
+        requestId: "md-req-1",
+        sessionId: "session-md",
+        src: "image_1",
+      },
+      { connection: { postMessage: connectionPostMessage } },
+    );
+
+    expect(connectionPostMessage).toHaveBeenCalledWith({
+      type: "agentMarkdownImageResolved",
+      requestId: "md-req-1",
+      result: expect.objectContaining({
+        status: "ready",
+        src: "data:image/png;base64,QUJD",
+        mimeType: "image/png",
+      }),
+    });
+  });
+
   it("replies with a not_found result when the clicked path does not exist", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

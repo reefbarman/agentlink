@@ -24,4 +24,12 @@ export * from "./readTools.js";
 export * from "./sessionPreferences.js";
 export * from "./sharedOpenAiCompatibleConfig.js";
 export * from "./sharedOpenAiCompatibleCredentials.js";
+export * from "./webImageErrors.js";
+export * from "./webImageRuntime.js";
+export * from "./webImageTools.js";
+export type {
+  PublicFetchRequest,
+  PublicFetchResult,
+  PublicWebFetcher,
+} from "./webImageTransport.js";
 export * from "./writeTools.js";

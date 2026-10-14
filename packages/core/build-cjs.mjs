@@ -5,6 +5,8 @@ import { build } from "esbuild";
 const modules = [
   "agentEngine",
   "agentToolLoop",
+  "browserRuntime",
+  "codexDeviceAuth",
   "client",
   "codex",
   "embeddedAgentWeb",
@@ -34,6 +36,10 @@ const modules = [
   "webAccess",
 ];
 
+// Focused portable subpaths must not accidentally widen the historical root CJS surface.
+const rootModules = modules.filter(
+  (name) => name !== "browserRuntime" && name !== "codexDeviceAuth",
+);
 const sharedCoreModuleNames = new Set(modules);
 const sharedCoreModulesPlugin = {
   name: "shared-core-modules",
@@ -65,7 +71,7 @@ await writeFile(
   "dist/cjs/index.cjs",
   [
     '"use strict";',
-    `module.exports = Object.assign({}, ${modules
+    `module.exports = Object.assign({}, ${rootModules
       .map((module) => `require("./${module}.cjs")`)
       .join(", ")});`,
     "",

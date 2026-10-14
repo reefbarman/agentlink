@@ -6,6 +6,19 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import {
+  createLocalMarkdownImageReader,
+  resolveMarkdownImage,
+} from "../tools/markdownImageResolver";
+import {
+  getVscodeWebImageRuntime,
+  readVscodeWebImagePolicy,
+} from "../tools/webImages/vscodeWebImageTools";
+import type {
+  MarkdownImageResolution,
+  MarkdownImageResolveRequest,
+} from "../shared/markdownImageSource";
+import { collectStoredSessionImages } from "./sessionImages";
 import { isReviewPublicationCommand } from "../approvals/reviewPublicationPolicy.js";
 import {
   isCoreReasoningEffort,
@@ -593,6 +606,11 @@ export type ExtensionToWebview =
       requestId: string;
       ok: boolean;
       error?: "not_found" | "open_failed";
+    }
+  | {
+      type: "agentMarkdownImageResolved";
+      requestId: string;
+      result: MarkdownImageResolution;
     }
   | {
       type: "agentDetectQuestionResult";
@@ -5601,6 +5619,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       searchBackend: config.get("webAccess.searchBackend"),
       fetchBackend: config.get("webAccess.fetchBackend"),
       nativeSearchMode: config.get("webAccess.nativeSearchMode"),
+      imageRetrieval: config.get("webAccess.imageRetrieval"),
       allowedDomains: config.get("webAccess.allowedDomains"),
       blockedDomains: config.get("webAccess.blockedDomains"),
       maxSearchUsesPerTurn: config.get("webAccess.maxSearchUsesPerTurn"),
@@ -6116,6 +6135,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       this.log(`[error] Failed to open browser path: ${err}`);
       return { ok: false, error: "path_unavailable" };
+    }
+  }
+
+  /** Browser remote view: resolves a Markdown image for a VS Code session. */
+  public async resolveBrowserMarkdownImage(
+    request: MarkdownImageResolveRequest,
+  ): Promise<MarkdownImageResolution> {
+    return this.resolveMarkdownImageForSession(request.sessionId, request);
+  }
+
+  private async resolveMarkdownImageForSession(
+    sessionId: string | undefined,
+    request: { src: string; userConfirmed?: boolean },
+  ): Promise<MarkdownImageResolution> {
+    const session = sessionId
+      ? this.sessionManager?.getSession?.(sessionId)
+      : undefined;
+    const messages =
+      session && typeof session.getAllMessages === "function"
+        ? session.getAllMessages()
+        : [];
+    const roots = (vscode.workspace.workspaceFolders ?? []).map(
+      (folder) => folder.uri.fsPath,
+    );
+    try {
+      return await resolveMarkdownImage(request, {
+        sessionId: session?.id ?? sessionId ?? "",
+        getSessionImages: () => collectStoredSessionImages(messages),
+        getMessages: () => messages,
+        web: {
+          runtime: getVscodeWebImageRuntime(),
+          policy: readVscodeWebImagePolicy(),
+        },
+        readLocalImage: createLocalMarkdownImageReader(() => roots),
+      });
+    } catch (err) {
+      this.log(`[markdown-image] Failed to resolve image: ${err}`);
+      return { status: "unavailable", message: "Image unavailable." };
     }
   }
 
@@ -9880,6 +9937,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentResolveMarkdownImage": {
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : "";
+        if (!requestId) break;
+        const result = await this.resolveMarkdownImageForSession(
+          typeof msg.sessionId === "string" ? msg.sessionId : sourceSessionId,
+          {
+            src: typeof msg.src === "string" ? msg.src : "",
+            userConfirmed: msg.userConfirmed === true,
+          },
+        );
+        const message: ExtensionToWebview = {
+          type: "agentMarkdownImageResolved",
+          requestId,
+          result,
+        };
+        if (context?.connection) context.connection.postMessage(message);
+        else this.postMessage(message);
+        break;
+      }
+
       case "agentOpenImageInEditor": {
         const src = typeof msg.src === "string" ? msg.src : "";
         const name = typeof msg.name === "string" ? msg.name : undefined;
@@ -11266,7 +11344,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               { type: "image" }
             > => content.type === "image",
           )
-          .map((image) => ({ mimeType: image.mimeType, data: image.data }));
+          .map((image) => ({
+            mimeType: image.mimeType,
+            data: image.data,
+            ...(image.attribution ? { attribution: image.attribution } : {}),
+          }));
         const resultDocuments = event.result
           .filter(
             (

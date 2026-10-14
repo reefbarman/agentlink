@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { ImagePreview, type OpenImageInEditor } from "./ImagePreview";
+import { ImageSourceCaption } from "./ImageSourceCaption";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
@@ -1246,20 +1247,28 @@ export function ToolCallBlock({
                 <div class="tool-result-image-previews">
                   {resultImages.map((image, index) => {
                     const alt = `${toolCall.name} result image ${index + 1}`;
-                    return (
+                    const preview = (
                       <ImagePreview
                         key={`${image.mimeType}-${index}`}
                         image={{
                           src: `data:${image.mimeType};base64,${image.data}`,
                           mimeType: image.mimeType,
                         }}
-                        alt={alt}
+                        alt={image.attribution?.alt ?? alt}
                         className="tool-result-image-preview"
                         buttonClassName="tool-result-image-preview-button"
                         loading="lazy"
                         onOpenInEditor={onOpenImageInEditor}
                         showDownload
                       />
+                    );
+                    return image.attribution ? (
+                      <div key={`${image.mimeType}-${index}`}>
+                        {preview}
+                        <ImageSourceCaption attribution={image.attribution} />
+                      </div>
+                    ) : (
+                      preview
                     );
                   })}
                 </div>

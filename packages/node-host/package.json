@@ -40,7 +40,9 @@
     "@napi-rs/keyring": "2.1.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "https-proxy-agent": "9.1.0",
+    "parse5": "^8.0.1",
     "proxy-from-env": "2.1.0",
+    "undici": "^8.7.0",
     "ws": "8.22.0"
   },
   "engines": {

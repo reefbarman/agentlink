@@ -46,6 +46,7 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 
 - `webAccess.searchBackend`, `webAccess.fetchBackend` — expose native web_search/web_fetch and pick backend
 - `webAccess.nativeSearchMode` — external access mode for provider-native transports
+- `webAccess.imageRetrieval` — `enabled` (default), `prompt` (ask before each new site and show a load button for every web image in replies), or `disabled` for web images in chat Markdown, `inspect_page_images` and `present_images`; also disabled when `webAccess.fetchBackend` is `disabled`
 - `webAccess.allowedDomains` / `webAccess.blockedDomains` — mutually exclusive domain lists; a native route is omitted for the turn if its provider cannot enforce them
 - `webAccess.maxSearchUsesPerTurn`, `webAccess.maxFetchUsesPerTurn`, `webAccess.maxFetchContentTokens`, `webAccess.maxReplayBytesPerTurn` — per-turn caps
 

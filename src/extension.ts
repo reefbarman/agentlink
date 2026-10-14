@@ -1077,6 +1077,7 @@ export async function activate(
     getSandboxAvailability:
       async (): Promise<SandboxPreparationAvailability> => {
         let runtime: ResolvedSandboxNodeRuntime;
+        const runtimeWasCached = sandboxNodeRuntimePromise !== undefined;
         try {
           runtime = await ensureSandboxNodeRuntime();
         } catch (error) {
@@ -1152,9 +1153,14 @@ export async function activate(
           const detail = error instanceof Error ? error.message : String(error);
           if (error instanceof SandboxRuntimeFingerprintNodeUnavailableError) {
             log(
-              `[sandbox-terminal] Node runtime became unavailable before sandbox selection: ${detail}`,
+              `[sandbox-terminal] Node runtime became unavailable before sandbox selection: ${detail} (${runtime.executable})`,
             );
-            void showSandboxRuntimeUnavailable(error);
+            // The executable may have disappeared since it was resolved (for
+            // example, a Homebrew upgrade removed its versioned keg). Drop the
+            // cache so the next availability check re-resolves a replacement,
+            // and only warn when a freshly resolved runtime is already gone.
+            resetSandboxNodeRuntime();
+            if (!runtimeWasCached) void showSandboxRuntimeUnavailable(error);
             return {
               status: "runtime-unavailable",
               detail,

@@ -1869,7 +1869,7 @@ describe("protocol package boundary", () => {
       );
       const normalizedSource = source.replace(/\s+/g, " ");
       expect(normalizedSource, buildScript).toMatch(
-        /readFile\("dist\/browserGatewayTranscriptMessage\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptMessage\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayTranscriptBlock\.js"'\s*,\s*'"\.\/browserGatewayTranscriptBlock\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\), \), \)/,
+        /readFile\("dist\/browserGatewayTranscriptMessage\.d\.ts", "utf8"\)\.then\(\s*\(content\) => writeFile\( "dist\/cjs\/browserGatewayTranscriptMessage\.d\.cts", content \.replaceAll\(\s*'"\.\/browserGatewayTranscriptBlock\.js"'\s*,\s*'"\.\/browserGatewayTranscriptBlock\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/browserGatewayTranscriptText\.js"'\s*,\s*'"\.\/browserGatewayTranscriptText\.cjs"'\s*,?\s*\) \.replaceAll\(\s*'"\.\/toolResult\.js"'\s*,\s*'"\.\/toolResult\.cjs"'\s*,?\s*\), \), \)/,
       );
     }
 
@@ -1884,6 +1884,7 @@ describe("protocol package boundary", () => {
     for (const dependency of [
       "browserGatewayTranscriptBlock",
       "browserGatewayTranscriptText",
+      "toolResult",
     ]) {
       expect(declaration).toContain(`from "./${dependency}.cjs";`);
     }

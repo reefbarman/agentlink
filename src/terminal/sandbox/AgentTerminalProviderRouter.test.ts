@@ -1186,6 +1186,46 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeProvider).not.toHaveBeenCalled();
   });
 
+  it("recovers with a fresh sandbox provider when the host re-resolves a removed runtime", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
+
+    test.sandbox.retire = vi.fn();
+    const verified = await test.getSandboxAvailability.mock.results[0]?.value;
+    test.getSandboxAvailability
+      .mockResolvedValueOnce({
+        status: "runtime-unavailable",
+        diagnostic: { category: "runtime_node_unavailable" },
+      } as never)
+      .mockResolvedValueOnce({
+        ...verified,
+        attestation: {
+          ...verified.attestation,
+          attestationId: "attestation-2",
+        },
+      } as never);
+
+    const result = await test.router.executeCommand({
+      owner: undefined,
+      command: "echo recovered",
+      cwd: "/workspace",
+    });
+
+    expect(result.security?.route).toBe("sandbox");
+    expect(test.createSandboxProvider).toHaveBeenCalledTimes(2);
+    expect(test.sandbox.retire).toHaveBeenCalledOnce();
+    expect(test.sandboxes[1]?.executeCommand).toHaveBeenCalledOnce();
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.log).toHaveBeenCalledWith(
+      expect.stringContaining("re-resolved"),
+    );
+  });
+
   it.each([
     [
       "runtime-unavailable",

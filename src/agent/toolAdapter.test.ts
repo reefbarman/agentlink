@@ -1225,6 +1225,7 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "search_files",
   "web_search",
   "web_fetch",
+  "inspect_page_images",
   "search_session_history",
   "read_session_excerpt",
   "diagnose_activity",
@@ -1461,19 +1462,22 @@ describe("getAgentTools", () => {
     }
   });
 
-  it("defines present_images as an approval-free session image selector", () => {
+  it("defines present_images over session, web and local image sources", () => {
     const tool = getAgentTools().find(
       (candidate) => candidate.name === "present_images",
     );
     expect(tool).toBeDefined();
-    expect(tool?.description).toContain("main chat transcript");
+    expect(tool?.description).toContain("Markdown");
     expect(tool?.input_schema.properties).toHaveProperty("image_ids");
+    expect(tool?.input_schema.properties).toHaveProperty("urls");
+    expect(tool?.input_schema.properties).toHaveProperty("candidate_ids");
+    expect(tool?.input_schema.properties).toHaveProperty("paths");
     expect(tool?.input_schema.properties).toHaveProperty("use_recent_images");
     expect(tool?.input_schema.required).toBeUndefined();
     expect(TOOL_CAPABILITIES.present_images).toMatchObject({
       cluster: "media",
-      sideEffect: "control",
-      requiresApproval: "never",
+      sideEffect: "external",
+      requiresApproval: "policy",
       parallelSafe: false,
     });
   });

@@ -63,6 +63,11 @@ import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { RemoteToolDetailProvider } from "../../agent/webview/components/RemoteToolDetail";
+import { MarkdownImageProvider } from "../../agent/webview/components/MarkdownImage";
+import type {
+  MarkdownImageResolution,
+  MarkdownImageResolveRequest,
+} from "../../shared/markdownImageSource";
 import {
   loadRemoteDisplayImage,
   loadRemoteTranscriptBlockDetail,
@@ -5252,6 +5257,61 @@ export function BrowserGatewayApp({
     })();
   };
 
+  const runAskAgentQueueAction = (
+    action: "steer" | "update" | "remove",
+    queueId: string,
+    text?: string,
+  ): void => {
+    if (!isAskAgentSelected || !foreground?.sessionId) return;
+    const sessionId = foreground.sessionId;
+    const actionOrigin = { ...snapshotOriginRef.current };
+    const label =
+      action === "steer" ? "Steer" : action === "update" ? "Edit" : "Remove";
+    void (async () => {
+      try {
+        const response = await fetch("/api/ask-agent/queue", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            action,
+            id: queueId,
+            sessionId,
+            ...(text !== undefined ? { text } : {}),
+          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (!relayClientEnabled && body.ok && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
+        }
+        setSendStatus(
+          body.ok
+            ? action === "steer"
+              ? "Steering…"
+              : action === "update"
+                ? "Queued message updated."
+                : "Queued message removed."
+            : body.error === "queue_item_not_found"
+              ? "That message has already been sent."
+              : `${label} failed: ${body.error ?? response.status}`,
+        );
+      } catch (err) {
+        setSendStatus(`${label} error: ${String(err)}`);
+      }
+    })();
+  };
+
   const handleInstancePointerDown = (
     e: PointerEvent,
     instanceId: string,
@@ -7578,6 +7638,34 @@ export function BrowserGatewayApp({
           ? "Choose an available model in the AgentLink VS Code window before sending a message."
           : undefined;
 
+  // Markdown images resolve through the session owner: the helper for Ask
+  // Agent, the VS Code window for workspace sessions.
+  const resolveBrowserMarkdownImage = async (
+    request: MarkdownImageResolveRequest,
+  ): Promise<MarkdownImageResolution> => {
+    const response = await fetch(
+      isAskAgentSelected
+        ? "/api/ask-agent/markdown-image"
+        : buildApiPath("/api/markdown-image"),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(request),
+      },
+    );
+    if (!response.ok) {
+      return {
+        status: "unavailable",
+        message: `Image unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return (await response.json()) as MarkdownImageResolution;
+  };
+
   const browserVscodeApi = {
     postMessage: (msg: unknown) => {
       const data =
@@ -9665,53 +9753,11 @@ export function BrowserGatewayApp({
                       )
                     }
                   >
-                    <ChatView
-                      key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
-                      messages={messages}
-                      streaming={Boolean(streaming)}
-                      initialMessageLimit={
-                        mobileLayout || touchInput ? 20 : undefined
-                      }
-                      sessionId={foreground?.sessionId ?? null}
-                      originalPrompt={
-                        isAskAgentSelected
-                          ? undefined
-                          : foreground?.originalPrompt
-                      }
-                      emptyState={
-                        !isAskAgentSelected ? (
-                          <ModelSetupCard
-                            setupState={modelSetupState}
-                            hasWorkspace={
-                              (snapshot?.session.projects?.length ?? 0) > 0
-                            }
-                            surface="browser"
-                          />
-                        ) : (
-                          <AskAgentWelcome
-                            desktop={consumerShell}
-                            onStart={(prompt) => {
-                              void handleSend(prompt, []);
-                            }}
-                          />
-                        )
-                      }
-                      detectedQuestion={foreground?.detectedQuestion ?? null}
-                      onDetectedQuestionAnswer={(payload) => {
-                        void handleSend(payload, []);
-                      }}
-                      onDismissDetectedQuestion={() => undefined}
-                      onOpenFile={
-                        isAskAgentSelected
-                          ? undefined
-                          : (filePath, line) =>
-                              browserVscodeApi.postMessage({
-                                command: "agentOpenFile",
-                                path: filePath,
-                                line,
-                              })
-                      }
-                      onOpenImageInEditor={
+                    <MarkdownImageProvider
+                      scopeKey={`${selectedTabId}:${foreground?.sessionId ?? "empty"}`}
+                      sessionId={foreground?.sessionId ?? undefined}
+                      resolve={resolveBrowserMarkdownImage}
+                      onOpenInEditor={
                         isAskAgentSelected
                           ? undefined
                           : (image) =>
@@ -9720,29 +9766,86 @@ export function BrowserGatewayApp({
                                 ...image,
                               })
                       }
-                      onRetry={handleRetry}
-                      onSignIn={() => handleSignIn("codex")}
-                      onSignInAnotherAccount={() =>
-                        setModeStatus(
-                          "Use VS Code account controls to sign in with another account.",
-                        )
-                      }
-                      onCondense={handleCondense}
-                      bgSessions={background}
-                      onStopBackground={handleStopBackground}
-                      onOpenTranscript={handleOpenBgTranscript}
-                      onFinalMarkerContinue={(prompt) => {
-                        setComposerInjection({
-                          type: "context",
-                          context: prompt,
-                        });
-                      }}
-                      onRevertCheckpoint={handleRevertCheckpoint}
-                      onViewCheckpointDiff={handleViewCheckpointDiff}
-                      streamingMetrics={streamingBaselineMetrics}
-                      streamingMetricsSurface="browser-webview"
-                      streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
-                    />
+                    >
+                      <ChatView
+                        key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
+                        messages={messages}
+                        streaming={Boolean(streaming)}
+                        initialMessageLimit={
+                          mobileLayout || touchInput ? 20 : undefined
+                        }
+                        sessionId={foreground?.sessionId ?? null}
+                        originalPrompt={
+                          isAskAgentSelected
+                            ? undefined
+                            : foreground?.originalPrompt
+                        }
+                        emptyState={
+                          !isAskAgentSelected ? (
+                            <ModelSetupCard
+                              setupState={modelSetupState}
+                              hasWorkspace={
+                                (snapshot?.session.projects?.length ?? 0) > 0
+                              }
+                              surface="browser"
+                            />
+                          ) : (
+                            <AskAgentWelcome
+                              desktop={consumerShell}
+                              onStart={(prompt) => {
+                                void handleSend(prompt, []);
+                              }}
+                            />
+                          )
+                        }
+                        detectedQuestion={foreground?.detectedQuestion ?? null}
+                        onDetectedQuestionAnswer={(payload) => {
+                          void handleSend(payload, []);
+                        }}
+                        onDismissDetectedQuestion={() => undefined}
+                        onOpenFile={
+                          isAskAgentSelected
+                            ? undefined
+                            : (filePath, line) =>
+                                browserVscodeApi.postMessage({
+                                  command: "agentOpenFile",
+                                  path: filePath,
+                                  line,
+                                })
+                        }
+                        onOpenImageInEditor={
+                          isAskAgentSelected
+                            ? undefined
+                            : (image) =>
+                                browserVscodeApi.postMessage({
+                                  command: "agentOpenImageInEditor",
+                                  ...image,
+                                })
+                        }
+                        onRetry={handleRetry}
+                        onSignIn={() => handleSignIn("codex")}
+                        onSignInAnotherAccount={() =>
+                          setModeStatus(
+                            "Use VS Code account controls to sign in with another account.",
+                          )
+                        }
+                        onCondense={handleCondense}
+                        bgSessions={background}
+                        onStopBackground={handleStopBackground}
+                        onOpenTranscript={handleOpenBgTranscript}
+                        onFinalMarkerContinue={(prompt) => {
+                          setComposerInjection({
+                            type: "context",
+                            context: prompt,
+                          });
+                        }}
+                        onRevertCheckpoint={handleRevertCheckpoint}
+                        onViewCheckpointDiff={handleViewCheckpointDiff}
+                        streamingMetrics={streamingBaselineMetrics}
+                        streamingMetricsSurface="browser-webview"
+                        streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
+                      />
+                    </MarkdownImageProvider>
                   </RemoteToolDetailProvider>
                 )}
               </div>
@@ -9806,8 +9909,19 @@ export function BrowserGatewayApp({
                         : [],
                     )}
                     <MessageQueuePanel
-                      allowSteering={!isAskAgentSelected}
+                      allowInterjection={!isAskAgentSelected}
                       pendingIds={pendingMessageQueueIds}
+                      onEdit={
+                        isAskAgentSelected
+                          ? (item, text) =>
+                              runAskAgentQueueAction("update", item.id, text)
+                          : undefined
+                      }
+                      onRemove={
+                        isAskAgentSelected
+                          ? (item) => runAskAgentQueueAction("remove", item.id)
+                          : undefined
+                      }
                       queue={messageQueue.map((item) => {
                         const override = queueInterjectionOverrides.get(
                           `${foreground.sessionId}:${item.id}`,
@@ -9817,7 +9931,10 @@ export function BrowserGatewayApp({
                           : { ...item, interjectionReady: override };
                       })}
                       onSteer={(item) => {
-                        if (isAskAgentSelected) return;
+                        if (isAskAgentSelected) {
+                          runAskAgentQueueAction("steer", item.id);
+                          return;
+                        }
                         browserVscodeApi.postMessage({
                           command: "agentSteerQueuedMessage",
                           sessionId: foreground.sessionId,

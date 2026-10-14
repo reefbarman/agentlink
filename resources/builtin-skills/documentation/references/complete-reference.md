@@ -537,17 +537,18 @@ Legacy persisted provider web-activity events are projected into ordinary `web_s
 
 ### Settings
 
-| Setting                                     | Default   | Purpose                                                                          |
-| ------------------------------------------- | --------- | -------------------------------------------------------------------------------- |
-| `agentlink.webAccess.searchBackend`         | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_search`.              |
-| `agentlink.webAccess.fetchBackend`          | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_fetch`.               |
-| `agentlink.webAccess.nativeSearchMode`      | `cached`  | Select `cached`, `indexed`, or `live` external access where supported.           |
-| `agentlink.webAccess.allowedDomains`        | `[]`      | Optional native-provider domain allowlist; mutually exclusive with the denylist. |
-| `agentlink.webAccess.blockedDomains`        | `[]`      | Optional native-provider domain denylist; mutually exclusive with the allowlist. |
-| `agentlink.webAccess.maxSearchUsesPerTurn`  | `5`       | Requested native-provider search-use limit where supported.                      |
-| `agentlink.webAccess.maxFetchUsesPerTurn`   | `3`       | Requested native-provider fetch-use limit where supported.                       |
-| `agentlink.webAccess.maxFetchContentTokens` | `25000`   | Requested native-provider fetched-content token cap where supported.             |
-| `agentlink.webAccess.maxReplayBytesPerTurn` | `5242880` | Maximum private provider replay retained when exact continuation requires it.    |
+| Setting                                     | Default   | Purpose                                                                           |
+| ------------------------------------------- | --------- | --------------------------------------------------------------------------------- |
+| `agentlink.webAccess.searchBackend`         | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_search`.               |
+| `agentlink.webAccess.fetchBackend`          | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_fetch`.                |
+| `agentlink.webAccess.nativeSearchMode`      | `cached`  | Select `cached`, `indexed`, or `live` external access where supported.            |
+| `agentlink.webAccess.imageRetrieval`        | `enabled` | Select `enabled`, `prompt`, or `disabled` for web images in chat and image tools. |
+| `agentlink.webAccess.allowedDomains`        | `[]`      | Optional native-provider domain allowlist; mutually exclusive with the denylist.  |
+| `agentlink.webAccess.blockedDomains`        | `[]`      | Optional native-provider domain denylist; mutually exclusive with the allowlist.  |
+| `agentlink.webAccess.maxSearchUsesPerTurn`  | `5`       | Requested native-provider search-use limit where supported.                       |
+| `agentlink.webAccess.maxFetchUsesPerTurn`   | `3`       | Requested native-provider fetch-use limit where supported.                        |
+| `agentlink.webAccess.maxFetchContentTokens` | `25000`   | Requested native-provider fetched-content token cap where supported.              |
+| `agentlink.webAccess.maxReplayBytesPerTurn` | `5242880` | Maximum private provider replay retained when exact continuation requires it.     |
 
 Domain restrictions apply only to native provider routes and fail closed when the provider transport cannot represent them. Limits are applied only when the provider advertises enforceable support; diagnostics report effective enforcement.
 
@@ -1124,18 +1125,48 @@ Masks guide the edit rather than defining a guaranteed pixel-exact boundary. Bot
 
 **Response includes:** requested versus observed image settings, helper `model`, `image_model`, billing, requested/generated counts, safe reference metadata, provider image-call IDs, revised prompts, response ID and documented usage when returned, event types, and inline final image blocks. `images[].path` appears only after a VS Code save. MIME type is derived from returned bytes when possible. Partial streaming frames are kept separate from final outputs and are never saved or reported as completed assets.
 
+### Images in agent replies
+
+Agents show images with Markdown: `![description](source)`. Screenshots and other image tool results otherwise stay inside their collapsed tool calls, so this is how an agent puts an image in front of the user. `source` can be:
+
+- a web image URL, for example an `image_url` from `inspect_page_images` or a URL from search results;
+- a chat image ID such as `image_3` (attachments, screenshots, generated images, MCP image results; see [Session image IDs](#session-image-ids));
+- a local PNG, JPEG, GIF or WebP file, relative to the workspace or absolute, inside the workspace or the temporary folder (VS Code only).
+
+Every chat surface renders the image with the standard viewer: click to enlarge, open in the editor, copy, print and download. Web images get a source caption linking to the page (or the image URL).
+
+The chat view never loads an image URL itself. The VS Code extension host, or the browser gateway helper for Browser Ask Agent and Desktop, retrieves it with the public-only rules of `inspect_page_images` and caches it. A web image loads automatically only when its URL already appeared in the chat in content from the user or a tool (search results, fetched pages, inspected pages, MCP results). Any other image URL shows **Load image from …** instead, so text the model was tricked into writing cannot make the chat contact a server. With `agentlink.webAccess.imageRetrieval` set to `prompt`, every web image waits for that click; with `disabled`, web images are not loaded.
+
 ### present_images
 
-Show images that are already available in the current session directly in the main chat transcript. This is the explicit presentation path for requests such as “take a screenshot and show it to me”: screenshot and other image-returning tool results remain inside their collapsed tool calls during ordinary agent inspection, and the agent calls `present_images` only when the visual output should be immediately visible to the user.
-
-The tool is display-only, writes no files, consumes no image-generation quota, and requires no approval. It is available in both the VS Code chat and Browser Ask Agent.
+Look at images and show them in the chat in one step. Use it when the agent needs to see an image itself, for example to check a found image matches the request before describing it; to only show an image, Markdown is enough. The images are returned to the model, rendered on the collapsed tool result, and shown in the assistant's main transcript message, so the agent should not repeat them in Markdown. It writes no files and consumes no image-generation quota. Available in the VS Code chat and Browser Ask Agent.
 
 | Parameter           | Type               | Description                                                                                                                                                                   |
 | ------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `image_ids`         | string[]?          | Exact IDs of prior session images, including user attachments and image tool results. IDs follow `image_N` session order; missing-ID errors list the currently available IDs. |
-| `use_recent_images` | boolean \| number? | Select the most recent image with `true`, disable recent selection with `false`, or select that many recent images with a positive number. Maximum: 8.                        |
+| `use_recent_images` | boolean \| number? | Select the most recent image with `true`, disable recent selection with `false`, or select that many recent images with a positive number.                                    |
+| `urls`              | string[]?          | Direct public image URLs. PNG, JPEG, and still WebP up to 4 MB, 8192 px per edge, and 16 megapixels; AgentLink checks the actual bytes.                                       |
+| `candidate_ids`     | string[]?          | Candidates from `inspect_page_images`. These keep the source page as the caption.                                                                                             |
+| `paths`             | string[]?          | Local PNG, JPEG, GIF, or WebP files inside the workspace or the temporary folder (VS Code only).                                                                              |
 
-When both selectors are omitted, the most recent session image is presented. Exact and recent selections can be combined; duplicates are removed while preserving their first selected order.
+At most 8 images per call. With no source at all, the most recent session image is presented. Exact and recent selections can be combined; duplicates are removed. If some sources fail, the others are still presented and the result lists the failures.
+
+Web images keep their source attribution. The transcript shows a caption with a link to the source page (or image URL), the title, and any publisher-supplied creator or licence, which AgentLink does not verify. Retrieved web images become session images and can be referenced later by `image_N`.
+
+### inspect_page_images
+
+List the main images on a public web page so the agent can pick one to show, for example a product photo, album cover, or artwork. AgentLink downloads the HTML itself (no scripts, cookies, or credentials) and extracts candidates from JSON-LD structured data, Open Graph and Twitter card tags, and large `<img>` elements. The agent shows a candidate by putting its `image_url` in a Markdown image; the caption then credits the page. Available in VS Code and Browser Ask Agent.
+
+| Parameter     | Type    | Description                                          |
+| ------------- | ------- | ---------------------------------------------------- |
+| `url`         | string  | Absolute public `http`/`https` page URL.             |
+| `max_results` | number? | Maximum candidates to return. Default 8, maximum 12. |
+
+**Response includes:** the final page URL and title, and candidates with a `candidate_id`, image URL, alt text, title, declared dimensions, where it was found (`json_ld`, `open_graph`, `twitter`, `html_image`), and any publisher-supplied creator or licence. Candidate IDs stay valid for the chat session (up to 100 per session).
+
+**Safety and limits (web images):** only public internet addresses are contacted; private, loopback, link-local, and other local ranges are blocked for every connection and redirect (up to 3), HTTPS-to-HTTP downgrades are refused, and requests time out after 15 seconds. Web images must be PNG, JPEG, or still WebP up to 4 MB, 8192 px per edge, and 16 megapixels; SVG, GIF, and animated web images are rejected, and AgentLink checks the actual bytes rather than trusting the server's content type. Pages larger than 4 MB are read up to 4 MB and parsed from that prefix, with a warning in the result. Per turn, an agent can inspect up to 6 pages and retrieve up to 8 images (16 MB total) with `present_images`. URLs shown in approvals, tool results, and attribution drop query strings and fragments, and fall back to the site origin when the path contains a token-like segment, so signed CDN links are not stored in the transcript.
+
+**Approval:** governed by `agentlink.webAccess.imageRetrieval`. With `enabled` (default), retrieval works without asking, like `web_search` and `web_fetch`. With `prompt`, each new site contacted by `inspect_page_images` or `present_images` asks **Allow once**, **Allow public images for this chat**, or **Deny**; the chat-wide grant covers only these tools and never unblocks blocked domains or private addresses. `disabled` hides `inspect_page_images` and turns off web sources in `present_images` and Markdown, as does `agentlink.webAccess.fetchBackend` set to `disabled`. `agentlink.webAccess.allowedDomains`/`blockedDomains` apply to every page, image and redirect. Browser Ask Agent performs retrieval in the browser gateway helper and shows approvals in the browser tab.
 
 ### Session image IDs
 
@@ -1145,7 +1176,7 @@ IDs are numbered over the session's stored history, so they do not change when c
 
 Rewinding to a checkpoint removes images from the discarded turns; earlier images keep their IDs. Transcript-only diagnostic notes are not counted.
 
-**Response includes:** `status: "presented"`, the selected image count and image metadata (`id`, `name`, and `mimeType`), plus image blocks rendered both on the collapsed tool result and directly in the assistant’s main transcript message. PNG, JPEG, GIF, and WebP session images are supported.
+**`present_images` response includes:** `status: "presented"`, the image count and metadata (`id`, `name`, `mimeType`, and `source` for web images), any per-source `errors`, plus image blocks rendered both on the collapsed tool result and directly in the assistant’s main transcript message. PNG, JPEG, GIF, and WebP session images are supported.
 
 ### save_session_image
 

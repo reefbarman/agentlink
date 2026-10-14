@@ -1148,6 +1148,7 @@ export function toolResultToContent(
           media_type: mediaType,
           data: content.data,
         },
+        ...(content.attribution ? { attribution: content.attribution } : {}),
       };
     })
     .filter((b): b is ContentBlock => b !== null);

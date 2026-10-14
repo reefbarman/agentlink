@@ -312,6 +312,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/markdown-image",
+    "Markdown transcript images resolve through the owning VS Code host as authenticated HTTP read payloads.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/project/default",
     "Requires a project-selection command before Stage 5.",
   ),
@@ -553,6 +559,7 @@ function classifyAskAgentRoute(
     case "projectHandoffApprove":
     case "thinking":
     case "retry":
+    case "queue":
       return retainedHttp(
         "ask_agent",
         method,
@@ -566,6 +573,13 @@ function classifyAskAgentRoute(
         method,
         path,
         "Non-authoritative composer dictation: availability read and device audio upload over HTTP.",
+      );
+    case "markdownImage":
+      return retainedHttp(
+        "ask_agent",
+        method,
+        path,
+        "Markdown transcript images resolve through the helper as authenticated HTTP read payloads.",
       );
     default:
       return assertNever(handler);

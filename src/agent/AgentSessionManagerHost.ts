@@ -292,6 +292,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           searchBackend: stringValue("webAccess.searchBackend"),
           fetchBackend: stringValue("webAccess.fetchBackend"),
           nativeSearchMode: stringValue("webAccess.nativeSearchMode"),
+          imageRetrieval: stringValue("webAccess.imageRetrieval"),
           allowedDomains: stringArrayValue("webAccess.allowedDomains"),
           blockedDomains: stringArrayValue("webAccess.blockedDomains"),
           maxSearchUsesPerTurn: numberValue("webAccess.maxSearchUsesPerTurn"),

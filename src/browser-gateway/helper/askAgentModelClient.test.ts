@@ -178,6 +178,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       "recall_memory",
       "generate_image",
       "present_images",
+      "inspect_page_images",
     ]);
     expect(Object.keys(ASK_AGENT_DEFERRED_NATIVE_TOOL_VALIDATORS)).toEqual(
       disclosure.deferredTools.map((tool) => tool.name),
@@ -916,6 +917,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       "search_files",
       "generate_image",
       "present_images",
+      "inspect_page_images",
     ]);
     const askUserTool = (
       (body.tools as
@@ -956,7 +958,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
         | undefined) ?? []
     ).find((tool) => tool.name === "present_images");
     expect(presentImagesTool?.description).toContain(
-      "main browser chat transcript",
+      "Markdown ![description](source)",
     );
     expect(toolNames).not.toContain("execute_command");
     expect(toolNames).not.toContain("write_file");

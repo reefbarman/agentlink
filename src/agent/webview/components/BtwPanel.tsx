@@ -1,8 +1,12 @@
-import { useEffect, useRef, useMemo } from "preact/hooks";
-import { Marked } from "marked";
-import DOMPurify from "dompurify";
+import { mountMarkdownImages, unmountMarkdownImages } from "./StreamingText";
+import { useEffect, useMemo, useRef } from "preact/hooks";
+
 import type { BtwBudget } from "../types";
+import DOMPurify from "dompurify";
+import { Marked } from "marked";
+import { renderMarkdownImagePlaceholder } from "./markdownImagePlaceholder";
 import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
+import { useMarkdownImageHost } from "./MarkdownImage";
 
 export interface BtwState {
   requestId: string;
@@ -46,6 +50,7 @@ function renderMarkdown(text: string): string {
       checkbox({ checked }: { checked: boolean }) {
         return renderMarkdownTaskCheckbox(checked);
       },
+      image: renderMarkdownImagePlaceholder,
     },
   });
 
@@ -62,6 +67,8 @@ export function BtwPanel({
   onPromote,
 }: BtwPanelProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const markdownRef = useRef<HTMLDivElement>(null);
+  const imageHost = useMarkdownImageHost();
   const isStreaming = !state.done && !state.error;
   const isThinking = isStreaming && !state.answer;
   const canPromote = Boolean(state.done && !state.error && state.answer);
@@ -70,6 +77,12 @@ export function BtwPanel({
     () => (state.answer ? renderMarkdown(state.answer) : ""),
     [state.answer],
   );
+
+  useEffect(() => {
+    if (!markdownRef.current) return;
+    const slots = mountMarkdownImages(markdownRef.current, imageHost);
+    return () => unmountMarkdownImages(slots);
+  }, [html, imageHost]);
 
   // Dismiss on Escape
   useEffect(() => {
@@ -130,6 +143,7 @@ export function BtwPanel({
       >
         {state.answer && (
           <div
+            ref={markdownRef}
             class="markdown-body"
             dangerouslySetInnerHTML={{ __html: html }}
           />

@@ -16,6 +16,7 @@ export function MessageQueuePanel({
   onRemove,
   onResolveSkillSelection,
   allowSteering = true,
+  allowInterjection = true,
 }: {
   queue: MessageQueueItem[];
   pendingIds?: ReadonlySet<string>;
@@ -25,6 +26,8 @@ export function MessageQueuePanel({
   onEditingChange?: (item: MessageQueueItem, editing: boolean) => void;
   onRemove?: (item: MessageQueueItem) => void;
   allowSteering?: boolean;
+  /** Hide "interject at next break" on surfaces whose runtime cannot inject mid-turn. */
+  allowInterjection?: boolean;
   onResolveSkillSelection?: (
     item: MessageQueueItem,
     skillRevision?: string,
@@ -117,58 +120,65 @@ export function MessageQueuePanel({
               )}
             </div>
           )}
-          {allowSteering && (
+          {(allowSteering || onEdit || onRemove) && (
             <div class="queue-item-actions">
-              <button
-                class="icon-button queue-item-steer"
-                title={
-                  pendingIds?.has(item.id)
-                    ? "Waiting for queue confirmation"
-                    : editingQueueId === item.id
-                      ? "Finish editing before steering"
-                      : "Steer now"
-                }
-                disabled={
-                  pendingIds?.has(item.id) ||
-                  editingQueueId === item.id ||
-                  selectionBlocked
-                }
-                onClick={() => {
-                  if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
-                    onSteer(item);
+              {allowSteering && (
+                <button
+                  class="icon-button queue-item-steer"
+                  title={
+                    pendingIds?.has(item.id)
+                      ? "Waiting for queue confirmation"
+                      : editingQueueId === item.id
+                        ? "Finish editing before steering"
+                        : "Steer now"
                   }
-                }}
-              >
-                <i class="codicon codicon-compass-active" />
-              </button>
-              <button
-                class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
-                title={
-                  pendingIds?.has(item.id)
-                    ? "Waiting for queue confirmation"
-                    : editingQueueId === item.id
-                      ? "Finish editing before interjecting"
-                      : item.interjectionReady
-                        ? "Ready to interject at next break"
-                        : "Interject at next break"
-                }
-                disabled={
-                  pendingIds?.has(item.id) ||
-                  editingQueueId === item.id ||
-                  selectionBlocked
-                }
-                onClick={() => {
-                  if (
-                    !selectionBlocked &&
-                    !pendingIds?.has(item.id) &&
-                    editingQueueId !== item.id
-                  ) {
-                    onInterject(item);
+                  disabled={
+                    pendingIds?.has(item.id) ||
+                    editingQueueId === item.id ||
+                    selectionBlocked
                   }
-                }}
-              >
-                <i class="codicon codicon-reply" />
-              </button>
+                  onClick={() => {
+                    if (
+                      !pendingIds?.has(item.id) &&
+                      editingQueueId !== item.id
+                    ) {
+                      onSteer(item);
+                    }
+                  }}
+                >
+                  <i class="codicon codicon-compass-active" />
+                </button>
+              )}
+              {allowSteering && allowInterjection && (
+                <button
+                  class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
+                  title={
+                    pendingIds?.has(item.id)
+                      ? "Waiting for queue confirmation"
+                      : editingQueueId === item.id
+                        ? "Finish editing before interjecting"
+                        : item.interjectionReady
+                          ? "Ready to interject at next break"
+                          : "Interject at next break"
+                  }
+                  disabled={
+                    pendingIds?.has(item.id) ||
+                    editingQueueId === item.id ||
+                    selectionBlocked
+                  }
+                  onClick={() => {
+                    if (
+                      !selectionBlocked &&
+                      !pendingIds?.has(item.id) &&
+                      editingQueueId !== item.id
+                    ) {
+                      onInterject(item);
+                    }
+                  }}
+                >
+                  <i class="codicon codicon-reply" />
+                </button>
+              )}
               {onEdit && editingQueueId !== item.id && (
                 <button
                   class="icon-button queue-item-edit"
