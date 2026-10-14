@@ -317,6 +317,8 @@ const LOW_PRIORITY_DIRECTORY_SEGMENTS = new Set([
   ".ruff_cache",
   ".gradle",
   ".m2",
+  // SwiftPM build output, including `.build/index-build`.
+  ".build",
 ]);
 
 const DIRECTORY_BUDGET_SHARE = 0.3;
