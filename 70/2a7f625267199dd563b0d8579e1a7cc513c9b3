@@ -1,0 +1,36 @@
+scripts/report-tool-usage-telemetry.mjs
+  h_e08a86bb3a33a2 7,244,431-466
+  s_eb3fbb7e0b29d9::t_e36d59dd50aff0 467-468
+scripts/report-tool-usage-telemetry.test.mjs
+  h_e08a86bb3a33a2 11,79-121
+  s_ef62b6f07c0576::t_0073bf70976e69 122-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "702a7f625267199dd563b0d8579e1a7cc513c9b3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_eb3fbb7e0b29d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33353885-3dde-4db4-a5f9-382d50f30a51",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_ef62b6f07c0576": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6736456-2639-4379-bd51-271d0ad94dde",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
