@@ -6,32 +6,56 @@ import { writeFileAtomic } from "./atomicFile.js";
 
 /**
  * Owner settings per repository, in `<dataRoot>/tasks/repositories.json`:
- * the validation commands the server runs against each task's commit.
- * They come from the owner, never from the repository's own files, so a
- * repository cannot choose what runs on the server.
+ * the validation commands the server runs against each task's commit, and
+ * the standing permission to publish its tasks. They come from the owner,
+ * never from the repository's own files, so a repository cannot choose
+ * what runs on the server or where it is published.
  */
 
 export const MAX_VALIDATION_COMMANDS = 10;
 export const MAX_VALIDATION_COMMAND_LENGTH = 1_000;
 const MAX_REPOSITORIES = 200;
 
+/**
+ * Standing permission to publish this repository's tasks: push each task's
+ * commit to its own `agentlink/*` branch (never forced) and open or update
+ * that task's draft pull request, with one GitHub connection. Nothing else
+ * (merging, other branches, comments, labels) can be granted.
+ */
+export interface PublishPermission {
+  readonly connectionId: string;
+  readonly grantedAt: number;
+}
+
 export interface RepositorySettings {
   /** As given, normalized: `https://host/owner/name` without `.git`. */
   readonly repository: string;
   /** Shell commands run in order in the task's clone; all must pass. */
   readonly validation: readonly string[];
+  readonly publish?: PublishPermission;
   readonly updatedAt: number;
 }
 
 export interface RepositorySettingsStore {
   list(): readonly RepositorySettings[];
   get(repository: string): RepositorySettings | undefined;
-  /** Replace a repository's settings; no commands removes the entry. */
+  /**
+   * Replace a repository's validation commands, keeping its permission. An
+   * entry with neither is removed.
+   */
   set(
     repository: string,
     validation: readonly string[],
     now: number,
   ): Promise<RepositorySettings | undefined>;
+  /** Grant (with a connection) or revoke (undefined) publishing. */
+  setPublish(
+    repository: string,
+    connectionId: string | undefined,
+    now: number,
+  ): Promise<RepositorySettings | undefined>;
+  /** Revoke every permission that uses this connection. */
+  revokeConnection(connectionId: string, now: number): Promise<void>;
 }
 
 interface StoredSettings {
@@ -97,6 +121,30 @@ export async function openRepositorySettings(options: {
     writes = next.catch(() => undefined);
     return next;
   };
+  /** Store an entry, or remove it when it holds nothing. */
+  const store = async (
+    key: string,
+    validation: readonly string[],
+    publish: PublishPermission | undefined,
+    now: number,
+  ): Promise<RepositorySettings | undefined> => {
+    if (validation.length === 0 && !publish) {
+      if (entries.delete(key)) await persist();
+      return undefined;
+    }
+    if (!entries.has(key) && entries.size >= MAX_REPOSITORIES) {
+      throw new HttpError(409, "repository_limit_reached");
+    }
+    const entry: RepositorySettings = {
+      repository: key,
+      validation,
+      ...(publish ? { publish } : {}),
+      updatedAt: now,
+    };
+    entries.set(key, entry);
+    await persist();
+    return entry;
+  };
   return {
     list: () => [...entries.values()],
     get: (repository) => {
@@ -109,21 +157,27 @@ export async function openRepositorySettings(options: {
     async set(repository, validation, now) {
       const key = repositoryKey(repository);
       const commands = parseValidationCommands(validation);
-      if (commands.length === 0) {
-        if (entries.delete(key)) await persist();
-        return undefined;
+      return store(key, commands, entries.get(key)?.publish, now);
+    },
+    async setPublish(repository, connectionId, now) {
+      const key = repositoryKey(repository);
+      const current = entries.get(key);
+      const publish =
+        connectionId === undefined
+          ? undefined
+          : current?.publish?.connectionId === connectionId
+            ? current.publish
+            : { connectionId, grantedAt: now };
+      return store(key, current?.validation ?? [], publish, now);
+    },
+    async revokeConnection(connectionId, now) {
+      // Collected first: storing changes the map being read.
+      const granted = Array.from(entries.values()).filter(
+        (entry) => entry.publish?.connectionId === connectionId,
+      );
+      for (const entry of granted) {
+        await store(entry.repository, entry.validation, undefined, now);
       }
-      if (!entries.has(key) && entries.size >= MAX_REPOSITORIES) {
-        throw new HttpError(409, "repository_limit_reached");
-      }
-      const entry: RepositorySettings = {
-        repository: key,
-        validation: commands,
-        updatedAt: now,
-      };
-      entries.set(key, entry);
-      await persist();
-      return entry;
     },
   };
 }
@@ -152,6 +206,9 @@ async function readSettings(file: string): Promise<RepositorySettings[]> {
         entry.validation.every(
           (command: unknown) => typeof command === "string",
         ) &&
+        (entry.publish === undefined ||
+          (typeof entry.publish?.connectionId === "string" &&
+            typeof entry.publish.grantedAt === "number")) &&
         typeof entry.updatedAt === "number",
     );
   if (!valid) {

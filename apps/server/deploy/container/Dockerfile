@@ -5,6 +5,8 @@
 #     -f apps/server/deploy/container/Dockerfile apps/server
 #   docker build --target command-worker -t agentlink-command-worker:local \
 #     -f apps/server/deploy/container/Dockerfile apps/server
+#   docker build --target publisher -t agentlink-publisher:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
 #
 # The context is apps/server; its .dockerignore admits only the bundle.
 # Run them with compose.yaml next to this file (see apps/server/README.md).
@@ -36,6 +38,21 @@ WORKDIR /srv/agentlink/projects
 EXPOSE 7300
 ENTRYPOINT ["agentlink-server", "command-worker"]
 CMD ["--token-file", "/run/secrets/command-worker-token", "--root", "/srv/agentlink/projects", "--reap-orphans"]
+
+# Publisher: holds the GitHub connections' tokens and pushes task commits
+# to agentlink/* branches and opens their draft pull requests. Only git and
+# the bundle; it runs no other commands.
+FROM node:22-bookworm-slim AS publisher
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chmod=0755 dist/agentlink-server.js /usr/local/bin/agentlink-server
+RUN install -d -o node -g node -m 0700 /var/lib/agentlink-publisher
+ENV NODE_ENV=production
+USER node
+WORKDIR /var/lib/agentlink-publisher
+EXPOSE 7400
+ENTRYPOINT ["agentlink-server", "publisher"]
 
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git

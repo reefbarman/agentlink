@@ -92,6 +92,9 @@ import {
 import { openRepositorySettings } from "./taskRepositories.js";
 import { pickReviewModel } from "./taskReview.js";
 import { createTaskRoutes } from "./taskRoutes.js";
+import { openGitHubConnections } from "./githubConnections.js";
+import { createGitHubRoutes } from "./githubRoutes.js";
+import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
@@ -202,6 +205,8 @@ export type AssistantServicePreflight = (
   readonly codexSignIn?: string;
   /** Present when a command worker is configured. */
   readonly commandWorker?: string;
+  /** Present when a publisher is configured. */
+  readonly publisher?: string;
 };
 
 /**
@@ -400,6 +405,28 @@ export async function preflightAssistantService(
         ? `Command worker: reachable at ${worker.host}:${worker.port}`
         : `Command worker: not reachable at ${worker.host}:${worker.port} (${ping.code}); commands and search fail until it is`,
     };
+  }
+  if (config.publisher) {
+    const { host, port } = config.publisher;
+    // Reported, not fatal: tasks stop at ready until it is reachable.
+    const client = createPublisherClient({
+      host,
+      port,
+      token: await prepareSecret(
+        config.publisher.token,
+        "publisher.token",
+        env,
+      ),
+      timeoutMs: 3_000,
+    });
+    let publisherStatus: string;
+    try {
+      const health = await client.health();
+      publisherStatus = `Publisher: reachable at ${host}:${port}; ${health.deviceFlow ? "Connect GitHub uses the GitHub App" : "no GitHub App client ID, so only pasted tokens can connect"}`;
+    } catch (error) {
+      publisherStatus = `Publisher: not reachable at ${host}:${port} (${error instanceof Error ? error.message : String(error)}); tasks stop at ready until it is`;
+    }
+    result = { ...result, publisher: publisherStatus };
   }
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
@@ -635,6 +662,26 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // Which GitHub accounts tasks publish with; their tokens stay in the
+  // publisher.
+  const githubConnections = await openGitHubConnections({
+    file: path.join(config.dataRoot, "github", "connections.json"),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  const publisher = config.publisher
+    ? createPublisherClient({
+        host: config.publisher.host,
+        port: config.publisher.port,
+        token: await prepareSecret(
+          config.publisher.token,
+          "publisher.token",
+          env,
+        ),
+      })
+    : undefined;
   let server: AssistantServer | undefined;
   /** Devices still signed in, once the access store is open. */
   const activeDeviceIds = () =>
@@ -1062,6 +1109,8 @@ export async function startAssistantService(
                 available: configuredModels(config),
               }),
             repositories: repositorySettings,
+            connections: githubConnections,
+            ...(publisher ? { publisher } : {}),
             log,
             failureDetail: (projectId, sessionId) =>
               turnFailures.take(projectId, sessionId),
@@ -1074,6 +1123,7 @@ export async function startAssistantService(
     const taskRoutes = createTaskRoutes({
       store: taskStore,
       repositories: repositorySettings,
+      connections: githubConnections,
       runner: tasks?.runner,
       isOwner: (auth) =>
         server !== undefined &&
@@ -1103,6 +1153,14 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
     });
+    const githubRoutes = createGitHubRoutes({
+      connections: githubConnections,
+      publisher,
+      repositories: repositorySettings,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
     const assetVersion = randomUUID();
     server = await createAssistantServer({
       dataRoot: serverAccessDataRoot(config),
@@ -1115,6 +1173,7 @@ export async function startAssistantService(
         (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
+        (await githubRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       deviceNotifications: {
         isOn: (deviceId) => push.isSubscribed(deviceId),

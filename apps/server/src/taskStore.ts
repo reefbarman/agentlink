@@ -37,6 +37,10 @@ export type TaskState =
   | "blocked_review"
   /** Committed on the task branch with a clean tree. */
   | "ready"
+  /** Pushing the branch and opening its draft pull request. */
+  | "publishing"
+  /** Pushed, with a draft pull request open. */
+  | "published"
   | "failed"
   | "cancelled"
   /** The server stopped while it worked; the workspace is kept. */
@@ -55,6 +59,7 @@ export const ACTIVE_TASK_STATES: readonly TaskState[] = [
   "validating",
   "reviewing",
   "fixing",
+  "publishing",
 ];
 
 /** States a task can be resumed from. */
@@ -159,7 +164,8 @@ export function evidenceFor(
 
 /**
  * An external effect recorded before it is made, so a restart can check
- * what happened instead of repeating it. Written by the publisher slice.
+ * what happened instead of repeating it. `intended` with no outcome after a
+ * restart means the publisher must look before acting again.
  */
 export interface TaskEffectIntent {
   readonly kind: "push" | "pull_request";
@@ -167,6 +173,8 @@ export interface TaskEffectIntent {
   readonly status: "intended" | "done" | "failed";
   readonly at: number;
   readonly url?: string;
+  /** The stable error code when it failed. */
+  readonly error?: string;
 }
 
 export interface TaskRun extends TaskRequest {
@@ -196,6 +204,15 @@ export interface TaskRun extends TaskRequest {
   readonly commits?: readonly string[];
   readonly evidence: readonly TaskEvidence[];
   readonly effects: readonly TaskEffectIntent[];
+  /**
+   * The GitHub connection whose person the commits credit, fixed when the
+   * clone was made. It publishes with that connection only.
+   */
+  readonly connectionId?: string;
+  /** The draft pull request, once opened. */
+  readonly pullRequest?: { readonly number: number; readonly url: string };
+  /** The commit last pushed to the task branch. */
+  readonly publishedCommit?: string;
   /** The chat's final message, shortened. */
   readonly summary?: string;
   /** A stable error code. */

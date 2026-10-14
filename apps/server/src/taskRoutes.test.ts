@@ -9,6 +9,7 @@ import { HttpError } from "./httpJson.js";
 import { createTaskRoutes } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
 import { openRepositorySettings } from "./taskRepositories.js";
+import { openGitHubConnections } from "./githubConnections.js";
 import { openTaskStore, type TaskRequest, type TaskRun } from "./taskStore.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -60,6 +61,10 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     ),
     stop: vi.fn(async (taskId: string) => store.get(taskId)!),
     resume: vi.fn(async (taskId: string) => store.get(taskId)!),
+    publish: vi.fn(
+      async (taskId: string, _options?: { allowUnreviewed?: boolean }) =>
+        store.get(taskId)!,
+    ),
     delete: vi.fn(async (taskId: string) => {
       await store.delete(taskId);
     }),
@@ -68,9 +73,13 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
   const repositories = await openRepositorySettings({
     file: path.join(dir, "repositories.json"),
   });
+  const connections = await openGitHubConnections({
+    file: path.join(dir, "connections.json"),
+  });
   const routes = createTaskRoutes({
     store,
     repositories,
+    connections,
     runner: options.enabled === false ? undefined : runner,
     isOwner: (request) => request.principal.subjectId === "owner",
     models: [{ providerId: "codex", modelId: "gpt-5" }],
@@ -118,6 +127,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
   return {
     store,
     runner,
+    connections,
     call,
     setCaller(next: AssistantServerAuth) {
       caller = next;
@@ -239,6 +249,101 @@ describe("task routes", () => {
         validation: [],
       }),
     ).resolves.toMatchObject({ status: 200, body: { repository: null } });
+  });
+
+  it("grants and revokes a repository's permission to publish", async () => {
+    const test = await setup();
+    const connection = await test.connections.create(
+      "app",
+      { commitName: "Tristan", commitEmail: "tristan@example.com" },
+      1,
+    );
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        connectionId: "ffffffffffff",
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "connection_not_found" },
+    });
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://gitlab.com/reefbarman/demo",
+        connectionId: connection.id,
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "repository_not_github" },
+    });
+    await test.call("PUT", "/api/tasks/repositories", {
+      repository: "https://github.com/reefbarman/demo",
+      validation: ["npm test"],
+    });
+    // Granting keeps the validation commands, and the reverse.
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        connectionId: connection.id,
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: {
+        repository: {
+          validation: ["npm test"],
+          publish: { connectionId: connection.id },
+        },
+      },
+    });
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        validation: [],
+      }),
+    ).resolves.toMatchObject({
+      body: {
+        repository: {
+          validation: [],
+          publish: { connectionId: connection.id },
+        },
+      },
+    });
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        connectionId: null,
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { repository: null } });
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "repository_change_required" },
+    });
+  });
+
+  it("publishes through the runner, only with known options", async () => {
+    const test = await setup();
+    await test.call("POST", "/api/tasks", REQUEST);
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/publish`, { allowUnreviewed: true }),
+    ).resolves.toMatchObject({ status: 202, body: { task: { id: ID } } });
+    expect(test.runner.publish).toHaveBeenCalledWith(ID, {
+      allowUnreviewed: true,
+    });
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/publish`, { force: true }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "publish_field_unknown" },
+    });
+    test.setCaller(auth("owner", false));
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/publish`, {}),
+    ).resolves.toMatchObject({ status: 401 });
+    expect(test.runner.publish).toHaveBeenCalledTimes(1);
   });
 
   it("shows only the evidence for the task's current commit", async () => {

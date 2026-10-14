@@ -19,9 +19,26 @@ import type { TaskRun, ValidationCommandResult } from "./taskStore.js";
  * dot, so no project created in the app can ever own that folder.
  */
 
-/** Commits until slice C binds tasks to a GitHub connection's identity. */
+/**
+ * Every task commit's author. A task bound to a GitHub connection also
+ * credits that connection's person with a `Co-authored-by` trailer.
+ */
 export const TASK_COMMIT_NAME = "AgentLink Assistant";
 export const TASK_COMMIT_EMAIL = "assistant@agentlink.invalid";
+/** Holds the `Co-authored-by` trailer the commit hook adds. */
+const CO_AUTHOR_FILE = "agentlink-co-author";
+/**
+ * Adds the trailer to every commit message, including `git commit -m` and
+ * `--no-verify` (which skips other hooks, not this one). The trailer is read
+ * from a file, so the person's name is never part of the script.
+ */
+const CO_AUTHOR_HOOK = `#!/bin/sh
+# Added by AgentLink Assistant: credits this task's GitHub connection.
+trailer_file="$(git rev-parse --git-dir)/${CO_AUTHOR_FILE}"
+[ -f "$trailer_file" ] || exit 0
+exec git interpret-trailers --in-place --if-exists addIfDifferent \\
+  --trailer "$(cat "$trailer_file")" "$1"
+`;
 const MAX_DETAIL_LENGTH = 2_000;
 /** Each validation command's time limit. */
 const VALIDATION_TIMEOUT_MS = 20 * 60 * 1_000;
@@ -54,6 +71,12 @@ export class TaskWorkspaceError extends Error {
   }
 }
 
+/** The person a task's commits credit as co-author. */
+export interface TaskCoAuthor {
+  readonly name: string;
+  readonly email: string;
+}
+
 export interface PreparedWorkspace {
   readonly baseCommit: string;
   readonly resolvedBaseBranch: string;
@@ -74,8 +97,11 @@ export interface WorkspaceInspection {
 export interface TaskWorkspaces {
   /** Where a new task's clone goes. */
   workspaceFor(taskId: string, repository: string): string;
-  /** Fresh clone at the base on the task branch; replaces any earlier try. */
-  prepare(task: TaskRun): Promise<PreparedWorkspace>;
+  /**
+   * Fresh clone at the base on the task branch; replaces any earlier try.
+   * With a co-author, every commit made in it credits them.
+   */
+  prepare(task: TaskRun, coAuthor?: TaskCoAuthor): Promise<PreparedWorkspace>;
   inspect(task: TaskRun): Promise<WorkspaceInspection>;
   exists(task: TaskRun): Promise<boolean>;
   /**
@@ -140,7 +166,7 @@ export function createTaskWorkspaces(options: {
       const [planned] = planRepositories([repository]);
       return path.join(tasksRoot, taskId, planned!.directory);
     },
-    async prepare(task) {
+    async prepare(task, coAuthor) {
       const folder = taskFolder(task);
       await fs.rm(folder, { recursive: true, force: true });
       await fs.mkdir(tasksRoot, { recursive: true, mode: 0o755 });
@@ -177,6 +203,20 @@ export function createTaskWorkspaces(options: {
         ["user.email", TASK_COMMIT_EMAIL],
       ] as const) {
         await run(["config", key, value], workspace, "config_failed");
+      }
+      if (coAuthor) {
+        const gitDirectory = path.join(workspace, ".git");
+        await fs.writeFile(
+          path.join(gitDirectory, CO_AUTHOR_FILE),
+          `Co-authored-by: ${coAuthor.name} <${coAuthor.email}>\n`,
+          { mode: 0o644 },
+        );
+        await fs.mkdir(path.join(gitDirectory, "hooks"), { recursive: true });
+        await fs.writeFile(
+          path.join(gitDirectory, "hooks", "prepare-commit-msg"),
+          CO_AUTHOR_HOOK,
+          { mode: 0o755 },
+        );
       }
       return {
         baseCommit,

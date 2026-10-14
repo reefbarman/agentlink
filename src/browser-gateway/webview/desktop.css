@@ -2544,6 +2544,36 @@ html.quick-ask-document body {
   text-transform: uppercase;
 }
 
+.browser-shell.browser-shell-desktop
+  .assistant-inbox-group
+  h3
+  .assistant-panel-action {
+  margin-left: 8px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.browser-shell.browser-shell-desktop .assistant-github-code {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--ag-accent-a35);
+  border-radius: 12px;
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-github-code p {
+  margin: 0 0 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-github-code code {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  user-select: all;
+}
+
 .browser-shell.browser-shell-desktop .assistant-inbox-entry {
   display: flex;
   align-items: center;

@@ -1,4 +1,5 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
+import { GitHubPanel } from "./AssistantGitHub";
 import {
   NotificationSettings,
   useLocalInboxNotifications,
@@ -384,7 +385,7 @@ export function AssistantHub({
   loadSession: (sessionId: string) => void;
   reloadPage: () => void;
 }) {
-  const [view, setView] = useState<"jobs" | "inbox" | null>(null);
+  const [view, setView] = useState<"jobs" | "inbox" | "github" | null>(null);
   const openChat = async (projectId: string, sessionId: string) => {
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
     setView(null);
@@ -437,6 +438,15 @@ export function AssistantHub({
             </span>
           )}
         </button>
+        <button
+          type="button"
+          class="assistant-hub-button"
+          aria-haspopup="dialog"
+          onClick={() => setView("github")}
+        >
+          <i class="codicon codicon-github" aria-hidden="true" />
+          <span>GitHub</span>
+        </button>
       </nav>
       {view === "jobs" && (
         <JobsPanel
@@ -452,6 +462,7 @@ export function AssistantHub({
           openChat={openChat}
         />
       )}
+      {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
     </>
   );
 }

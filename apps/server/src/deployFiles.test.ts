@@ -265,6 +265,67 @@ describe("deployment files", () => {
     expect(assistant).toContain("target: meridian-api-key");
   });
 
+  it("runs the publisher apart from commands, with task clones read-only", async () => {
+    const container = path.join(deploy, "container");
+    const dockerfile = await fs.readFile(
+      path.join(container, "Dockerfile"),
+      "utf8",
+    );
+    const publisherStage = dockerfile
+      .split(/^(?=FROM )/mu)
+      .find((text) => text.split("\n")[0]!.endsWith(" AS publisher"))!;
+    expect(publisherStage).toMatch(/^USER node$/mu);
+    expect(publisherStage).toMatch(
+      /^ENTRYPOINT \["agentlink-server", "publisher"\]$/mu,
+    );
+    // Only git: no shell tools for anything else to use.
+    const instructions = publisherStage
+      .split("\n")
+      .filter((line) => !line.startsWith("#"))
+      .join("\n");
+    expect(instructions).not.toMatch(/curl|wget|python|ripgrep/u);
+
+    const overlay = await fs.readFile(
+      path.join(container, "compose.publisher.yaml"),
+      "utf8",
+    );
+    const service = overlay.slice(
+      overlay.indexOf("\n  publisher:\n"),
+      overlay.indexOf("\nnetworks:\n"),
+    );
+    expect(service).not.toMatch(/^\s+ports:/mu);
+    expect(service).not.toMatch(/network_mode|privileged/u);
+    expect(service).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    for (const line of [
+      "read_only: true",
+      "init: true",
+      "pull_policy: never",
+      "- no-new-privileges:true",
+      "mem_limit:",
+      "pids_limit:",
+      "- ./projects/.tasks:/srv/agentlink/projects/.tasks:ro",
+      "target: publisher-key",
+    ]) {
+      expect(service, line).toContain(line);
+    }
+    // Never on the command worker's network, never the whole projects
+    // folder, the assistant's data, or its other secrets.
+    expect(service).toMatch(
+      /^ {4}networks:\n {6}- publisher\n {6}- publisher-egress\n/mu,
+    );
+    expect(service).not.toMatch(
+      /command-worker|\.\/data|server\.json|- \.\/projects:|egress-policy|meridian/u,
+    );
+    expect(overlay).toMatch(/^ {2}publisher:\n {4}internal: true$/mu);
+    // The assistant gets the shared token, never the encryption key.
+    const assistant = overlay.slice(
+      overlay.indexOf("\n  assistant:\n"),
+      overlay.indexOf("\n  publisher:\n"),
+    );
+    expect(assistant).toContain("target: publisher-token");
+    expect(assistant).not.toContain("publisher-key");
+  });
+
   it("ships a launchd daemon that runs as a service user", async () => {
     const file = path.join(deploy, "launchd", "local.agentlink.server.plist");
     const plist = await fs.readFile(file, "utf8");

@@ -17,11 +17,15 @@ import {
 } from "./taskStore.js";
 import {
   TaskWorkspaceError,
+  type TaskCoAuthor,
   type TaskWorkspaces,
   type ValidationRun,
   type WorkspaceInspection,
 } from "./taskWorkspace.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
+import type { GitHubConnection } from "./githubConnections.js";
+import type { PublishRequest, PublishResult } from "./publisher.js";
+import { PublisherRequestError } from "./publisherClient.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -230,7 +234,7 @@ function createFakeWorkspaces() {
   const existing = new Set<string>();
   const workspaces = {
     workspaceFor: (taskId: string) => `/srv/projects/.tasks/${taskId}/demo`,
-    prepare: vi.fn(async (task: TaskRun) => {
+    prepare: vi.fn(async (task: TaskRun, _coAuthor?: TaskCoAuthor) => {
       existing.add(task.id);
       return { baseCommit: "base0", resolvedBaseBranch: "main" };
     }),
@@ -297,6 +301,10 @@ async function setup(
     readonly validation?: readonly string[];
     /** False: no model on another provider. */
     readonly reviewer?: boolean;
+    /** The repository may publish with connection CONNECTION. */
+    readonly permission?: boolean;
+    /** The publisher's answer to each publish, in order; then success. */
+    readonly publishFailures?: PublisherRequestError[];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-runner-"));
@@ -311,6 +319,22 @@ async function setup(
     close: vi.fn(async (_task: TaskRun) => undefined),
   };
   const recovered: TaskRun[] = [];
+  const failures = [...(options.publishFailures ?? [])];
+  const publisher = {
+    publish: vi.fn(async (_request: PublishRequest): Promise<PublishResult> => {
+      const failure = failures.shift();
+      if (failure) throw failure;
+      return {
+        push: "created",
+        pullRequest: {
+          number: 7,
+          url: "https://github.com/reefbarman/demo/pull/7",
+          draft: true,
+          created: true,
+        },
+      };
+    }),
+  };
   const runner = createTaskRunner({
     store,
     workspaces: fakeWorkspaces.workspaces,
@@ -333,10 +357,21 @@ async function setup(
           : CODEX,
     repositories: {
       get: (repository) =>
-        options.validation
-          ? { repository, validation: options.validation, updatedAt: 0 }
+        options.validation || options.permission
+          ? {
+              repository,
+              validation: options.validation ?? [],
+              ...(options.permission
+                ? { publish: { connectionId: CONNECTION.id, grantedAt: 0 } }
+                : {}),
+              updatedAt: 0,
+            }
           : undefined,
     },
+    connections: {
+      get: (id) => (id === CONNECTION.id ? CONNECTION : undefined),
+    },
+    publisher,
     onTaskRecovered: (task) => recovered.push(task),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
     ...(options.approvalTimeoutMs
@@ -356,10 +391,21 @@ async function setup(
     ...fakeWorkspaces,
     projects,
     recovered,
+    publisher,
     waitFor,
     waitForTurns,
   };
 }
+
+const CONNECTION: GitHubConnection = {
+  id: "c0ffee000001",
+  kind: "app",
+  login: "reefbarman",
+  commitName: "Tristan",
+  commitEmail: "tristan@example.com",
+  createdAt: 0,
+  updatedAt: 0,
+};
 
 describe("task runner", () => {
   it("prepares a clone, runs the chat and accepts committed work", async () => {
@@ -854,6 +900,203 @@ describe("task runner", () => {
     expect(test.workspaces.remove).toHaveBeenCalledOnce();
     await expect(test.runner.stop(created.id)).rejects.toMatchObject({
       code: "task_not_found",
+    });
+  });
+});
+
+describe("publishing tasks", () => {
+  it("credits the connection and publishes an approved task on its own", async () => {
+    const test = await setup({ permission: true, validation: ["npm test"] });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    // The clone's commits credit the repository's connection.
+    expect(test.workspaces.prepare.mock.calls[0]?.[1]).toEqual({
+      name: "Tristan",
+      email: "tristan@example.com",
+    });
+    expect(test.store.get(created.id)?.connectionId).toBe(CONNECTION.id);
+    test.endTurn("completed", { text: "Fixed it." });
+    await test.waitFor(created.id, "published");
+    const task = test.store.get(created.id)!;
+    expect(test.publisher.publish).toHaveBeenCalledOnce();
+    expect(test.publisher.publish.mock.calls[0]![0]).toMatchObject({
+      connectionId: CONNECTION.id,
+      repository: REQUEST.repository,
+      workspace: created.workspace,
+      branch: created.branch,
+      commit: "c1",
+      baseBranch: "main",
+      title: "Fix the clock test",
+    });
+    const body = test.publisher.publish.mock.calls[0]![0].body;
+    expect(body).toContain("`npm test`: passed");
+    expect(body).toContain("Approved by `claude/sonnet`");
+    expect(task).toMatchObject({
+      pullRequest: {
+        number: 7,
+        url: "https://github.com/reefbarman/demo/pull/7",
+      },
+      publishedCommit: "c1",
+      effects: [
+        { kind: "push", commit: "c1", status: "done" },
+        {
+          kind: "pull_request",
+          commit: "c1",
+          status: "done",
+          url: "https://github.com/reefbarman/demo/pull/7",
+        },
+      ],
+    });
+    expect(test.store.events(created.id).map((event) => event.state)).toEqual([
+      "queued",
+      "preparing",
+      "implementing",
+      "validating",
+      "reviewing",
+      "publishing",
+      "published",
+    ]);
+  });
+
+  it("stays ready without a permission, or with open findings", async () => {
+    const plain = await setup();
+    const unpermitted = await plain.runner.create(REQUEST);
+    await plain.waitForTurns(1);
+    expect(plain.workspaces.prepare.mock.calls[0]?.[1]).toBeUndefined();
+    plain.endTurn("completed", { text: "Done." });
+    await plain.waitFor(unpermitted.id, "ready");
+    expect(plain.store.get(unpermitted.id)?.error).toBeUndefined();
+    expect(plain.publisher.publish).not.toHaveBeenCalled();
+    await expect(plain.runner.publish(unpermitted.id)).rejects.toMatchObject({
+      code: "publish_permission_missing",
+    });
+
+    const test = await setup({ permission: true });
+    for (let round = 0; round < 3; round += 1) {
+      test.reviewReplies.push({
+        status: "completed",
+        result: { text: blockingReview("Still wrong") },
+      });
+    }
+    const created = await test.runner.create(REQUEST);
+    for (let turn = 1; turn <= 3; turn += 1) {
+      await test.waitForTurns(turn);
+      test.endTurn("completed", { text: "Tried." });
+    }
+    await test.waitFor(created.id, "ready");
+    expect(test.store.get(created.id)?.openFindings).toBe(1);
+    expect(test.publisher.publish).not.toHaveBeenCalled();
+    // The owner can still publish it, findings and all.
+    await test.runner.publish(created.id);
+    await test.waitFor(created.id, "published");
+    expect(test.publisher.publish.mock.calls[0]![0].body).toContain(
+      "Changes requested",
+    );
+  });
+
+  it("records a failed publish and publishes when asked again", async () => {
+    const test = await setup({
+      permission: true,
+      publishFailures: [
+        new PublisherRequestError(
+          409,
+          "connection_signed_out",
+          "Sign in again",
+        ),
+      ],
+    });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    test.endTurn("completed", { text: "Done." });
+    await vi.waitFor(() =>
+      expect(test.store.get(created.id)).toMatchObject({
+        state: "ready",
+        error: "connection_signed_out",
+        errorDetail: "Sign in again",
+      }),
+    );
+    expect(test.store.get(created.id)?.effects).toEqual([
+      expect.objectContaining({
+        kind: "push",
+        status: "failed",
+        error: "connection_signed_out",
+      }),
+    ]);
+    await test.runner.publish(created.id);
+    await test.waitFor(created.id, "published");
+    expect(test.store.get(created.id)?.error).toBeUndefined();
+    expect(test.publisher.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes again after a restart during publishing", async () => {
+    const ready: TaskRun = {
+      ...REQUEST,
+      id: "abcdefabcdef",
+      projectId: "task-abcdefabcdef",
+      branch: "agentlink/fix-the-clock-test-abcdefabcdef",
+      workspace: "/srv/projects/.tasks/abcdefabcdef/demo",
+      state: "publishing",
+      attempts: 1,
+      baseCommit: "base0",
+      resolvedBaseBranch: "main",
+      headCommit: "c1",
+      connectionId: CONNECTION.id,
+      evidence: [
+        { kind: "implementation", commit: "c1", at: 1 },
+        {
+          kind: "review",
+          commit: "c1",
+          at: 2,
+          model: "claude/sonnet",
+          sessionId: "r1",
+          verdict: "approve",
+          findings: [],
+        },
+      ],
+      effects: [{ kind: "push", commit: "c1", status: "intended", at: 3 }],
+      createdAt: 1,
+      updatedAt: 3,
+    };
+    const test = await setup({
+      permission: true,
+      prepareStore: (store) => store.create(ready).then(() => undefined),
+    });
+    await test.waitFor(ready.id, "published");
+    expect(test.publisher.publish).toHaveBeenCalledOnce();
+    expect(test.recovered).toEqual([]);
+    // Never implemented again: it only finished publishing.
+    expect(test.turns).toHaveLength(0);
+  });
+
+  it("publishes an unreviewed task only when the owner says so", async () => {
+    const test = await setup({ permission: true, reviewer: false });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    test.endTurn("completed", { text: "Done." });
+    await test.waitFor(created.id, "blocked_review");
+    await expect(test.runner.publish(created.id)).rejects.toMatchObject({
+      code: "task_not_ready",
+    });
+    await test.runner.publish(created.id, { allowUnreviewed: true });
+    await test.waitFor(created.id, "published");
+    expect(test.publisher.publish.mock.calls[0]![0].body).toContain(
+      "Not reviewed",
+    );
+  });
+
+  it("refuses to publish with a connection the commits do not credit", async () => {
+    const test = await setup({ permission: true });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    test.endTurn("completed", { text: "Done." });
+    await test.waitFor(created.id, "published");
+    await test.store.save({
+      ...test.store.get(created.id)!,
+      state: "ready",
+      connectionId: "beef00000002",
+    });
+    await expect(test.runner.publish(created.id)).rejects.toMatchObject({
+      code: "connection_changed",
     });
   });
 });

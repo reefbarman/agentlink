@@ -26,6 +26,8 @@ import {
   hasCodexProvider,
 } from "./codexSignIn.js";
 import { encode } from "uqr";
+import { parseVaultKey } from "./publisherVault.js";
+import { startPublisher } from "./publisher.js";
 
 import { pairingLink } from "./accessPages.js";
 import {
@@ -64,6 +66,9 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server egress-gateway [--listen <host:port>]
                                        [--allow <host>]... [--no-default-allow]
                                        [--policy-key-file <path>]
+       agentlink-server publisher --token-file <file> --key-file <file>
+                                  --tasks-root <dir> --data <dir>
+                                  [--client-id <id>] [--listen <host:port>]
 
 Runs the AgentLink assistant server over HTTPS.
 
@@ -121,10 +126,23 @@ Commands:
                    plain HTTP, IP addresses, ports other than 443, and names
                    that resolve to private addresses are refused with a 403
                    naming the host.
+  publisher        Hold the GitHub connections' tokens and publish coding
+                   tasks for a server whose configuration has "publisher"
+                   (normally in its own container): push a task's commit to
+                   its agentlink/* branch, never forced, and open or update
+                   its draft pull request. --token-file is the token shared
+                   with the server, --key-file encrypts the stored
+                   connections (both chmod 600, 32 bytes as hex), each task
+                   clone must be under --tasks-root (mounted read-only), and
+                   --data holds the encrypted connections. --client-id (or
+                   AGENTLINK_GITHUB_CLIENT_ID) is your GitHub App's client
+                   ID for "Connect GitHub"; without it only pasted tokens
+                   work. --listen defaults to 0.0.0.0:7400.
 `;
 
 const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
 const DEFAULT_EGRESS_GATEWAY_LISTEN = "0.0.0.0:3128";
+const DEFAULT_PUBLISHER_LISTEN = "0.0.0.0:7400";
 
 const COMMANDS = new Set(["pair", "export-ca", "codex-login", "codex-logout"]);
 
@@ -138,6 +156,9 @@ export async function runAssistantServerCli(
   }
   if (argv[0] === "egress-gateway") {
     return await runEgressGateway(argv.slice(1), io);
+  }
+  if (argv[0] === "publisher") {
+    return await runPublisher(argv.slice(1), io);
   }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
@@ -192,6 +213,7 @@ export async function runAssistantServerCli(
     io.stdout(
       `${preflight.commandWorker ?? "Commands: disabled (no commandWorker configured)"}\n`,
     );
+    if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
     return 0;
   }
 
@@ -482,6 +504,90 @@ async function runEgressGateway(
   const signal = await io.waitForShutdown();
   io.log(`Received ${signal}; closing tunnels`);
   await gateway.close();
+  return 0;
+}
+
+async function runPublisher(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const values: Record<string, string | undefined> = {
+    "--listen": DEFAULT_PUBLISHER_LISTEN,
+    "--client-id": io.env.AGENTLINK_GITHUB_CLIENT_ID || undefined,
+  };
+  const known = [
+    "--listen",
+    "--token-file",
+    "--key-file",
+    "--tasks-root",
+    "--data",
+    "--client-id",
+  ];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === "--help" || argument === "-h") {
+      io.stdout(ASSISTANT_SERVER_USAGE);
+      return 0;
+    }
+    if (!known.includes(argument)) {
+      return usageError(io, `Unknown argument: ${argument}`);
+    }
+    const value = argv[index + 1];
+    if (!value) return usageError(io, `${argument} needs a value`);
+    values[argument] = value;
+    index += 1;
+  }
+  for (const required of [
+    "--token-file",
+    "--key-file",
+    "--tasks-root",
+    "--data",
+  ]) {
+    if (!values[required]) return usageError(io, `${required} is required`);
+  }
+  const address = parseListen(values["--listen"]!);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  const clientId = values["--client-id"]?.trim() || undefined;
+  if (clientId && !/^[A-Za-z0-9._-]{1,100}$/u.test(clientId)) {
+    return usageError(io, "--client-id is not a GitHub App client ID");
+  }
+  const token = await (
+    await prepareSecret(
+      { file: values["--token-file"]! },
+      "--token-file",
+      io.env,
+    )
+  )();
+  let vaultKey: Buffer;
+  try {
+    const readKey = await prepareSecret(
+      { file: values["--key-file"]! },
+      "--key-file",
+      io.env,
+    );
+    vaultKey = parseVaultKey(Buffer.from(await readKey(), "utf8"));
+  } catch (error) {
+    return usageError(
+      io,
+      `--key-file: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const publisher = await startPublisher({
+    host: address.host,
+    port: address.port,
+    token,
+    vaultKey,
+    tasksRoot: values["--tasks-root"]!,
+    dataDirectory: values["--data"]!,
+    ...(clientId ? { clientId } : {}),
+    log: io.log,
+  });
+  io.log(
+    `AgentLink publisher listening on ${address.host}:${publisher.port} for ${values["--tasks-root"]}${clientId ? "; Connect GitHub uses the configured GitHub App" : "; no GitHub App client ID, so only pasted tokens can connect"}`,
+  );
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; stopping the publisher`);
+  await publisher.close();
   return 0;
 }
 

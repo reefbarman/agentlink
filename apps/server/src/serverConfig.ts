@@ -60,6 +60,20 @@ export interface AssistantServerConfig {
   readonly web?: AssistantServerWebConfig;
   /** Push notifications to devices that turn them on. */
   readonly notifications?: AssistantServerNotificationsConfig;
+  /**
+   * The publisher (`agentlink-server publisher`), which holds the GitHub
+   * connections and publishes coding tasks. Without it tasks stop at
+   * `ready` and GitHub cannot be connected.
+   */
+  readonly publisher?: AssistantServerPublisherConfig;
+}
+
+export interface AssistantServerPublisherConfig {
+  /** Loopback, or a sibling container's name on a private network. */
+  readonly host: string;
+  readonly port: number;
+  /** Shared token the publisher also reads. */
+  readonly token: AssistantServerSecretSource;
 }
 
 export interface AssistantServerNotificationsConfig {
@@ -361,6 +375,7 @@ export function parseAssistantServerConfig(
     "commandWorker",
     "web",
     "notifications",
+    "publisher",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -516,6 +531,34 @@ export function parseAssistantServerConfig(
     ...(config.notifications === undefined
       ? {}
       : { notifications: parseNotifications(config.notifications) }),
+    ...(config.publisher === undefined
+      ? {}
+      : { publisher: parsePublisher(config.publisher, baseDirectory) }),
+  };
+}
+
+function parsePublisher(
+  value: unknown,
+  baseDirectory: string,
+): AssistantServerPublisherConfig {
+  const label = "publisher";
+  const item = record(value, label);
+  allowKeys(item, label, ["host", "port", "token"]);
+  const host = text(item.host, `${label}.host`);
+  // Plain HTTP with a shared token: this machine or a private network only.
+  if (!isPrivateServiceHost(host)) {
+    throw new Error(
+      `${label}.host must be loopback or a container name on a private network`,
+    );
+  }
+  const port = item.port;
+  if (!Number.isSafeInteger(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`${label}.port must be an integer from 1 to 65535`);
+  }
+  return {
+    host,
+    port: Number(port),
+    token: secretSource(item.token, `${label}.token`, baseDirectory),
   };
 }
 

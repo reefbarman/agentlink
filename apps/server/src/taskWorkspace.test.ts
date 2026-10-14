@@ -239,6 +239,45 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     expect(run(task.workspace, "rev-parse", "HEAD")).toBe(task.baseCommit);
   });
 
+  it("credits the connection's person on every commit", async () => {
+    const { workspaces, taskFor, run } = await setup();
+    const base = taskFor("aaaaaaaaaaaa");
+    // A name a shell would expand, if it were ever part of a script.
+    const name = 'Tris "$(touch pwned)" `id`';
+    const task = {
+      ...base,
+      ...(await workspaces.prepare(base, {
+        name,
+        email: "tristan@example.com",
+      })),
+    };
+    await fs.writeFile(path.join(task.workspace, "fix.txt"), "fixed\n");
+    run(task.workspace, "add", "fix.txt");
+    // Even `-m` with --no-verify still gets the trailer.
+    run(task.workspace, "commit", "-q", "--no-verify", "-m", "Fix it");
+    const message = run(task.workspace, "log", "-1", "--format=%B");
+    expect(message).toContain("Fix it");
+    expect(message).toContain(`Co-authored-by: ${name} <tristan@example.com>`);
+    expect(run(task.workspace, "log", "-1", "--format=%an")).toBe(
+      TASK_COMMIT_NAME,
+    );
+    await expect(fs.stat(path.join(task.workspace, "pwned"))).rejects.toThrow();
+    // Committing again does not add the trailer twice.
+    await fs.writeFile(path.join(task.workspace, "more.txt"), "more\n");
+    run(task.workspace, "add", "more.txt");
+    run(
+      task.workspace,
+      "commit",
+      "-q",
+      "-m",
+      "More\n\nCo-authored-by: " + `${name} <tristan@example.com>`,
+    );
+    expect(
+      run(task.workspace, "log", "-1", "--format=%B").split("Co-authored-by")
+        .length,
+    ).toBe(2);
+  });
+
   it("gives the reviewer the diff from the base", async () => {
     const { workspaces, taskFor, run } = await setup();
     const base = taskFor("aaaaaaaaaaaa");

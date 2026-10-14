@@ -4,6 +4,8 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
+import type { GitHubConnectionStore } from "./githubConnections.js";
+import { parseGitHubRepository } from "./githubApi.js";
 import {
   parseValidationCommands,
   type RepositorySettingsStore,
@@ -25,20 +27,28 @@ import {
  * - `GET /api/tasks/:id` (record and state history), `DELETE` (also removes
  *   its clone)
  * - `POST /api/tasks/:id/stop`, `POST /api/tasks/:id/resume`
+ * - `POST /api/tasks/:id/publish` (`{ allowUnreviewed? }`): push a ready
+ *   task and open its draft pull request, within the repository's
+ *   standing permission
  * - `GET /api/tasks/repositories`, `PUT /api/tasks/repositories`
- *   (`{ repository, validation }`): each repository's validation commands
+ *   (`{ repository, validation?, connectionId? }`): each repository's
+ *   validation commands, and the GitHub connection its tasks publish with
+ *   (`null` revokes the permission)
  *
  * Unsafe methods have already passed the server's Host, Origin and
  * fetch-site checks; mutations re-check the sign-in before they apply.
  */
 
 const MAX_TASK_BODY_BYTES = 64 * 1024;
-const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume))?$/u;
-const REPOSITORY_FIELDS = new Set(["repository", "validation"]);
+const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume|publish))?$/u;
+const REPOSITORY_FIELDS = new Set(["repository", "validation", "connectionId"]);
+const PUBLISH_FIELDS = new Set(["allowUnreviewed"]);
 
 export interface TaskRoutesOptions {
   readonly store: TaskStore;
   readonly repositories: RepositorySettingsStore;
+  /** Connections a repository's permission may name. */
+  readonly connections?: Pick<GitHubConnectionStore, "get">;
   /** Undefined when the server has no `projectsRoot` for clones. */
   readonly runner: TaskRunner | undefined;
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
@@ -116,9 +126,41 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       if (typeof body.repository !== "string") {
         throw new HttpError(400, "repository_required");
       }
-      const validation = parseValidationCommands(body.validation);
+      if (body.validation === undefined && body.connectionId === undefined) {
+        throw new HttpError(400, "repository_change_required");
+      }
+      const validation =
+        body.validation === undefined
+          ? undefined
+          : parseValidationCommands(body.validation);
+      let connectionId: string | null | undefined;
+      if (body.connectionId !== undefined) {
+        if (body.connectionId === null) {
+          connectionId = null;
+        } else if (
+          typeof body.connectionId !== "string" ||
+          !options.connections?.get(body.connectionId)
+        ) {
+          throw new HttpError(400, "connection_not_found");
+        } else if (!parseGitHubRepository(body.repository)) {
+          // Only github.com repositories can be published.
+          throw new HttpError(400, "repository_not_github");
+        } else {
+          connectionId = body.connectionId;
+        }
+      }
       await requireValid(auth);
-      const saved = await repositories.set(body.repository, validation, now());
+      let saved = repositories.get(body.repository);
+      if (validation !== undefined) {
+        saved = await repositories.set(body.repository, validation, now());
+      }
+      if (connectionId !== undefined) {
+        saved = await repositories.setPublish(
+          body.repository,
+          connectionId ?? undefined,
+          now(),
+        );
+      }
       sendJson(response, 200, { repository: saved ?? null });
       return true;
     }
@@ -154,6 +196,31 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       if (method !== "POST") throw new HttpError(405, "method_not_allowed");
       requireTask(taskId);
       const runner = requireRunner();
+      if (action === "publish") {
+        const body = await readJsonBody(
+          request,
+          MAX_TASK_BODY_BYTES,
+          auth.signal,
+        );
+        if (Object.keys(body).some((key) => !PUBLISH_FIELDS.has(key))) {
+          throw new HttpError(400, "publish_field_unknown");
+        }
+        if (
+          body.allowUnreviewed !== undefined &&
+          typeof body.allowUnreviewed !== "boolean"
+        ) {
+          throw new HttpError(400, "allow_unreviewed_invalid");
+        }
+        await requireValid(auth);
+        sendJson(response, 202, {
+          task: describeTask(
+            await runner.publish(taskId, {
+              allowUnreviewed: body.allowUnreviewed === true,
+            }),
+          ),
+        });
+        return true;
+      }
       await requireValid(auth);
       if (action === "stop") {
         sendJson(response, 200, { task: await runner.stop(taskId) });
@@ -168,6 +235,7 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
         task: describeTask(task),
         events: store.events(taskId),
         validation: repositories.get(task.repository)?.validation ?? [],
+        publish: repositories.get(task.repository)?.publish ?? null,
       });
       return true;
     }

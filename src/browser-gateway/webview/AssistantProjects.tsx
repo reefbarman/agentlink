@@ -94,6 +94,26 @@ const ERROR_TEXT: Record<string, string> = {
   instructions_too_large: "Instructions can be up to 64 KB.",
   network_preset_invalid: "Choose a network setting.",
   network_allow_invalid: "Check the extra sites.",
+  // GitHub connections and repository settings.
+  publisher_not_configured: "Publishing is not set up on this server.",
+  publisher_unavailable: "The publisher is not reachable.",
+  github_app_not_configured:
+    "The publisher has no GitHub App client ID: use a token instead.",
+  device_flow_failed: "GitHub did not give a sign-in code. Try again.",
+  token_required: "Paste the token.",
+  token_invalid: "That does not look like a GitHub token.",
+  token_rejected: "GitHub did not accept that token.",
+  commit_name_invalid:
+    "Give the name its commits credit (up to 100 characters).",
+  commit_email_invalid: "Give a valid email for its commits.",
+  connection_not_found: "That GitHub connection no longer exists.",
+  connection_limit_reached: "You can have up to 20 GitHub connections.",
+  repository_required: "Give the repository's https:// URL.",
+  repository_not_github: "Only github.com repositories can be published.",
+  repository_limit_reached: "You can set up to 200 repositories.",
+  validation_command_invalid:
+    "Each validation command can be up to 1,000 characters.",
+  too_many_validation_commands: "A repository can have up to 10 commands.",
   // Scheduled jobs and the inbox.
   name_invalid: "Give the job a name (up to 100 characters).",
   prompt_invalid: "Write what each run should ask (up to 20,000 characters).",

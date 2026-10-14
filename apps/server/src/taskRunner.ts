@@ -2,8 +2,18 @@ import type { AgentModelReference } from "@agentlink/core";
 import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
+import type { GitHubConnectionStore } from "./githubConnections.js";
 import { HttpError } from "./httpJson.js";
+import {
+  PublisherRequestError,
+  type PublisherClient,
+} from "./publisherClient.js";
 import type { SessionEventHub } from "./SessionEventHub.js";
+import {
+  publishProblem,
+  pullRequestBody,
+  pullRequestTitle,
+} from "./taskPublish.js";
 import type { RepositorySettingsStore } from "./taskRepositories.js";
 import {
   REVIEW_RETRY_PROMPT,
@@ -19,6 +29,7 @@ import {
   newTaskId,
   taskBranchName,
   type ReviewFinding,
+  type TaskEffectIntent,
   type TaskEvidence,
   type TaskRequest,
   type TaskRun,
@@ -49,8 +60,16 @@ import type { AssistantSessionOperations } from "./workspaceRoutes.js";
  * chat, for at most `maxFixRounds` rounds. Evidence is bound to the commit
  * it was made for; a new commit needs new evidence.
  *
- * A restart never continues a task by itself: it is recorded interrupted
- * with its clone and chats kept, and the owner resumes it.
+ * A ready task whose repository has a standing permission is then
+ * published on its own when its review approved the exact commit: the
+ * publisher pushes it to the task branch and opens a draft pull request.
+ * Otherwise the owner publishes it (and only the owner may publish one
+ * without a review). The push is recorded as an intent first.
+ *
+ * A restart never continues a task's work by itself: it is recorded
+ * interrupted with its clone and chats kept, and the owner resumes it. A
+ * task that was publishing is published again: the publisher finds the
+ * branch and pull request that already exist rather than making more.
  */
 
 const DEFAULT_MAX_CONCURRENT_TASKS = 1;
@@ -83,8 +102,11 @@ export interface TaskRunnerOptions {
   readonly reviewModel: (
     implementer: AgentModelReference,
   ) => AgentModelReference | undefined;
-  /** The owner's validation commands, per repository. */
+  /** The owner's validation commands and publish permission, per repository. */
   readonly repositories?: Pick<RepositorySettingsStore, "get">;
+  /** GitHub connections; with the publisher, ready tasks can be published. */
+  readonly connections?: Pick<GitHubConnectionStore, "get">;
+  readonly publisher?: Pick<PublisherClient, "publish">;
   readonly onTaskChanged?: (task: TaskRun) => void;
   /** A task a previous process left working, now recorded interrupted. */
   readonly onTaskRecovered?: (task: TaskRun) => void;
@@ -108,6 +130,15 @@ export interface TaskRunner {
   stop(taskId: string): Promise<TaskRun>;
   /** Queue a stopped, failed, blocked or interrupted task again. */
   resume(taskId: string): Promise<TaskRun>;
+  /**
+   * Push a ready task and open (or update) its draft pull request, within
+   * its repository's standing permission. `allowUnreviewed` publishes a task
+   * whose review could not happen.
+   */
+  publish(
+    taskId: string,
+    options?: { readonly allowUnreviewed?: boolean },
+  ): Promise<TaskRun>;
   /** Stop it if needed, then remove its clone, chat mount and record. */
   delete(taskId: string): Promise<void>;
   /** Record working tasks interrupted, keeping their clones. */
@@ -131,6 +162,9 @@ interface Outcome {
 
 interface LiveTask {
   task: TaskRun;
+  /** `work`: implement and check. `publish`: only publish it. */
+  readonly mode: "work" | "publish";
+  readonly allowUnreviewed: boolean;
   readonly controller: AbortController;
   readonly auth: AssistantServerAuth;
   stopping: { readonly reason: string; readonly state: TaskState } | undefined;
@@ -212,10 +246,16 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     return auth;
   };
 
-  const enqueue = async (task: TaskRun): Promise<TaskRun> => {
+  const enqueue = async (
+    task: TaskRun,
+    mode: LiveTask["mode"] = "work",
+    allowUnreviewed = false,
+  ): Promise<TaskRun> => {
     const controller = new AbortController();
     const entry: LiveTask = {
       task,
+      mode,
+      allowUnreviewed,
       controller,
       auth: taskAuth(task.id, options.ownerId() ?? "", controller),
       stopping: undefined,
@@ -229,7 +269,8 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       state: "queued",
       error: undefined,
       errorDetail: undefined,
-      openFindings: undefined,
+      // Publishing keeps what the work found; new work starts afresh.
+      ...(mode === "work" ? { openFindings: undefined } : {}),
       finishedAt: undefined,
     });
     pump();
@@ -541,21 +582,147 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     }
   };
 
+  /** The repository's permission and connection, if it may publish. */
+  const publishTarget = (task: TaskRun) => {
+    const settings = options.repositories?.get(task.repository);
+    const permission = settings?.publish;
+    const connection = permission
+      ? options.connections?.get(permission.connectionId)
+      : undefined;
+    return {
+      validationCommands: settings?.validation ?? [],
+      permission,
+      connection,
+    };
+  };
+
+  /** Why this task cannot be published now, if it cannot. */
+  const publishBlocker = (
+    task: TaskRun,
+    flags: { readonly automatic: boolean; readonly allowUnreviewed: boolean },
+  ) =>
+    publishProblem({
+      task,
+      ...publishTarget(task),
+      publisherConfigured: options.publisher !== undefined,
+      ...flags,
+    });
+
+  const updateEffect = (
+    entry: LiveTask,
+    intent: TaskEffectIntent,
+    patch: Partial<TaskEffectIntent>,
+  ): TaskEffectIntent[] =>
+    entry.task.effects.map((effect) =>
+      effect === intent ? { ...effect, ...patch } : effect,
+    );
+
+  /**
+   * Push the head commit and open or update the draft pull request. The push
+   * is recorded as intended first; the publisher looks before it acts, so
+   * doing this again after a restart finds what is already there.
+   */
+  const publishTask = async (entry: LiveTask): Promise<Outcome> => {
+    const task = entry.task;
+    const stay = (error: string, errorDetail?: string): Outcome => ({
+      state: "ready",
+      error,
+      ...(errorDetail ? { errorDetail } : {}),
+      ...(task.openFindings !== undefined
+        ? { openFindings: task.openFindings }
+        : {}),
+    });
+    const problem = publishBlocker(task, {
+      automatic: false,
+      allowUnreviewed: entry.allowUnreviewed,
+    });
+    if (problem) return stay(problem.code, problem.detail);
+    const { permission, connection } = publishTarget(task);
+    const commit = task.headCommit!;
+    const intent: TaskEffectIntent = {
+      kind: "push",
+      commit,
+      status: "intended",
+      at: now(),
+    };
+    await save(entry, {
+      state: "publishing",
+      connectionId: permission!.connectionId,
+      effects: [...task.effects, intent],
+    });
+    try {
+      const result = await options.publisher!.publish({
+        connectionId: connection!.id,
+        repository: task.repository,
+        workspace: task.workspace,
+        branch: task.branch,
+        commit,
+        baseBranch: task.resolvedBaseBranch ?? task.baseBranch ?? "main",
+        title: pullRequestTitle(entry.task),
+        body: pullRequestBody(entry.task),
+      });
+      await save(entry, {
+        effects: [
+          ...updateEffect(entry, intent, { status: "done" }),
+          {
+            kind: "pull_request",
+            commit,
+            status: "done",
+            at: now(),
+            url: result.pullRequest.url,
+          },
+        ],
+        pullRequest: {
+          number: result.pullRequest.number,
+          url: result.pullRequest.url,
+        },
+        publishedCommit: commit,
+      });
+      log(
+        `Task ${task.id} published ${commit.slice(0, 12)} to ${task.branch}: ${result.pullRequest.url}`,
+      );
+      return { state: "published" };
+    } catch (error) {
+      const code =
+        error instanceof PublisherRequestError ? error.code : errorCode(error);
+      await save(entry, {
+        effects: updateEffect(entry, intent, { status: "failed", error: code }),
+      });
+      return stay(
+        code,
+        error instanceof PublisherRequestError ? error.detail : undefined,
+      );
+    }
+  };
+
   const execute = async (entry: LiveTask): Promise<void> => {
     let final: Outcome;
     try {
+      // Publishing acts through the publisher, not through a chat.
+      if (entry.mode === "publish") {
+        final = await publishTask(entry);
+        return await finish(entry, final);
+      }
       if (!options.ownerId()) throw new HttpError(409, "owner_missing");
       if (entry.task.startedAt === undefined) {
         await save(entry, { startedAt: now() });
       }
       // No base commit yet: the clone was never made, or never finished.
       if (!entry.task.baseCommit || !(await workspaces.exists(entry.task))) {
+        // Commits credit the connection the repository publishes with.
+        const { permission, connection } = publishTarget(entry.task);
         await save(entry, {
           state: "preparing",
           sessionId: undefined,
           commits: [],
+          connectionId: connection ? permission!.connectionId : undefined,
         });
-        const prepared = await workspaces.prepare(entry.task);
+        const prepared = await workspaces.prepare(
+          entry.task,
+          connection
+            ? { name: connection.commitName, email: connection.commitEmail }
+            : undefined,
+        );
         await save(entry, { ...prepared, headCommit: prepared.baseCommit });
       }
       assertNotStopping(entry);
@@ -585,6 +752,19 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         prompt = taskPrompt(entry.task);
       }
       final = await work(entry, sessionId, prompt);
+      // Ready, approved and permitted: publish without waiting for the owner.
+      if (
+        final.state === "ready" &&
+        !entry.stopping &&
+        options.publisher &&
+        publishTarget(entry.task).permission &&
+        !publishBlocker(entry.task, {
+          automatic: true,
+          allowUnreviewed: false,
+        })
+      ) {
+        final = await publishTask(entry);
+      }
     } catch (error) {
       final = entry.stopping
         ? { state: entry.stopping.state, error: entry.stopping.reason }
@@ -596,8 +776,15 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
               : {}),
           };
     }
-    // Stopping wins over whatever the chat reported meanwhile.
-    if (entry.stopping) {
+    await finish(entry, final);
+  };
+
+  /** Record how a run ended. */
+  const finish = async (entry: LiveTask, outcome: Outcome): Promise<void> => {
+    let final = outcome;
+    // Stopping wins over whatever the chat reported meanwhile, except a
+    // publish that went through: that effect happened.
+    if (entry.stopping && final.state !== "published") {
       final = { state: entry.stopping.state, error: entry.stopping.reason };
     }
     const sessionId = entry.task.sessionId;
@@ -664,6 +851,12 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       const at = now();
       for (const task of store.list()) {
         if (!isActiveTask(task)) continue;
+        // Its push may or may not have happened: publish again, which finds
+        // the branch and pull request already there instead of repeating.
+        if (task.state === "publishing") {
+          await enqueue(task, "publish");
+          continue;
+        }
         const interrupted: TaskRun = {
           ...task,
           state: "interrupted",
@@ -714,6 +907,23 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       }
       return enqueue(task);
     },
+    async publish(taskId, publishOptions = {}) {
+      if (closed) throw new HttpError(503, "server_closing");
+      const task = requireTask(taskId);
+      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      const allowUnreviewed = publishOptions.allowUnreviewed === true;
+      const publishable =
+        task.state === "ready" ||
+        task.state === "published" ||
+        (task.state === "blocked_review" && allowUnreviewed);
+      if (!publishable) throw new TaskInputError("task_not_ready", 409);
+      const problem = publishBlocker(task, {
+        automatic: false,
+        allowUnreviewed,
+      });
+      if (problem) throw new TaskInputError(problem.code, 409);
+      return enqueue(task, "publish", allowUnreviewed);
+    },
     async delete(taskId) {
       const task = requireTask(taskId);
       const entry = live.get(taskId);
@@ -729,7 +939,12 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       closed = true;
       await Promise.all(
         [...live.values()].map((entry) =>
-          stop(entry, "server_stopped", "interrupted"),
+          // A publish in flight stays publishing, for the next start.
+          stop(
+            entry,
+            "server_stopped",
+            entry.task.state === "publishing" ? "publishing" : "interrupted",
+          ),
         ),
       );
       await store.flush();
