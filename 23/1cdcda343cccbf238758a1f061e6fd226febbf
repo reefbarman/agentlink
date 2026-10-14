@@ -1,0 +1,27 @@
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 717-720,744-753
+apps/server/src/webAssets.ts
+  h_e08a86bb3a33a2 13-22,80-81
+  s_f4c34f187828aa::t_2cf431b2b352ad 82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "231cdcda343cccbf238758a1f061e6fd226febbf",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f4c34f187828aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bbf67994-7896-4165-91f0-70a2f6dd3cc3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
