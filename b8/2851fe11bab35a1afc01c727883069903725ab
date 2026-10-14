@@ -1,0 +1,76 @@
+apps/server/src/jobRunner.test.ts
+  h_e08a86bb3a33a2 165-168,194,500-535
+  s_07b6c8cd238d6e::t_362d6246012860 536-537
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 172-189,986-997,1003
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 58,669-670,716-723,921-922
+apps/server/src/turnFailures.test.ts
+  h_e08a86bb3a33a2 1-79
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 100-103,110-113,120-121,260-264
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 39-65
+apps/server/src/turnFailures.ts
+  h_e08a86bb3a33a2 1-120
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 185-194,770-775
+packages/node-host/src/nodeHostAgent.ts
+  h_e08a86bb3a33a2 12,100-101,156
+apps/server/README.md
+  h_e08a86bb3a33a2 385
+CHANGELOG.md
+  h_e08a86bb3a33a2 7
+apps/server/src/jobStore.ts
+  h_e08a86bb3a33a2 108-109
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 363-364,480-492
+  s_121bfa51e4e709::t_867d012f5df8fd 361-362,365
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 69-70,797,799
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 42,113-114,333
+apps/server/src/jobRunner.ts
+  h_e08a86bb3a33a2 74-81,369-376,384,388
+packages/core/src/turnKernel.test.ts
+  s_2d2ae41805570d::t_c4d8df49f84db8 2036-2073
+resources/builtin-skills/documentation/references/release-notes.md
+  s_2d2ae41805570d::t_101c0c754867de 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b82851fe11bab35a1afc01c727883069903725ab",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_07b6c8cd238d6e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f1826188-dd86-4343-87ac-fff457196741",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_121bfa51e4e709": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6f662374-cef7-4a5c-9a9a-4bd193bfcd21",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_2d2ae41805570d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f1838448-e4ff-47dc-ab02-e62e71b231be",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
