@@ -173,6 +173,11 @@ import {
 } from "./background/backgroundBudgetPolicy.js";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
+import {
+  assessDelegatedWriteScopes,
+  formatUnavailableDelegatedWriteScopes,
+  NON_WRITING_DELEGATION_MODES,
+} from "./delegatedWriteScopePreflight.js";
 import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 import {
   partitionMcpToolsForDisclosure,
@@ -11509,6 +11514,14 @@ export class AgentSessionManager {
         enforcedOwnedPaths: request.ownedPaths ?? [],
       },
     );
+    const writeScopeWarnings = this.preflightDelegatedWriteScopes({
+      ownedPaths: request.ownedPaths,
+      parent,
+      executionRoot,
+      childCanWrite:
+        !usesReadOnlyNativeProfile &&
+        !NON_WRITING_DELEGATION_MODES.has(route.resolvedMode),
+    });
 
     this.log?.(
       `[bg-route] task=${task} class=${route.taskClass} requested={mode:${request.mode ?? "-"},model:${request.model ?? "-"},provider:${request.provider ?? "-"}} resolved={mode:${route.resolvedMode},model:${route.resolvedModel},provider:${route.resolvedProvider}} fallback=${backendFallbackUsed} reason="${backendFallbackReason}"`,
@@ -11881,6 +11894,7 @@ export class AgentSessionManager {
       modelGroup: route.modelGroup,
       routingReason: backendFallbackReason,
       fallbackUsed: backendFallbackUsed,
+      ...(writeScopeWarnings ? { writeScopeWarnings } : {}),
     };
   }
 
@@ -13826,6 +13840,77 @@ export class AgentSessionManager {
           ? `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, and this writer cannot be path-scoped, so no concurrent write is possible regardless of file ownership. Use a read-only profile, a native background agent with ownedPaths, or wait for the ancestor's turn to finish.`
           : `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, which blocks writers that do not declare ownedPaths. Declare ownedPaths (an enforced write scope disjoint from other writers) to run concurrently, use a read-only profile, or wait for the ancestor's turn to finish.`,
     });
+  }
+
+  /**
+   * Reject a native writable delegation whose outside-workspace ownedPaths
+   * no inherited rule can reach, before any child work is spent. Delegated
+   * children cannot request path trust or write approval themselves, so
+   * such writes are always denied at dispatch. Partial coverage only warns;
+   * dispatch-time enforcement stays authoritative.
+   */
+  private preflightDelegatedWriteScopes(args: {
+    ownedPaths: readonly string[] | undefined;
+    parent: AgentSession | undefined;
+    executionRoot: string;
+    childCanWrite: boolean;
+  }): string[] | undefined {
+    if (!args.ownedPaths?.length || !args.childCanWrite) return undefined;
+    const approvalManager = this.toolCtx?.approvalManager;
+    if (
+      !approvalManager ||
+      typeof approvalManager.isPathTrusted !== "function" ||
+      typeof approvalManager.getFileWriteAuthorization !== "function" ||
+      typeof approvalManager.getPathRules !== "function" ||
+      typeof approvalManager.getWriteRules !== "function"
+    ) {
+      return undefined;
+    }
+    // The child inherits the parent's approvals; project and global rules
+    // resolve through the parent's project binding.
+    const sessionId = args.parent?.id ?? this.toolCtx!.sessionId;
+    if (args.parent?.projectScope.rootPath) {
+      approvalManager.bindSessionProject(
+        args.parent.id,
+        args.parent.projectScope,
+      );
+    }
+    const assessment = assessDelegatedWriteScopes({
+      ownedPaths: args.ownedPaths,
+      executionRoot: args.executionRoot,
+      workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),
+      authority: {
+        isPathTrusted: (filePath) =>
+          approvalManager.isPathTrusted(sessionId, filePath),
+        isWriteAllowed: (filePath) =>
+          approvalManager.getFileWriteAuthorization(sessionId, filePath)
+            .allowed,
+        pathRules: () => {
+          const rules = approvalManager.getPathRules(sessionId);
+          return [...rules.session, ...rules.project, ...rules.global];
+        },
+        writeRules: (filePath) => {
+          const rules = approvalManager.getWriteRules(sessionId, filePath);
+          return [
+            ...rules.session,
+            ...rules.project,
+            ...rules.global,
+            ...rules.settings.map((pattern) => ({
+              pattern,
+              mode: "glob" as const,
+            })),
+          ];
+        },
+      },
+    });
+    if (assessment.unavailable.length > 0) {
+      throw new FleetAdmissionError({
+        ok: false,
+        code: "write_scope_unavailable",
+        message: formatUnavailableDelegatedWriteScopes(assessment.unavailable),
+      });
+    }
+    return assessment.warnings.length > 0 ? assessment.warnings : undefined;
   }
 
   private ensureSharedWorkspaceScopeAvailable(
