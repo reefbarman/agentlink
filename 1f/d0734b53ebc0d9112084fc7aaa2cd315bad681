@@ -1,0 +1,29 @@
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 400-401,423,537,827,834-840
+apps/server/src/taskReview.ts
+  h_e08a86bb3a33a2 44-45,53-59
+  s_e596b585886ae1::t_ff7165bd0a7b84 42-43,46
+apps/server/src/taskReview.test.ts
+  h_e08a86bb3a33a2 87-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1fd0734b53ebc0d9112084fc7aaa2cd315bad681",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e596b585886ae1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcc5a8fc-3536-4f65-83f4-1820e02daee5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
