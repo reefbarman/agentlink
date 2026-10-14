@@ -393,6 +393,45 @@ describe("streamOpenAiCompatibleCompletion", () => {
     expect(toolFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps malformed tool-argument diagnostics through error normalization", async () => {
+    const fetch = vi.fn<OpenAiCompatibleFetch>(async () =>
+      sseResponse([
+        event({
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_bad",
+                    function: { name: "read_file", arguments: '{"path":' },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        }),
+        "data: [DONE]\n\n",
+      ]),
+    );
+    const failure = collectEvents(
+      streamOpenAiCompatibleCompletion({
+        profile: profile(),
+        apiKey: "secret",
+        request: streamRequest(),
+        fetch,
+        retryDelay: async () => undefined,
+      }),
+    );
+
+    await expect(failure).rejects.toBeInstanceOf(OpenAiCompatibleRequestError);
+    await expect(failure).rejects.toThrow(
+      "OpenAI-compatible tool call call_bad returned malformed JSON arguments (tool read_file, choice 0, index 0, 8 bytes, finish_reason tool_calls)",
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects redirects and verifies fetch was configured for manual handling", async () => {
     let redirectMode: RequestRedirect | undefined;
     const fetch: OpenAiCompatibleFetch = async (_input, init) => {
