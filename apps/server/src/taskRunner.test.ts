@@ -9,10 +9,16 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import { SessionEventHub } from "./SessionEventHub.js";
 import { createTaskRunner, taskPrompt } from "./taskRunner.js";
-import { openTaskStore, type TaskRun, type TaskStore } from "./taskStore.js";
+import {
+  evidenceFor,
+  openTaskStore,
+  type TaskRun,
+  type TaskStore,
+} from "./taskStore.js";
 import {
   TaskWorkspaceError,
   type TaskWorkspaces,
+  type ValidationRun,
   type WorkspaceInspection,
 } from "./taskWorkspace.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
@@ -22,6 +28,9 @@ afterEach(async () => {
   for (const step of cleanup.splice(0).reverse()) await step();
 });
 
+const CODEX: AgentModelReference = { providerId: "codex", modelId: "gpt-5" };
+const CLAUDE: AgentModelReference = { providerId: "claude", modelId: "sonnet" };
+
 const REQUEST = {
   repository: "https://github.com/reefbarman/demo",
   objective: "Fix the clock test",
@@ -29,10 +38,62 @@ const REQUEST = {
 
 type TurnStatus = "completed" | "suspended" | "failed" | "cancelled";
 
+const APPROVE = '```json\n{"verdict":"approve","findings":[]}\n```';
+const blockingReview = (reason: string) =>
+  `Looks mostly fine.\n\`\`\`json\n${JSON.stringify({
+    verdict: "changes_requested",
+    findings: [
+      { severity: "blocking", file: "src/clock.ts", line: 3, reason },
+      { severity: "suggestion", reason: "Name the constant" },
+    ],
+  })}\n\`\`\``;
+
+interface ReviewReply {
+  readonly status: TurnStatus;
+  readonly result?: Record<string, unknown>;
+  /** Ask for a tool first; the runner must refuse it. */
+  readonly interaction?: boolean;
+}
+
 function createFakeOperations(events: SessionEventHub) {
   let next = 0;
+  /** Implementation turns only; review turns are in `reviewTurns`. */
   const turns: Array<{ sessionId: string; projectId: string; text: string }> =
     [];
+  const reviewTurns: Array<{
+    sessionId: string;
+    projectId: string;
+    text: string;
+  }> = [];
+  /** Sessions switched to `ask`: the runner's review chats. */
+  const reviewSessions = new Set<string>();
+  /** What each review turn answers, in order; then approve. */
+  const reviewReplies: ReviewReply[] = [];
+  const publishEnd = (
+    key: string,
+    sessionId: string,
+    status: TurnStatus,
+    result: Record<string, unknown> = {},
+  ) => {
+    events.publish(key, {
+      kind: "turn",
+      event: {
+        schemaVersion: 1,
+        sessionId,
+        turnId: "turn",
+        sequence: 1,
+        emittedAt: Date.now(),
+        type: `turn.${status}`,
+        result: { status, sessionId, turnId: "turn", ...result },
+      } as unknown as EmbeddedAgentTurnEvent,
+    });
+    events.publish(key, {
+      kind: "task",
+      state: "finished",
+      taskId: `t-${sessionId}`,
+      status,
+    });
+  };
   const requireValid = async (auth: AssistantServerAuth) => {
     if (!(await auth.revalidate()).valid) {
       throw new HttpError(401, "authentication_required");
@@ -59,59 +120,113 @@ function createFakeOperations(events: SessionEventHub) {
         text: string,
       ) => {
         await requireValid(auth);
-        turns.push({ sessionId, projectId, text });
-        events.publish(`${projectId}/${sessionId}`, {
+        const key = `${projectId}/${sessionId}`;
+        const review = reviewSessions.has(sessionId);
+        (review ? reviewTurns : turns).push({ sessionId, projectId, text });
+        events.publish(key, {
           kind: "task",
           state: "started",
           taskId: `t-${sessionId}`,
           operation: "turn",
           actor: { subjectId: "owner", deviceId: auth.session.deviceId },
         });
+        if (review) {
+          // The reviewer answers by itself, after the turn has started.
+          const reply = reviewReplies.shift() ?? {
+            status: "completed",
+            result: { text: APPROVE },
+          };
+          queueMicrotask(() => {
+            if (reply.interaction) {
+              events.publish(key, {
+                kind: "turn",
+                event: {
+                  schemaVersion: 1,
+                  sessionId,
+                  turnId: "turn",
+                  sequence: 1,
+                  emittedAt: Date.now(),
+                  type: "interaction.required",
+                  interactionRevision: "rev1",
+                  interaction: { interactionId: "i1", toolName: "write" },
+                } as unknown as EmbeddedAgentTurnEvent,
+              });
+              events.publish(key, {
+                kind: "task",
+                state: "finished",
+                taskId: `t-${sessionId}`,
+                status: "suspended",
+              });
+              pendingReview.set(sessionId, reply);
+              return;
+            }
+            publishEnd(key, sessionId, reply.status, reply.result);
+          });
+        }
         return { taskId: `t-${sessionId}` };
+      },
+    ),
+    setApprovalMode: vi.fn(
+      async (
+        _auth: AssistantServerAuth,
+        _projectId: string,
+        sessionId: string,
+        mode: string,
+      ) => {
+        if (mode === "ask") reviewSessions.add(sessionId);
+        return mode;
+      },
+    ),
+    // A refused tool request resumes the review, which then finishes.
+    answerInteraction: vi.fn(
+      async (
+        _auth: AssistantServerAuth,
+        projectId: string,
+        sessionId: string,
+        _answer: { decision: string },
+      ) => {
+        const reply = pendingReview.get(sessionId);
+        pendingReview.delete(sessionId);
+        queueMicrotask(() =>
+          publishEnd(
+            `${projectId}/${sessionId}`,
+            sessionId,
+            reply?.status ?? "completed",
+            reply?.result ?? { text: APPROVE },
+          ),
+        );
+        return { taskId: `r-${sessionId}` };
       },
     ),
     cancel: vi.fn(async () => undefined),
   };
+  const pendingReview = new Map<string, ReviewReply>();
+  /** End the latest implementation turn the way the routes publish it. */
   const endTurn = (
     status: TurnStatus,
     result: Record<string, unknown> = {},
   ) => {
     const turn = turns.at(-1)!;
-    const key = `${turn.projectId}/${turn.sessionId}`;
-    events.publish(key, {
-      kind: "turn",
-      event: {
-        schemaVersion: 1,
-        sessionId: turn.sessionId,
-        turnId: "turn",
-        sequence: 1,
-        emittedAt: Date.now(),
-        type: `turn.${status}`,
-        result: {
-          status,
-          sessionId: turn.sessionId,
-          turnId: "turn",
-          ...result,
-        },
-      } as unknown as EmbeddedAgentTurnEvent,
-    });
-    events.publish(key, {
-      kind: "task",
-      state: "finished",
-      taskId: `t-${turn.sessionId}`,
+    publishEnd(
+      `${turn.projectId}/${turn.sessionId}`,
+      turn.sessionId,
       status,
-    });
+      result,
+    );
   };
   return {
     operations: calls as unknown as AssistantSessionOperations,
     calls,
     turns,
+    reviewTurns,
+    reviewReplies,
     endTurn,
   };
 }
 
 function createFakeWorkspaces() {
   const inspections: WorkspaceInspection[] = [];
+  const validations: ValidationRun[] = [];
   const existing = new Set<string>();
   const workspaces = {
     workspaceFor: (taskId: string) => `/srv/projects/.tasks/${taskId}/demo`,
@@ -135,15 +250,53 @@ function createFakeWorkspaces() {
     remove: vi.fn(async (task: TaskRun) => {
       existing.delete(task.id);
     }),
+    validate: vi.fn(
+      async (
+        _task: TaskRun,
+        commands: readonly string[],
+      ): Promise<ValidationRun> =>
+        validations.shift() ?? {
+          passed: true,
+          commands: commands.map((command) => ({
+            command,
+            exitCode: 0,
+            timedOut: false,
+            durationMs: 5,
+            outputTail: "ok",
+          })),
+        },
+    ),
+    diff: vi.fn(async () => ({
+      stat: " src/clock.ts | 2 +-",
+      patch: "-a\n+b\n",
+      truncated: false,
+    })),
   } satisfies TaskWorkspaces;
-  return { workspaces, inspections, existing };
+  return { workspaces, inspections, existing, validations };
 }
+
+const failedValidation = (output: string): ValidationRun => ({
+  passed: false,
+  commands: [
+    {
+      command: "npm test",
+      exitCode: 1,
+      timedOut: false,
+      durationMs: 9,
+      outputTail: output,
+    },
+  ],
+});
 
 async function setup(
   options: {
     readonly prepareStore?: (store: TaskStore) => Promise<void>;
     readonly failureDetail?: () => string | undefined;
     readonly approvalTimeoutMs?: number;
+    /** The repository's validation commands. */
+    readonly validation?: readonly string[];
+    /** False: no model on another provider. */
+    readonly reviewer?: boolean;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-runner-"));
@@ -167,8 +320,23 @@ async function setup(
     ownerId: () => "owner",
     resolveModel: (key) =>
       key === "claude/sonnet"
-        ? { providerId: "claude", modelId: "sonnet" }
-        : undefined,
+        ? CLAUDE
+        : key === "codex/gpt-5"
+          ? CODEX
+          : undefined,
+    defaultModel: CODEX,
+    reviewModel: (implementer) =>
+      options.reviewer === false
+        ? undefined
+        : implementer.providerId === "codex"
+          ? CLAUDE
+          : CODEX,
+    repositories: {
+      get: (repository) =>
+        options.validation
+          ? { repository, validation: options.validation, updatedAt: 0 }
+          : undefined,
+    },
     onTaskRecovered: (task) => recovered.push(task),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
     ...(options.approvalTimeoutMs
@@ -231,14 +399,242 @@ describe("task runner", () => {
       headCommit: "c1",
       commits: ["c1"],
       summary: "Fixed the clock and ran the tests.",
-      evidence: [{ kind: "implementation", commit: "c1" }],
+      evidence: [
+        { kind: "implementation", commit: "c1" },
+        { kind: "review", commit: "c1" },
+      ],
+      openFindings: 0,
     });
+    // No validation commands set: nothing to run.
+    expect(test.workspaces.validate).not.toHaveBeenCalled();
     expect(test.store.events(created.id).map((event) => event.state)).toEqual([
       "queued",
       "preparing",
       "implementing",
+      "reviewing",
       "ready",
     ]);
+    // A Claude implementer is reviewed by Codex, in its own read-only chat.
+    expect(test.calls.createSession.mock.calls[1]?.[2]).toEqual(CODEX);
+    expect(test.calls.setApprovalMode).toHaveBeenCalledWith(
+      expect.anything(),
+      created.projectId,
+      "s2",
+      "ask",
+    );
+    expect(test.reviewTurns[0]!.text).toContain("Fix the clock test");
+    expect(test.reviewTurns[0]!.text).toContain("-a\n+b");
+    expect(task.evidence.at(-1)).toMatchObject({
+      kind: "review",
+      commit: "c1",
+      model: "codex/gpt-5",
+      sessionId: "s2",
+      verdict: "approve",
+    });
+  });
+
+  it("validates the commit and sends failures back to the chat", async () => {
+    const test = await setup({ validation: ["npm test"] });
+    const created = await test.runner.create(REQUEST);
+    test.validations.push(failedValidation("1 failing: clock drifts"));
+    test.inspections.push(
+      {
+        branch: created.branch,
+        head: "c1",
+        clean: true,
+        status: "",
+        commits: ["c1"],
+      },
+      {
+        branch: created.branch,
+        head: "c2",
+        clean: true,
+        status: "",
+        commits: ["c1", "c2"],
+      },
+    );
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitForTurns(2);
+    expect(test.store.get(created.id)?.state).toBe("fixing");
+    expect(test.turns[1]!.text).toContain("$ npm test — failed (exit 1)");
+    expect(test.turns[1]!.text).toContain("clock drifts");
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    const task = test.store.get(created.id)!;
+    expect(test.workspaces.validate).toHaveBeenCalledTimes(2);
+    expect(test.workspaces.validate.mock.calls[1]?.[1]).toEqual(["npm test"]);
+    // Each piece of evidence names the commit it is about.
+    expect(evidenceFor(task, "c1").validation?.passed).toBe(false);
+    expect(evidenceFor(task, "c2").validation?.passed).toBe(true);
+    expect(evidenceFor(task, "c1").review).toBeUndefined();
+    expect(evidenceFor(task, "c2").review?.verdict).toBe("approve");
+    expect(task.fixRounds).toBe(1);
+  });
+
+  it("never becomes ready while validation fails", async () => {
+    const test = await setup({ validation: ["npm test"] });
+    const created = await test.runner.create(REQUEST);
+    test.validations.push(
+      failedValidation("fail 1"),
+      failedValidation("fail 2"),
+      failedValidation("fail 3"),
+    );
+    for (let turn = 1; turn <= 3; turn += 1) {
+      test.inspections.push({
+        branch: created.branch,
+        head: `c${turn}`,
+        clean: true,
+        status: "",
+        commits: [`c${turn}`],
+      });
+      await test.waitForTurns(turn);
+      test.endTurn("completed");
+    }
+    await test.waitFor(created.id, "failed");
+    expect(test.store.get(created.id)).toMatchObject({
+      error: "validation_failed",
+      errorDetail: expect.stringContaining("fail 3"),
+    });
+    expect(test.reviewTurns).toHaveLength(0);
+  });
+
+  it("sends blocking findings back and reviews the new commit again", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    test.reviewReplies.push({
+      status: "completed",
+      result: { text: blockingReview("The clock still drifts at midnight") },
+    });
+    test.inspections.push(
+      {
+        branch: created.branch,
+        head: "c1",
+        clean: true,
+        status: "",
+        commits: ["c1"],
+      },
+      {
+        branch: created.branch,
+        head: "c2",
+        clean: true,
+        status: "",
+        commits: ["c1", "c2"],
+      },
+    );
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitForTurns(2);
+    expect(test.turns[1]!.text).toContain(
+      "- [blocking] src/clock.ts:3: The clock still drifts at midnight",
+    );
+    // Suggestions are not sent back as work.
+    expect(test.turns[1]!.text).not.toContain("Name the constant");
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    const task = test.store.get(created.id)!;
+    expect(test.reviewTurns).toHaveLength(2);
+    // A fresh review chat for the new commit.
+    expect(test.reviewTurns[1]!.sessionId).not.toBe(
+      test.reviewTurns[0]!.sessionId,
+    );
+    expect(evidenceFor(task, "c1").review?.verdict).toBe("changes_requested");
+    expect(evidenceFor(task, "c2").review?.verdict).toBe("approve");
+    expect(task.openFindings).toBe(0);
+  });
+
+  it("is ready with findings still open after two fix rounds", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    for (let round = 0; round < 3; round += 1) {
+      test.reviewReplies.push({
+        status: "completed",
+        result: { text: blockingReview(`Problem ${round}`) },
+      });
+    }
+    for (let turn = 1; turn <= 3; turn += 1) {
+      test.inspections.push({
+        branch: created.branch,
+        head: `c${turn}`,
+        clean: true,
+        status: "",
+        commits: [`c${turn}`],
+      });
+      await test.waitForTurns(turn);
+      test.endTurn("completed");
+    }
+    await test.waitFor(created.id, "ready");
+    expect(test.store.get(created.id)).toMatchObject({
+      openFindings: 1,
+      fixRounds: 2,
+    });
+    expect(test.turns).toHaveLength(3);
+  });
+
+  it("is blocked when no reviewer on another provider exists", async () => {
+    const test = await setup({ reviewer: false });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "blocked_review");
+    expect(test.store.get(created.id)?.error).toBe("no_reviewer");
+  });
+
+  it("is blocked when the reviewer fails, then resumes at the review", async () => {
+    const test = await setup({ failureDetail: () => "Claude usage limit" });
+    const created = await test.runner.create(REQUEST);
+    test.reviewReplies.push({
+      status: "failed",
+      result: { error: { code: "rate_limited", category: "rate_limit" } },
+    });
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "blocked_review");
+    expect(test.store.get(created.id)).toMatchObject({
+      error: "rate_limited",
+      errorDetail: "Claude usage limit",
+    });
+    // Resumed: the committed work is not redone, only reviewed.
+    await test.runner.resume(created.id);
+    await test.waitFor(created.id, "ready");
+    expect(test.turns).toHaveLength(1);
+    expect(test.reviewTurns).toHaveLength(2);
+  });
+
+  it("refuses every tool request from the reviewer", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    test.reviewReplies.push({
+      status: "completed",
+      result: { text: APPROVE },
+      interaction: true,
+    });
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    expect(test.calls.answerInteraction).toHaveBeenCalledWith(
+      expect.anything(),
+      created.projectId,
+      test.reviewTurns[0]!.sessionId,
+      { interactionId: "i1", interactionRevision: "rev1", decision: "deny" },
+    );
+  });
+
+  it("asks once more for unreadable findings, then is blocked", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    test.reviewReplies.push(
+      { status: "completed", result: { text: "Looks good to me!" } },
+      { status: "completed", result: { text: "Really, it is fine." } },
+    );
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "blocked_review");
+    expect(test.store.get(created.id)?.error).toBe("review_unreadable");
+    expect(test.reviewTurns[1]!.text).toContain(
+      "did not end with a readable JSON block",
+    );
+    expect(test.reviewTurns[1]!.sessionId).toBe(test.reviewTurns[0]!.sessionId);
   });
 
   it("sends the chat back until the tree is clean and committed", async () => {

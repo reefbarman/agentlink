@@ -8,6 +8,7 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import { createTaskRoutes } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
+import { openRepositorySettings } from "./taskRepositories.js";
 import { openTaskStore, type TaskRequest, type TaskRun } from "./taskStore.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -64,8 +65,12 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     }),
     close: vi.fn(async () => undefined),
   } satisfies TaskRunner;
+  const repositories = await openRepositorySettings({
+    file: path.join(dir, "repositories.json"),
+  });
   const routes = createTaskRoutes({
     store,
+    repositories,
     runner: options.enabled === false ? undefined : runner,
     isOwner: (request) => request.principal.subjectId === "owner",
     models: [{ providerId: "codex", modelId: "gpt-5" }],
@@ -187,6 +192,79 @@ describe("task routes", () => {
       body: { error: "tasks_forbidden" },
     });
     expect(test.runner.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps validation commands per repository", async () => {
+    const test = await setup();
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://GitHub.com/reefbarman/Demo.git",
+        validation: [" npm ci ", "npm test"],
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: {
+        repository: {
+          repository: "https://github.com/reefbarman/demo",
+          validation: ["npm ci", "npm test"],
+        },
+      },
+    });
+    await expect(
+      test.call("GET", "/api/tasks/repositories"),
+    ).resolves.toMatchObject({
+      body: { repositories: [{ validation: ["npm ci", "npm test"] }] },
+    });
+    // Any spelling of the same repository finds them.
+    await test.call("POST", "/api/tasks", {
+      ...REQUEST,
+      repository: "https://github.com/reefbarman/demo/",
+    });
+    await expect(test.call("GET", `/api/tasks/${ID}`)).resolves.toMatchObject({
+      body: { validation: ["npm ci", "npm test"] },
+    });
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        validation: ["x".repeat(1_001)],
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "validation_command_invalid" },
+    });
+    // No commands clears them.
+    await expect(
+      test.call("PUT", "/api/tasks/repositories", {
+        repository: "https://github.com/reefbarman/demo",
+        validation: [],
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { repository: null } });
+  });
+
+  it("shows only the evidence for the task's current commit", async () => {
+    const test = await setup();
+    await test.call("POST", "/api/tasks", REQUEST);
+    await test.store.save({
+      ...test.store.get(ID)!,
+      headCommit: "c2",
+      evidence: [
+        { kind: "implementation", commit: "c1", at: 1 },
+        {
+          kind: "review",
+          commit: "c1",
+          at: 2,
+          model: "claude/sonnet",
+          sessionId: "r1",
+          verdict: "approve",
+          findings: [],
+        },
+        { kind: "implementation", commit: "c2", at: 3 },
+      ],
+    });
+    const { body } = await test.call("GET", `/api/tasks/${ID}`);
+    expect((body.task as { current: unknown }).current).toEqual({
+      implementation: { kind: "implementation", commit: "c2", at: 3 },
+    });
   });
 
   it("lists but does not start tasks without a projects folder", async () => {

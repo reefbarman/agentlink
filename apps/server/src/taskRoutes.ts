@@ -4,10 +4,16 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
+import {
+  parseValidationCommands,
+  type RepositorySettingsStore,
+} from "./taskRepositories.js";
 import type { TaskRunner } from "./taskRunner.js";
 import {
   TASK_ID_PATTERN,
+  evidenceFor,
   parseTaskRequest,
+  type TaskRun,
   type TaskStore,
 } from "./taskStore.js";
 
@@ -19,6 +25,8 @@ import {
  * - `GET /api/tasks/:id` (record and state history), `DELETE` (also removes
  *   its clone)
  * - `POST /api/tasks/:id/stop`, `POST /api/tasks/:id/resume`
+ * - `GET /api/tasks/repositories`, `PUT /api/tasks/repositories`
+ *   (`{ repository, validation }`): each repository's validation commands
  *
  * Unsafe methods have already passed the server's Host, Origin and
  * fetch-site checks; mutations re-check the sign-in before they apply.
@@ -26,13 +34,24 @@ import {
 
 const MAX_TASK_BODY_BYTES = 64 * 1024;
 const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume))?$/u;
+const REPOSITORY_FIELDS = new Set(["repository", "validation"]);
 
 export interface TaskRoutesOptions {
   readonly store: TaskStore;
+  readonly repositories: RepositorySettingsStore;
   /** Undefined when the server has no `projectsRoot` for clones. */
   readonly runner: TaskRunner | undefined;
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
   readonly models: readonly AssistantServerModelChoice[];
+  readonly now?: () => number;
+}
+
+/**
+ * A task with the evidence that still applies: the latest of each kind
+ * recorded for its head commit. Evidence for older commits is stale.
+ */
+export function describeTask(task: TaskRun) {
+  return { ...task, current: evidenceFor(task, task.headCommit) };
 }
 
 export interface TaskRoutes {
@@ -54,7 +73,8 @@ export function taskModelError(
 }
 
 export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
-  const { store } = options;
+  const { store, repositories } = options;
+  const now = options.now ?? Date.now;
   const models = modelsByKey(options.models);
 
   const requireRunner = () => {
@@ -79,10 +99,34 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
     pathname: string,
     method: string,
   ): Promise<boolean> => {
+    if (pathname === "/api/tasks/repositories") {
+      if (method === "GET") {
+        sendJson(response, 200, { repositories: repositories.list() });
+        return true;
+      }
+      if (method !== "PUT") throw new HttpError(405, "method_not_allowed");
+      const body = await readJsonBody(
+        request,
+        MAX_TASK_BODY_BYTES,
+        auth.signal,
+      );
+      if (Object.keys(body).some((key) => !REPOSITORY_FIELDS.has(key))) {
+        throw new HttpError(400, "repository_field_unknown");
+      }
+      if (typeof body.repository !== "string") {
+        throw new HttpError(400, "repository_required");
+      }
+      const validation = parseValidationCommands(body.validation);
+      await requireValid(auth);
+      const saved = await repositories.set(body.repository, validation, now());
+      sendJson(response, 200, { repository: saved ?? null });
+      return true;
+    }
+
     if (pathname === "/api/tasks") {
       if (method === "GET") {
         sendJson(response, 200, {
-          tasks: store.list(),
+          tasks: store.list().map(describeTask),
           enabled: options.runner !== undefined,
         });
         return true;
@@ -119,9 +163,11 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       return true;
     }
     if (method === "GET") {
+      const task = requireTask(taskId);
       sendJson(response, 200, {
-        task: requireTask(taskId),
+        task: describeTask(task),
         events: store.events(taskId),
+        validation: repositories.get(task.repository)?.validation ?? [],
       });
       return true;
     }

@@ -84,7 +84,13 @@ import { createWebTools } from "./webTools.js";
 import { createProjectChats } from "./projectChats.js";
 import { openProjectCatalog, projectNetworkPolicy } from "./projectCatalog.js";
 import { createGitCloner } from "./projectClone.js";
-import { createGitCommand, type GitCommandOptions } from "./gitCommand.js";
+import {
+  createGitCommand,
+  createProcessRunner,
+  type GitCommandOptions,
+} from "./gitCommand.js";
+import { openRepositorySettings } from "./taskRepositories.js";
+import { pickReviewModel } from "./taskReview.js";
 import { createTaskRoutes } from "./taskRoutes.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { openTaskStore, type TaskRun } from "./taskStore.js";
@@ -622,6 +628,13 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  const repositorySettings = await openRepositorySettings({
+    file: path.join(serverTasksDirectory(config), "repositories.json"),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   let server: AssistantServer | undefined;
   /** Devices still signed in, once the access store is open. */
   const activeDeviceIds = () =>
@@ -689,6 +702,7 @@ export async function startAssistantService(
     const taskTools = config.projectsRoot
       ? createTaskTools({
           store: taskStore,
+          repositories: repositorySettings,
           runner: {
             create: async (request) => {
               if (!taskRunner) throw new Error("Tasks are not ready yet");
@@ -1002,6 +1016,9 @@ export async function startAssistantService(
           const workspaces = createTaskWorkspaces({
             tasksRoot,
             git: createGitCommand(gitOptions),
+            // Validation runs where commands run, like the chats' commands.
+            run: createProcessRunner(gitOptions),
+            shell: config.commandWorker?.shell ?? "/bin/sh",
           });
           const openTaskProject = async (task: TaskRun) => {
             if (taskHosts.has(task.projectId)) return;
@@ -1036,6 +1053,15 @@ export async function startAssistantService(
             },
             ownerId: () => server?.store.ownerId,
             resolveModel,
+            defaultModel: config.defaultModel,
+            // Reviews go to another provider: Codex work is reviewed by
+            // Claude (through Meridian) and the reverse.
+            reviewModel: (implementer) =>
+              pickReviewModel(implementer, {
+                roleModel: config.modelRoles?.review,
+                available: configuredModels(config),
+              }),
+            repositories: repositorySettings,
             log,
             failureDetail: (projectId, sessionId) =>
               turnFailures.take(projectId, sessionId),
@@ -1047,6 +1073,7 @@ export async function startAssistantService(
     taskRunner = tasks?.runner;
     const taskRoutes = createTaskRoutes({
       store: taskStore,
+      repositories: repositorySettings,
       runner: tasks?.runner,
       isOwner: (auth) =>
         server !== undefined &&

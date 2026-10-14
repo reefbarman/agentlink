@@ -4,53 +4,79 @@ import type { WorkspaceProcessLauncher } from "@agentlink/workspace-host";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /** Output kept per command: enough for refs and short status listings. */
-const MAX_OUTPUT_BYTES = 64 * 1024;
+const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 
-export interface GitCommandOptions {
-  /** Where git runs: the command worker, or this machine. */
+export interface ProcessRunnerOptions {
+  /** Where processes run: the command worker, or this machine. */
   readonly launcher: WorkspaceProcessLauncher;
-  /** Absolute git binary where the launcher runs processes. */
-  readonly gitExecutable: string;
-  /** Environment for git, including any egress proxy. */
+  /** Environment for every process, including any egress proxy. */
   readonly environment: Readonly<Record<string, string>>;
   readonly ownerId: string;
   readonly timeoutMs?: number;
 }
 
-export interface GitCommandResult {
-  /** Undefined when git was stopped by a signal. */
-  readonly exitCode: number | undefined;
-  readonly signal: string | undefined;
-  /** stdout and stderr together, the tail when it was long. */
-  readonly output: string;
+export interface GitCommandOptions extends ProcessRunnerOptions {
+  /** Absolute git binary where the launcher runs processes. */
+  readonly gitExecutable: string;
 }
 
-/** Thrown when git could not be started at all. */
+export interface ProcessResult {
+  /** Undefined when the process was stopped by a signal. */
+  readonly exitCode: number | undefined;
+  readonly signal: string | undefined;
+  /** The kept output (see `keep`). */
+  readonly output: string;
+  /** Some output was dropped to stay within `maxOutputBytes`. */
+  readonly truncated: boolean;
+  /** Killed for running past its time limit. */
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+}
+
+export type GitCommandResult = ProcessResult;
+
+/** Thrown when a process could not be started at all. */
 export class GitLaunchError extends Error {
   constructor(readonly code: string) {
-    super(`git could not start (${code})`);
+    super(`the process could not start (${code})`);
     this.name = "GitLaunchError";
   }
 }
 
-export type GitCommand = (request: {
+export interface ProcessRequest {
+  readonly executable: string;
   readonly args: readonly string[];
-  /** Canonical absolute folder git runs in. */
+  /** Canonical absolute folder the process runs in. */
   readonly cwd: string;
   /** Labels the operation in the worker's records. */
   readonly purpose: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
-}) => Promise<GitCommandResult>;
+  readonly maxOutputBytes?: number;
+  /** `tail` (default) keeps the end of long output, `head` the start. */
+  readonly keep?: "head" | "tail";
+  /** `both` (default) keeps stdout and stderr together. */
+  readonly streams?: "both" | "stdout";
+}
 
-/**
- * Run one git command where commands run. Git never prompts (a repository
- * that needs credentials fails instead of hanging), and only the tail of
- * its output is kept.
- */
-export function createGitCommand(options: GitCommandOptions): GitCommand {
-  return async ({ args, cwd, purpose, timeoutMs }) => {
+export type ProcessRunner = (request: ProcessRequest) => Promise<ProcessResult>;
+
+export type GitCommand = (
+  request: Omit<ProcessRequest, "executable" | "environment">,
+) => Promise<GitCommandResult>;
+
+/** Run one process where commands run, keeping bounded output. */
+export function createProcessRunner(
+  options: ProcessRunnerOptions,
+): ProcessRunner {
+  return async (request) => {
+    const { executable, args, cwd, purpose } = request;
+    const limit = request.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    const keepHead = request.keep === "head";
     const output: Buffer[] = [];
     let size = 0;
+    let truncated = false;
+    const started = Date.now();
     const handle = options.launcher.launchProcess({
       request: {
         schemaVersion: 1,
@@ -60,23 +86,31 @@ export function createGitCommand(options: GitCommandOptions): GitCommand {
         turnId: purpose,
         policyFingerprint: `${purpose}-v1`,
         operationDigest: createHash("sha256")
-          .update(
-            JSON.stringify({ executable: options.gitExecutable, args, cwd }),
-          )
+          .update(JSON.stringify({ executable, args, cwd }))
           .digest("hex"),
-        executable: options.gitExecutable,
+        executable,
         args: [...args],
         cwd,
-        environment: {
-          ...options.environment,
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_ASKPASS: "/bin/false",
-        },
+        environment: { ...options.environment, ...request.environment },
       },
-      onOutput: (_stream, bytes) => {
+      onOutput: (stream, bytes) => {
+        if (request.streams === "stdout" && stream !== "stdout") return;
+        if (keepHead) {
+          if (size >= limit) {
+            truncated = true;
+            return;
+          }
+          const room = limit - size;
+          if (bytes.length > room) truncated = true;
+          const kept = bytes.subarray(0, room);
+          output.push(kept);
+          size += kept.length;
+          return;
+        }
         output.push(bytes);
         size += bytes.length;
-        while (size > MAX_OUTPUT_BYTES && output.length > 1) {
+        while (size > limit && output.length > 1) {
+          truncated = true;
           size -= output.shift()!.length;
         }
       },
@@ -88,9 +122,13 @@ export function createGitCommand(options: GitCommandOptions): GitCommand {
         (error as { code?: string }).code ?? "launch_failed",
       );
     }
+    let timedOut = false;
     const timer = setTimeout(
-      () => handle.signal("SIGKILL"),
-      timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      () => {
+        timedOut = true;
+        handle.signal("SIGKILL");
+      },
+      request.timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
     timer.unref?.();
     const exit = await handle.exited.finally(() => clearTimeout(timer));
@@ -98,6 +136,23 @@ export function createGitCommand(options: GitCommandOptions): GitCommand {
       exitCode: exit.exitCode,
       signal: exit.signal,
       output: Buffer.concat(output).toString("utf8"),
+      truncated,
+      timedOut,
+      durationMs: Date.now() - started,
     };
   };
+}
+
+/**
+ * Run one git command where commands run. Git never prompts (a repository
+ * that needs credentials fails instead of hanging).
+ */
+export function createGitCommand(options: GitCommandOptions): GitCommand {
+  const run = createProcessRunner(options);
+  return (request) =>
+    run({
+      ...request,
+      executable: options.gitExecutable,
+      environment: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false" },
+    });
 }

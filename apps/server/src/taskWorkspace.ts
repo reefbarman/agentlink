@@ -1,9 +1,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { GitLaunchError, type GitCommand } from "./gitCommand.js";
+import {
+  GitLaunchError,
+  type GitCommand,
+  type ProcessRunner,
+} from "./gitCommand.js";
 import { planRepositories } from "./projectCatalog.js";
-import type { TaskRun } from "./taskStore.js";
+import type { TaskRun, ValidationCommandResult } from "./taskStore.js";
 
 /**
  * Task workspaces: one fresh clone per task, at
@@ -19,6 +23,26 @@ import type { TaskRun } from "./taskStore.js";
 export const TASK_COMMIT_NAME = "AgentLink Assistant";
 export const TASK_COMMIT_EMAIL = "assistant@agentlink.invalid";
 const MAX_DETAIL_LENGTH = 2_000;
+/** Each validation command's time limit. */
+const VALIDATION_TIMEOUT_MS = 20 * 60 * 1_000;
+const MAX_VALIDATION_OUTPUT_TAIL = 4_000;
+/** Diff given to the reviewer; longer ones are cut, with a note. */
+const MAX_DIFF_BYTES = 120 * 1024;
+
+export interface ValidationRun {
+  /** Every command exited 0 and none changed tracked files. */
+  readonly passed: boolean;
+  /** In order, up to and including the first that failed. */
+  readonly commands: readonly ValidationCommandResult[];
+  /** Tracked files the commands changed, before they were restored. */
+  readonly changedFiles?: string;
+}
+
+export interface TaskDiff {
+  readonly stat: string;
+  readonly patch: string;
+  readonly truncated: boolean;
+}
 
 export class TaskWorkspaceError extends Error {
   constructor(
@@ -54,6 +78,14 @@ export interface TaskWorkspaces {
   prepare(task: TaskRun): Promise<PreparedWorkspace>;
   inspect(task: TaskRun): Promise<WorkspaceInspection>;
   exists(task: TaskRun): Promise<boolean>;
+  /**
+   * Run validation commands in the clone, in order, stopping at the first
+   * failure. The tree was clean and committed before; anything the
+   * commands change or leave behind is put back afterwards.
+   */
+  validate(task: TaskRun, commands: readonly string[]): Promise<ValidationRun>;
+  /** `baseCommit..HEAD`, for the reviewer. */
+  diff(task: TaskRun): Promise<TaskDiff>;
   /** Delete the task's folder. */
   remove(task: TaskRun): Promise<void>;
 }
@@ -62,6 +94,11 @@ export function createTaskWorkspaces(options: {
   /** Canonical absolute folder for every task's clone. */
   readonly tasksRoot: string;
   readonly git: GitCommand;
+  /** Runs validation commands where commands run. */
+  readonly run: ProcessRunner;
+  /** Absolute shell there; each command runs as `<shell> -c <command>`. */
+  readonly shell: string;
+  readonly validationTimeoutMs?: number;
 }): TaskWorkspaces {
   const { tasksRoot, git } = options;
 
@@ -196,6 +233,100 @@ export function createTaskWorkspaces(options: {
     },
     async remove(task) {
       await fs.rm(taskFolder(task), { recursive: true, force: true });
+    },
+    async validate(task, commands) {
+      taskFolder(task);
+      const workspace = task.workspace;
+      const head = lastLine(
+        await run(["rev-parse", "HEAD"], workspace, "workspace_unreadable"),
+      );
+      const results: ValidationCommandResult[] = [];
+      for (const command of commands) {
+        let result;
+        try {
+          result = await options.run({
+            executable: options.shell,
+            args: ["-c", command],
+            cwd: workspace,
+            purpose: "task-validation",
+            timeoutMs: options.validationTimeoutMs ?? VALIDATION_TIMEOUT_MS,
+          });
+        } catch (error) {
+          if (error instanceof GitLaunchError) {
+            throw new TaskWorkspaceError(
+              "validation_unavailable",
+              error.message,
+            );
+          }
+          throw error;
+        }
+        results.push({
+          command,
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          durationMs: result.durationMs,
+          outputTail: result.output.slice(-MAX_VALIDATION_OUTPUT_TAIL),
+        });
+        if (result.exitCode !== 0) break;
+      }
+      // What the commands changed, then put the clone back as it was.
+      const after = lastLine(
+        await run(["rev-parse", "HEAD"], workspace, "workspace_unreadable"),
+      );
+      const status = (
+        await run(
+          ["status", "--porcelain=v1", "--untracked-files=no"],
+          workspace,
+          "workspace_unreadable",
+        )
+      ).trim();
+      const changedFiles =
+        after !== head
+          ? `the commands moved HEAD from ${head} to ${after}`
+          : status.slice(0, MAX_DETAIL_LENGTH);
+      await run(["reset", "-q", "--hard", head], workspace, "restore_failed");
+      // Untracked, not ignored: only what the commands made (it was clean).
+      await run(["clean", "-fdq"], workspace, "restore_failed");
+      return {
+        passed:
+          !changedFiles && results.every((result) => result.exitCode === 0),
+        commands: results,
+        ...(changedFiles ? { changedFiles } : {}),
+      };
+    },
+    async diff(task) {
+      taskFolder(task);
+      if (!task.baseCommit) throw new TaskWorkspaceError("base_unknown");
+      const range = `${task.baseCommit}..HEAD`;
+      const stat = await run(
+        ["diff", "--stat", range],
+        task.workspace,
+        "diff_failed",
+      );
+      let patch;
+      try {
+        patch = await git({
+          args: ["diff", "--no-color", range],
+          cwd: task.workspace,
+          purpose: "task-workspace",
+          maxOutputBytes: MAX_DIFF_BYTES,
+          keep: "head",
+          streams: "stdout",
+        });
+      } catch (error) {
+        if (error instanceof GitLaunchError) {
+          throw new TaskWorkspaceError("git_unavailable", error.message);
+        }
+        throw error;
+      }
+      if (patch.exitCode !== 0) {
+        throw new TaskWorkspaceError("diff_failed", patch.output.slice(-500));
+      }
+      return {
+        stat: stat.trim(),
+        patch: patch.output,
+        truncated: patch.truncated,
+      };
     },
   };
 }

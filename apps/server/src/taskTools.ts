@@ -12,6 +12,7 @@ import type {
 import { HttpError } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
+import type { RepositorySettingsStore } from "./taskRepositories.js";
 import { taskModelError } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
 import {
@@ -43,6 +44,8 @@ const MAX_LISTED_TASKS = 20;
 
 export interface TaskToolsOptions {
   readonly store: TaskStore;
+  /** The owner's validation commands, shown on the approval card. */
+  readonly repositories?: Pick<RepositorySettingsStore, "get">;
   readonly runner: Pick<TaskRunner, "create">;
   readonly models: readonly AssistantServerModelChoice[];
 }
@@ -102,6 +105,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       }
       const request = parseTaskRequest({ ...input });
       check(request);
+      const validation =
+        options.repositories?.get(request.repository)?.validation ?? [];
       const display: TaskStartDisplay = {
         kind: TASK_START_DISPLAY_KIND,
         action: "create",
@@ -112,6 +117,10 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           `Starts from: ${request.baseBranch ?? "the default branch"}`,
           `Model: ${request.model ?? "the server's default"}`,
           "It works on a new agentlink/ branch and commits there, without asking before each edit or command. Nothing is pushed.",
+          validation.length > 0
+            ? `Then the server runs: ${validation.join(" && ")}`
+            : "No validation commands are set for this repository.",
+          "Then a model from another provider reviews the commit; it may be sent back to fix findings twice.",
           "Objective:",
           request.objective,
         ].join("\n"),

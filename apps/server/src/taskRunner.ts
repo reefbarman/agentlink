@@ -4,12 +4,22 @@ import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import type { SessionEventHub } from "./SessionEventHub.js";
+import type { RepositorySettingsStore } from "./taskRepositories.js";
+import {
+  REVIEW_RETRY_PROMPT,
+  describeFinding,
+  parseReview,
+  reviewPrompt,
+} from "./taskReview.js";
 import {
   TaskInputError,
+  evidenceFor,
   isActiveTask,
   isResumableTask,
   newTaskId,
   taskBranchName,
+  type ReviewFinding,
+  type TaskEvidence,
   type TaskRequest,
   type TaskRun,
   type TaskState,
@@ -26,19 +36,33 @@ import type { AssistantSessionOperations } from "./workspaceRoutes.js";
  * Runs coding tasks, one at a time. Each task gets a fresh clone on its own
  * branch, mounted as a hidden project, and an implementation chat there
  * that acts for the owner (the task is its device). When the chat finishes
- * the runner itself checks the clone: the work must be committed on the
- * task branch with nothing left over. If not, the chat is told what is
- * wrong and tries again, a bounded number of times.
+ * the runner itself checks the work, in order:
+ *
+ * 1. The clone: committed on the task branch with nothing left over. If
+ *    not, the chat is told what is wrong (a bounded number of times).
+ * 2. Validation: the owner's commands for the repository, run by the server
+ *    in the worker against that exact commit.
+ * 3. Review: a separate read-only chat on another provider's model reads
+ *    `baseCommit..commit` and returns structured findings.
+ *
+ * Failed validation or blocking findings go back to the implementation
+ * chat, for at most `maxFixRounds` rounds. Evidence is bound to the commit
+ * it was made for; a new commit needs new evidence.
  *
  * A restart never continues a task by itself: it is recorded interrupted
- * with its clone and chat kept, and the owner resumes it.
+ * with its clone and chats kept, and the owner resumes it.
  */
 
 const DEFAULT_MAX_CONCURRENT_TASKS = 1;
 /** Extra turns to fix a dirty tree or missing commit. */
 const DEFAULT_MAX_FOLLOW_UPS = 2;
+/** Rounds of fixing failed validation or blocking review findings. */
+const DEFAULT_MAX_FIX_ROUNDS = 2;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
+/** Refusals of a reviewer's tool requests before it is stopped. */
+const MAX_REVIEW_DENIALS = 10;
 const MAX_SUMMARY_LENGTH = 2_000;
+const MAX_FEEDBACK_OUTPUT = 3_000;
 const TASK_PROJECT_PREFIX = "task-";
 
 export interface TaskRunnerOptions {
@@ -53,6 +77,14 @@ export interface TaskRunnerOptions {
   };
   readonly ownerId: () => string | undefined;
   readonly resolveModel: (key: string) => AgentModelReference | undefined;
+  /** The implementer when a task names no model. */
+  readonly defaultModel: AgentModelReference;
+  /** A reviewer on another provider than the implementer, if any. */
+  readonly reviewModel: (
+    implementer: AgentModelReference,
+  ) => AgentModelReference | undefined;
+  /** The owner's validation commands, per repository. */
+  readonly repositories?: Pick<RepositorySettingsStore, "get">;
   readonly onTaskChanged?: (task: TaskRun) => void;
   /** A task a previous process left working, now recorded interrupted. */
   readonly onTaskRecovered?: (task: TaskRun) => void;
@@ -62,6 +94,7 @@ export interface TaskRunnerOptions {
   ) => string | undefined;
   readonly maxConcurrentTasks?: number;
   readonly maxFollowUps?: number;
+  readonly maxFixRounds?: number;
   readonly approvalTimeoutMs?: number;
   readonly now?: () => number;
   readonly log?: (line: string) => void;
@@ -73,7 +106,7 @@ export interface TaskRunner {
   create(request: TaskRequest): Promise<TaskRun>;
   /** Stop a queued or working task; it can be resumed. */
   stop(taskId: string): Promise<TaskRun>;
-  /** Queue a stopped, failed or interrupted task again. */
+  /** Queue a stopped, failed, blocked or interrupted task again. */
   resume(taskId: string): Promise<TaskRun>;
   /** Stop it if needed, then remove its clone, chat mount and record. */
   delete(taskId: string): Promise<void>;
@@ -89,8 +122,11 @@ type TurnResult = Extract<
 interface Outcome {
   readonly state: TaskState;
   readonly summary?: string;
+  /** The chat's whole final message. */
+  readonly text?: string;
   readonly error?: string;
   readonly errorDetail?: string;
+  readonly openFindings?: number;
 }
 
 interface LiveTask {
@@ -98,10 +134,15 @@ interface LiveTask {
   readonly controller: AbortController;
   readonly auth: AssistantServerAuth;
   stopping: { readonly reason: string; readonly state: TaskState } | undefined;
+  /** The chat whose turn is running: implementation or review. */
+  activeSessionId: string | undefined;
   /** Ends the turn being waited for, if any. */
   endTurn: ((outcome: Outcome) => void) | undefined;
   done: Promise<void> | undefined;
 }
+
+type ValidationEvidence = Extract<TaskEvidence, { kind: "validation" }>;
+type ReviewEvidence = Extract<TaskEvidence, { kind: "review" }>;
 
 export function taskProjectId(taskId: string): string {
   return `${TASK_PROJECT_PREFIX}${taskId}`;
@@ -114,6 +155,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
   const maxConcurrent =
     options.maxConcurrentTasks ?? DEFAULT_MAX_CONCURRENT_TASKS;
   const maxFollowUps = options.maxFollowUps ?? DEFAULT_MAX_FOLLOW_UPS;
+  const maxFixRounds = options.maxFixRounds ?? DEFAULT_MAX_FIX_ROUNDS;
   const approvalTimeoutMs =
     options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const live = new Map<string, LiveTask>();
@@ -136,6 +178,9 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     });
     changed(entry.task);
   };
+
+  const addEvidence = (entry: LiveTask, evidence: TaskEvidence) =>
+    save(entry, { evidence: [...entry.task.evidence, evidence] });
 
   /** The owner acting through this task, valid while the task exists. */
   const taskAuth = (
@@ -174,6 +219,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       controller,
       auth: taskAuth(task.id, options.ownerId() ?? "", controller),
       stopping: undefined,
+      activeSessionId: undefined,
       endTurn: undefined,
       done: undefined,
     };
@@ -183,6 +229,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       state: "queued",
       error: undefined,
       errorDetail: undefined,
+      openFindings: undefined,
       finishedAt: undefined,
     });
     pump();
@@ -205,25 +252,62 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     if (entry.stopping) throw new HttpError(409, entry.stopping.reason);
   };
 
-  /** Send one message to the task's chat and wait for the turn to end. */
+  /**
+   * Send one message to a chat and wait for its turn to end. In the
+   * implementation chat an approval waits for the owner; in a review chat
+   * every tool request is refused, so the reviewer cannot change anything.
+   */
   const runTurn = async (
     entry: LiveTask,
     sessionId: string,
     text: string,
+    role: "implement" | "review",
   ): Promise<Outcome> => {
     const { projectId } = entry.task;
+    const workingState = entry.task.state;
     const sessionKey = operations.sessionKey(projectId, sessionId);
     let result: TurnResult | undefined;
+    let pending:
+      | { readonly interactionId: string; readonly interactionRevision: string }
+      | undefined;
+    let denials = 0;
     let expiry: ReturnType<typeof setTimeout> | undefined;
     const outcome = new Promise<Outcome>((resolve) => {
       entry.endTurn = resolve;
     });
+    const refuse = async () => {
+      const interaction = pending;
+      pending = undefined;
+      denials += 1;
+      if (!interaction || denials > MAX_REVIEW_DENIALS) {
+        await operations
+          .cancel(entry.auth, projectId, sessionId)
+          .catch(() => undefined);
+        entry.endTurn?.({ state: "failed", error: "reviewer_tried_to_write" });
+        return;
+      }
+      await operations
+        .answerInteraction(entry.auth, projectId, sessionId, {
+          ...interaction,
+          decision: "deny",
+        })
+        .catch((error: unknown) => {
+          entry.endTurn?.({ state: "failed", error: errorCode(error) });
+        });
+    };
     const subscription = options.events.subscribe(
       sessionKey,
       options.events.latestSequence(sessionKey),
       ({ event }) => {
         if (event.kind === "turn") {
-          if ("result" in event.event) result = event.event.result;
+          const turnEvent = event.event;
+          if (turnEvent.type === "interaction.required") {
+            pending = {
+              interactionId: turnEvent.interaction.interactionId,
+              interactionRevision: turnEvent.interactionRevision,
+            };
+          }
+          if ("result" in turnEvent) result = turnEvent.result;
           return;
         }
         if (event.kind !== "task" || entry.stopping) return;
@@ -232,7 +316,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           if (entry.task.state === "awaiting_approval") {
             if (expiry) clearTimeout(expiry);
             expiry = undefined;
-            void save(entry, { state: "implementing" });
+            void save(entry, { state: workingState });
           }
           return;
         }
@@ -244,10 +328,16 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           case "completed":
             entry.endTurn?.({
               state: "implementing",
-              ...(result?.text ? { summary: summarize(result.text) } : {}),
+              ...(result?.text
+                ? { summary: summarize(result.text), text: result.text }
+                : {}),
             });
             return;
           case "suspended":
+            if (role === "review") {
+              void refuse();
+              return;
+            }
             void save(entry, { state: "awaiting_approval" });
             if (expiry) clearTimeout(expiry);
             expiry = setTimeout(() => {
@@ -265,7 +355,10 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       },
     );
     try {
-      await save(entry, { attempts: entry.task.attempts + 1 });
+      entry.activeSessionId = sessionId;
+      if (role === "implement") {
+        await save(entry, { attempts: entry.task.attempts + 1 });
+      }
       await operations.startTurn(entry.auth, projectId, sessionId, text);
       // Stopped while the turn was starting: its cancel came too early.
       if (entry.stopping && entry.stopping.reason !== "server_stopped") {
@@ -278,6 +371,171 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       subscription.unsubscribe();
       if (expiry) clearTimeout(expiry);
       entry.endTurn = undefined;
+      entry.activeSessionId = undefined;
+    }
+  };
+
+  const implementerModel = (task: TaskRun): AgentModelReference => {
+    if (!task.model) return options.defaultModel;
+    const model = options.resolveModel(task.model);
+    if (!model) throw new HttpError(400, "model_not_available");
+    return model;
+  };
+
+  /** Review the exact commit in a new, read-only chat on another provider. */
+  const review = async (
+    entry: LiveTask,
+    commit: string,
+  ): Promise<ReviewEvidence | Outcome> => {
+    const model = options.reviewModel(implementerModel(entry.task));
+    if (!model) {
+      return {
+        state: "blocked_review",
+        error: "no_reviewer",
+        errorDetail:
+          "No model from another provider is configured to review this task. Add one (for example Claude through Meridian, as the `review` model role).",
+      };
+    }
+    const diff = await workspaces.diff(entry.task);
+    const { projectId } = entry.task;
+    const { sessionId } = await operations.createSession(
+      entry.auth,
+      projectId,
+      model,
+    );
+    await operations.setApprovalMode(entry.auth, projectId, sessionId, "ask");
+    assertNotStopping(entry);
+    const unavailable = (outcome: Outcome): Outcome => {
+      // Read once: the host hands each failure's reason out a single time.
+      const detail =
+        outcome.errorDetail ?? options.failureDetail?.(projectId, sessionId);
+      return {
+        state: "blocked_review",
+        error: outcome.error ?? "review_failed",
+        ...(detail ? { errorDetail: detail } : {}),
+      };
+    };
+    let outcome = await runTurn(
+      entry,
+      sessionId,
+      reviewPrompt(entry.task, diff),
+      "review",
+    );
+    if (outcome.state !== "implementing") return unavailable(outcome);
+    let parsed = parseReview(outcome.text);
+    if (!parsed) {
+      outcome = await runTurn(entry, sessionId, REVIEW_RETRY_PROMPT, "review");
+      if (outcome.state !== "implementing") return unavailable(outcome);
+      parsed = parseReview(outcome.text);
+    }
+    if (!parsed) {
+      return {
+        state: "blocked_review",
+        error: "review_unreadable",
+        errorDetail: "The reviewer did not return findings in the asked form.",
+      };
+    }
+    return {
+      kind: "review",
+      commit,
+      at: now(),
+      model: `${model.providerId}/${model.modelId}`,
+      sessionId,
+      verdict: parsed.verdict,
+      findings: parsed.findings,
+    };
+  };
+
+  /** Implement, check, validate, review, fix: until ready or stuck. */
+  const work = async (
+    entry: LiveTask,
+    sessionId: string,
+    firstPrompt: string | undefined,
+  ): Promise<Outcome> => {
+    let prompt = firstPrompt;
+    let followUps = 0;
+    let fixRounds = 0;
+    await save(entry, { fixRounds: 0 });
+    for (;;) {
+      assertNotStopping(entry);
+      if (prompt !== undefined) {
+        await save(entry, { state: fixRounds > 0 ? "fixing" : "implementing" });
+        const outcome = await runTurn(entry, sessionId, prompt, "implement");
+        if (outcome.state !== "implementing") return outcome;
+        if (outcome.summary) await save(entry, { summary: outcome.summary });
+      }
+      const inspection = await workspaces.inspect(entry.task);
+      await save(entry, {
+        headCommit: inspection.head,
+        commits: inspection.commits,
+      });
+      const problem = workProblem(entry.task, inspection);
+      if (problem) {
+        if (followUps >= maxFollowUps) {
+          return {
+            state: "failed",
+            error: problem,
+            ...(inspection.status ? { errorDetail: inspection.status } : {}),
+          };
+        }
+        followUps += 1;
+        prompt = followUpPrompt(entry.task, problem, inspection);
+        continue;
+      }
+      const head = inspection.head;
+      if (!evidenceFor(entry.task, head).implementation) {
+        await addEvidence(entry, {
+          kind: "implementation",
+          commit: head,
+          at: now(),
+        });
+      }
+
+      const commands =
+        options.repositories?.get(entry.task.repository)?.validation ?? [];
+      if (commands.length > 0) {
+        let validation = evidenceFor(entry.task, head).validation;
+        if (!validation || !sameCommands(validation, commands)) {
+          await save(entry, { state: "validating" });
+          const run = await workspaces.validate(entry.task, commands);
+          assertNotStopping(entry);
+          validation = { kind: "validation", commit: head, at: now(), ...run };
+          await addEvidence(entry, validation);
+        }
+        if (!validation.passed) {
+          if (fixRounds >= maxFixRounds) {
+            return {
+              state: "failed",
+              error: "validation_failed",
+              errorDetail: describeValidation(validation).slice(0, 2_000),
+            };
+          }
+          fixRounds += 1;
+          await save(entry, { fixRounds });
+          prompt = validationFixPrompt(entry.task, validation);
+          continue;
+        }
+      }
+
+      let reviewed = evidenceFor(entry.task, head).review;
+      if (!reviewed) {
+        await save(entry, { state: "reviewing" });
+        const result = await review(entry, head);
+        assertNotStopping(entry);
+        if (!("kind" in result)) return result;
+        reviewed = result;
+        await addEvidence(entry, reviewed);
+      }
+      const blocking = reviewed.findings.filter(
+        (finding) => finding.severity === "blocking",
+      );
+      if (blocking.length > 0 && fixRounds < maxFixRounds) {
+        fixRounds += 1;
+        await save(entry, { fixRounds });
+        prompt = reviewFixPrompt(entry.task, blocking);
+        continue;
+      }
+      return { state: "ready", openFindings: blocking.length };
     }
   };
 
@@ -303,16 +561,18 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       await save(entry, { state: "implementing" });
 
       let sessionId = entry.task.sessionId;
-      let prompt: string;
+      let prompt: string | undefined;
       if (sessionId) {
-        prompt = resumePrompt(entry.task);
+        // Resumed: work already accepted at HEAD goes straight to the checks.
+        const inspection = await workspaces.inspect(entry.task);
+        const accepted =
+          !workProblem(entry.task, inspection) &&
+          evidenceFor(entry.task, inspection.head).implementation !== undefined;
+        prompt = accepted ? undefined : resumePrompt(entry.task);
       } else {
         const model = entry.task.model
-          ? options.resolveModel(entry.task.model)
+          ? implementerModel(entry.task)
           : undefined;
-        if (entry.task.model && !model) {
-          throw new HttpError(400, "model_not_available");
-        }
         // A new chat starts autonomous: protected files still ask.
         ({ sessionId } = await operations.createSession(
           entry.auth,
@@ -322,41 +582,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         await save(entry, { sessionId });
         prompt = taskPrompt(entry.task);
       }
-      assertNotStopping(entry);
-
-      for (let followUps = 0; ; followUps += 1) {
-        const outcome = await runTurn(entry, sessionId, prompt);
-        if (outcome.state !== "implementing") {
-          final = outcome;
-          break;
-        }
-        const inspection = await workspaces.inspect(entry.task);
-        await save(entry, {
-          headCommit: inspection.head,
-          commits: inspection.commits,
-          ...(outcome.summary ? { summary: outcome.summary } : {}),
-        });
-        const problem = workProblem(entry.task, inspection);
-        if (!problem) {
-          await save(entry, {
-            evidence: [
-              ...entry.task.evidence,
-              { kind: "implementation", commit: inspection.head, at: now() },
-            ],
-          });
-          final = { state: "ready" };
-          break;
-        }
-        if (followUps >= maxFollowUps) {
-          final = {
-            state: "failed",
-            error: problem,
-            ...(inspection.status ? { errorDetail: inspection.status } : {}),
-          };
-          break;
-        }
-        prompt = followUpPrompt(entry.task, problem, inspection);
-      }
+      final = await work(entry, sessionId, prompt);
     } catch (error) {
       final = entry.stopping
         ? { state: entry.stopping.state, error: entry.stopping.reason }
@@ -387,6 +613,9 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       finishedAt: now(),
       error: final.error,
       errorDetail,
+      ...(final.openFindings !== undefined
+        ? { openFindings: final.openFindings }
+        : {}),
     });
     entry.controller.abort(new Error("task_finished"));
     log(
@@ -410,7 +639,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         entry.controller.abort(new Error(reason));
         return;
       }
-      const sessionId = entry.task.sessionId;
+      const sessionId = entry.activeSessionId ?? entry.task.sessionId;
       // Closing: the routes stop every turn themselves.
       if (sessionId && reason !== "server_stopped") {
         await operations
@@ -517,6 +746,39 @@ function workProblem(
   return undefined;
 }
 
+function sameCommands(
+  validation: ValidationEvidence,
+  commands: readonly string[],
+): boolean {
+  // A run that stopped early still ran the first failing command.
+  const ran = validation.commands.map((result) => result.command);
+  return validation.passed
+    ? ran.length === commands.length &&
+        ran.every((command, index) => command === commands[index])
+    : ran.every((command, index) => command === commands[index]);
+}
+
+export function describeValidation(validation: ValidationEvidence): string {
+  const lines: string[] = [];
+  for (const result of validation.commands) {
+    const status = result.timedOut
+      ? "timed out"
+      : result.exitCode === 0
+        ? "passed"
+        : `failed (exit ${result.exitCode ?? "signal"})`;
+    lines.push(`$ ${result.command} — ${status}`);
+    if (result.exitCode !== 0 && result.outputTail.trim()) {
+      lines.push(result.outputTail.trim().slice(-MAX_FEEDBACK_OUTPUT));
+    }
+  }
+  if (validation.changedFiles) {
+    lines.push(
+      `The commands changed tracked files (now put back):\n${validation.changedFiles}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export function taskPrompt(task: TaskRun): string {
   return [
     `You are working on a coding task in a fresh clone of ${task.repository}.`,
@@ -529,6 +791,7 @@ export function taskPrompt(task: TaskRun): string {
     "- Make the change, then run the project's relevant tests or checks if you can.",
     `- Commit all of your work on ${task.branch} with clear commit messages. Do not create or switch branches, rebase, or push: the owner publishes the result.`,
     "- Finish with no uncommitted or untracked files: commit what belongs to the change and delete scratch files.",
+    "- After you finish, the server runs the repository's validation commands and another model reviews your commit; you may be asked to fix what they find.",
     "- End with a short summary of what changed and how you checked it.",
   ].join("\n");
 }
@@ -540,6 +803,32 @@ function resumePrompt(task: TaskRun): string {
     task.objective,
     "",
     `As before: commit everything on ${task.branch}, leave no uncommitted or untracked files, and end with a short summary.`,
+  ].join("\n");
+}
+
+function validationFixPrompt(
+  task: TaskRun,
+  validation: ValidationEvidence,
+): string {
+  return [
+    `The server ran the repository's validation commands on commit ${validation.commit.slice(0, 12)} and they did not pass:`,
+    "",
+    describeValidation(validation),
+    "",
+    `Fix the cause, run the failing command yourself to check, and commit the fix on ${task.branch}. Leave no uncommitted or untracked files, and end with a short summary.`,
+  ].join("\n");
+}
+
+function reviewFixPrompt(
+  task: TaskRun,
+  findings: readonly ReviewFinding[],
+): string {
+  return [
+    "A reviewer on another model read your commit and found problems that block it:",
+    "",
+    ...findings.map(describeFinding),
+    "",
+    `Fix each one, or if you are sure a finding is wrong, explain why in your summary. Commit the fixes on ${task.branch}, leave no uncommitted or untracked files, and end with a short summary.`,
   ].join("\n");
 }
 

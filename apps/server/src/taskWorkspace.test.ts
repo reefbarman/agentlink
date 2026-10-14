@@ -4,9 +4,9 @@ import {
   createTaskWorkspaces,
 } from "./taskWorkspace.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { createGitCommand, createProcessRunner } from "./gitCommand.js";
 
 import type { TaskRun } from "./taskStore.js";
-import { createGitCommand } from "./gitCommand.js";
 import { createLocalWorkspaceExecutionBackend } from "@agentlink/workspace-host";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -74,14 +74,21 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     await fs.mkdir(path.join(projects, "home"), { recursive: true });
     await fs.writeFile(path.join(projects, "home", "secret.txt"), "no\n");
     const tasksRoot = path.join(projects, ".tasks");
+    const processOptions = {
+      launcher: createLocalWorkspaceExecutionBackend(),
+      environment: {
+        PATH: "/usr/bin:/bin",
+        HOME: dir,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+      ownerId: "test",
+    };
     const workspaces = createTaskWorkspaces({
       tasksRoot,
-      git: createGitCommand({
-        launcher: createLocalWorkspaceExecutionBackend(),
-        gitExecutable: git!,
-        environment: { PATH: "/usr/bin:/bin", HOME: dir },
-        ownerId: "test",
-      }),
+      git: createGitCommand({ ...processOptions, gitExecutable: git! }),
+      run: createProcessRunner(processOptions),
+      shell: "/bin/sh",
     });
     const taskFor = (id: string, extra: Partial<TaskRun> = {}): TaskRun => ({
       id,
@@ -186,6 +193,63 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
 
     run(task.workspace, "checkout", "-q", "-b", "other");
     expect((await workspaces.inspect(task)).branch).toBe("other");
+  });
+
+  it("runs validation on the commit and puts the clone back", async () => {
+    const { workspaces, taskFor, run } = await setup();
+    const base = taskFor("aaaaaaaaaaaa");
+    const task = { ...base, ...(await workspaces.prepare(base)) };
+    const passing = await workspaces.validate(task, [
+      "test -f README.md && echo checked",
+      "echo build > out.txt",
+    ]);
+    expect(passing).toMatchObject({
+      passed: true,
+      commands: [
+        { command: "test -f README.md && echo checked", exitCode: 0 },
+        { command: "echo build > out.txt", exitCode: 0 },
+      ],
+    });
+    expect(passing.commands[0]!.outputTail).toContain("checked");
+    // What validation left behind is gone again.
+    await expect(
+      fs.stat(path.join(task.workspace, "out.txt")),
+    ).rejects.toThrow();
+
+    // Stops at the first failure.
+    const failing = await workspaces.validate(task, [
+      "echo broken >&2; exit 3",
+      "echo never",
+    ]);
+    expect(failing.passed).toBe(false);
+    expect(failing.commands).toHaveLength(1);
+    expect(failing.commands[0]).toMatchObject({ exitCode: 3 });
+    expect(failing.commands[0]!.outputTail).toContain("broken");
+
+    // A command that rewrites tracked files fails, and is undone.
+    const rewriting = await workspaces.validate(task, [
+      "echo changed > README.md",
+    ]);
+    expect(rewriting.passed).toBe(false);
+    expect(rewriting.changedFiles).toContain("README.md");
+    await expect(
+      fs.readFile(path.join(task.workspace, "README.md"), "utf8"),
+    ).resolves.toBe("hello\n");
+    expect((await workspaces.inspect(task)).clean).toBe(true);
+    expect(run(task.workspace, "rev-parse", "HEAD")).toBe(task.baseCommit);
+  });
+
+  it("gives the reviewer the diff from the base", async () => {
+    const { workspaces, taskFor, run } = await setup();
+    const base = taskFor("aaaaaaaaaaaa");
+    const task = { ...base, ...(await workspaces.prepare(base)) };
+    await fs.writeFile(path.join(task.workspace, "fix.txt"), "fixed\n");
+    run(task.workspace, "add", "fix.txt");
+    run(task.workspace, "commit", "-q", "-m", "fix");
+    const diff = await workspaces.diff(task);
+    expect(diff.stat).toContain("fix.txt");
+    expect(diff.patch).toContain("+fixed");
+    expect(diff.truncated).toBe(false);
   });
 
   it("starts again from scratch and fails with git's words", async () => {

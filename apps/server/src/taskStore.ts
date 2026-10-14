@@ -27,6 +27,14 @@ export type TaskState =
   | "implementing"
   /** The implementation chat is waiting for the owner. */
   | "awaiting_approval"
+  /** The server is running the repository's validation commands. */
+  | "validating"
+  /** A reviewer on another provider is reading the change. */
+  | "reviewing"
+  /** The implementation chat is fixing failed checks or review findings. */
+  | "fixing"
+  /** No reviewer could review the change (none configured, or it failed). */
+  | "blocked_review"
   /** Committed on the task branch with a clean tree. */
   | "ready"
   | "failed"
@@ -44,6 +52,9 @@ export const ACTIVE_TASK_STATES: readonly TaskState[] = [
   "preparing",
   "implementing",
   "awaiting_approval",
+  "validating",
+  "reviewing",
+  "fixing",
 ];
 
 /** States a task can be resumed from. */
@@ -53,6 +64,7 @@ export const RESUMABLE_TASK_STATES: readonly TaskState[] = [
   "interrupted",
   "blocked_auth",
   "blocked_quota",
+  "blocked_review",
 ];
 
 export interface TaskRequest {
@@ -66,12 +78,83 @@ export interface TaskRequest {
   readonly model?: string;
 }
 
-/** Proof recorded against one exact commit. */
-export interface TaskEvidence {
-  /** `implementation`: the chat finished with this commit and a clean tree. */
-  readonly kind: "implementation";
-  readonly commit: string;
-  readonly at: number;
+/** One validation command's run, against the evidence's commit. */
+export interface ValidationCommandResult {
+  readonly command: string;
+  /** Undefined when it was stopped by a signal. */
+  readonly exitCode: number | undefined;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+  /** The end of its output. */
+  readonly outputTail: string;
+}
+
+export interface ReviewFinding {
+  readonly severity: "blocking" | "suggestion";
+  readonly file?: string;
+  readonly line?: number;
+  readonly reason: string;
+}
+
+/**
+ * Proof recorded against one exact commit. Evidence for any other commit
+ * says nothing about the current one: a later commit makes it stale.
+ */
+export type TaskEvidence =
+  | {
+      /** The chat finished with this commit and a clean tree. */
+      readonly kind: "implementation";
+      readonly commit: string;
+      readonly at: number;
+    }
+  | {
+      /** The server ran the repository's validation commands. */
+      readonly kind: "validation";
+      readonly commit: string;
+      readonly at: number;
+      readonly passed: boolean;
+      readonly commands: readonly ValidationCommandResult[];
+      /** Files the commands changed (restored afterwards); fails the run. */
+      readonly changedFiles?: string;
+    }
+  | {
+      /** A reviewer on another provider read `baseCommit..commit`. */
+      readonly kind: "review";
+      readonly commit: string;
+      readonly at: number;
+      /** `providerId/modelId`. */
+      readonly model: string;
+      readonly sessionId: string;
+      readonly verdict: "approve" | "changes_requested";
+      readonly findings: readonly ReviewFinding[];
+    };
+
+/** The latest evidence of each kind for exactly this commit. */
+export function evidenceFor(
+  task: Pick<TaskRun, "evidence">,
+  commit: string | undefined,
+): {
+  readonly implementation?: Extract<TaskEvidence, { kind: "implementation" }>;
+  readonly validation?: Extract<TaskEvidence, { kind: "validation" }>;
+  readonly review?: Extract<TaskEvidence, { kind: "review" }>;
+} {
+  const latest = <K extends TaskEvidence["kind"]>(kind: K) =>
+    commit === undefined
+      ? undefined
+      : ([...task.evidence]
+          .reverse()
+          .find(
+            (entry: TaskEvidence) =>
+              entry.kind === kind && entry.commit === commit,
+          ) as Extract<TaskEvidence, { kind: K }> | undefined);
+  const implementation = latest("implementation");
+  const validation = latest("validation");
+  const review = latest("review");
+  return {
+    ...(implementation ? { implementation } : {}),
+    ...(validation ? { validation } : {}),
+    ...(review ? { review } : {}),
+  };
 }
 
 /**
@@ -101,6 +184,10 @@ export interface TaskRun extends TaskRequest {
   readonly resolvedBaseBranch?: string;
   /** Implementation turns started, including follow-ups. */
   readonly attempts: number;
+  /** Rounds spent fixing failed validation or review findings. */
+  readonly fixRounds?: number;
+  /** Blocking review findings still open when the task became ready. */
+  readonly openFindings?: number;
   /** The implementation chat. */
   readonly sessionId?: string;
   /** The task branch's commit when the chat last finished. */
