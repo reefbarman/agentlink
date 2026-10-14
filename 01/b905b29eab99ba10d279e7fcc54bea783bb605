@@ -1,0 +1,43 @@
+src/agent/FleetScheduler.ts
+  h_e08a86bb3a33a2 7
+src/agent/AgentSessionManager.background.test.ts
+  h_e08a86bb3a33a2 400-516
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 195
+src/core/capabilities/background.ts
+  h_e08a86bb3a33a2 108-112
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 176-180,11517-11524,11897,13845-13904,13906-13913
+  s_28d87b814fd705::t_2dffec83509e22 13905,13914-13915
+src/agent/delegatedWriteScopePreflight.test.ts
+  h_e08a86bb3a33a2 1-164
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1596
+src/agent/delegatedWriteScopePreflight.ts
+  h_e08a86bb3a33a2 1-164
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01b905b29eab99ba10d279e7fcc54bea783bb605",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_28d87b814fd705": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "458bda79-81be-4b12-bb28-09a995788af3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
