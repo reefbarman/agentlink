@@ -84,5 +84,16 @@ describe("review prompt", () => {
     expect(prompt).toContain("+b");
     expect(prompt).toContain("Do not edit files");
     expect(prompt).toContain("The diff was cut short");
+    expect(prompt).not.toContain("validation commands");
+  });
+
+  it("tells the reviewer the owner's validation commands are in scope", () => {
+    const prompt = reviewPrompt(
+      { objective: "Add SECURITY.md", branch: "agentlink/sec-1" } as TaskRun,
+      { stat: "", patch: "", truncated: false },
+      ["test -f CODE_OF_CONDUCT.md"],
+    );
+    expect(prompt).toContain("$ test -f CODE_OF_CONDUCT.md");
+    expect(prompt).toContain("do not ask for them to be removed");
   });
 });

@@ -397,6 +397,8 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       };
     }
     const diff = await workspaces.diff(entry.task);
+    const validation =
+      options.repositories?.get(entry.task.repository)?.validation ?? [];
     const { projectId } = entry.task;
     const { sessionId } = await operations.createSession(
       entry.auth,
@@ -418,7 +420,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     let outcome = await runTurn(
       entry,
       sessionId,
-      reviewPrompt(entry.task, diff),
+      reviewPrompt(entry.task, diff, validation),
       "review",
     );
     if (outcome.state !== "implementing") return unavailable(outcome);
@@ -532,7 +534,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       if (blocking.length > 0 && fixRounds < maxFixRounds) {
         fixRounds += 1;
         await save(entry, { fixRounds });
-        prompt = reviewFixPrompt(entry.task, blocking);
+        prompt = reviewFixPrompt(entry.task, blocking, commands);
         continue;
       }
       return { state: "ready", openFindings: blocking.length };
@@ -822,12 +824,20 @@ function validationFixPrompt(
 function reviewFixPrompt(
   task: TaskRun,
   findings: readonly ReviewFinding[],
+  validation: readonly string[],
 ): string {
   return [
     "A reviewer on another model read your commit and found problems that block it:",
     "",
     ...findings.map(describeFinding),
     "",
+    ...(validation.length > 0
+      ? [
+          "The repository owner's validation commands must keep passing, and they take precedence over a finding that conflicts with them:",
+          ...validation.map((command) => `$ ${command}`),
+          "",
+        ]
+      : []),
     `Fix each one, or if you are sure a finding is wrong, explain why in your summary. Commit the fixes on ${task.branch}, leave no uncommitted or untracked files, and end with a short summary.`,
   ].join("\n");
 }

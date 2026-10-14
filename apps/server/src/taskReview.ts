@@ -39,13 +39,24 @@ export function pickReviewModel(
   );
 }
 
-export function reviewPrompt(task: TaskRun, diff: TaskDiff): string {
+export function reviewPrompt(
+  task: TaskRun,
+  diff: TaskDiff,
+  validation: readonly string[] = [],
+): string {
   return [
     "You are reviewing a change made by another AI model for this task. You did not write it. Review it as a careful senior engineer.",
     "",
     "Task objective:",
     task.objective,
     "",
+    ...(validation.length > 0
+      ? [
+          "The repository owner requires these validation commands to pass, and they pass on this commit. Changes needed to satisfy them are in scope, so do not ask for them to be removed:",
+          ...validation.map((command) => `$ ${command}`),
+          "",
+        ]
+      : []),
     `The change is ${task.baseCommit ?? "the base"}..${task.headCommit ?? "HEAD"} on branch ${task.branch}, checked out in this folder. You may read any file here for context. Do not edit files, run commands or start other agents: those requests will be refused.`,
     "",
     "Changed files:",
