@@ -23,6 +23,7 @@ import {
   type NodeHostMcpResourcePromptContext,
   type NodeHostMcpResourcePromptProvider,
 } from "./mcpResourcePrompts.js";
+import { redactAuthCallbackSecrets } from "./mcpResultRedaction.js";
 
 const MAX_SERVERS = 20;
 const MAX_TOOLS_PER_SERVER = 100;
@@ -440,7 +441,10 @@ function normalizeResult(result: CallToolResult, maxChars: number): string {
   const structured = result.structuredContent
     ? `\nStructured content:\n${safeJson(result.structuredContent)}`
     : "";
-  return boundedText(`${text}${structured}` || "", maxChars);
+  return boundedText(
+    redactAuthCallbackSecrets(`${text}${structured}` || ""),
+    maxChars,
+  );
 }
 
 function asInputSchema(tool: Tool): CoreModelJsonSchema {
