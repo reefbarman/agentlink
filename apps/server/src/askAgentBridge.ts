@@ -3,6 +3,7 @@ import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-gateway-ask-agent-identity";
 
 import { isJobChangeDisplay } from "./jobChangeDisplay.js";
+import { isTaskStartDisplay } from "./taskStartDisplay.js";
 import type { ChatSessionActivity } from "@agentlink/protocol/chat-session-history";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import {
@@ -860,8 +861,12 @@ export async function createAskAgentBridge(
     event: Extract<EmbeddedAgentTurnEvent, { type: "interaction.required" }>,
   ): ApprovalRequest => {
     const { interaction } = event;
-    // A job change describes itself in full: schedule, project and prompt.
-    if (isJobChangeDisplay(interaction.displayContent)) {
+    // A job change or new task describes itself in full: what it will do,
+    // where, and with which instructions.
+    if (
+      isJobChangeDisplay(interaction.displayContent) ||
+      isTaskStartDisplay(interaction.displayContent)
+    ) {
       return {
         kind: "write",
         id: interaction.interactionId,

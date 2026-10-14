@@ -447,6 +447,35 @@ function isTaskState(state: string, status?: string) {
 }
 
 describe("assistant workspace routes", () => {
+  it("keeps hidden projects out of the list but reachable, until removed", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    harness.routes.addProject({
+      projectId: "task-aaaaaaaaaaaa",
+      label: "Task: fix it",
+      host: harness.host,
+      hidden: true,
+    });
+    await expect(
+      request({ path: "/api/projects", session: owner }),
+    ).resolves.toMatchObject({
+      body: { projects: [{ projectId: "home" }] },
+    });
+    await expect(
+      request({
+        path: "/api/projects/task-aaaaaaaaaaaa/models",
+        session: owner,
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(harness.routes.removeProject("task-aaaaaaaaaaaa")).toBe(true);
+    await expect(
+      request({
+        path: "/api/projects/task-aaaaaaaaaaaa/models",
+        session: owner,
+      }),
+    ).resolves.toMatchObject({ status: 404 });
+  });
+
   it("streams a turn, resumes an approval, and reconnects", async () => {
     const harness = await startHarness();
     const { owner, request } = harness;

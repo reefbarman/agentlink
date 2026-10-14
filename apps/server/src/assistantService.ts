@@ -84,6 +84,12 @@ import { createWebTools } from "./webTools.js";
 import { createProjectChats } from "./projectChats.js";
 import { openProjectCatalog, projectNetworkPolicy } from "./projectCatalog.js";
 import { createGitCloner } from "./projectClone.js";
+import { createGitCommand, type GitCommandOptions } from "./gitCommand.js";
+import { createTaskRoutes } from "./taskRoutes.js";
+import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
+import { openTaskStore, type TaskRun } from "./taskStore.js";
+import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
+import { createTaskWorkspaces } from "./taskWorkspace.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
   createAssistantWorkspaceRoutes,
@@ -155,6 +161,11 @@ export function serverJobsDirectory(config: AssistantServerConfig): string {
 /** The owner's inbox of job results and approvals waiting. */
 export function serverInboxDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "inbox");
+}
+
+/** Coding task records and their state history. */
+export function serverTasksDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "tasks");
 }
 
 /** VAPID keys and the devices' push subscriptions. */
@@ -604,6 +615,13 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  const taskStore = await openTaskStore({
+    directory: serverTasksDirectory(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   let server: AssistantServer | undefined;
   /** Devices still signed in, once the access store is open. */
   const activeDeviceIds = () =>
@@ -666,12 +684,30 @@ export async function startAssistantService(
     });
     // Bound once the runner exists; no turn can start before then.
     let jobRunner: JobRunner | undefined;
+    let taskRunner: TaskRunner | undefined;
+    // Chats can propose coding tasks when there is somewhere to clone them.
+    const taskTools = config.projectsRoot
+      ? createTaskTools({
+          store: taskStore,
+          runner: {
+            create: async (request) => {
+              if (!taskRunner) throw new Error("Tasks are not ready yet");
+              return taskRunner.create(request);
+            },
+          },
+          models: configuredModels(config),
+        })
+      : undefined;
     /** Why turns failed, beyond the public error code; owner-only. */
     const turnFailures = createTurnFailureLog();
-    const openHost = async (project: {
-      readonly id: string;
-      readonly root: string;
-    }) => {
+    const openHost = async (
+      project: {
+        readonly id: string;
+        readonly root: string;
+      },
+      /** A coding task's own clone: web tools only, no jobs or tasks. */
+      kind: "project" | "task" = "project",
+    ) => {
       const autonomous = (request: { readonly sessionId: string }) =>
         approvalModes.get(project.id, request.sessionId) === "autonomous";
       const webTools = projectWebTools(config, {
@@ -710,9 +746,21 @@ export async function startAssistantService(
         }),
         hostTools: async (request) => [
           ...(await webTools(request)),
-          ...(await jobTools.readTools(request)),
+          ...(kind === "project" ? await jobTools.readTools(request) : []),
+          ...(kind === "project" && taskTools
+            ? await taskTools.readTools(request)
+            : []),
         ],
-        approvalHostTools: jobTools.approvalTools,
+        ...(kind === "project"
+          ? {
+              approvalHostTools: taskTools
+                ? combineApprovalHostTools([
+                    jobTools.approvalTools,
+                    taskTools.approvalTools,
+                  ])
+                : jobTools.approvalTools,
+            }
+          : {}),
         onTurnError: ({ sessionId, error, publicError }) => {
           const detail = describeTurnFailure(error);
           if (!detail) return;
@@ -848,32 +896,30 @@ export async function startAssistantService(
       const opened = await openBridge(id);
       bridges.set(id, opened);
     }
+    // git where commands run, for project clones and task workspaces.
+    const gitOptions: GitCommandOptions = {
+      launcher: worker
+        ? createCommandWorkerLauncher(worker)
+        : createLocalWorkspaceExecutionBackend(),
+      gitExecutable: GIT_EXECUTABLE,
+      // The owner typed these URLs: clones may reach any public host.
+      environment: commandWorkerEnvironment(
+        config.commandWorker?.egressProxy
+          ? egressProxyUrl(
+              config.commandWorker.egressProxy,
+              policyKey,
+              DEFAULT_NETWORK_POLICY,
+            )
+          : undefined,
+      ),
+      ownerId,
+    };
     const chat = createProjectChats({
       catalog,
       bridges,
       models: configuredModels(config),
       log,
-      ...(config.projectsRoot
-        ? {
-            clone: createGitCloner({
-              launcher: worker
-                ? createCommandWorkerLauncher(worker)
-                : createLocalWorkspaceExecutionBackend(),
-              gitExecutable: GIT_EXECUTABLE,
-              // The owner typed these URLs: clones may reach any public host.
-              environment: commandWorkerEnvironment(
-                config.commandWorker?.egressProxy
-                  ? egressProxyUrl(
-                      config.commandWorker.egressProxy,
-                      policyKey,
-                      DEFAULT_NETWORK_POLICY,
-                    )
-                  : undefined,
-              ),
-              ownerId,
-            }),
-          }
-        : {}),
+      ...(config.projectsRoot ? { clone: createGitCloner(gitOptions) } : {}),
       openProject: async (entry) => {
         const host = await openHost(entry);
         routes.addProject(mountFor(entry.id, host));
@@ -942,6 +988,71 @@ export async function startAssistantService(
       },
     });
     jobRunner = jobs;
+
+    // Coding tasks: each one is a fresh clone under `<projectsRoot>/.tasks`,
+    // mounted as its own hidden project while it exists.
+    const taskHosts = new Map<string, WorkspaceHost>();
+    const tasks = config.projectsRoot
+      ? await (async () => {
+          await fs.mkdir(config.projectsRoot!, { recursive: true });
+          const tasksRoot = path.join(
+            await fs.realpath(config.projectsRoot!),
+            ".tasks",
+          );
+          const workspaces = createTaskWorkspaces({
+            tasksRoot,
+            git: createGitCommand(gitOptions),
+          });
+          const openTaskProject = async (task: TaskRun) => {
+            if (taskHosts.has(task.projectId)) return;
+            const host = await openHost(
+              { id: task.projectId, root: task.workspace },
+              "task",
+            );
+            taskHosts.set(task.projectId, host);
+            routes.addProject({
+              projectId: task.projectId,
+              label: `Task: ${task.objective.replace(/\s+/gu, " ").slice(0, 60)}`,
+              host,
+              hidden: true,
+            });
+          };
+          const runner = createTaskRunner({
+            store: taskStore,
+            workspaces,
+            operations: routes.operations,
+            events: routes.events,
+            projects: {
+              open: openTaskProject,
+              async close(task) {
+                const host = taskHosts.get(task.projectId);
+                if (!host) return;
+                taskHosts.delete(task.projectId);
+                routes.removeProject(task.projectId);
+                const index = hosts.findIndex((entry) => entry.host === host);
+                if (index >= 0) hosts.splice(index, 1);
+                await host.close();
+              },
+            },
+            ownerId: () => server?.store.ownerId,
+            resolveModel,
+            log,
+            failureDetail: (projectId, sessionId) =>
+              turnFailures.take(projectId, sessionId),
+            onTaskChanged: () => assistantChanged(),
+          });
+          return { runner, workspaces, openTaskProject };
+        })()
+      : undefined;
+    taskRunner = tasks?.runner;
+    const taskRoutes = createTaskRoutes({
+      store: taskStore,
+      runner: tasks?.runner,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      models: configuredModels(config),
+    });
     const jobRoutes = createJobRoutes({
       store: jobStore,
       runner: jobs,
@@ -974,6 +1085,7 @@ export async function startAssistantService(
       handleRequest: async (request, response, auth) =>
         (await chat.handleRequest(request, response, auth)) ||
         (await jobRoutes.handleRequest(request, response, auth)) ||
+        (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
@@ -986,6 +1098,8 @@ export async function startAssistantService(
       onClose: async () => {
         // Before the routes stop turns: open runs are recorded interrupted.
         await jobs.close();
+        await tasks?.runner.close();
+        await taskStore.flush();
         await inbox.flush();
         await push.close();
         await chat.close();
@@ -1030,6 +1144,16 @@ export async function startAssistantService(
     const { port } = await server.start();
     certificates?.watch(server);
     await jobs.start();
+    if (tasks) {
+      await tasks.runner.start();
+      // Earlier tasks' chats stay readable: mount each clone still on disk.
+      for (const task of taskStore.list()) {
+        if (!(await tasks.workspaces.exists(task))) continue;
+        await tasks.openTaskProject(task).catch((error: unknown) => {
+          log(`Could not open task ${task.id}'s clone: ${message(error)}`);
+        });
+      }
+    }
     log(
       `AgentLink server listening on ${config.listen.host}:${port} for ${config.publicOrigins.join(", ")} (${hosts.length} project${hosts.length === 1 ? "" : "s"})`,
     );

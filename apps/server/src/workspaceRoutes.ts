@@ -81,6 +81,11 @@ export interface AssistantProjectMount {
   readonly projectId: string;
   readonly label?: string;
   readonly host: AssistantWorkspaceHost;
+  /**
+   * Not listed in `GET /api/projects` (a coding task's own clone). Its
+   * sessions are still reachable by ID, with the same authorization.
+   */
+  readonly hidden?: boolean;
 }
 
 /**
@@ -270,6 +275,11 @@ export interface AssistantWorkspaceRoutes {
   ): void;
   /** Mount a project created while the server runs. */
   addProject(mount: AssistantProjectMount): void;
+  /**
+   * Unmount a project whose sessions are idle; the caller closes its host.
+   * Returns whether it was mounted.
+   */
+  removeProject(projectId: string): boolean;
   /** Resolves once no server-owned task is running for the session. */
   whenIdle(projectId: string, sessionId: string): Promise<void>;
   /** Abort running tasks and wait for them to settle. */
@@ -841,6 +851,7 @@ export function createAssistantWorkspaceRoutes(
     if (url.pathname === "/api/projects" && method === "GET") {
       const visible = [];
       for (const mount of projects.values()) {
+        if (mount.hidden) continue;
         if (
           await options.authorizeProject({
             principal: auth.principal,
@@ -1268,6 +1279,7 @@ export function createAssistantWorkspaceRoutes(
     events: hub,
     operations,
     addProject: mountProject,
+    removeProject: (projectId) => projects.delete(projectId),
     notifyAgentApproval({ projectId, parentSessionId, childSessionId }) {
       if (!projects.has(projectId)) return;
       hub.publish(sessionKey(projectId, parentSessionId), {

@@ -398,6 +398,27 @@ A job sends a prompt to a new chat on a schedule, with no browser open. In the w
 
 Only the owner can use these routes (`403 jobs_forbidden`). Errors: `400 project_not_found`, `model_not_available`, `reasoning_effort_not_available`, `schedule_*`, `job_field_unknown`; `404 job_not_found`; `409 job_limit_reached` (100 jobs). Definitions are stored in `<dataRoot>/jobs/jobs.json` (an unreadable file stops the server from starting) and runs in `<dataRoot>/jobs/runs.jsonl`.
 
+### Coding tasks
+
+A task takes a coding objective for a public repository and works on it in its own fresh clone, on its own branch, until the work is committed. It needs `projectsRoot`. Publishing (push and draft PR), server-run validation and cross-provider review come in later slices; for now a finished task is `ready` with its commits in the clone.
+
+- **Starting one.** `POST /api/tasks`, or ask in a chat: the Assistant proposes it with `start_task`, and an approval card shows the exact repository, base branch, model and objective. Nothing starts until you allow it, even in an autonomous chat. `list_tasks` reads the tasks without asking. Objectives proposed from a chat are limited to 4,000 characters.
+- **Workspace.** The server clones the repository into `<projectsRoot>/.tasks/<taskId>/<repository>` (the base branch, or the default one) and creates `agentlink/<words-of-the-objective>-<taskId>` at that commit. Commits use the name `AgentLink Assistant` until GitHub connections arrive. Each clone is mounted as its own hidden project, so its file tools reach only that clone; commands run in the command worker, which (as for projects) can see the whole projects folder.
+- **Implementation.** One task runs at a time; the rest wait as `queued`. The work is an autonomous chat in the task's project, told the objective, the branch and that it must commit everything there. When it finishes, the server checks the clone itself: still on the task branch, no uncommitted or untracked files, and at least one commit beyond the base. If not, the chat is told what is wrong and tries again, at most twice more, then the task `failed` (`wrong_branch`, `uncommitted_changes` or `no_commits`, with `git status` as `errorDetail`). Accepted work is recorded as evidence against its exact commit.
+- **States.** `queued`, `preparing`, `implementing`, `awaiting_approval` (protected files and background actions still ask; it waits up to 12 hours, then `cancelled`, `approval_expired`), `ready`, `failed`, `cancelled`, `blocked_auth`, `blocked_quota`, and `interrupted` (the server stopped while it worked). Nothing continues after a restart by itself: **resume** it, which continues in the same chat and clone, or clones again if the clone never finished.
+- **Deleting** stops the task, closes its chat and removes its clone and record.
+
+| Route                        | Body                                             | Result                                                |
+| ---------------------------- | ------------------------------------------------ | ----------------------------------------------------- |
+| `GET /api/tasks`             |                                                  | `{ tasks, enabled }`, newest first                    |
+| `POST /api/tasks`            | `{ repository, objective, baseBranch?, model? }` | `202 { task }`                                        |
+| `GET /api/tasks/:id`         |                                                  | `{ task, events }`: the record and its state changes  |
+| `POST /api/tasks/:id/stop`   |                                                  | `{ task }` (`cancelled`)                              |
+| `POST /api/tasks/:id/resume` |                                                  | `202 { task }`; `409 task_busy`, `task_not_resumable` |
+| `DELETE /api/tasks/:id`      |                                                  | `{ ok: true }`                                        |
+
+The task's chat is `GET /api/projects/<task.projectId>/sessions/<task.sessionId>`. Only the owner can use these routes (`403 tasks_forbidden`). Errors: `400 repository_url_invalid` (https, no credentials), `objective_required`, `base_branch_invalid`, `model_not_available`, `task_field_unknown`; `404 task_not_found`; `409 tasks_disabled` (no `projectsRoot`), `task_limit_reached` (200 tasks). Records are stored in `<dataRoot>/tasks/tasks.json` (an unreadable file stops the server from starting) and state changes in `<dataRoot>/tasks/events.jsonl`.
+
 ### Notifications
 
 Each new [Inbox](#scheduled-jobs) entry is also sent as a Web Push notification to every device that turned notifications on, so you hear about a finished run or a waiting approval with no tab open. Tapping a notification opens the run's chat.
