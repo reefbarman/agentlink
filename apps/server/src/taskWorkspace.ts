@@ -77,6 +77,24 @@ export interface TaskCoAuthor {
   readonly email: string;
 }
 
+/**
+ * Writes a git bundle of the base branch to `destination` (the publisher
+ * fetching it with a GitHub connection) and names the branch it holds.
+ */
+export type BaseSnapshot = (
+  destination: string,
+) => Promise<{ readonly branch: string }>;
+
+export interface PrepareOptions {
+  /** Every commit made in the clone credits them. */
+  readonly coAuthor?: TaskCoAuthor;
+  /**
+   * Clone from this instead of the repository URL, so private repositories
+   * work without a token reaching the clone.
+   */
+  readonly snapshot?: BaseSnapshot;
+}
+
 export interface PreparedWorkspace {
   readonly baseCommit: string;
   readonly resolvedBaseBranch: string;
@@ -97,11 +115,8 @@ export interface WorkspaceInspection {
 export interface TaskWorkspaces {
   /** Where a new task's clone goes. */
   workspaceFor(taskId: string, repository: string): string;
-  /**
-   * Fresh clone at the base on the task branch; replaces any earlier try.
-   * With a co-author, every commit made in it credits them.
-   */
-  prepare(task: TaskRun, coAuthor?: TaskCoAuthor): Promise<PreparedWorkspace>;
+  /** Fresh clone at the base on the task branch; replaces any earlier try. */
+  prepare(task: TaskRun, options?: PrepareOptions): Promise<PreparedWorkspace>;
   inspect(task: TaskRun): Promise<WorkspaceInspection>;
   exists(task: TaskRun): Promise<boolean>;
   /**
@@ -166,23 +181,52 @@ export function createTaskWorkspaces(options: {
       const [planned] = planRepositories([repository]);
       return path.join(tasksRoot, taskId, planned!.directory);
     },
-    async prepare(task, coAuthor) {
+    async prepare(task, prepareOptions = {}) {
+      const { coAuthor, snapshot } = prepareOptions;
       const folder = taskFolder(task);
       await fs.rm(folder, { recursive: true, force: true });
       await fs.mkdir(tasksRoot, { recursive: true, mode: 0o755 });
       await fs.mkdir(folder, { mode: 0o755 });
       const workspace = task.workspace;
-      await run(
-        [
-          "clone",
-          ...(task.baseBranch ? ["--branch", task.baseBranch] : []),
-          "--",
-          task.repository,
-          path.basename(workspace),
-        ],
-        folder,
-        "clone_failed",
-      );
+      if (snapshot) {
+        // Beside the clone, never inside it, and gone once cloned.
+        const bundle = path.join(folder, "base.bundle");
+        try {
+          const { branch } = await snapshot(bundle);
+          await run(
+            [
+              "clone",
+              "--branch",
+              branch,
+              "--",
+              bundle,
+              path.basename(workspace),
+            ],
+            folder,
+            "clone_failed",
+          );
+        } finally {
+          await fs.rm(bundle, { force: true });
+        }
+        // `origin` names the repository, never a token or the bundle.
+        await run(
+          ["remote", "set-url", "origin", task.repository],
+          workspace,
+          "config_failed",
+        );
+      } else {
+        await run(
+          [
+            "clone",
+            ...(task.baseBranch ? ["--branch", task.baseBranch] : []),
+            "--",
+            task.repository,
+            path.basename(workspace),
+          ],
+          folder,
+          "clone_failed",
+        );
+      }
       const baseCommit = lastLine(
         await run(["rev-parse", "HEAD"], workspace, "base_unreadable"),
       );

@@ -17,14 +17,18 @@ import {
 } from "./taskStore.js";
 import {
   TaskWorkspaceError,
-  type TaskCoAuthor,
+  type PrepareOptions,
   type TaskWorkspaces,
   type ValidationRun,
   type WorkspaceInspection,
 } from "./taskWorkspace.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
 import type { GitHubConnection } from "./githubConnections.js";
-import type { PublishRequest, PublishResult } from "./publisher.js";
+import type {
+  PublishRequest,
+  PublishResult,
+  SnapshotRequest,
+} from "./publisher.js";
 import { PublisherRequestError } from "./publisherClient.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -234,7 +238,7 @@ function createFakeWorkspaces() {
   const existing = new Set<string>();
   const workspaces = {
     workspaceFor: (taskId: string) => `/srv/projects/.tasks/${taskId}/demo`,
-    prepare: vi.fn(async (task: TaskRun, _coAuthor?: TaskCoAuthor) => {
+    prepare: vi.fn(async (task: TaskRun, _options?: PrepareOptions) => {
       existing.add(task.id);
       return { baseCommit: "base0", resolvedBaseBranch: "main" };
     }),
@@ -334,6 +338,11 @@ async function setup(
         },
       };
     }),
+    snapshot: vi.fn(
+      async (_request: SnapshotRequest, _destination: string) => ({
+        branch: "main",
+      }),
+    ),
   };
   const runner = createTaskRunner({
     store,
@@ -910,9 +919,26 @@ describe("publishing tasks", () => {
     const created = await test.runner.create(REQUEST);
     await test.waitForTurns(1);
     // The clone's commits credit the repository's connection.
-    expect(test.workspaces.prepare.mock.calls[0]?.[1]).toEqual({
+    const prepareOptions = test.workspaces.prepare.mock.calls[0]?.[1];
+    expect(prepareOptions?.coAuthor).toEqual({
       name: "Tristan",
       email: "tristan@example.com",
+    });
+    // Its base comes through the publisher, with that connection's token.
+    await expect(
+      prepareOptions?.snapshot?.("/srv/projects/.tasks/x/base.bundle"),
+    ).resolves.toEqual({ branch: "main" });
+    expect(test.publisher.snapshot).toHaveBeenCalledWith(
+      { connectionId: CONNECTION.id, repository: REQUEST.repository },
+      "/srv/projects/.tasks/x/base.bundle",
+    );
+    test.publisher.snapshot.mockRejectedValueOnce(
+      new PublisherRequestError(409, "connection_signed_out", "expired"),
+    );
+    await expect(prepareOptions?.snapshot?.("/b")).rejects.toMatchObject({
+      name: "TaskWorkspaceError",
+      code: "connection_signed_out",
+      detail: "expired",
     });
     expect(test.store.get(created.id)?.connectionId).toBe(CONNECTION.id);
     test.endTurn("completed", { text: "Fixed it." });
@@ -962,7 +988,8 @@ describe("publishing tasks", () => {
     const plain = await setup();
     const unpermitted = await plain.runner.create(REQUEST);
     await plain.waitForTurns(1);
-    expect(plain.workspaces.prepare.mock.calls[0]?.[1]).toBeUndefined();
+    // No connection: a plain clone, crediting nobody.
+    expect(plain.workspaces.prepare.mock.calls[0]?.[1]).toEqual({});
     plain.endTurn("completed", { text: "Done." });
     await plain.waitFor(unpermitted.id, "ready");
     expect(plain.store.get(unpermitted.id)?.error).toBeUndefined();

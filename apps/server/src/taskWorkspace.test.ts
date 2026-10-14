@@ -239,6 +239,57 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     expect(run(task.workspace, "rev-parse", "HEAD")).toBe(task.baseCommit);
   });
 
+  it("clones a snapshot bundle, never keeping it or naming it as origin", async () => {
+    const { source, workspaces, taskFor, run } = await setup();
+    // A repository the clone itself could never reach.
+    const task = taskFor("aaaaaaaaaaaa", {
+      repository: "https://github.com/octo/private-demo",
+      baseBranch: "develop",
+    });
+    const asked: string[] = [];
+    const prepared = await workspaces.prepare(task, {
+      snapshot: async (destination) => {
+        asked.push(destination);
+        run(
+          source,
+          "bundle",
+          "create",
+          "-q",
+          destination,
+          "refs/heads/develop",
+        );
+        return { branch: "develop" };
+      },
+    });
+    expect(prepared).toEqual({
+      baseCommit: run(source, "rev-parse", "develop"),
+      resolvedBaseBranch: "develop",
+    });
+    expect(asked).toEqual([
+      path.join(path.dirname(task.workspace), "base.bundle"),
+    ]);
+    await expect(fs.stat(asked[0]!)).rejects.toThrow();
+    expect(run(task.workspace, "remote", "get-url", "origin")).toBe(
+      "https://github.com/octo/private-demo",
+    );
+    expect(run(task.workspace, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
+      task.branch,
+    );
+
+    // A failed fetch leaves nothing behind and reports its reason.
+    const failing = taskFor("bbbbbbbbbbbb", {
+      repository: "https://github.com/octo/private-demo",
+    });
+    await expect(
+      workspaces.prepare(failing, {
+        snapshot: async () => {
+          throw new TaskWorkspaceError("connection_signed_out");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "connection_signed_out" });
+    expect(await workspaces.exists(failing)).toBe(false);
+  });
+
   it("credits the connection's person on every commit", async () => {
     const { workspaces, taskFor, run } = await setup();
     const base = taskFor("aaaaaaaaaaaa");
@@ -247,8 +298,7 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     const task = {
       ...base,
       ...(await workspaces.prepare(base, {
-        name,
-        email: "tristan@example.com",
+        coAuthor: { name, email: "tristan@example.com" },
       })),
     };
     await fs.writeFile(path.join(task.workspace, "fix.txt"), "fixed\n");

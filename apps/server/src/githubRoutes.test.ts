@@ -85,6 +85,7 @@ function fakePublisher() {
     ),
     remove: vi.fn(async (id: string) => statuses.delete(id)),
     publish: vi.fn(),
+    snapshot: vi.fn(),
   } satisfies PublisherClient;
   return { publisher, statuses };
 }

@@ -106,7 +106,8 @@ export interface TaskRunnerOptions {
   readonly repositories?: Pick<RepositorySettingsStore, "get">;
   /** GitHub connections; with the publisher, ready tasks can be published. */
   readonly connections?: Pick<GitHubConnectionStore, "get">;
-  readonly publisher?: Pick<PublisherClient, "publish">;
+  /** Publishes ready tasks, and fetches connected repositories' bases. */
+  readonly publisher?: Pick<PublisherClient, "publish" | "snapshot">;
   readonly onTaskChanged?: (task: TaskRun) => void;
   /** A task a previous process left working, now recorded interrupted. */
   readonly onTaskRecovered?: (task: TaskRun) => void;
@@ -717,12 +718,42 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           commits: [],
           connectionId: connection ? permission!.connectionId : undefined,
         });
-        const prepared = await workspaces.prepare(
-          entry.task,
-          connection
-            ? { name: connection.commitName, email: connection.commitEmail }
-            : undefined,
-        );
+        const publisher = options.publisher;
+        const task = entry.task;
+        const prepared = await workspaces.prepare(task, {
+          ...(connection
+            ? {
+                coAuthor: {
+                  name: connection.commitName,
+                  email: connection.commitEmail,
+                },
+              }
+            : {}),
+          // With a connection, the publisher fetches the base with its
+          // token, so private repositories work and the token stays there.
+          ...(connection && publisher
+            ? {
+                snapshot: (destination: string) =>
+                  publisher
+                    .snapshot(
+                      {
+                        connectionId: connection.id,
+                        repository: task.repository,
+                        ...(task.baseBranch
+                          ? { baseBranch: task.baseBranch }
+                          : {}),
+                      },
+                      destination,
+                    )
+                    .catch((error: unknown) => {
+                      if (error instanceof PublisherRequestError) {
+                        throw new TaskWorkspaceError(error.code, error.detail);
+                      }
+                      throw error;
+                    }),
+              }
+            : {}),
+        });
         await save(entry, { ...prepared, headCommit: prepared.baseCommit });
       }
       assertNotStopping(entry);

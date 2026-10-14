@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 import { tokensMatch } from "./commandWorkerProtocol.js";
 import {
@@ -32,6 +33,10 @@ import { TASK_BRANCH_PREFIX, isSafeBranchName } from "./taskStore.js";
  * including its hooks and config. Each publish fetches the task branch into
  * a scratch repository of its own, checks it is exactly the commit asked
  * for, and pushes from there.
+ *
+ * It also fetches a repository's base branch for a new task (`snapshot`),
+ * so private repositories can be cloned without their token reaching the
+ * server: the server receives a git bundle and clones from that.
  */
 
 export const PUBLISHER_PROTOCOL = 1;
@@ -44,6 +49,8 @@ const GIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_GIT_OUTPUT = 64 * 1024;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_]{20,255}$/u;
+/** Header naming the branch a snapshot bundle holds. */
+export const SNAPSHOT_BRANCH_HEADER = "x-agentlink-branch";
 
 export class PublisherError extends Error {
   constructor(
@@ -108,6 +115,23 @@ export interface PublishRequest {
   readonly baseBranch: string;
   readonly title: string;
   readonly body: string;
+}
+
+/** What the server asks for when a task starts on a connected repository. */
+export interface SnapshotRequest {
+  readonly connectionId: string;
+  /** `https://github.com/<owner>/<name>`. */
+  readonly repository: string;
+  /** The branch to start from; the repository's default when absent. */
+  readonly baseBranch?: string;
+}
+
+/** A git bundle of one branch, in the publisher's scratch area. */
+export interface Snapshot {
+  readonly bundle: string;
+  readonly branch: string;
+  /** Delete the bundle once it has been sent. */
+  release(): Promise<void>;
 }
 
 export interface PublishResult {
@@ -228,6 +252,23 @@ export async function startPublisher(
     if (url.pathname === "/v1/publish" && method === "POST") {
       const body = await readBody(request);
       sendJson(response, 200, await service.publish(parsePublish(body)));
+      return;
+    }
+    if (url.pathname === "/v1/snapshot" && method === "POST") {
+      const body = await readBody(request);
+      const snapshot = await service.snapshot(parseSnapshot(body));
+      try {
+        const { size } = await fs.stat(snapshot.bundle);
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-length": size,
+          "cache-control": "no-store",
+          [SNAPSHOT_BRANCH_HEADER]: snapshot.branch,
+        });
+        await pipeline(createReadStream(snapshot.bundle), response);
+      } finally {
+        await snapshot.release();
+      }
       return;
     }
     const match = /^\/v1\/connections\/([^/]+)(\/device|\/token)?$/u.exec(
@@ -585,7 +626,120 @@ export function createPublisherService(dependencies: {
         publishing.delete(lock);
       }
     },
+    /**
+     * Fetch the base branch with the connection's token into a scratch
+     * repository and bundle it. Works for private repositories; the token
+     * stays here.
+     */
+    async snapshot(request: SnapshotRequest): Promise<Snapshot> {
+      const repository = parseGitHubRepository(request.repository);
+      if (!repository) throw new PublisherError(400, "repository_invalid");
+      const token = await usableToken(request.connectionId);
+      const scratch = await fs.mkdtemp(
+        path.join(dependencies.scratchRoot, "snapshot-"),
+      );
+      const release = () => fs.rm(scratch, { recursive: true, force: true });
+      try {
+        const remote = `https://github.com/${repository.owner}/${repository.name}.git`;
+        const { run } = githubGit({ git, scratch, token });
+        let branch = request.baseBranch;
+        if (!branch) {
+          const head = await run(
+            ["ls-remote", "--symref", "--", remote, "HEAD"],
+            "fetch_failed",
+            { authenticated: true },
+          );
+          branch = /^ref: refs\/heads\/(\S+)\tHEAD$/mu.exec(head)?.[1];
+          if (!branch || !isSafeBranchName(branch)) {
+            throw new PublisherError(502, "default_branch_unknown");
+          }
+        }
+        await run(["init", "-q", "--bare", "."], "scratch_failed");
+        await run(
+          [
+            "fetch",
+            "-q",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--",
+            remote,
+            `+refs/heads/${branch}:refs/heads/${branch}`,
+          ],
+          "fetch_failed",
+          { authenticated: true },
+        );
+        const bundle = path.join(scratch, "base.bundle");
+        await run(
+          ["bundle", "create", "-q", bundle, `refs/heads/${branch}`],
+          "bundle_failed",
+        );
+        log(
+          `publisher: fetched ${repository.owner}/${repository.name} ${branch} for a task`,
+        );
+        return { bundle, branch, release };
+      } catch (error) {
+        await release();
+        throw error;
+      }
+    },
   };
+}
+
+/**
+ * git in a scratch repository with no user or system config. With
+ * `authenticated`, the token reaches git only through its environment, and
+ * is redacted from any output reported.
+ */
+function githubGit(options: {
+  readonly git: LocalGit;
+  readonly scratch: string;
+  readonly token: string;
+}) {
+  const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${options.token}`).toString("base64")}`;
+  const redact = (text: string) =>
+    text
+      .split(options.token)
+      .join("[token]")
+      .split(header)
+      .join("[token]")
+      .trim()
+      .slice(-2_000);
+  const base: Record<string, string> = {
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    HOME: options.scratch,
+    LC_ALL: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  const authenticated: Record<string, string> = {
+    ...base,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: header,
+  };
+  const run = async (
+    args: readonly string[],
+    code: string,
+    flags: { readonly authenticated?: boolean } = {},
+  ) => {
+    const result = await options.git(
+      ["-c", "core.hooksPath=/dev/null", ...args],
+      {
+        cwd: options.scratch,
+        environment: flags.authenticated ? authenticated : base,
+      },
+    );
+    if (result.exitCode !== 0) {
+      throw new PublisherError(
+        code === "push_rejected" ? 409 : 502,
+        code,
+        redact(result.output),
+      );
+    }
+    return result.output;
+  };
+  return { run, redact, base, authenticated };
 }
 
 function rethrowGitHub(error: unknown): never {
@@ -638,41 +792,11 @@ async function pushCommit(options: {
   readonly token: string;
 }): Promise<PublishResult["push"]> {
   const scratch = await fs.mkdtemp(path.join(options.scratchRoot, "push-"));
-  const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${options.token}`).toString("base64")}`;
-  const redact = (text: string) =>
-    text
-      .split(options.token)
-      .join("[token]")
-      .split(header)
-      .join("[token]")
-      .trim()
-      .slice(-2_000);
-  const base: Record<string, string> = {
-    PATH: "/usr/local/bin:/usr/bin:/bin",
-    HOME: scratch,
-    LC_ALL: "C",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  const run = async (
-    args: readonly string[],
-    code: string,
-    environment: Record<string, string> = base,
-  ) => {
-    const result = await options.git(
-      ["-c", "core.hooksPath=/dev/null", ...args],
-      { cwd: scratch, environment },
-    );
-    if (result.exitCode !== 0) {
-      throw new PublisherError(
-        code === "push_rejected" ? 409 : 502,
-        code,
-        redact(result.output),
-      );
-    }
-    return result.output;
-  };
+  const { run, redact, authenticated } = githubGit({
+    git: options.git,
+    scratch,
+    token: options.token,
+  });
   try {
     await run(["init", "-q", "--bare", "."], "scratch_failed");
     await run(
@@ -710,15 +834,7 @@ async function pushCommit(options: {
         options.remote,
         `${options.commit}:refs/heads/${options.branch}`,
       ],
-      {
-        cwd: scratch,
-        environment: {
-          ...base,
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-          GIT_CONFIG_VALUE_0: header,
-        },
-      },
+      { cwd: scratch, environment: authenticated },
     );
     const output = pushed.output;
     const line = output
@@ -793,6 +909,38 @@ export function parsePublish(body: Record<string, unknown>): PublishRequest {
     throw new PublisherError(400, "body_invalid");
   }
   return request;
+}
+
+/** Validate a snapshot request from the server. Unknown keys are refused. */
+export function parseSnapshot(body: Record<string, unknown>): SnapshotRequest {
+  if (
+    Object.keys(body).some(
+      (key) => !["connectionId", "repository", "baseBranch"].includes(key),
+    )
+  ) {
+    throw new PublisherError(400, "field_unknown");
+  }
+  const { connectionId, repository, baseBranch } = body;
+  if (
+    typeof connectionId !== "string" ||
+    !CONNECTION_ID_PATTERN.test(connectionId)
+  ) {
+    throw new PublisherError(400, "connectionId_invalid");
+  }
+  if (typeof repository !== "string") {
+    throw new PublisherError(400, "repository_invalid");
+  }
+  if (
+    baseBranch !== undefined &&
+    (typeof baseBranch !== "string" || !isSafeBranchName(baseBranch))
+  ) {
+    throw new PublisherError(400, "baseBranch_invalid");
+  }
+  return {
+    connectionId,
+    repository,
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+  };
 }
 
 function localGit(executable: string): LocalGit {

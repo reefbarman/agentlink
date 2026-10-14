@@ -15,10 +15,12 @@ import {
   PublisherError,
   createPublisherService,
   parsePublish,
+  parseSnapshot,
   startPublisher,
   type LocalGit,
   type PublishRequest,
 } from "./publisher.js";
+import { createPublisherClient } from "./publisherClient.js";
 import { openCredentialVault } from "./publisherVault.js";
 
 const KEY = Buffer.alloc(32, 7);
@@ -578,7 +580,150 @@ describe("connections", { timeout: 30_000 }, () => {
   });
 });
 
+describe("snapshots", { timeout: 30_000 }, () => {
+  it("bundles the default or chosen branch with the token only in git's environment", async () => {
+    const setup = await fixture();
+    git(setup.workspace, "push", "-q", "origin", "HEAD:release");
+    const { publisher } = await service({ fixture: setup });
+
+    const main = await publisher.snapshot({
+      connectionId: CONNECTION,
+      repository: REPOSITORY,
+    });
+    expect(main.branch).toBe("main");
+    expect(main.bundle.startsWith(setup.scratchRoot)).toBe(true);
+    const heads = git(setup.root, "bundle", "list-heads", main.bundle);
+    expect(heads).toBe(
+      `${git(setup.remote, "rev-parse", "main")} refs/heads/main`,
+    );
+    await main.release();
+    expect(await fs.readdir(setup.scratchRoot)).toEqual([]);
+
+    const release = await publisher.snapshot({
+      connectionId: CONNECTION,
+      repository: REPOSITORY,
+      baseBranch: "release",
+    });
+    expect(release.branch).toBe("release");
+    expect(git(setup.root, "bundle", "list-heads", release.bundle)).toBe(
+      `${setup.commit} refs/heads/release`,
+    );
+    await release.release();
+
+    // The token is never an argument, only an environment header.
+    for (const call of setup.calls) {
+      expect(call.args.join(" ")).not.toContain(TOKEN);
+    }
+    const remoteCalls = setup.calls.filter((call) =>
+      call.args.includes(REMOTE_URL),
+    );
+    expect(remoteCalls.length).toBeGreaterThan(0);
+    for (const call of remoteCalls) {
+      expect(call.environment.GIT_CONFIG_VALUE_0).toContain("basic ");
+    }
+  });
+
+  it("fails cleanly for a missing branch or connection", async () => {
+    const setup = await fixture();
+    const { publisher } = await service({ fixture: setup });
+    await expect(
+      publisher.snapshot({
+        connectionId: CONNECTION,
+        repository: REPOSITORY,
+        baseBranch: "nope",
+      }),
+    ).rejects.toMatchObject({ code: "fetch_failed" });
+    await expect(
+      publisher.snapshot({
+        connectionId: "c0ffee00000f",
+        repository: REPOSITORY,
+      }),
+    ).rejects.toMatchObject({ code: "connection_missing" });
+    await expect(
+      publisher.snapshot({
+        connectionId: CONNECTION,
+        repository: "https://gitlab.com/octo/hello",
+      }),
+    ).rejects.toMatchObject({ code: "repository_invalid" });
+    expect(await fs.readdir(setup.scratchRoot)).toEqual([]);
+  });
+
+  it("parses snapshot requests strictly", () => {
+    const valid = { connectionId: CONNECTION, repository: REPOSITORY };
+    expect(parseSnapshot(valid)).toEqual(valid);
+    expect(parseSnapshot({ ...valid, baseBranch: "develop" })).toMatchObject({
+      baseBranch: "develop",
+    });
+    expect(() => parseSnapshot({ ...valid, token: "x" })).toThrow(
+      "field_unknown",
+    );
+    expect(() => parseSnapshot({ ...valid, baseBranch: "../x" })).toThrow(
+      "baseBranch_invalid",
+    );
+    expect(() => parseSnapshot({ ...valid, connectionId: "../x" })).toThrow(
+      "connectionId_invalid",
+    );
+  });
+});
+
 describe("publisher HTTP", { timeout: 30_000 }, () => {
+  it("streams a snapshot to the server's client", async () => {
+    const setup = await fixture();
+    const dataDirectory = path.join(setup.root, "publisher-data");
+    const vault = await openCredentialVault({
+      file: path.join(dataDirectory, "connections.enc"),
+      key: KEY,
+    });
+    await vault.put({
+      id: CONNECTION,
+      kind: "app",
+      login: "reefbarman",
+      accessToken: TOKEN,
+      updatedAt: 1,
+    });
+    const publisher = await startPublisher({
+      host: "127.0.0.1",
+      port: 0,
+      token: "shared-token",
+      tasksRoot: setup.tasksRoot,
+      dataDirectory,
+      vaultKey: KEY,
+      github: fakeGitHub().api,
+      git: setup.localGit,
+    });
+    try {
+      const client = createPublisherClient({
+        host: "127.0.0.1",
+        port: publisher.port,
+        token: async () => "shared-token",
+      });
+      const destination = path.join(setup.root, "base.bundle");
+      await expect(
+        client.snapshot(
+          { connectionId: CONNECTION, repository: REPOSITORY },
+          destination,
+        ),
+      ).resolves.toEqual({ branch: "main" });
+      expect(git(setup.root, "bundle", "list-heads", destination)).toContain(
+        "refs/heads/main",
+      );
+      await expect(
+        client.snapshot(
+          { connectionId: "c0ffee00000f", repository: REPOSITORY },
+          path.join(setup.root, "other.bundle"),
+        ),
+      ).rejects.toMatchObject({ status: 404, code: "connection_missing" });
+      // Nothing left in the publisher's scratch area.
+      await vi.waitFor(async () =>
+        expect(await fs.readdir(path.join(dataDirectory, "scratch"))).toEqual(
+          [],
+        ),
+      );
+    } finally {
+      await publisher.close();
+    }
+  });
+
   it("answers only requests with the shared token", async () => {
     const setup = await fixture();
     const publisher = await startPublisher({

@@ -66,7 +66,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     switch (code) {
       case "repository_required":
       case "repository_url_invalid":
-        return "repository must be a public https:// clone URL with no credentials, for example https://github.com/owner/name";
+        return "repository must be an https:// clone URL with no credentials, for example https://github.com/owner/name (private repositories need a GitHub connection set for them in the GitHub panel)";
       case "objective_required":
         return "objective must describe what the task should achieve";
       case "objective_too_long":
@@ -202,7 +202,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const startTask = defineTool({
     name: "start_task",
     description:
-      "Start a coding task: the server makes a fresh clone of a public repository on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
+      "Start a coding task: the server makes a fresh clone of a repository (public, or private with a GitHub connection set for it) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -210,7 +210,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         repository: {
           type: "string",
           description:
-            "Public https:// clone URL, for example https://github.com/owner/name",
+            "https:// clone URL with no credentials, for example https://github.com/owner/name",
         },
         objective: {
           type: "string",

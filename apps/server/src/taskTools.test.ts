@@ -96,7 +96,7 @@ describe("task tools", () => {
       test.prepare({ ...REQUEST, repository: "git@github.com:a/b" }),
     ).resolves.toMatchObject({
       decision: "deny",
-      reason: expect.stringMatching(/public https:\/\//u),
+      reason: expect.stringMatching(/an https:\/\//u),
     });
     await expect(
       test.prepare({ ...REQUEST, model: "claude/opus" }),
