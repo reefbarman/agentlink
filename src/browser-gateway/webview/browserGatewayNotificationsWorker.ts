@@ -82,7 +82,12 @@ worker.addEventListener("push", (event) => {
         body: text(payload.body, "Something needs your attention.", 300),
         icon: "/agentlink-icon.png",
         badge: "/agentlink-icon.png",
-        ...(typeof payload.tag === "string" ? { tag: payload.tag } : {}),
+        // A tag replaces the earlier notification; without `renotify` the
+        // replacement is silent, so a second test (or a run's next state)
+        // would never show a banner.
+        ...(typeof payload.tag === "string"
+          ? { tag: payload.tag, renotify: true }
+          : {}),
         data: { url: samePath(payload.url) },
       },
     ),
