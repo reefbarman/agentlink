@@ -1,0 +1,58 @@
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 56-57,666-667,674-696,708-712,931
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 823-867
+apps/server/src/jobChangeDisplay.ts
+  h_e08a86bb3a33a2 1-25
+CHANGELOG.md
+  h_e08a86bb3a33a2 7
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 647-836
+apps/server/src/jobTools.ts
+  h_e08a86bb3a33a2 1-687
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 144-346
+apps/server/src/jobTools.test.ts
+  h_e08a86bb3a33a2 1-364
+apps/server/README.md
+  h_e08a86bb3a33a2 377
+apps/server/src/jobRoutes.ts
+  h_e08a86bb3a33a2 53-75,83-95,99,117-121
+  s_0450acbc03dec2::t_e5f6df1712fdd7 76-82
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 9,180-214,217-225,362-363,366-367,747-748,768-769,800-804,832-850,994-995,1035-1043,1451-1464
+  s_0450acbc03dec2::t_e056355b24d983 744-746,805,990-993,996
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 4-5,863-883
+resources/builtin-skills/documentation/references/release-notes.md
+  s_714c29b5ea15c5::t_62d14b55e17265 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ae36dac6fb9f13d42bb867666e1f06169412168",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0450acbc03dec2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba31749c-e69e-4418-9a77-1b2c855dac7d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_714c29b5ea15c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "342ea518-dcb6-4f05-a526-99ce5ee4a51c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
