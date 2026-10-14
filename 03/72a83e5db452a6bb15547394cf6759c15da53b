@@ -1,0 +1,14 @@
+src/browser-gateway/webview/browserGatewayNotificationsWorker.ts
+  h_e08a86bb3a33a2 85-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0372a83e5db452a6bb15547394cf6759c15da53b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
