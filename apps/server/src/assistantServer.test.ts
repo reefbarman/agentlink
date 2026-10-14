@@ -714,6 +714,10 @@ describe("assistant server access layer", () => {
             immutable: true,
           },
         ],
+        [
+          "/browser-gateway-notifications.js",
+          { contentType: "text/javascript; charset=utf-8", body: "3;" },
+        ],
         // A web asset can never shadow the API.
         ["/api/projects", { contentType: "text/plain", body: "shadowed" }],
       ]),
@@ -737,6 +741,16 @@ describe("assistant server access layer", () => {
     await expect(
       harness.request({ method: "HEAD", path: "/app.js" }),
     ).resolves.toMatchObject({ status: 200, body: undefined });
+    // The notification worker may load the app's icon, and nothing else;
+    // other files keep the strict default.
+    const worker = await harness.request({
+      path: "/browser-gateway-notifications.js",
+    });
+    expect(worker.headers["content-security-policy"]).toBe(
+      "default-src 'none'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    );
+    const script = await harness.request({ path: "/app.js" });
+    expect(script.headers["content-security-policy"]).not.toContain("img-src");
     // Unknown paths and the API still need a session.
     await expect(harness.request({ path: "/other.js" })).resolves.toMatchObject(
       { status: 401, body: { error: "authentication_required" } },

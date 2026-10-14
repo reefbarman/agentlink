@@ -10,6 +10,16 @@ export interface WebAsset {
 
 export type WebAssets = ReadonlyMap<string, WebAsset>;
 
+/** The notification service worker, which shows the app's icon. */
+export const NOTIFICATION_WORKER_PATH = "/browser-gateway-notifications.js";
+/**
+ * A service worker runs under the policy it was served with. The server's
+ * default (`default-src 'none'`) would block the notification icon, and
+ * Chrome then shows no notification at all.
+ */
+export const NOTIFICATION_WORKER_CSP =
+  "default-src 'none'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'";
+
 /** How esbuild.mjs embeds an asset: binary files are base64 text. */
 interface EmbeddedWebAsset {
   readonly contentType: string;
@@ -66,6 +76,9 @@ export function serveWebAsset(
     "content-length": Buffer.byteLength(asset.body),
     ...(asset.immutable
       ? { "cache-control": "public, max-age=31536000, immutable" }
+      : {}),
+    ...(pathname === NOTIFICATION_WORKER_PATH
+      ? { "content-security-policy": NOTIFICATION_WORKER_CSP }
       : {}),
   });
   response.end(method === "HEAD" ? undefined : asset.body);
