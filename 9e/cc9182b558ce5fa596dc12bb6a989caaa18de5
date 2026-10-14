@@ -1,0 +1,104 @@
+apps/server/src/publisher.test.ts
+  h_e08a86bb3a33a2 1-618
+apps/server/src/taskRoutes.ts
+  h_e08a86bb3a33a2 7-8,30-32,34-36,43-45,50-51,129-151,153-161,163,199-223,238
+  s_7789bd74608e27::t_955d1bab304b51 162
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 95-97,208-209,409-430,665-684,1112-1113,1126,1156-1159,1176
+  s_7789bd74608e27::t_92aaca61a485c7 1160-1163
+apps/server/src/githubRoutes.test.ts
+  h_e08a86bb3a33a2 1-312
+src/browser-gateway/webview/AssistantGitHub.test.tsx
+  h_e08a86bb3a33a2 1-278
+apps/server/src/githubApi.ts
+  h_e08a86bb3a33a2 1-369
+apps/server/src/taskRepositories.ts
+  h_e08a86bb3a33a2 9-12,19-29,35,43-45,51-54,57-58,124-141,160-179,209-211
+  s_7789bd74608e27::t_c82ee7ea4d533d 42,55-56,142-147
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 8-9,42-55
+  s_7789bd74608e27::t_dd6fbd434bfd0e 56
+apps/server/src/taskRoutes.test.ts
+  h_e08a86bb3a33a2 12,64-67,76-77,82,130,254-297,302-314,317-346
+  h_e08a86bb3a33a2 78,298-301,315-316,347-348
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 268-328
+apps/server/src/publisherClient.ts
+  h_e08a86bb3a33a2 1-104
+apps/server/src/publisherVault.ts
+  h_e08a86bb3a33a2 1-166
+apps/server/src/taskStore.ts
+  h_e08a86bb3a33a2 40-43,62,167-168,176-177,207-215
+apps/server/src/taskWorkspace.ts
+  h_e08a86bb3a33a2 23-25,28-41,74-79,101-102,104,169,207-219
+  s_7789bd74608e27::t_4911a5ce653543 22,100,103,220
+CHANGELOG.md
+  h_e08a86bb3a33a2 12
+src/browser-gateway/webview/AssistantProjects.tsx
+  h_e08a86bb3a33a2 97-116
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 63-76,378,534-561
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 29-30,69-71,129-140,145,160-162,216,510-590
+  s_7789bd74608e27::t_4221d7128b7fce 591-593
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 2,388,441-449,465
+apps/server/src/githubConnections.ts
+  h_e08a86bb3a33a2 1-206
+apps/server/src/githubRoutes.ts
+  h_e08a86bb3a33a2 1-302
+apps/server/src/publisher.ts
+  h_e08a86bb3a33a2 1-866
+src/browser-gateway/webview/AssistantGitHub.tsx
+  h_e08a86bb3a33a2 1-666
+apps/server/src/githubApi.test.ts
+  h_e08a86bb3a33a2 1-134
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 5,7-10,12-16,32,63-72,105,107-109,133-141,165-167,250-252,257-258,272-273,585-697,701-705,712-713,718,721-724,755-767,779-787,854-859,910-925,942,946
+  s_7789bd74608e27::t_18d3f3b3ee5957 249,253,720,725,926,943-945,947
+apps/server/README.md
+  h_e08a86bb3a33a2 97,404,407,413-414,421-423,428-476
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 20,26-28,237,304-307,322-337,360,363-367,371-372,374,394,400-408,907-1099
+  s_7789bd74608e27::t_18bf53a35c4130 361-362,368,373,409,1100-1103
+apps/server/deploy/container/compose.publisher.yaml
+  h_e08a86bb3a33a2 1-97
+apps/server/src/taskPublish.ts
+  h_e08a86bb3a33a2 1-158
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2547-2573
+  s_2e4c7929dcfae1::t_6f48663d3e8c13 2574-2576
+apps/server/src/taskWorkspace.test.ts
+  h_e08a86bb3a33a2 242-280
+resources/builtin-skills/documentation/references/release-notes.md
+  s_2e4c7929dcfae1::t_c7c13d521b2bf2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2e4c7929dcfae1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a368ec12-1641-4e7e-beb6-efc70670a93b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_7789bd74608e27": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9717e6a4-9f4d-4f32-ba94-1660457a513a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
