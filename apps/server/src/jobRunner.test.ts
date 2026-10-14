@@ -162,6 +162,10 @@ async function setup(
     readonly maxConcurrentRuns?: number;
     readonly prepare?: (store: JobStore) => Promise<void>;
     readonly start?: boolean;
+    readonly failureDetail?: (
+      projectId: string,
+      sessionId: string,
+    ) => string | undefined;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "job-runner-"));
@@ -187,6 +191,7 @@ async function setup(
     ...(options.maxConcurrentRuns
       ? { maxConcurrentRuns: options.maxConcurrentRuns }
       : {}),
+    ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
   });
   cleanup.push(() => runner.close());
   if (options.start !== false) await runner.start();
@@ -490,6 +495,44 @@ describe("job runner", () => {
       },
     });
     await harness.waitForRun(job.id, "blocked_quota");
+  });
+
+  it("records what went wrong when the host knows more than the error code", async () => {
+    const asked: string[] = [];
+    const harness = await setup({
+      failureDetail: (projectId, sessionId) => {
+        asked.push(`${projectId}/${sessionId}`);
+        return "The model is overloaded (HTTP 503)";
+      },
+    });
+    const job = await createJob(harness);
+    await harness.runner.runNow(job.id);
+    await vi.waitFor(() => expect(harness.fake.turns).toHaveLength(1));
+    const sessionId = harness.fake.turns[0]!.sessionId;
+    harness.fake.endTurn(sessionId, "failed", {
+      error: {
+        code: "turn_execution_failed",
+        category: "internal",
+        message: "Turn execution failed",
+        retryable: false,
+      },
+    });
+    await harness.waitForRun(job.id, "failed");
+    expect(harness.latestRun(job.id)).toMatchObject({
+      error: "turn_execution_failed",
+      errorDetail: "The model is overloaded (HTTP 503)",
+    });
+    expect(asked).toEqual([`${job.projectId}/${sessionId}`]);
+
+    // A finished run asks for nothing.
+    await harness.runner.runNow(job.id);
+    await vi.waitFor(() => expect(harness.fake.turns).toHaveLength(2));
+    harness.fake.endTurn(harness.fake.turns[1]!.sessionId, "completed", {
+      text: "fine",
+    });
+    await harness.waitForRun(job.id, "completed");
+    expect(harness.latestRun(job.id)!.errorDetail).toBeUndefined();
+    expect(asked).toHaveLength(1);
   });
 
   it("does not run without an owner and records stopped runs as interrupted", async () => {

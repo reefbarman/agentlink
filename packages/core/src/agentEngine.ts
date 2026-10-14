@@ -39,6 +39,7 @@ import {
   createHeadlessTurnKernel,
   type HeadlessTurnAuthRequest,
   type HeadlessTurnKernel,
+  type HeadlessTurnKernelOptions,
   type HeadlessTurnTool,
 } from "./turnKernel.js";
 import type { TurnExecutionLimits } from "./turnExecution.js";
@@ -109,6 +110,8 @@ export interface CreateAgentEngineOptions<
   readonly createTurnId?: () => string;
   readonly createInteractionId?: () => string;
   readonly now?: () => number;
+  /** See `HeadlessTurnKernelOptions.onTurnError`. */
+  readonly onTurnError?: HeadlessTurnKernelOptions<TPrincipal>["onTurnError"];
 }
 
 export interface CreateAgentSessionRequest<
@@ -327,6 +330,7 @@ export function createAgentEngine<
     defaultLimits: options.limits,
     resolveAuthContext: options.resolveAuthContext,
     now,
+    onTurnError: options.onTurnError,
   });
 
   const read = async (request: {

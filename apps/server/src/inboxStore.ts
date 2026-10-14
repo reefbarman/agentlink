@@ -97,21 +97,28 @@ export function inboxEntryForRun(
         ...base,
         kind: "run_blocked",
         title: `${job.name} could not run`,
-        body: "The model provider's sign-in is missing or has expired.",
+        body: withDetail(
+          "The model provider's sign-in is missing or has expired.",
+          run.errorDetail,
+        ),
       };
     case "blocked_quota":
       return {
         ...base,
         kind: "run_blocked",
         title: `${job.name} could not run`,
-        body: "The model provider refused the run (usage or rate limits).",
+        body: withDetail(
+          "The model provider refused the run (usage or rate limits).",
+          run.errorDetail,
+        ),
       };
     case "failed":
       return {
         ...base,
         kind: "run_failed",
         title: `${job.name} failed`,
-        ...body(run.error),
+        // What went wrong when known; the bare error code otherwise.
+        ...body(run.errorDetail ?? run.error),
       };
     case "interrupted":
       return {
@@ -248,6 +255,11 @@ function isEntry(value: unknown): value is InboxEntry {
     typeof entry.projectId === "string" &&
     typeof entry.read === "boolean"
   );
+}
+
+/** A fixed explanation, then what the provider actually said. */
+function withDetail(text: string, detail: string | undefined): string {
+  return detail ? `${text} ${detail}` : text;
 }
 
 function truncate(value: string, max: number): string {

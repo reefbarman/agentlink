@@ -169,6 +169,24 @@ export interface HeadlessTurnKernelOptions<
     | Promise<CoreModelAuthContext | undefined>;
   /** Injectable clock for deterministic event timestamps and execution limits. */
   readonly now?: () => number;
+  /**
+   * Observe the private cause of a failed turn before it is mapped to the
+   * safe public error. Host-side only: whatever the host keeps or shows is
+   * its own redaction decision. Errors thrown here are ignored.
+   */
+  readonly onTurnError?: (report: HeadlessTurnErrorReport<TPrincipal>) => void;
+}
+
+export interface HeadlessTurnErrorReport<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  readonly turnId: string;
+  /** The original error. Never projected into events. */
+  readonly error: unknown;
+  /** The error the turn's public result carries. */
+  readonly publicError: AgentTurnError;
 }
 
 export interface HeadlessTurnKernel<
@@ -965,12 +983,24 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       return cancelled;
     }
 
+    const publicError = toTurnError(error);
+    try {
+      options.onTurnError?.({
+        principal: prepared.request.principal,
+        sessionId: prepared.request.sessionId,
+        turnId: prepared.turnId,
+        error,
+        publicError,
+      });
+    } catch {
+      // Observation must never change the turn's outcome.
+    }
     const failed: Extract<AgentTurnResult, { status: "failed" }> = {
       status: "failed",
       sessionId: prepared.request.sessionId,
       turnId: prepared.turnId,
       sessionRevision,
-      error: toTurnError(error),
+      error: publicError,
       usage,
       execution,
       provenance: provenance(),

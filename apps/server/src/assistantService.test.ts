@@ -358,7 +358,11 @@ describe("assistant service notifications", () => {
     const model = http.createServer((request, response) => {
       request.resume();
       response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "bad request" } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "fixture model is switched off today" },
+        }),
+      );
     });
     await new Promise<void>((resolve) =>
       model.listen(0, "127.0.0.1", () => resolve()),
@@ -473,6 +477,19 @@ describe("assistant service notifications", () => {
       title: entry!.title,
       url: `/?inboxEntry=${entry!.id}&openProject=home&openSession=${entry!.sessionId}`,
     });
+    // The provider's reason reaches the run and the Inbox, not the push.
+    const runs = (
+      (await request({ path: `/api/jobs/${jobId}/runs`, cookie })).body as {
+        runs: Array<{ status: string; errorDetail?: string }>;
+      }
+    ).runs;
+    expect(runs[0]!.errorDetail).toContain("fixture model is switched off");
+    expect((entry as { body?: string }).body).toContain(
+      "fixture model is switched off",
+    );
+    expect(JSON.stringify(phone.read(pushed[0]!.body))).not.toContain(
+      "switched off",
+    );
 
     // Revoking the device deletes its subscription.
     await expect(

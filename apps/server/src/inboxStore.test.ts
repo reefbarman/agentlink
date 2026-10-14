@@ -36,6 +36,33 @@ const run = (patch: Partial<JobRun>): JobRun => ({
 describe("inboxEntryForRun", () => {
   const job = { name: "Morning brief" };
 
+  it("says what went wrong when the run knows", () => {
+    expect(
+      inboxEntryForRun(
+        run({
+          status: "failed",
+          error: "turn_execution_failed",
+          errorDetail: "The model is overloaded (HTTP 503)",
+        }),
+        job,
+      )?.body,
+    ).toBe("The model is overloaded (HTTP 503)");
+    expect(
+      inboxEntryForRun(
+        run({ status: "failed", error: "turn_execution_failed" }),
+        job,
+      )?.body,
+    ).toBe("turn_execution_failed");
+    expect(
+      inboxEntryForRun(
+        run({ status: "blocked_quota", errorDetail: "Weekly limit reached" }),
+        job,
+      )?.body,
+    ).toBe(
+      "The model provider refused the run (usage or rate limits). Weekly limit reached",
+    );
+  });
+
   it("raises entries for finished, blocked and waiting runs", () => {
     expect(
       inboxEntryForRun(run({ status: "completed", summary: "All good" }), job),

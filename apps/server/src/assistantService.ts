@@ -55,6 +55,7 @@ import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { createJobRoutes } from "./jobRoutes.js";
 import { createJobRunner, type JobRunner } from "./jobRunner.js";
 import { createJobTools } from "./jobTools.js";
+import { createTurnFailureLog, describeTurnFailure } from "./turnFailures.js";
 import { serverTimeZone } from "./jobSchedule.js";
 import {
   isActiveRun,
@@ -665,6 +666,8 @@ export async function startAssistantService(
     });
     // Bound once the runner exists; no turn can start before then.
     let jobRunner: JobRunner | undefined;
+    /** Why turns failed, beyond the public error code; owner-only. */
+    const turnFailures = createTurnFailureLog();
     const openHost = async (project: {
       readonly id: string;
       readonly root: string;
@@ -710,6 +713,14 @@ export async function startAssistantService(
           ...(await jobTools.readTools(request)),
         ],
         approvalHostTools: jobTools.approvalTools,
+        onTurnError: ({ sessionId, error, publicError }) => {
+          const detail = describeTurnFailure(error);
+          if (!detail) return;
+          turnFailures.record(project.id, sessionId, detail);
+          log(
+            `Turn failed in project "${project.id}" (${publicError.code}): ${detail}`,
+          );
+        },
         files: {
           enabled: true,
           // Protected paths always ask, whatever this says.
@@ -907,6 +918,8 @@ export async function startAssistantService(
       resolveModel,
       projectDefaults,
       log,
+      failureDetail: (projectId, sessionId) =>
+        turnFailures.take(projectId, sessionId),
       onRunRecovered: ({ run, job }) => recordInInbox(run, job),
       onRunChanged: ({ run, job, auth }) => {
         const bridge = bridges.get(run.projectId);

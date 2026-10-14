@@ -2033,6 +2033,44 @@ describe("headless E4 turn kernel", () => {
     expect(JSON.stringify({ events, result })).not.toContain("private.example");
   });
 
+  it("reports the private cause of a failed turn to the host only", async () => {
+    const cause = new Error("upstream said no: private.example");
+    class FailingBackend extends ScriptedBackend {
+      // oxlint-disable-next-line require-yield
+      override async *stream(): AsyncGenerator<CoreModelStreamEvent> {
+        throw cause;
+      }
+    }
+    const reports: Array<{ error: unknown; code: string; turnId: string }> = [];
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(new FailingBackend([])),
+      onTurnError: (report) => {
+        reports.push({
+          error: report.error,
+          code: report.publicError.code,
+          turnId: report.turnId,
+        });
+        // A failing observer cannot change the outcome.
+        throw new Error("observer broke");
+      },
+    });
+
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "turn_execution_failed" },
+    });
+    expect(reports).toEqual([
+      {
+        error: cause,
+        code: "turn_execution_failed",
+        turnId: (result as { turnId: string }).turnId,
+      },
+    ]);
+    expect(JSON.stringify({ events, result })).not.toContain("private.example");
+  });
+
   it("rejects unsupported model capabilities before provider dispatch", async () => {
     class NoToolBackend extends ScriptedBackend {
       override getCapabilities(): CoreModelCapabilities {

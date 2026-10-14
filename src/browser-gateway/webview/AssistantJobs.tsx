@@ -66,6 +66,8 @@ export interface JobRun {
   title?: string;
   summary?: string;
   error?: string;
+  /** What went wrong, in words, when the server knows. */
+  errorDetail?: string;
 }
 
 export interface Job {
@@ -792,9 +794,9 @@ function JobHistory({
                     : ""}
               </span>
             </span>
-            {(run.summary || run.error) && (
+            {(run.summary || run.errorDetail || run.error) && (
               <span class="assistant-run-summary">
-                {run.summary ?? run.error}
+                {run.summary ?? run.errorDetail ?? run.error}
               </span>
             )}
           </div>

@@ -71,6 +71,14 @@ export interface JobRunnerOptions {
   readonly approvalTimeoutMs?: number;
   readonly now?: () => number;
   readonly log?: (line: string) => void;
+  /**
+   * Why a run's chat failed, in words, when the host knows more than the
+   * turn's public error code. Read once, when the run ends.
+   */
+  readonly failureDetail?: (
+    projectId: string,
+    sessionId: string,
+  ) => string | undefined;
 }
 
 export interface JobRunner {
@@ -358,6 +366,14 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     if (entry.stopping) {
       final = { status: entry.stopping.status, error: entry.stopping.reason };
     }
+    const runSessionId = entry.run.sessionId;
+    const errorDetail =
+      runSessionId &&
+      (final.status === "failed" ||
+        final.status === "blocked_auth" ||
+        final.status === "blocked_quota")
+        ? options.failureDetail?.(job.projectId, runSessionId)
+        : undefined;
     // Free the job before its final record: whoever sees that may run it.
     if (live.get(job.id) === entry) live.delete(job.id);
     await save(entry, {
@@ -365,10 +381,11 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       finishedAt: now(),
       ...(final.summary ? { summary: final.summary } : {}),
       ...(final.error ? { error: final.error } : {}),
+      ...(errorDetail ? { errorDetail } : {}),
     });
     entry.controller.abort(new Error("job_run_finished"));
     log(
-      `Job "${job.name}" run ${final.status}${final.error ? ` (${final.error})` : ""}`,
+      `Job "${job.name}" run ${final.status}${final.error ? ` (${final.error})` : ""}${errorDetail ? `: ${errorDetail}` : ""}`,
     );
   };
 

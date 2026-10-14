@@ -105,6 +105,8 @@ export interface JobRun {
   readonly summary?: string;
   /** A stable error code, or why a run was skipped. */
   readonly error?: string;
+  /** What actually went wrong, in words (redacted), when it is known. */
+  readonly errorDetail?: string;
 }
 
 export class JobInputError extends Error {

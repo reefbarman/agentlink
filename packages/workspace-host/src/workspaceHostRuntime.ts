@@ -182,6 +182,16 @@ export interface CreateWorkspaceHostOptions {
    * session's approval mode (for example scheduling a job).
    */
   readonly approvalHostTools?: WorkspaceApprovalHostTools;
+  /**
+   * The private cause of a failed turn, before it is replaced by the safe
+   * public error in events. The host decides what, if anything, to keep.
+   */
+  readonly onTurnError?: (report: {
+    readonly sessionId: string;
+    readonly turnId: string;
+    readonly error: unknown;
+    readonly publicError: { readonly code: string; readonly message: string };
+  }) => void;
 }
 
 /**
@@ -757,6 +767,12 @@ export async function createWorkspaceHost(
     defaultModel: options.defaultModel,
     defaultReasoningEffort: options.defaultReasoningEffort,
     maxOutputTokens: 4_096,
+    ...(options.onTurnError
+      ? {
+          onTurnError: ({ sessionId, turnId, error, publicError }) =>
+            options.onTurnError?.({ sessionId, turnId, error, publicError }),
+        }
+      : {}),
     ...(fileTools ||
     commandTools ||
     artifactTools ||
