@@ -8,6 +8,7 @@ import {
   finalizeReport,
   mergeFeedbackCounts,
   parseArgs,
+  readJsonLines,
   readTelemetry,
 } from "./report-tool-usage-telemetry.mjs";
 
@@ -73,6 +74,51 @@ afterEach(() => {
   for (const directory of tempDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("reads lines incrementally across chunk and multibyte UTF-8 boundaries", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "lines.jsonl");
+  const lines = ["first", "", "héllo wörld 🎉", "x".repeat(37), "last"];
+  // CRLF endings plus a final line without a trailing newline.
+  fs.writeFileSync(inputPath, lines.join("\r\n"), "utf-8");
+  for (const chunkBytes of [1, 2, 3, 5, 7, 64, 1024]) {
+    assert.deepEqual(
+      [...readJsonLines(inputPath, chunkBytes)],
+      lines,
+      `chunk size ${chunkBytes}`,
+    );
+  }
+});
+
+test("incremental reading preserves totals and malformed-line accounting", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const records = [
+    flushRecord({
+      flushedAt: "2026-09-07T00:00:00Z",
+      tools: { read_file: toolBucket({ calls: 2, outcomes: { ok: 2 } }) },
+    }),
+    "{not json",
+    flushRecord({
+      flushedAt: "2026-09-08T00:00:00Z",
+      tools: { read_file: toolBucket() },
+    }),
+  ];
+  // Truncated final record with no trailing newline.
+  fs.writeFileSync(
+    inputPath,
+    records
+      .map((record) =>
+        typeof record === "string" ? record : JSON.stringify(record),
+      )
+      .join("\r\n") + '\r\n{"version":1,"type":"tool_usage_fl',
+    "utf-8",
+  );
+  const report = readTelemetry(inputPath);
+  assert.equal(report.flushes, 2);
+  assert.equal(report.tools.read_file.calls, 3);
+  assert.equal(report.invalidLines, 2);
 });
 
 test("separates v2 invocation groups and exposure from legacy call totals", () => {

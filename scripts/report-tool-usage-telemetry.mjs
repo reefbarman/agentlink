@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { StringDecoder } from "node:string_decoder";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadToolInventory } from "./tool-inventory.mjs";
@@ -238,11 +239,9 @@ export function readTelemetry(
     return report;
   }
 
-  const raw = fs.readFileSync(inputPath, "utf-8");
-  const lines = raw.split(/\r?\n/);
   const errorProcesses = new Map();
 
-  for (const line of lines) {
+  for (const line of readJsonLines(inputPath)) {
     if (!line.trim()) continue;
     let record;
     try {
@@ -427,6 +426,44 @@ export function readTelemetry(
 
   finalizeReport(report, knownParameters);
   return report;
+}
+
+const READ_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Yield lines from a file without materializing the whole file as one string.
+ * The telemetry log can exceed V8's maximum string length. Splits on LF and
+ * strips a trailing CR, matching the previous `split(/\r?\n/)` behavior, and
+ * decodes UTF-8 incrementally so multibyte characters may span chunks.
+ */
+export function* readJsonLines(filePath, chunkBytes = READ_CHUNK_BYTES) {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(chunkBytes);
+    const decoder = new StringDecoder("utf8");
+    let pending = "";
+    for (;;) {
+      const bytesRead = fs.readSync(fd, buffer, 0, chunkBytes, null);
+      if (bytesRead === 0) break;
+      pending += decoder.write(buffer.subarray(0, bytesRead));
+      let start = 0;
+      let newline = pending.indexOf("\n", start);
+      while (newline !== -1) {
+        yield stripTrailingCr(pending.slice(start, newline));
+        start = newline + 1;
+        newline = pending.indexOf("\n", start);
+      }
+      pending = pending.slice(start);
+    }
+    pending += decoder.end();
+    yield stripTrailingCr(pending);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function stripTrailingCr(line) {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
 }
 
 function isValidDate(value) {
