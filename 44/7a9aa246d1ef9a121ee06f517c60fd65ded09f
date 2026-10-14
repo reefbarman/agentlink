@@ -1,0 +1,16 @@
+src/tools/getRepoMap.test.ts
+  h_e08a86bb3a33a2 429-493
+src/tools/getRepoMap.ts
+  h_e08a86bb3a33a2 320-321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
