@@ -1,0 +1,104 @@
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 26-27,140-141,143-152,843-848,989-998,1000-1017,1019,1025,1162-1185
+  s_0ed5bae5b85292::t_a67dfe1e883e66 139,142,999,1018,1186-1188
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2827-2858
+apps/server/README.md
+  h_e08a86bb3a33a2 416-417
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 36
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 3,27,503-519
+apps/server/src/taskResultDelivery.test.ts
+  h_e08a86bb3a33a2 1-218
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 20-21,207-209,239,317,320-339,716-806
+  s_050983791c49cd::t_074548a21aa60a 807-808
+src/browser-gateway/webview/AssistantTasks.test.tsx
+  h_e08a86bb3a33a2 12-14,18,119-170
+  s_1542310f12cec6::t_51599104807c5c 171
+src/browser-gateway/webview/AssistantTasks.tsx
+  h_e08a86bb3a33a2 160-232
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 23,113,787,789,791-793,922-923,1058-1059,1148-1190,1307,1311-1317,1319,1391,1447-1448
+  s_0bb9e3b90ba188::t_8d76020a427263 790,1310,1318,1320
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 423-424
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 3,436-444
+apps/server/src/taskTools.test.ts
+  h_e08a86bb3a33a2 49-50,82,94,99,111-113
+  s_0ed5bae5b85292::t_00fb1c34f8b5cc 73-79,93,95,104-105,107,109-110,114-116,121,124-126,248-356,504-508
+CHANGELOG.md
+  h_e08a86bb3a33a2 18
+apps/server/src/taskRoutes.test.ts
+  h_e08a86bb3a33a2 64
+apps/server/src/taskStore.ts
+  h_e08a86bb3a33a2 234-242,249-257
+  s_0ed5bae5b85292::t_6c1a9e0212edca 258
+apps/server/src/taskResultDelivery.ts
+  h_e08a86bb3a33a2 1-320
+apps/server/src/taskTools.ts
+  h_e08a86bb3a33a2 29,55,71,87-91,97,130-141,406-407,426-448,450-575,577-578,580,584-588,590-607,610-613,620-628,630,632-641,651-657,661-669
+  s_0ed5bae5b85292::t_760849275f65a6 408-425,576,582-583,608-609,614-618,631,670
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 58,604-605,10402-10404
+apps/server/src/taskReview.ts
+  h_e08a86bb3a33a2 78-86
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 50-58,161-165,168-175,210-219,423,430-433,471,473,737-796,798-799,806,1916
+  s_050983791c49cd::t_cb45f2f4578498 166-167,434,472,474,797,800-805,807-808
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 988-1061
+apps/server/src/taskPublish.ts
+  h_e08a86bb3a33a2 114-120
+apps/server/src/repositoryTools.test.ts
+  s_1542310f12cec6::t_2fb4262498ce38 385-386
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1542310f12cec6::t_79bcade4181529 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_050983791c49cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33281894-e8d9-42e3-a44a-c02adaace7c2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0bb9e3b90ba188": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5fecb944-3484-4b2d-99c2-fb8bdf841204",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0ed5bae5b85292": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44298e0a-cefb-43d3-8842-3ad5d814c12d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1542310f12cec6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3ebe0cff-4afb-49f4-9a45-105ef0b9dec9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
