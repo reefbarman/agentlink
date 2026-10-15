@@ -67,6 +67,10 @@ describe("createWebTools", () => {
     ).values()) {
       expect(tool.effect).toBe("read");
       expect(tool.authorization).toBe("none");
+      // The chat's tool card shows what was asked for.
+      expect(tool.displayInput?.({ url: "https://a.example" })).toEqual({
+        url: "https://a.example",
+      });
     }
   });
 });

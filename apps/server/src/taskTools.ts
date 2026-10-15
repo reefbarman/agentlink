@@ -369,6 +369,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       additionalProperties: false,
       properties: {},
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "read",
     parallelSafe: true,
     presentation: { title: "List coding tasks" },
@@ -449,6 +451,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         },
         required: ["repository", "objective"],
       },
+      // Shown on the chat's tool card (inputs come from the model, no secrets).
+      displayInput: (input) => input,
       effect: "write",
       authorization: "required",
       presentation: { title: "Start a coding task" },
@@ -579,6 +583,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         },
         required: ["taskId", "instructions"],
       },
+      // Shown on the chat's tool card (inputs come from the model, no secrets).
+      displayInput: (input) => input,
       effect: "write",
       authorization: "required",
       presentation: { title: "Continue a coding task" },

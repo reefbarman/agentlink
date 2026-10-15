@@ -259,9 +259,16 @@ describe("read_repository", () => {
         connections: { get: () => undefined },
         ...(snapshots ? { snapshots } : {}),
       });
-      return ((await resolve({} as never)) as unknown as RunnableTool[]).map(
-        (tool) => tool.definition.name,
-      );
+      const tools = (await resolve({} as never)) as unknown as Array<
+        RunnableTool & { displayInput?: (input: unknown) => unknown }
+      >;
+      // Each tool card shows what was asked for, not an empty {}.
+      for (const tool of tools) {
+        expect(tool.displayInput?.({ repository: "a/b" })).toEqual({
+          repository: "a/b",
+        });
+      }
+      return tools.map((tool) => tool.definition.name);
     };
     expect(await names()).toEqual(["list_repositories"]);
     expect(await names(readSetup({ snapshot: SNAPSHOT }).snapshots)).toEqual([

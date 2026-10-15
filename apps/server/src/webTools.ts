@@ -103,6 +103,8 @@ function webFetchTool(options: WebToolsOptions): HostTool {
       },
       required: ["url"],
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "read",
     parallelSafe: true,
     presentation: { title: "Read web page" },
@@ -198,6 +200,8 @@ function webSearchTool(options: WebToolsOptions): HostTool {
       },
       required: ["query"],
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "read",
     parallelSafe: true,
     presentation: { title: "Search the web" },

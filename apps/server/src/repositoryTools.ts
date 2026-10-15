@@ -261,6 +261,8 @@ export function createRepositoryTools(options: {
         },
       },
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "read",
     parallelSafe: true,
     presentation: { title: "Find repositories" },
@@ -352,6 +354,8 @@ export function createRepositoryTools(options: {
           },
           required: ["repository"],
         },
+        // Shown on the chat's tool card (inputs come from the model, no secrets).
+        displayInput: (input) => input,
         effect: "read",
         parallelSafe: true,
         presentation: { title: "Read a repository" },

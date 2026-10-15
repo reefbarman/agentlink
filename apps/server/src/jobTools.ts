@@ -437,6 +437,8 @@ export function createJobTools(options: JobToolsOptions): JobTools {
       additionalProperties: false,
       properties: {},
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "read",
     parallelSafe: true,
     presentation: { title: "List scheduled jobs" },
@@ -538,6 +540,8 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         },
       },
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "write",
     authorization: "required",
     presentation: { title: "Schedule a job" },
@@ -554,6 +558,8 @@ export function createJobTools(options: JobToolsOptions): JobTools {
       properties: { jobId: { type: "string", minLength: 1 } },
       required: ["jobId"],
     },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
     effect: "write",
     authorization: "required",
     presentation: { title: "Delete a scheduled job" },
