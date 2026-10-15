@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.31.2
+
 - `web_fetch` through the Codex web route now says when a page came back incomplete. If the provider reports more lines than it can serve (for example a 595-line source file that stops at line 405), the warning names the missing line range and tells the agent to use another web tool for the rest, instead of only saying pagination did not advance.
 
 ## 1.31.1

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
-  "createdAt": "2026-10-15T07:54:36.141Z",
+  "sourceSha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
+  "createdAt": "2026-10-15T11:52:04.005Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.31.0",
-      "baselineRef": "v1.31.0",
-      "reserved": "1.31.0",
-      "commits": ["870bdc1a3b83d150e754d4c1888e6e5d9190d6a1"],
+      "published": "1.31.1",
+      "baselineRef": "v1.31.1",
+      "reserved": "1.31.1",
+      "commits": ["ddcc086e12f0e116168d13964f92684cd6c0bb60"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.31.1",
+      "version": "1.31.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.31.1",
+      "tag": "v1.31.2",
       "notes": [
         {
-          "sha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
-          "subject": "fix: address triaged feedback for pkill review, regex replace escapes and duplicate MCP servers",
-          "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
+          "sha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
+          "subject": "fix(web_fetch): name unserved line range when Codex pagination stops short",
+          "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.18.0",
-      "baselineRef": "desktop-v0.18.0",
-      "reserved": "0.18.0",
-      "commits": ["870bdc1a3b83d150e754d4c1888e6e5d9190d6a1"],
+      "published": "0.18.1",
+      "baselineRef": "desktop-v0.18.1",
+      "reserved": "0.18.1",
+      "commits": ["ddcc086e12f0e116168d13964f92684cd6c0bb60"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.18.1",
+      "version": "0.18.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.18.1",
+      "tag": "desktop-v0.18.2",
       "notes": [
         {
-          "sha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
-          "subject": "fix: address triaged feedback for pkill review, regex replace escapes and duplicate MCP servers",
-          "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
+          "sha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
+          "subject": "fix(web_fetch): name unserved line range when Codex pagination stops short",
+          "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
           "breaking": false
         }
       ]
@@ -87,6 +87,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ddcc086e12f0e116168d13964f92684cd6c0bb60": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
