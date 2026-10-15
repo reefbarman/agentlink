@@ -1,256 +1,34 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "4216397f89a9322e0aa80be699f6010253794f38",
-  "createdAt": "2026-10-15T00:24:49.379Z",
+  "sourceSha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
+  "createdAt": "2026-10-15T07:54:36.141Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
     "omitted": []
   },
-  "overrides": [
-    "39a786755f9fd16bc59368d5d8c8001da8016d72",
-    "5f5e17d3854f62cb4f1834594835d84149e8074e"
-  ],
+  "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.30.0",
-      "baselineRef": "v1.30.0",
-      "reserved": "1.30.25",
-      "commits": [
-        "39a786755f9fd16bc59368d5d8c8001da8016d72",
-        "5f5e17d3854f62cb4f1834594835d84149e8074e",
-        "5f113c66bf469a69f030ce11d9592ba0a70f6da1",
-        "ba01165559855e54dc99b03bbded3fff99d44df4",
-        "1466f3085cddaa38911535b71e52be6c3c9cc7b2",
-        "f7752cea8c2ee2a76f7861ca15f5938627fac69f",
-        "515cf9529208deb0490dcedc01ab3b7871c6bed1",
-        "43c0e5f91bcb42b876c4ef42eb085982a7453840",
-        "41193a70f19afb6c60e9042cef1c66cec90ba875",
-        "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
-        "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
-        "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
-        "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-        "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-        "776bc1d0d4400d3ab593343e471d3f9de136acfc",
-        "0a6a81187b725493b453073dd1e708d0f90e96ff",
-        "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-        "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-        "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-        "8b7e1087512f1ab4288534970d936c91794ab055",
-        "ec193cd75140f32079325fcb88df539ffc0949d9",
-        "525d9afac9f8c922a5c3bf875ce1722a71335600",
-        "c828cbc504f1fd9e644aedd517074534d5e71791",
-        "24e35e0caad915b053057d25581dbf6488d74a1e",
-        "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
-        "861db4e485252ce68d5def6c52a0f5a127d09f81",
-        "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
-        "fad7841d7b9a0a828b4426e90be03f6b33902b95",
-        "01b905b29eab99ba10d279e7fcc54bea783bb605",
-        "936854e9c6398662cc22166f6ab40193dff7935b",
-        "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
-        "ffff73794cbf107182575bd176cc0f44816f9552"
-      ],
+      "published": "1.31.0",
+      "baselineRef": "v1.31.0",
+      "reserved": "1.31.0",
+      "commits": ["870bdc1a3b83d150e754d4c1888e6e5d9190d6a1"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.31.0",
-      "effectiveBump": "minor",
+      "version": "1.31.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.31.0",
+      "tag": "v1.31.1",
       "notes": [
         {
-          "sha": "39a786755f9fd16bc59368d5d8c8001da8016d72",
-          "subject": "feat(retrieval): upgrade LanceDB and drop Intel Mac support",
-          "summary": "Upgrades LanceDB and drops Intel Mac (darwin-x64) support; installers and the VS Code install commands now require Apple Silicon.",
-          "breaking": false
-        },
-        {
-          "sha": "5f5e17d3854f62cb4f1834594835d84149e8074e",
-          "subject": "chore(vscode): require VS Code 1.140 and align API types",
-          "summary": "The VS Code extension now requires VS Code 1.140.0 or newer, so older editors can no longer install the current release.",
-          "breaking": false
-        },
-        {
-          "sha": "5f113c66bf469a69f030ce11d9592ba0a70f6da1",
-          "subject": "fix(terminal): report shell output when native shell startup times out",
-          "summary": "Native shell startup timeouts now report the shell's last output, such as an update prompt, in the error and output channel log.",
-          "breaking": false
-        },
-        {
-          "sha": "ba01165559855e54dc99b03bbded3fff99d44df4",
-          "subject": "feat(cli): migrate multiline input to Ink 8",
-          "summary": "The CLI multiline composer moves to Ink 8 with a local editor supporting cursor movement, paste, and horizontal scrolling of long lines.",
-          "breaking": false
-        },
-        {
-          "sha": "1466f3085cddaa38911535b71e52be6c3c9cc7b2",
-          "subject": "fix(terminal): keep tasks menu within the webview viewport",
-          "summary": "The terminal tasks menu now stays inside the webview viewport instead of overflowing the left edge in narrow panels.",
-          "breaking": false
-        },
-        {
-          "sha": "f7752cea8c2ee2a76f7861ca15f5938627fac69f",
-          "subject": "fix(agent): restore pending ask_user cards for non-foreground chat tabs",
-          "summary": "Pending ask_user questions in non-foreground chat tabs are now persisted and restored on reload instead of being treated as interrupted.",
-          "breaking": false
-        },
-        {
-          "sha": "515cf9529208deb0490dcedc01ab3b7871c6bed1",
-          "subject": "fix: address triaged tool feedback",
-          "summary": "Fixes search_files match limits and offsets, ignores no-op document version bumps in edit review, logs sandbox probe errors, and warns when attaching to an outdated browser gateway helper.",
-          "breaking": false
-        },
-        {
-          "sha": "43c0e5f91bcb42b876c4ef42eb085982a7453840",
-          "subject": "fix(openai-compatible): count inline images at a fixed cost in usage fallback",
-          "summary": "Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.",
-          "breaking": false
-        },
-        {
-          "sha": "41193a70f19afb6c60e9042cef1c66cec90ba875",
-          "subject": "fix: address triaged tool feedback",
-          "summary": "Budget-exhausted background results include a completed-tool digest, sandboxed gh keyring failures get host-credential guidance, more config secrets are redacted, and compose telemetry records rejected children.",
-          "breaking": false
-        },
-        {
-          "sha": "16693ce7c1e6f7a49310ac9cef79175f3d20987f",
-          "subject": "fix(tools): refuse write_file rewrites that replace secrets with the redaction placeholder",
-          "summary": "write_file now refuses full rewrites of structured config files that would replace existing secret values with the [REDACTED] placeholder.",
-          "breaking": false
-        },
-        {
-          "sha": "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b",
-          "subject": "chore(release): desktop-v0.10.0, cli-v0.11.0, sdk-v0.7.1",
-          "summary": "Release bookkeeping commit that updates version metadata, the lockfile, and changelogs without changing shipped behaviour.",
-          "breaking": false
-        },
-        {
-          "sha": "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181",
-          "subject": "fix(agent): offer history migration when an untitled workspace is saved",
-          "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
-          "breaking": false
-        },
-        {
-          "sha": "8b30ef6e3912defc9d9e852e84e111da99fdac14",
-          "subject": "fix(node-host): bind Codex OAuth callback to loopback and allow requiring Secret Service",
-          "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
-          "breaking": false
-        },
-        {
-          "sha": "e3b849eb40e8cea3429e37fcbe70f2a92937edb0",
-          "subject": "feat(agent): add Codex voice input to the chat composer",
-          "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
-          "breaking": false
-        },
-        {
-          "sha": "776bc1d0d4400d3ab593343e471d3f9de136acfc",
-          "subject": "feat(voice): live dictation with pause detection, auto-stop, and push-to-talk",
-          "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
-          "breaking": false
-        },
-        {
-          "sha": "0a6a81187b725493b453073dd1e708d0f90e96ff",
-          "subject": "feat(core): expose live dictation helpers as @agentlink/core/voice",
-          "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
-          "breaking": false
-        },
-        {
-          "sha": "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089",
-          "subject": "docs(core): guide for adding a voice input button with @agentlink/core",
-          "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
-          "breaking": false
-        },
-        {
-          "sha": "b6884d8dc5684f8e48f4fe346aa6b37b4e735818",
-          "subject": "feat(web): lend Codex OAuth web tools to every model",
-          "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
-          "breaking": false
-        },
-        {
-          "sha": "f1d93924cec164a16ae05f765e47a4a295e08a8d",
-          "subject": "fix(core): avoid Cloudflare challenge in default transcription fetch",
-          "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
-          "breaking": false
-        },
-        {
-          "sha": "8b7e1087512f1ab4288534970d936c91794ab055",
-          "subject": "fix(web): treat Codex 'not accessible via this tool' pages as failed reads",
-          "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
-          "breaking": false
-        },
-        {
-          "sha": "ec193cd75140f32079325fcb88df539ffc0949d9",
-          "subject": "fix(tools): report sandbox preparation failure reason on native fallback",
-          "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
-          "breaking": false
-        },
-        {
-          "sha": "525d9afac9f8c922a5c3bf875ce1722a71335600",
-          "subject": "feat(tools): allow ssh -t with a remote command in execute_command",
-          "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
-          "breaking": false
-        },
-        {
-          "sha": "c828cbc504f1fd9e644aedd517074534d5e71791",
-          "subject": "docs(skills): let documentation skill defer to a user-named source checkout",
-          "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
-          "breaking": false
-        },
-        {
-          "sha": "24e35e0caad915b053057d25581dbf6488d74a1e",
-          "subject": "fix(browser-gateway): restore attached image previews over the relay data plane",
-          "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
-          "breaking": false
-        },
-        {
-          "sha": "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
-          "subject": "feat(condense): align GPT-6.1 Sol auto-condense with Codex 500k default window",
-          "summary": "GPT-6.1 Sol now auto-condenses at about 450k input tokens, matching Codex's 500k default window, instead of the generic 256k-based default.",
-          "breaking": false
-        },
-        {
-          "sha": "861db4e485252ce68d5def6c52a0f5a127d09f81",
-          "subject": "feat(condense): cost-aware per-model condense targets and pre-condense notice",
-          "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
-          "breaking": false
-        },
-        {
-          "sha": "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
-          "subject": "fix(repo-map): rank SwiftPM .build output after project code",
-          "summary": "get_repo_map now lists SwiftPM .build output after project code, so generated artifacts no longer crowd authored modules out of a bounded map.",
-          "breaking": false
-        },
-        {
-          "sha": "fad7841d7b9a0a828b4426e90be03f6b33902b95",
-          "subject": "feat(execute_command): guide recovery from SwiftPM nested sandbox denial",
-          "summary": "Sandboxed swift build/test failures from SwiftPM's nested sandbox now return guidance to retry with --disable-sandbox inside AgentLink's sandbox, never automatically and never via native escalation.",
-          "breaking": false
-        },
-        {
-          "sha": "01b905b29eab99ba10d279e7fcc54bea783bb605",
-          "subject": "feat(background): preflight outside-workspace ownedPaths at spawn",
-          "summary": "Writable background spawns are now checked up front: an ownedPaths entry outside the workspace that inherited approvals cannot reach is rejected immediately, and partial coverage returns writeScopeWarnings.",
-          "breaking": false
-        },
-        {
-          "sha": "936854e9c6398662cc22166f6ab40193dff7935b",
-          "subject": "feat(mcp): redact device sign-in callback secrets from tool results",
-          "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
-          "breaking": false
-        },
-        {
-          "sha": "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
-          "subject": "fix(openai-compatible): report structural context for malformed tool arguments",
-          "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
-          "breaking": false
-        },
-        {
-          "sha": "ffff73794cbf107182575bd176cc0f44816f9552",
-          "subject": "feat(images): render Markdown images and add web image retrieval",
-          "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
+          "sha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
+          "subject": "fix: address triaged feedback for pkill review, regex replace escapes and duplicate MCP servers",
+          "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
           "breaking": false
         }
       ]
@@ -259,13 +37,25 @@
       "published": "0.18.0",
       "baselineRef": "desktop-v0.18.0",
       "reserved": "0.18.0",
-      "commits": [],
+      "commits": ["870bdc1a3b83d150e754d4c1888e6e5d9190d6a1"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.18.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.18.1",
+      "notes": [
+        {
+          "sha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
+          "subject": "fix: address triaged feedback for pkill review, regex replace escapes and duplicate MCP servers",
+          "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
+          "breaking": false
+        }
+      ]
     },
     "cli": {
       "published": "0.18.0",
@@ -293,259 +83,11 @@
     }
   },
   "decisions": {
-    "39a786755f9fd16bc59368d5d8c8001da8016d72": {
-      "bump": "patch",
-      "breakingUnits": ["cli", "desktop", "vscode"],
-      "summary": "Upgrades LanceDB and drops Intel Mac (darwin-x64) support; installers and the VS Code install commands now require Apple Silicon.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5f5e17d3854f62cb4f1834594835d84149e8074e": {
-      "bump": "patch",
-      "breakingUnits": ["vscode"],
-      "summary": "The VS Code extension now requires VS Code 1.140.0 or newer, so older editors can no longer install the current release.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5f113c66bf469a69f030ce11d9592ba0a70f6da1": {
+    "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Native shell startup timeouts now report the shell's last output, such as an update prompt, in the error and output channel log.",
+      "summary": "Requires direct approval for broad pkill/killall patterns, makes regex find_and_replace interpret \\n, \\t and \\\\ like VS Code, and connects the Browser Ask Agent MCP hub lazily to avoid duplicate stdio MCP servers.",
       "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ba01165559855e54dc99b03bbded3fff99d44df4": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The CLI multiline composer moves to Ink 8 with a local editor supporting cursor movement, paste, and horizontal scrolling of long lines.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "1466f3085cddaa38911535b71e52be6c3c9cc7b2": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The terminal tasks menu now stays inside the webview viewport instead of overflowing the left edge in narrow panels.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f7752cea8c2ee2a76f7861ca15f5938627fac69f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Pending ask_user questions in non-foreground chat tabs are now persisted and restored on reload instead of being treated as interrupted.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "515cf9529208deb0490dcedc01ab3b7871c6bed1": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes search_files match limits and offsets, ignores no-op document version bumps in edit review, logs sandbox probe errors, and warns when attaching to an outdated browser gateway helper.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "43c0e5f91bcb42b876c4ef42eb085982a7453840": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "41193a70f19afb6c60e9042cef1c66cec90ba875": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Budget-exhausted background results include a completed-tool digest, sandboxed gh keyring failures get host-credential guidance, more config secrets are redacted, and compose telemetry records rejected children.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "16693ce7c1e6f7a49310ac9cef79175f3d20987f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "write_file now refuses full rewrites of structured config files that would replace existing secret values with the [REDACTED] placeholder.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a24ad03ae08e9d18ac4ad13b1e57c35fd174595b": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Release bookkeeping commit that updates version metadata, the lockfile, and changelogs without changing shipped behaviour.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "33ba852d4ac9404b4cc80fc4d251e7ef8bc13181": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When an untitled multi-folder workspace is saved to a .code-workspace file with the same folders, AgentLink now offers to migrate the earlier chat history into the saved workspace.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8b30ef6e3912defc9d9e852e84e111da99fdac14": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "e3b849eb40e8cea3429e37fcbe70f2a92937edb0": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "776bc1d0d4400d3ab593343e471d3f9de136acfc": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Voice input now transcribes live at natural pauses, auto-stops after configurable silence, supports push-to-talk (hold the mic or Alt+M), shows a live level and timer, and can optionally auto-send hands-free dictations.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0a6a81187b725493b453073dd1e708d0f90e96ff": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a browser-safe @agentlink/core/voice entry point with a pause-based voice activity segmenter, PCM resampler and WAV encoder for live dictation, which the VS Code recorder and browser capture now import from core.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d605785b2d8ff9bfbe7eb5d3ba9cc90eaae1c089": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Adds a voice input button guide to the core package, with a README Voice input section and a bundled documentation skill summary; no runtime behaviour changes.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b6884d8dc5684f8e48f4fe346aa6b37b4e735818": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f1d93924cec164a16ae05f765e47a4a295e08a8d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Codex audio transcription now uploads through undici with a narrower TLS cipher list and honours proxy settings, avoiding Cloudflare challenges in Electron; the SDK also exports createCodexTranscriptionFetch and CODEX_TRANSCRIPTION_TLS_CIPHERS.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8b7e1087512f1ab4288534970d936c91794ab055": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Web reads of unreachable URLs that return a Codex 'not accessible via this tool' page are now treated as failed reads instead of successful page content.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ec193cd75140f32079325fcb88df539ffc0949d9": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "525d9afac9f8c922a5c3bf875ce1722a71335600": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c828cbc504f1fd9e644aedd517074534d5e71791": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "24e35e0caad915b053057d25581dbf6488d74a1e": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "88ca1b0da869f0a4e14a961db8b5e24b8804e3de": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "GPT-6.1 Sol now auto-condenses at about 450k input tokens, matching Codex's 500k default window, instead of the generic 256k-based default.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "861db4e485252ce68d5def6c52a0f5a127d09f81": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "447a9aa246d1ef9a121ee06f517c60fd65ded09f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "get_repo_map now lists SwiftPM .build output after project code, so generated artifacts no longer crowd authored modules out of a bounded map.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "fad7841d7b9a0a828b4426e90be03f6b33902b95": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Sandboxed swift build/test failures from SwiftPM's nested sandbox now return guidance to retry with --disable-sandbox inside AgentLink's sandbox, never automatically and never via native escalation.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "01b905b29eab99ba10d279e7fcc54bea783bb605": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Writable background spawns are now checked up front: an ownedPaths entry outside the workspace that inherited approvals cannot reach is rejected immediately, and partial coverage returns writeScopeWarnings.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "936854e9c6398662cc22166f6ab40193dff7935b": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ffff73794cbf107182575bd176cc0f44816f9552": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
-      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

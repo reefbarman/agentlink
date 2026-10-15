@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.31.1
+
 - With Approve for Me, `pkill -f`, `killall -m`, and `pkill`/`killall` commands with options after the first pattern now always ask you directly instead of going to automatic command review. On macOS, `pkill` treats options after a pattern as extra patterns, so a command like `pkill -f 'name$' -P 1` could match almost every process and close VS Code. Narrow forms such as `pkill -9 node` are reviewed as before.
 - `find_and_replace` in regex mode now turns `\n`, `\t` and `\\` in the replacement into a newline, tab and backslash, matching VS Code's regex replace. Previously they were written literally, so a replacement meant to keep tab indentation could corrupt source files. Other backslash sequences and the `$1`/`$$` rules are unchanged.
 - Each VS Code window no longer starts a second copy of every global stdio MCP server at startup. The window's Browser Ask Agent MCP connection now starts on the first Browser Ask Agent MCP request, so until then each server runs once per window, under the project connection.
