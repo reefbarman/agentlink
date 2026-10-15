@@ -1,0 +1,67 @@
+apps/server/src/publisherClient.ts
+  h_e08a86bb3a33a2 7-8,10,58-65,139-146,152,159-162,169-173,189-190,193-202
+  s_05070c67fc44ef::t_97651a98ae3aca 147-151,153-158,163-168,174,203
+apps/server/src/repositorySnapshots.ts
+  h_e08a86bb3a33a2 1-282
+apps/server/src/publisher.test.ts
+  h_e08a86bb3a33a2 18,181,213-215,731-753,755-820,825-870
+  s_159562a3aa8ff5::t_b6101e9f38f8c3 754,821-823
+apps/server/README.md
+  h_e08a86bb3a33a2 407,444
+  h_e08a86bb3a33a2 445
+apps/server/src/repositoryTools.test.ts
+  h_e08a86bb3a33a2 5-8,16-17,183-353,358-362,364-371
+  s_159562a3aa8ff5::t_d1309e3e0cbc4b 354-357,372-377
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 111,774-776,781-783,793-826,830-837,843,1308
+  h_e08a86bb3a33a2 777-780,784-792
+apps/server/src/publisher.ts
+  h_e08a86bb3a33a2 57-60,136-154,308-322,401-402,405,702-763,837-839,1050-1073
+  s_159562a3aa8ff5::t_64805c76b5d691 323-325,764-765,840,1074-1075
+apps/server/src/githubRoutes.test.ts
+  h_e08a86bb3a33a2 102
+apps/server/src/taskTools.test.ts
+  h_e08a86bb3a33a2 6-7,35-44,46-49,67-70,75-82,102-104,108-221
+  s_05070c67fc44ef::t_84c983e866bd53 45,50,96-101,105,222
+CHANGELOG.md
+  h_e08a86bb3a33a2 17-18
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 3,5,7-9,75-173,175-202,208-211,321-402,405,415-416,432-439
+  s_159562a3aa8ff5::t_66f1e10edf16dc 6,174,203-204,403-404,440-441
+apps/server/src/repositorySnapshots.test.ts
+  h_e08a86bb3a33a2 1-242
+apps/server/src/taskTools.ts
+  h_e08a86bb3a33a2 12-13,16,19-20,43-47,58-65,68-76,84,86,91-95,113-116,132-152,154-159,162,164,172-173,175-179,181-191,201-204,206,211,214-216,218,248-303,305,364-369,396-406,412,429-435
+  s_05070c67fc44ef::t_dd6c92e5752bc4 18,21,153,160-161,304,306-307,370,407
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3392576dce22a714d3a062f530261c36fee45af",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_05070c67fc44ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8a2a25a4-1d48-4883-ae36-b148804127b1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_159562a3aa8ff5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e7a41df0-249a-4239-ba86-3490ab934c12",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
