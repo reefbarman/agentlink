@@ -1,0 +1,99 @@
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 11,227-244,252,893-905,907-926,928
+  s_e5b5e1581d3856::t_943c7a9e43bf74 906,927,929-930
+apps/server/src/SessionEventHub.ts
+  h_e08a86bb3a33a2 111-113,146-152,162-172
+  s_e5b5e1581d3856::t_a30302e44af30a 173-174
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 424-464
+apps/server/src/sessionProgress.test.ts
+  h_e08a86bb3a33a2 1-90
+CHANGELOG.md
+  h_e08a86bb3a33a2 22
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 70,76-77,123,149-153,155-159,924-928,930-931,979-981,984,1058-1063,1071-1073,1081-1089,1113,1181-1184,1189-1210,1492-1508,1553-1554
+  s_e7087805a9779e::t_ee1158e41cb6f5 929,1064-1070,1074-1080,1185-1188
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 101-102,156-157,160-166,1212-1224,1308-1330
+  s_f899f9b75da6ab::t_495867013bd42c 100,1225-1230
+packages/workspace-host/src/sessionInteractionTools.ts
+  h_e08a86bb3a33a2 26-30,54,56,64-66,124
+apps/server/README.md
+  h_e08a86bb3a33a2 32-33,348,360,375-383,420
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 12,70-76,79-84,262-267,447-453,563,566,840,843,855,911,914,928-932,1172-1173,1265-1329,1340,1344-1345,1364-1365,1389,1487,1610,1613,1650,1653,1673-1677,1679,1831-1833,1899,2395-2417
+  s_e5b5e1581d3856::t_d4aabd6b15ed38 85,564-565,567,2418
+apps/server/src/sessionProgress.ts
+  h_e08a86bb3a33a2 1-103
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 90-91,198,1307-1401
+  s_f899f9b75da6ab::t_0a996f922a1fbf 1402-1403
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 1431-1439
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 165-172,440-452,475-481,483,695-697,701,703-704,707
+  s_e5b5e1581d3856::t_9b795ee2b2b8be 474,485,702
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 39
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 160-163,201-203
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2823-2831
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 2,34-37,261-300,414-422,477-479
+  s_e5b5e1581d3856::t_9cd0b118c19fa5 33,423-426,480-481
+apps/server/src/sessionWatch.test.ts
+  h_e08a86bb3a33a2 1-203
+apps/server/src/sessionWatch.ts
+  h_e08a86bb3a33a2 1-260
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 4,438-565
+  s_e7087805a9779e::t_3d3a3466b6d10b 566
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 3,14-17,95-97,220-221,308,345-351,359-364,367-370,374-398,413,453
+  s_e5b5e1581d3856::t_04f95e1aad3963 13,94,365-366,371-373
+apps/server/src/inboxRoutes.ts
+  h_e08a86bb3a33a2 7-9,17-18,26-27,33-38,56-57,63-88
+  s_e5b5e1581d3856::t_d084a578273551 5-6,10,54-55,58
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 20,420-592
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e5b5e1581d3856": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "65f87dc6-5624-4bfe-b2d8-ff237cd3b13e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_e7087805a9779e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ee25319-2365-41cd-831e-958fe6ed5c9c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_f899f9b75da6ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a5b3ff49-d12b-467e-80c3-019f720c4173",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
