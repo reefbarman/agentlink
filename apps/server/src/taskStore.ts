@@ -231,11 +231,30 @@ export interface TaskRun extends TaskRequest {
   readonly error?: string;
   /** What actually went wrong, in words, when it is known. */
   readonly errorDetail?: string;
+  /**
+   * The chat that started the task (or asked its latest follow-up): its
+   * outcomes are delivered there.
+   */
+  readonly origin?: { readonly projectId: string; readonly sessionId: string };
+  /** The owner's follow-up instructions, oldest first (`continue_task`). */
+  readonly followUps?: readonly TaskFollowUp[];
+  /** A follow-up approved but not yet sent to the implementation chat. */
+  readonly pendingFollowUp?: string;
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly startedAt?: number;
   readonly finishedAt?: number;
 }
+
+export interface TaskFollowUp {
+  readonly instructions: string;
+  readonly at: number;
+}
+
+/** Longest follow-up instruction from a chat. */
+export const MAX_FOLLOW_UP_LENGTH = 4_000;
+/** Follow-ups kept on a task. */
+export const MAX_FOLLOW_UPS = 20;
 
 export interface TaskEvent {
   readonly taskId: string;

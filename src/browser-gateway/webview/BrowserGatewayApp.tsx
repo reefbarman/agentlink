@@ -55,6 +55,7 @@ import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { AssistantHub } from "./AssistantJobs";
+import { ChatTaskStrip, type ChatTaskCard } from "./AssistantTasks";
 import { DesktopRemotePane } from "./DesktopRemotePane";
 import { AssistantLauncher } from "./AssistantLauncher";
 import type {
@@ -600,6 +601,8 @@ export type GatewaySnapshot = {
   approvalMode?: "autonomous" | "ask";
   /** The Assistant's unread inbox count and jobs/inbox revision. */
   assistant?: { inboxUnread: number; revision: number };
+  /** The Assistant's coding tasks from the open chat; absent elsewhere. */
+  tasks?: ChatTaskCard[];
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -10396,6 +10399,9 @@ export function BrowserGatewayApp({
                     className="browser-streaming-row"
                   />
                 ) : null}
+                {assistantFleet && !mobileReviewOpen && (
+                  <ChatTaskStrip tasks={snapshot?.tasks} />
+                )}
                 {assistantFleet && !mobileReviewOpen && (
                   <BackgroundSessionStrip
                     key={foreground?.sessionId ?? selectedTabId}

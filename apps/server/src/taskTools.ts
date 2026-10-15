@@ -26,6 +26,7 @@ import {
   githubRepositoryUrl,
 } from "./repositoryTools.js";
 import {
+  MAX_FOLLOW_UP_LENGTH,
   MAX_TASK_REFERENCES,
   MAX_TASKS,
   parseTaskRequest,
@@ -51,7 +52,7 @@ import {
  *   Approving saves them, unless the owner set them meanwhile.
  */
 
-export const TASK_TOOL_NAMES = ["start_task"] as const;
+export const TASK_TOOL_NAMES = ["start_task", "continue_task"] as const;
 /** Shorter than the API's limit so the approval card shows all of it. */
 export const MAX_TOOL_OBJECTIVE_LENGTH = 4_000;
 const MAX_LISTED_MODELS = 20;
@@ -67,7 +68,7 @@ export interface TaskToolsOptions {
   /** Which connection reaches a repository, to offer publishing with it. */
   readonly directory?: Pick<RepositoryDirectory, "resolveConnection">;
   readonly connections?: Pick<GitHubConnectionStore, "get">;
-  readonly runner: Pick<TaskRunner, "create">;
+  readonly runner: Pick<TaskRunner, "create" | "continueTask">;
   readonly models: readonly AssistantServerModelChoice[];
   readonly now?: () => number;
 }
@@ -83,11 +84,17 @@ interface TaskSetup {
 export interface TaskTools {
   readonly readTools: HostToolResolver;
   readonly approvalTools: WorkspaceApprovalHostTools;
+  /**
+   * The approval tools for chats of a project: tasks they start or continue
+   * deliver their outcomes back to that chat.
+   */
+  approvalToolsFor(projectId: string): WorkspaceApprovalHostTools;
 }
 
 /** Model input never has these keys: the schema refuses unknown fields. */
 const PREPARED_KEY = "preparedTask";
 const SETUP_KEY = "preparedSetup";
+const FOLLOW_UP_KEY = "preparedFollowUp";
 
 export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const { store, runner } = options;
@@ -120,6 +127,18 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         return "validation must be at most 10 shell commands, each one line of at most 1,000 characters";
       case "task_limit_reached":
         return `there are already ${MAX_TASKS} tasks; the owner must delete some first`;
+      case "task_not_found":
+        return "there is no task with that ID; use list_tasks to find it";
+      case "task_not_continuable":
+        return "that task is still working (or was stopped): wait for its outcome, or resume it from the Tasks panel";
+      case "task_not_started":
+        return "that task never got as far as its own chat and clone; start a new task instead";
+      case "task_busy":
+        return "that task is working right now; wait for its outcome";
+      case "instructions_required":
+        return "instructions must say what to change";
+      case "instructions_too_long":
+        return `instructions must be at most ${MAX_FOLLOW_UP_LENGTH} characters`;
       case "references_invalid":
       case "reference_invalid":
         return "references must be GitHub repositories, as owner/name or https://github.com/owner/name";
@@ -384,90 +403,242 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     },
   });
 
-  const startTask = defineTool({
-    name: "start_task",
-    description:
-      "Start a coding task: the server makes a fresh clone of a repository (public, or private when one of the owner's GitHub connections can reach it; find its URL with list_repositories rather than asking) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        repository: {
-          type: "string",
-          description:
-            "https:// clone URL with no credentials, for example https://github.com/owner/name",
+  /** `start_task` for chats of `projectId`: the task remembers its chat. */
+  const makeStartTask = (projectId: string | undefined) =>
+    defineTool({
+      name: "start_task",
+      description:
+        "Start a coding task: the server makes a fresh clone of a repository (public, or private when one of the owner's GitHub connections can reach it; find its URL with list_repositories rather than asking) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          repository: {
+            type: "string",
+            description:
+              "https:// clone URL with no credentials, for example https://github.com/owner/name",
+          },
+          references: {
+            type: "array",
+            maxItems: MAX_TASK_REFERENCES,
+            items: { type: "string", minLength: 1, maxLength: 300 },
+            description:
+              "Other GitHub repositories the task needs to read, for example a project whose README and screenshots a website page should describe: owner/name or https://github.com/owner/name (from list_repositories). Each is cloned read-only beside the task's repository at its default branch; the task cannot change them. Omit when the task only needs its own repository.",
+          },
+          validation: {
+            type: "array",
+            maxItems: 10,
+            items: { type: "string", minLength: 1, maxLength: 1_000 },
+            description:
+              'Checks to propose for a repository that has none yet (list_repositories shows a repository\'s checks): shell commands the server runs in order on the task\'s commit, all of which must pass, for example ["npm ci", "npm test"]. Read the repository with read_repository first and take them from its package.json scripts, Makefile or CI workflow. The owner approves them on the card and they are saved for future tasks. Ignored when the repository already has checks; omit when there is nothing sensible to run.',
+          },
+          objective: {
+            type: "string",
+            minLength: 1,
+            maxLength: MAX_TOOL_OBJECTIVE_LENGTH,
+            description: "What the task must achieve, in full",
+          },
+          baseBranch: {
+            type: "string",
+            description: "Branch to start from; omit for the default branch",
+          },
+          model: {
+            type: "string",
+            description: '"providerId/modelId"; omit for the server\'s default',
+          },
         },
-        references: {
-          type: "array",
-          maxItems: MAX_TASK_REFERENCES,
-          items: { type: "string", minLength: 1, maxLength: 300 },
-          description:
-            "Other GitHub repositories the task needs to read, for example a project whose README and screenshots a website page should describe: owner/name or https://github.com/owner/name (from list_repositories). Each is cloned read-only beside the task's repository at its default branch; the task cannot change them. Omit when the task only needs its own repository.",
-        },
-        validation: {
-          type: "array",
-          maxItems: 10,
-          items: { type: "string", minLength: 1, maxLength: 1_000 },
-          description:
-            'Checks to propose for a repository that has none yet (list_repositories shows a repository\'s checks): shell commands the server runs in order on the task\'s commit, all of which must pass, for example ["npm ci", "npm test"]. Read the repository with read_repository first and take them from its package.json scripts, Makefile or CI workflow. The owner approves them on the card and they are saved for future tasks. Ignored when the repository already has checks; omit when there is nothing sensible to run.',
-        },
-        objective: {
-          type: "string",
-          minLength: 1,
-          maxLength: MAX_TOOL_OBJECTIVE_LENGTH,
-          description: "What the task must achieve, in full",
-        },
-        baseBranch: {
-          type: "string",
-          description: "Branch to start from; omit for the default branch",
-        },
-        model: {
-          type: "string",
-          description: '"providerId/modelId"; omit for the server\'s default',
-        },
+        required: ["repository", "objective"],
       },
-      required: ["repository", "objective"],
-    },
-    effect: "write",
-    authorization: "required",
-    presentation: { title: "Start a coding task" },
-    handler: async (input): Promise<HostToolResult> => {
-      const request = approvedRequest(input);
-      if (typeof request === "string") {
-        return { modelContent: `Not started: ${request}`, isError: true };
-      }
-      let notes: string[];
-      try {
-        notes = await applySetup(request.repository, approvedSetup(input));
-      } catch (error) {
-        if (error instanceof HttpError) {
-          return {
-            modelContent: `Not started: ${explain(error.code)}`,
-            isError: true,
-          };
+      effect: "write",
+      authorization: "required",
+      presentation: { title: "Start a coding task" },
+      handler: async (input, context): Promise<HostToolResult> => {
+        const request = approvedRequest(input);
+        if (typeof request === "string") {
+          return { modelContent: `Not started: ${request}`, isError: true };
         }
-        throw error;
-      }
-      const task = await runner.create(request);
-      return {
-        modelContent: [
-          `Started coding task ${task.id} on branch ${task.branch}.`,
-          ...notes,
-          "It runs in its own chat; call list_tasks to see its state. The owner sees it under Tasks.",
-        ].join("\n"),
-        displayContent: { taskId: task.id, branch: task.branch },
-      };
-    },
-  });
+        let notes: string[];
+        try {
+          notes = await applySetup(request.repository, approvedSetup(input));
+        } catch (error) {
+          if (error instanceof HttpError) {
+            return {
+              modelContent: `Not started: ${explain(error.code)}`,
+              isError: true,
+            };
+          }
+          throw error;
+        }
+        const task = projectId
+          ? await runner.create(request, {
+              origin: { projectId, sessionId: context.sessionId },
+            })
+          : await runner.create(request);
+        return {
+          modelContent: [
+            `Started coding task ${task.id} on branch ${task.branch}.`,
+            ...notes,
+            projectId
+              ? "It runs in its own chat. Its outcome (ready, a draft pull request, or a problem) will be delivered to this chat by itself: tell the owner it has started and do not poll list_tasks for it."
+              : "It runs in its own chat; call list_tasks to see its state. The owner sees it under Tasks.",
+          ].join("\n"),
+          displayContent: { taskId: task.id, branch: task.branch },
+        };
+      },
+    });
 
-  const approvalTools: HostTool[] = [startTask];
-  return {
-    readTools: () => [listTasks],
-    approvalTools: {
+  /** A follow-up approved on its card, checked again before it is sent. */
+  const approvedFollowUp = (
+    input: Readonly<Record<string, unknown>>,
+  ): { taskId: string; instructions: string } | string => {
+    const prepared = input[FOLLOW_UP_KEY];
+    if (!prepared || typeof prepared !== "object") {
+      return "This follow-up was not approved by the owner";
+    }
+    const { taskId, instructions } = prepared as Record<string, unknown>;
+    if (typeof taskId !== "string" || typeof instructions !== "string") {
+      return "This follow-up was not approved by the owner";
+    }
+    const task = store.get(taskId);
+    if (!task) return explain("task_not_found");
+    if (!CONTINUABLE.has(task.state)) return explain("task_not_continuable");
+    return { taskId, instructions };
+  };
+
+  const prepareFollowUp = (
+    input: Readonly<Record<string, unknown>>,
+  ): WorkspaceHostToolApproval => {
+    const taskId = typeof input.taskId === "string" ? input.taskId : "";
+    const instructions =
+      typeof input.instructions === "string" ? input.instructions.trim() : "";
+    const task = store.get(taskId);
+    if (!task) return { decision: "deny", reason: explain("task_not_found") };
+    if (!CONTINUABLE.has(task.state)) {
+      return { decision: "deny", reason: explain("task_not_continuable") };
+    }
+    if (!task.sessionId) {
+      return { decision: "deny", reason: explain("task_not_started") };
+    }
+    if (!instructions) {
+      return { decision: "deny", reason: explain("instructions_required") };
+    }
+    if (instructions.length > MAX_FOLLOW_UP_LENGTH) {
+      return { decision: "deny", reason: explain("instructions_too_long") };
+    }
+    const publish = options.repositories?.get(task.repository)?.publish;
+    const display: TaskStartDisplay = {
+      kind: TASK_START_DISPLAY_KIND,
+      action: "create",
+      text: [
+        "Continue a coding task on its own clone and branch:",
+        "",
+        `Task: ${oneLine(task.objective, 200)}`,
+        `Repository: ${task.repository}`,
+        `Branch: ${task.branch}`,
+        ...(task.pullRequest
+          ? [
+              `Pull request: ${task.pullRequest.url} (updated with the new commits)`,
+            ]
+          : []),
+        "It works without asking before each edit or command, then is checked, validated and reviewed again.",
+        publish && task.pullRequest
+          ? "If it passes, the same draft pull request is updated."
+          : publish
+            ? "If it passes, it opens a draft pull request."
+            : "Nothing is pushed: the result stays ready under Tasks.",
+        "Follow-up:",
+        instructions,
+      ].join("\n"),
+    };
+    return {
+      decision: "require_user",
+      summary: `Continue the coding task in ${task.repository}?`,
+      displayContent: display,
+      preparedInput: { [FOLLOW_UP_KEY]: { taskId, instructions } },
+    };
+  };
+
+  /** `continue_task` for chats of `projectId`: outcomes come back there. */
+  const makeContinueTask = (projectId: string | undefined) =>
+    defineTool({
+      name: "continue_task",
+      description:
+        "Send a follow-up to a coding task that has finished (ready, published as a draft pull request, failed or blocked): its implementation chat makes the change on the same clone and branch, then it is checked, validated and reviewed again, and a published task's draft pull request is updated with the new commits. Use it for changes to work a task already did (\"also mention the desktop app\") instead of starting a new task. The owner approves the exact follow-up first. Get the task ID from list_tasks or the task's result message.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          taskId: { type: "string", description: "The task's ID" },
+          instructions: {
+            type: "string",
+            minLength: 1,
+            maxLength: MAX_FOLLOW_UP_LENGTH,
+            description:
+              "What to change, as a complete instruction: the task's chat does not see this conversation",
+          },
+        },
+        required: ["taskId", "instructions"],
+      },
+      effect: "write",
+      authorization: "required",
+      presentation: { title: "Continue a coding task" },
+      handler: async (input, context): Promise<HostToolResult> => {
+        const followUp = approvedFollowUp(input);
+        if (typeof followUp === "string") {
+          return { modelContent: `Not continued: ${followUp}`, isError: true };
+        }
+        let task: TaskRun;
+        try {
+          task = projectId
+            ? await runner.continueTask(
+                followUp.taskId,
+                followUp.instructions,
+                { origin: { projectId, sessionId: context.sessionId } },
+              )
+            : await runner.continueTask(followUp.taskId, followUp.instructions);
+        } catch (error) {
+          if (error instanceof HttpError) {
+            return {
+              modelContent: `Not continued: ${explain(error.code)}`,
+              isError: true,
+            };
+          }
+          throw error;
+        }
+        return {
+          modelContent: [
+            `Coding task ${task.id} is working on the follow-up, on branch ${task.branch}.`,
+            projectId
+              ? "Its outcome will be delivered to this chat by itself: do not poll list_tasks for it."
+              : "Call list_tasks to see its state.",
+          ].join("\n"),
+          displayContent: { taskId: task.id, branch: task.branch },
+        };
+      },
+    });
+
+  /** The approval tools for chats of one project (or of none, in tests). */
+  const approvalToolsFor = (
+    projectId: string | undefined,
+  ): WorkspaceApprovalHostTools => {
+    const tools: HostTool[] = [
+      makeStartTask(projectId),
+      makeContinueTask(projectId),
+    ];
+    return {
       toolNames: TASK_TOOL_NAMES,
-      resolveTools: () => approvalTools,
-      prepare: (request) => prepare(request.input),
-      validatePending: ({ input }) => {
+      resolveTools: () => tools,
+      prepare: (request) =>
+        request.toolName === "continue_task"
+          ? prepareFollowUp(request.input)
+          : prepare(request.input),
+      validatePending: ({ toolName, input }) => {
+        if (toolName === "continue_task") {
+          const followUp = approvedFollowUp(input);
+          return typeof followUp === "string"
+            ? { ok: false, reason: followUp }
+            : { ok: true };
+        }
         const request = approvedRequest(input);
         if (typeof request === "string") return { ok: false, reason: request };
         try {
@@ -477,9 +648,25 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         }
         return { ok: true };
       },
-    },
+    };
+  };
+
+  return {
+    readTools: () => [listTasks],
+    approvalTools: approvalToolsFor(undefined),
+    approvalToolsFor,
   };
 }
+
+/** States `continue_task` accepts (the runner checks again). */
+const CONTINUABLE: ReadonlySet<string> = new Set([
+  "ready",
+  "published",
+  "failed",
+  "blocked_review",
+  "blocked_auth",
+  "blocked_quota",
+]);
 
 /**
  * One set of approval tools from several: each call goes to the set that

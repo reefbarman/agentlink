@@ -75,6 +75,15 @@ export function reviewPrompt(
     "Task objective:",
     task.objective,
     "",
+    ...(task.followUps?.length
+      ? [
+          "The owner's follow-up instructions, also part of the task (oldest first):",
+          ...task.followUps.map(
+            (followUp, index) => `${index + 1}. ${followUp.instructions}`,
+          ),
+          "",
+        ]
+      : []),
     ...(validation.length > 0
       ? [
           "The repository owner requires these validation commands to pass, and they pass on this commit. Changes needed to satisfy them are in scope, so do not ask for them to be removed:",

@@ -47,6 +47,15 @@ import {
   toDeliveredResult,
   withAgentResultCards,
 } from "./backgroundResultDelivery.js";
+import {
+  deliveredTaskResult,
+  formatTaskResultPrompt,
+  taskResultBlocks,
+  taskResultNotice,
+  withTaskResultNotices,
+  type TaskDeliveryResult,
+} from "./taskResultDelivery.js";
+import type { TaskRun } from "./taskStore.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type {
@@ -149,6 +158,21 @@ export interface AskAgentBridgeOptions {
    * Stop while viewing it. Without it the chat's turn is cancelled.
    */
   readonly stopRun?: (workspaceSessionId: string) => Promise<void>;
+  /**
+   * The coding tasks started from (or continued in) this chat, newest
+   * first, shown as live cards above the composer.
+   */
+  readonly chatTasks?: (workspaceSessionId: string) => readonly ChatTaskCard[];
+}
+
+/** A coding task as the chat that started it shows it. */
+export interface ChatTaskCard {
+  readonly id: string;
+  readonly state: string;
+  readonly objective: string;
+  readonly repository: string;
+  readonly pullRequest?: string;
+  readonly updatedAt: number;
 }
 
 export interface AskAgentBridge {
@@ -183,6 +207,16 @@ export interface AskAgentBridge {
   ): void;
   /** Make a chat the open one, for links from the inbox or jobs. */
   openSession(auth: AssistantServerAuth, sessionId: string): Promise<boolean>;
+  /**
+   * Hand a coding task's outcome to the chat that started it: a notice in
+   * the chat, then a turn so the assistant reports it. Runs after any turn
+   * already running or queued there. `chat_missing` when the chat is gone.
+   */
+  deliverTaskResult(
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    task: TaskRun,
+  ): Promise<TaskDeliveryResult>;
   /** Republish the snapshot (the inbox or jobs changed). */
   refresh(): void;
   close(): Promise<void>;
@@ -386,11 +420,17 @@ export async function createAskAgentBridge(
         ...state.snapshot,
         background: agentWatch.records.map(toAgentCard),
         approvalMode: activeApprovalMode(),
+        tasks: activeChatTasks(),
         ...(options.assistantStatus
           ? { assistant: { ...options.assistantStatus() } }
           : {}),
       },
     };
+  };
+  const activeChatTasks = (): readonly ChatTaskCard[] => {
+    const workspaceSessionId = workspaceSessionFor(store.getActiveSessionId());
+    if (!workspaceSessionId || !options.chatTasks) return [];
+    return options.chatTasks(workspaceSessionId);
   };
   const activeApprovalMode = (): ApprovalMode => {
     const storeSessionId = store.getActiveSessionId();
@@ -428,8 +468,10 @@ export async function createAskAgentBridge(
     sessionModels.set(sessionId, read.model);
     sessionEfforts.set(sessionId, read.reasoningEffort);
     sessionApprovalModes.set(sessionId, read.approvalMode);
-    const messages = withAgentResultCards(
-      agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+    const messages = withTaskResultNotices(
+      withAgentResultCards(
+        agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+      ),
     );
     // Agents that ended before this server started are not reported
     // again; ones still running are, when they finish.
@@ -690,6 +732,78 @@ export async function createAskAgentBridge(
       await flagUnread(storeSessionId, workspaceSessionId);
     }
     await publishNow();
+  };
+
+  /** Run a task's outcome turn in its chat, after any turn before it. */
+  const deliverTaskResult = (
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    task: TaskRun,
+  ): Promise<TaskDeliveryResult> => {
+    const previous = turnChain;
+    let release!: () => void;
+    turnChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return (async () => {
+      try {
+        await previous;
+        return await runTaskResult(auth, workspaceSessionId, task);
+      } finally {
+        release();
+      }
+    })();
+  };
+
+  const runTaskResult = async (
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    task: TaskRun,
+  ): Promise<TaskDeliveryResult> => {
+    if (closed || !(await auth.revalidate()).valid) return "unavailable";
+    await ensureLoaded(auth);
+    // A deleted chat is hidden, or no longer there at all.
+    if (state.hidden.includes(workspaceSessionId)) return "chat_missing";
+    const storeSessionId = storeSessionFor(workspaceSessionId);
+    if (!storeSessionId) return "chat_missing";
+    const result = deliveredTaskResult(task);
+    const notice = store.appendSessionMessage(storeSessionId, {
+      role: "assistant",
+      content: taskResultNotice(result),
+      blocks: taskResultBlocks(result),
+      now: now(),
+    });
+    if (!notice) return "chat_missing";
+    const assistant = store.startAssistantMessage({
+      now: now(),
+      sessionId: storeSessionId,
+    });
+    const turn = controller.beginTurn(assistant.id);
+    // The notice is in the chat; the outcome counts as delivered from here.
+    if (!turn) {
+      await flagUnread(storeSessionId, workspaceSessionId);
+      await publishNow();
+      return "delivered";
+    }
+    runningSession = storeSessionId;
+    try {
+      await publishNow();
+      await runTurn({
+        auth,
+        workspaceSessionId,
+        messageId: assistant.id,
+        turn,
+        text: formatTaskResultPrompt(result),
+      });
+    } catch {
+      // The notice stays; the owner can ask about it.
+    } finally {
+      controller.completeTurn(turn);
+      runningSession = undefined;
+      await flagUnread(storeSessionId, workspaceSessionId);
+    }
+    await publishNow();
+    return "delivered";
   };
 
   /** Flag a chat that finished a turn nobody was viewing. */
@@ -1799,6 +1913,7 @@ export async function createAskAgentBridge(
         // It still appears, unread, the next time chats load.
       }
     },
+    deliverTaskResult,
     followSession(_auth, workspaceSessionId, run) {
       if (closed || followed.has(workspaceSessionId)) return;
       state.titles[workspaceSessionId] = run.title.slice(0, MAX_TITLE_LENGTH);

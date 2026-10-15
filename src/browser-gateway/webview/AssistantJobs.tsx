@@ -1,6 +1,6 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { GitHubPanel } from "./AssistantGitHub";
-import { TasksPanel } from "./AssistantTasks";
+import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
   NotificationSettings,
   useLocalInboxNotifications,
@@ -433,6 +433,15 @@ export function AssistantHub({
   };
   useNotificationLinks(openTarget);
   useLocalInboxNotifications(revision, openTarget);
+  // A task card in the chat opens its task here.
+  useEffect(() => {
+    const onOpenTask = (event: Event) => {
+      const id = (event as CustomEvent<unknown>).detail;
+      if (typeof id === "string") openTask(id);
+    };
+    window.addEventListener(OPEN_TASK_EVENT, onOpenTask);
+    return () => window.removeEventListener(OPEN_TASK_EVENT, onOpenTask);
+  }, []);
   return (
     <>
       <nav class="assistant-hub" aria-label="Assistant">

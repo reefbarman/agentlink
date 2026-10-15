@@ -46,6 +46,8 @@ async function setup(
   options: {
     /** What resolveConnection answers for every repository. */
     readonly reach?: ConnectionResolution;
+    /** Use the approval tools of this project's chats. */
+    readonly projectId?: string;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-tools-"));
@@ -68,9 +70,16 @@ async function setup(
     file: path.join(dir, "repositories.json"),
   });
   const connections = new Map([[PERSONAL.id, PERSONAL]]);
+  const continueTask = vi.fn(
+    async (taskId: string, instructions: string): Promise<TaskRun> => ({
+      ...store.get(taskId)!,
+      state: "queued",
+      pendingFollowUp: instructions,
+    }),
+  );
   const tools = createTaskTools({
     store,
-    runner: { create },
+    runner: { create, continueTask },
     models: [{ providerId: "codex", modelId: "gpt-5" }],
     repositories,
     connections: { get: (id) => connections.get(id) },
@@ -81,24 +90,40 @@ async function setup(
       ),
     },
   });
+  const approval = options.projectId
+    ? tools.approvalToolsFor(options.projectId)
+    : tools.approvalTools;
   const byName = async (name: string) =>
     [
       ...((await tools.readTools({} as never)) as unknown as RunnableTool[]),
-      ...((await tools.approvalTools.resolveTools(
+      ...((await approval.resolveTools(
         {} as never,
       )) as unknown as RunnableTool[]),
     ].find((tool) => tool.definition.name === name)!;
   const startTask = await byName("start_task");
+  /** The chat calling the tools. */
+  const context = { sessionId: "chat-1" } as never;
   const run = (input: Record<string, unknown>) =>
-    startTask.executeValidated({ ...input }, {} as never);
+    startTask.executeValidated({ ...input }, context);
   const prepare = async (input: Record<string, unknown>) =>
-    tools.approvalTools.prepare({ toolName: "start_task", input } as never);
+    approval.prepare({ toolName: "start_task", input } as never);
+  const continueTool = await byName("continue_task");
+  const runContinue = (input: Record<string, unknown>) =>
+    continueTool.executeValidated({ ...input }, context);
+  const prepareContinue = async (input: Record<string, unknown>) =>
+    approval.prepare({ toolName: "continue_task", input } as never);
+  const validateContinue = async (input: Record<string, unknown>) =>
+    approval.validatePending!({ toolName: "continue_task", input } as never);
   return {
     store,
     tools,
     create,
+    continueTask,
     run,
     prepare,
+    runContinue,
+    prepareContinue,
+    validateContinue,
     byName,
     repositories,
     connections,
@@ -217,6 +242,115 @@ describe("one card to start a task", () => {
     const result = await test.run(prepared(approval));
     expect(test.repositories.get(REQUEST.repository)).toBeUndefined();
     expect(result.modelContent).toContain("removed meanwhile");
+  });
+});
+
+describe("tasks in the conversation", () => {
+  const finished = (overrides: Partial<TaskRun> = {}): TaskRun => ({
+    ...REQUEST,
+    id: "bbbbbbbbbbbb",
+    projectId: "task-bbbbbbbbbbbb",
+    branch: "agentlink/fix-the-clock-test-bbbbbbbbbbbb",
+    workspace: "/w/bbbbbbbbbbbb/demo",
+    state: "published",
+    sessionId: "implementation",
+    pullRequest: {
+      number: 7,
+      url: "https://github.com/reefbarman/demo/pull/7",
+    },
+    attempts: 1,
+    evidence: [],
+    effects: [],
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  });
+
+  it("records the chat that started a task", async () => {
+    const test = await setup({ projectId: "home" });
+    const approval = await test.prepare(REQUEST);
+    const result = await test.run(prepared(approval));
+    expect(test.create).toHaveBeenCalledWith(REQUEST, {
+      origin: { projectId: "home", sessionId: "chat-1" },
+    });
+    expect(String(result.modelContent)).toContain(
+      "will be delivered to this chat by itself",
+    );
+  });
+
+  it("continues a finished task after the owner approves the exact follow-up", async () => {
+    const test = await setup({ projectId: "home" });
+    await test.store.create(finished());
+    const approval = await test.prepareContinue({
+      taskId: "bbbbbbbbbbbb",
+      instructions: " Also mention the desktop app. ",
+    });
+    expect(approval).toMatchObject({
+      decision: "require_user",
+      summary:
+        "Continue the coding task in https://github.com/reefbarman/demo?",
+    });
+    const text = cardText(approval);
+    expect(text).toContain("Branch: agentlink/fix-the-clock-test-bbbbbbbbbbbb");
+    expect(text).toContain(
+      "Pull request: https://github.com/reefbarman/demo/pull/7 (updated with the new commits)",
+    );
+    expect(text).toContain("Follow-up:\nAlso mention the desktop app.");
+    // Nothing happens until approved.
+    expect(test.continueTask).not.toHaveBeenCalled();
+    await expect(test.validateContinue(prepared(approval))).resolves.toEqual({
+      ok: true,
+    });
+    const result = await test.runContinue(prepared(approval));
+    expect(result.isError).toBeUndefined();
+    expect(test.continueTask).toHaveBeenCalledWith(
+      "bbbbbbbbbbbb",
+      "Also mention the desktop app.",
+      { origin: { projectId: "home", sessionId: "chat-1" } },
+    );
+    // A call the owner never approved does nothing.
+    await expect(
+      test.runContinue({ taskId: "bbbbbbbbbbbb", instructions: "x" }),
+    ).resolves.toMatchObject({ isError: true });
+  });
+
+  it("refuses follow-ups a task cannot take, in plain words", async () => {
+    const test = await setup({ projectId: "home" });
+    await test.store.create(finished({ state: "implementing" }));
+    await expect(
+      test.prepareContinue({ taskId: "bbbbbbbbbbbb", instructions: "x" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("still working"),
+    });
+    await expect(
+      test.prepareContinue({ taskId: "cccccccccccc", instructions: "x" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("list_tasks"),
+    });
+    await test.store.create(
+      finished({ id: "dddddddddddd", state: "failed", sessionId: undefined }),
+    );
+    await expect(
+      test.prepareContinue({ taskId: "dddddddddddd", instructions: "x" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("start a new task"),
+    });
+  });
+
+  it("drops an approved follow-up whose task started working meanwhile", async () => {
+    const test = await setup({ projectId: "home" });
+    await test.store.create(finished());
+    const approval = await test.prepareContinue({
+      taskId: "bbbbbbbbbbbb",
+      instructions: "Also mention the desktop app.",
+    });
+    await test.store.save(finished({ state: "implementing" }));
+    await expect(
+      test.validateContinue(prepared(approval)),
+    ).resolves.toMatchObject({ ok: false });
   });
 });
 
@@ -367,7 +501,11 @@ describe("task tools", () => {
       other,
       test.tools.approvalTools,
     ]);
-    expect(combined.toolNames).toEqual(["schedule_job", "start_task"]);
+    expect(combined.toolNames).toEqual([
+      "schedule_job",
+      "start_task",
+      "continue_task",
+    ]);
     expect(
       await combined.prepare({ toolName: "schedule_job", input: {} } as never),
     ).toMatchObject({ reason: "job" });

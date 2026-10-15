@@ -420,7 +420,8 @@ export function assistantRoutingInstructions(capabilities: {
     "- Questions, research and writing: answer in this chat, using web tools when needed.",
     ...(capabilities.tasks
       ? [
-          "- A change to code or content in a repository (fix, update, add, refactor, open a PR): propose it with start_task. It runs in its own fresh clone from any chat, so never ask the owner to switch project first. Write the objective as a complete instruction, because the task's chat does not see this one. The owner approves the card; follow progress with list_tasks.",
+          "- A change to code or content in a repository (fix, update, add, refactor, open a PR): propose it with start_task. It runs in its own fresh clone from any chat, so never ask the owner to switch project first. Write the objective as a complete instruction, because the task's chat does not see this one. The owner approves the card; its outcome (a pull request, or a problem to fix) comes back to this chat by itself, so do not poll for it.",
+          "- A change to work a task already did (feedback on its pull request, a follow-up, or a retry after a problem): propose continue_task with that task's ID instead of a new task. It updates the same branch and pull request.",
         ]
       : []),
     ...(capabilities.repositories

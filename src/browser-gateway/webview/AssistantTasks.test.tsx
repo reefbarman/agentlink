@@ -9,9 +9,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type ChatTaskCard,
+  ChatTaskStrip,
+  OPEN_TASK_EVENT,
   type Task,
   type TaskDetail,
   TasksPanel,
+  taskStateLabel,
   notPublishedReason,
   publishAction,
   shortRepository,
@@ -111,6 +115,59 @@ function detail(
     publish,
   };
 }
+
+describe("chat task cards", () => {
+  const card = (overrides: Partial<ChatTaskCard> = {}): ChatTaskCard => ({
+    id: "t1",
+    state: "implementing",
+    objective: "Fix the README",
+    repository: "https://github.com/reefbarman/demo",
+    updatedAt: 2,
+    ...overrides,
+  });
+
+  it("show nothing for a chat without tasks", () => {
+    const { container } = render(<ChatTaskStrip tasks={[]} />);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("use the Tasks panel's labels and follow each snapshot", () => {
+    const { rerender } = render(<ChatTaskStrip tasks={[card()]} />);
+    expect(screen.getByText("Fix the README")).toBeTruthy();
+    expect(screen.getByText(taskStateLabel("implementing").label)).toBeTruthy();
+    expect(screen.getByText("reefbarman/demo", { exact: false })).toBeTruthy();
+    expect(screen.queryByText("Pull request")).toBeNull();
+
+    rerender(
+      <ChatTaskStrip
+        tasks={[
+          card({
+            state: "published",
+            pullRequest: "https://github.com/reefbarman/demo/pull/3",
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("Draft PR open")).toBeTruthy();
+    expect(screen.getByText("Pull request").getAttribute("href")).toBe(
+      "https://github.com/reefbarman/demo/pull/3",
+    );
+  });
+
+  it("open the task in the Tasks panel", () => {
+    const opened: string[] = [];
+    const listener = (event: Event) =>
+      opened.push((event as CustomEvent<string>).detail);
+    window.addEventListener(OPEN_TASK_EVENT, listener);
+    try {
+      render(<ChatTaskStrip tasks={[card()]} />);
+      fireEvent.click(screen.getByTitle("Open in Tasks"));
+      expect(opened).toEqual(["t1"]);
+    } finally {
+      window.removeEventListener(OPEN_TASK_EVENT, listener);
+    }
+  });
+});
 
 describe("task helpers", () => {
   it("names tasks and repositories", () => {

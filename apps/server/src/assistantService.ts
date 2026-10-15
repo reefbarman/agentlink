@@ -20,6 +20,7 @@ import {
 import {
   createAssistantServer,
   type AssistantServer,
+  type AssistantServerAuth,
 } from "./assistantServer.js";
 import {
   createServerCodexRuntime,
@@ -109,6 +110,7 @@ import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
 import { openRepositorySnapshots } from "./repositorySnapshots.js";
+import { chatTaskCards, openTaskDeliveries } from "./taskResultDelivery.js";
 import { createTaskWorkspaces } from "./taskWorkspace.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
@@ -782,9 +784,13 @@ export async function startAssistantService(
             ? { directory: repositoryDirectory, connections: githubConnections }
             : {}),
           runner: {
-            create: async (request) => {
+            create: async (...args) => {
               if (!taskRunner) throw new Error("Tasks are not ready yet");
-              return taskRunner.create(request);
+              return taskRunner.create(...args);
+            },
+            continueTask: async (...args) => {
+              if (!taskRunner) throw new Error("Tasks are not ready yet");
+              return taskRunner.continueTask(...args);
             },
           },
           models: configuredModels(config),
@@ -913,7 +919,8 @@ export async function startAssistantService(
               approvalHostTools: taskTools
                 ? combineApprovalHostTools([
                     jobTools.approvalTools,
-                    taskTools.approvalTools,
+                    // Tasks remember this project's chat that started them.
+                    taskTools.approvalToolsFor(project.id),
                   ])
                 : jobTools.approvalTools,
             }
@@ -1048,6 +1055,8 @@ export async function startAssistantService(
             );
           if (job) await jobs.stopJob(job.id, "cancelled");
         },
+        chatTasks: (workspaceSessionId) =>
+          chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
       });
     for (const { id } of hosts) {
       const opened = await openBridge(id);
@@ -1136,6 +1145,49 @@ export async function startAssistantService(
         })
         .finally(assistantChanged);
     };
+    /**
+     * The owner, acting for the server to deliver a task's outcome into its
+     * chat: valid while the same owner holds the server.
+     */
+    const ownerDeliveryAuth = (): AssistantServerAuth | undefined => {
+      const ownerId = server?.store.ownerId;
+      if (!ownerId) return undefined;
+      const at = Date.now();
+      const auth: AssistantServerAuth = {
+        principal: { tenantId: "agentlink-server", subjectId: ownerId },
+        session: {
+          ownerId,
+          sessionId: `task-results-${at}`,
+          deviceId: "task-results",
+          deviceLabel: "Task results",
+          createdAt: at,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        // Never aborted: the delivery turn ends with the turn itself.
+        signal: new AbortController().signal,
+        async revalidate() {
+          return { valid: server?.store.ownerId === ownerId };
+        },
+        detach: () => auth,
+      };
+      return auth;
+    };
+    // A task's outcomes go back to the chat that started it, once each.
+    const taskDeliveries = await openTaskDeliveries({
+      file: path.join(serverTasksDirectory(config), "deliveries.json"),
+      current: (taskId) => taskStore.get(taskId),
+      log,
+      deliver: async (task) => {
+        const origin = task.origin;
+        if (!origin) return "chat_missing";
+        const bridge = bridges.get(origin.projectId);
+        // Its project was removed: so was the chat.
+        if (!bridge) return "chat_missing";
+        const auth = ownerDeliveryAuth();
+        if (!auth) return "unavailable";
+        return bridge.deliverTaskResult(auth, origin.sessionId, task);
+      },
+    });
     // Each run is a new chat in its project, acting for the owner.
     const jobs = createJobRunner({
       store: jobStore,
@@ -1252,9 +1304,20 @@ export async function startAssistantService(
             onTaskChanged: (task) => {
               assistantChanged();
               recordTaskInInbox(task);
+              taskDeliveries.taskChanged(task);
             },
           });
-          return { runner, workspaces, openTaskProject };
+          return {
+            runner: {
+              ...runner,
+              async delete(taskId: string) {
+                await runner.delete(taskId);
+                taskDeliveries.forget(taskId);
+              },
+            },
+            workspaces,
+            openTaskProject,
+          };
         })()
       : undefined;
     taskRunner = tasks?.runner;
@@ -1325,6 +1388,7 @@ export async function startAssistantService(
         if (snapshotSweep) clearInterval(snapshotSweep);
         await jobs.close();
         await tasks?.runner.close();
+        await taskDeliveries.flush();
         await taskStore.flush();
         await taskInboxWrites;
         await inbox.flush();
@@ -1380,6 +1444,8 @@ export async function startAssistantService(
           log(`Could not open task ${task.id}'s clone: ${message(error)}`);
         });
       }
+      // Outcomes reached while the server was down, not yet delivered.
+      taskDeliveries.start(taskStore.list());
     }
     log(
       `AgentLink server listening on ${config.listen.host}:${port} for ${config.publicOrigins.join(", ")} (${hosts.length} project${hosts.length === 1 ? "" : "s"})`,

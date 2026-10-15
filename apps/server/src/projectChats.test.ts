@@ -33,6 +33,7 @@ function fakeBridge(projectId: string): AskAgentBridge {
     adoptSession: vi.fn(async () => undefined),
     followSession: vi.fn(),
     openSession: vi.fn(async (_auth, sessionId: string) => sessionId === "c1"),
+    deliverTaskResult: vi.fn(async () => "delivered" as const),
     refresh: vi.fn(),
     close: vi.fn(async () => undefined),
   };

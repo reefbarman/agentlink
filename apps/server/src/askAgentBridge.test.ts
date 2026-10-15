@@ -17,6 +17,8 @@ import {
   SessionEventHub,
   type AssistantSessionEvent,
 } from "./SessionEventHub.js";
+import { parseTaskResultPrompt } from "./taskResultDelivery.js";
+import type { TaskRun } from "./taskStore.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
 import type { WorkspaceBackgroundRecord } from "@agentlink/workspace-host";
 
@@ -202,6 +204,9 @@ async function startBridge(
     readonly signal?: AbortSignal;
     readonly defaults?: Parameters<typeof createAskAgentBridge>[0]["defaults"];
     readonly agentRefreshMs?: number;
+    readonly chatTasks?: Parameters<
+      typeof createAskAgentBridge
+    >[0]["chatTasks"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -231,6 +236,7 @@ async function startBridge(
     ...(options.agentRefreshMs
       ? { agentRefreshMs: options.agentRefreshMs }
       : {}),
+    ...(options.chatTasks ? { chatTasks: options.chatTasks } : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -308,8 +314,28 @@ async function startBridge(
       body: (await response.json()) as Record<string, unknown>,
     };
   };
-  return { bridge, fake, call, file };
+  return { bridge, fake, call, file, detached };
 }
+
+const codingTask = (overrides: Partial<TaskRun> = {}): TaskRun => ({
+  id: "aaaaaaaaaaaa",
+  projectId: "task-aaaaaaaaaaaa",
+  repository: "https://github.com/reefbarman/site",
+  objective: "Update the AgentLink page",
+  branch: "agentlink/update-the-agentlink-page-aaaaaaaaaaaa",
+  workspace: "/w/aaaaaaaaaaaa/site",
+  state: "published",
+  origin: { projectId: "home", sessionId: "ws-1" },
+  pullRequest: { number: 7, url: "https://github.com/reefbarman/site/pull/7" },
+  summary: "Updated the page.",
+  attempts: 1,
+  evidence: [],
+  effects: [],
+  createdAt: 1,
+  updatedAt: 2,
+  finishedAt: 2,
+  ...overrides,
+});
 
 const snapshotOf = (body: Record<string, unknown>) =>
   body.snapshot as unknown as Snapshot;
@@ -685,6 +711,99 @@ describe("Ask Agent bridge", () => {
       fake.agents.set("ws-1", [done]);
       agentChanged(fake);
       await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("delivers a coding task's outcome into its chat as a notice and a turn", async () => {
+      const { fake, call, bridge, detached } = await startBridge();
+      reply(fake, "On it");
+      await call("/api/ask-agent/send", { text: "fix the site" });
+
+      reply(fake, "The pull request is ready to review.");
+      await expect(
+        bridge.deliverTaskResult(detached, "ws-1", codingTask()),
+      ).resolves.toBe("delivered");
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+      expect(parseTaskResultPrompt(turnText(fake, 1))).toMatchObject({
+        taskId: "aaaaaaaaaaaa",
+        state: "published",
+        pullRequest: "https://github.com/reefbarman/site/pull/7",
+      });
+      const messages = await vi.waitFor(async () => {
+        const projected = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        ).session.foreground.projectedMessages;
+        expect(projected.at(-1)?.content).toBe(
+          "The pull request is ready to review.",
+        );
+        return projected;
+      });
+      // A notice from the task, never something the owner typed.
+      expect(messages.filter((message) => message.role === "user")).toEqual([
+        expect.objectContaining({ content: "fix the site" }),
+      ]);
+      expect(JSON.stringify(messages)).toContain("Coding task");
+      expect(JSON.stringify(messages)).not.toContain("coding_task_result");
+    });
+
+    it("shows the open chat's coding tasks as live cards", async () => {
+      let state = "implementing";
+      const chatTasks = vi.fn((sessionId: string) =>
+        sessionId === "ws-1"
+          ? [
+              {
+                id: "aaaaaaaaaaaa",
+                state,
+                objective: "Update the AgentLink page",
+                repository: "https://github.com/reefbarman/site",
+                updatedAt: 2,
+              },
+            ]
+          : [],
+      );
+      const { fake, call, bridge } = await startBridge(undefined, {
+        chatTasks,
+      });
+      const tasksOf = async () =>
+        (
+          (await call("/api/ask-agent/session")).body.snapshot as {
+            tasks: Array<{ id: string; state: string }>;
+          }
+        ).tasks;
+      // No chat yet, so nothing to show.
+      expect(await tasksOf()).toEqual([]);
+      reply(fake, "Started it");
+      await call("/api/ask-agent/send", { text: "fix the site" });
+      expect(await tasksOf()).toEqual([
+        expect.objectContaining({ id: "aaaaaaaaaaaa", state: "implementing" }),
+      ]);
+      // Read fresh on every snapshot, so it follows the Tasks panel.
+      state = "published";
+      bridge.refresh();
+      expect(await tasksOf()).toEqual([
+        expect.objectContaining({ state: "published" }),
+      ]);
+      await call("/api/ask-agent/session/new", {});
+      expect(await tasksOf()).toEqual([]);
+    });
+
+    it("skips a chat that is gone or was deleted", async () => {
+      const { fake, call, bridge, detached } = await startBridge();
+      reply(fake, "On it");
+      await call("/api/ask-agent/send", { text: "fix the site" });
+      await expect(
+        bridge.deliverTaskResult(detached, "ws-unknown", codingTask()),
+      ).resolves.toBe("chat_missing");
+
+      const first = snapshotOf((await call("/api/ask-agent/session")).body)
+        .session.foreground.sessionId;
+      await call("/api/ask-agent/session/new", {});
+      await expect(
+        call("/api/ask-agent/session/delete", { sessionId: first }),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        bridge.deliverTaskResult(detached, "ws-1", codingTask()),
+      ).resolves.toBe("chat_missing");
       expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
     });
   });

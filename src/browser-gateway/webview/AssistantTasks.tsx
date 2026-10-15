@@ -157,6 +157,79 @@ export function taskName(objective: string): string {
   );
 }
 
+/** A coding task as the chat that started it shows it (snapshot `tasks`). */
+export interface ChatTaskCard {
+  id: string;
+  state: TaskState;
+  objective: string;
+  repository: string;
+  pullRequest?: string;
+  updatedAt: number;
+}
+
+/** Asks the Assistant hub to open a task in the Tasks panel. */
+export const OPEN_TASK_EVENT = "agentlink-assistant-open-task";
+
+export function requestOpenTask(taskId: string): void {
+  window.dispatchEvent(
+    new CustomEvent<string>(OPEN_TASK_EVENT, { detail: taskId }),
+  );
+}
+
+/**
+ * Live cards for the open chat's coding tasks, above the composer. The
+ * labels are the Tasks panel's, and the data comes with each snapshot, so
+ * the card and the panel always agree. Opening one shows it in Tasks.
+ */
+export function ChatTaskStrip({
+  tasks,
+  onOpen = requestOpenTask,
+}: {
+  tasks: readonly ChatTaskCard[] | undefined;
+  onOpen?: (taskId: string) => void;
+}) {
+  if (!tasks || tasks.length === 0) return null;
+  return (
+    <ul class="assistant-chat-tasks" aria-label="Coding tasks from this chat">
+      {tasks.map((task) => {
+        const state = taskStateLabel(task.state);
+        return (
+          <li class="assistant-chat-task" key={task.id}>
+            <i class="codicon codicon-git-pull-request" aria-hidden="true" />
+            <button
+              type="button"
+              class="assistant-task-open"
+              title="Open in Tasks"
+              onClick={() => onOpen(task.id)}
+            >
+              <span class="assistant-chat-task-name">
+                {taskName(task.objective)}
+              </span>
+              <span class="assistant-job-meta">
+                <span class={`assistant-run-status tone-${state.tone}`}>
+                  {state.label}
+                </span>
+                {" · "}
+                {shortRepository(task.repository)}
+              </span>
+            </button>
+            {task.pullRequest && (
+              <a
+                class="assistant-task-pr"
+                href={task.pullRequest}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Pull request
+              </a>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** `owner/name` for a GitHub URL, the URL otherwise. */
 export function shortRepository(repository: string): string {
   return repository

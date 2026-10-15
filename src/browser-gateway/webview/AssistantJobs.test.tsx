@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,7 @@ import {
   type InboxEntry,
   type Job,
 } from "./AssistantJobs";
+import { requestOpenTask } from "./AssistantTasks";
 
 afterEach(() => {
   cleanup();
@@ -496,6 +498,23 @@ describe("AssistantHub", () => {
     );
     fireEvent.click(screen.getByText("Tasks"));
     expect(await screen.findByText(/No coding tasks yet/u)).toBeTruthy();
+  });
+
+  it("opens a task from its card in the chat", async () => {
+    const calls = stubFetch({
+      "GET /api/inbox": () => ({ entries: [], unread: 0 }),
+    });
+    render(
+      <AssistantHub
+        revision={1}
+        loadSession={() => undefined}
+        reloadPage={() => undefined}
+      />,
+    );
+    act(() => requestOpenTask("t9"));
+    await waitFor(() =>
+      expect(calls.some((call) => call.path === "/api/tasks/t9")).toBe(true),
+    );
   });
 
   it("shows the unread count and opens the panels", async () => {

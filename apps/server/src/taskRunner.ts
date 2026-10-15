@@ -23,6 +23,8 @@ import {
   taskLayout,
 } from "./taskReview.js";
 import {
+  MAX_FOLLOW_UP_LENGTH,
+  MAX_FOLLOW_UPS,
   TaskInputError,
   evidenceFor,
   isActiveTask,
@@ -134,7 +136,20 @@ export interface TaskRunnerOptions {
 export interface TaskRunner {
   /** Record tasks a previous process left working as interrupted. */
   start(): Promise<void>;
-  create(request: TaskRequest): Promise<TaskRun>;
+  create(
+    request: TaskRequest,
+    extras?: { readonly origin?: TaskRun["origin"] },
+  ): Promise<TaskRun>;
+  /**
+   * Send a follow-up instruction to a finished task's implementation chat,
+   * on the same clone and branch; it is then checked, validated, reviewed
+   * and (with permission) published to the same pull request again.
+   */
+  continueTask(
+    taskId: string,
+    instructions: string,
+    extras?: { readonly origin?: TaskRun["origin"] },
+  ): Promise<TaskRun>;
   /** Stop a queued or working task; it can be resumed. */
   stop(taskId: string): Promise<TaskRun>;
   /** Queue a stopped, failed, blocked or interrupted task again. */
@@ -825,7 +840,12 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
 
       let sessionId = entry.task.sessionId;
       let prompt: string | undefined;
-      if (sessionId) {
+      const followUp = entry.task.pendingFollowUp;
+      if (sessionId && followUp !== undefined) {
+        // The owner's follow-up: sent once, then part of the task's history.
+        prompt = followUpInstructionPrompt(entry.task, followUp);
+        await save(entry, { pendingFollowUp: undefined });
+      } else if (sessionId) {
         // Resumed: work already accepted at HEAD goes straight to the checks.
         const inspection = await workspaces.inspect(entry.task);
         const accepted =
@@ -966,12 +986,43 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         }
       }
     },
-    async create(request) {
+    async continueTask(taskId, instructions, extras = {}) {
+      if (closed) throw new HttpError(503, "server_closing");
+      const task = requireTask(taskId);
+      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      if (!CONTINUABLE_STATES.has(task.state)) {
+        throw new TaskInputError("task_not_continuable", 409);
+      }
+      // Without its chat and clone there is nothing to continue.
+      if (!task.sessionId || !(await workspaces.exists(task))) {
+        throw new TaskInputError("task_not_started", 409);
+      }
+      const text = instructions.trim();
+      if (!text) throw new TaskInputError("instructions_required");
+      if (text.length > MAX_FOLLOW_UP_LENGTH) {
+        throw new TaskInputError("instructions_too_long");
+      }
+      const at = now();
+      const updated: TaskRun = {
+        ...task,
+        ...(extras.origin ? { origin: extras.origin } : {}),
+        followUps: [
+          ...(task.followUps ?? []),
+          { instructions: text, at },
+        ].slice(-MAX_FOLLOW_UPS),
+        pendingFollowUp: text,
+        updatedAt: at,
+      };
+      await store.save(updated);
+      return enqueue(updated);
+    },
+    async create(request, extras = {}) {
       if (closed) throw new HttpError(503, "server_closing");
       const id = newTaskId();
       const at = now();
       const task: TaskRun = {
         ...request,
+        ...(extras.origin ? { origin: extras.origin } : {}),
         id,
         projectId: taskProjectId(id),
         branch: taskBranchName(request.objective, id),
@@ -1105,6 +1156,33 @@ export function taskPrompt(task: TaskRun): string {
     "- Finish with no uncommitted or untracked files: commit what belongs to the change and delete scratch files.",
     "- After you finish, the server runs the repository's validation commands and another model reviews your commit; you may be asked to fix what they find.",
     "- End with a short summary of what changed and how you checked it.",
+  ].join("\n");
+}
+
+/** States a follow-up may start from: the task finished, one way or another. */
+const CONTINUABLE_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
+  "ready",
+  "published",
+  "failed",
+  "blocked_review",
+  "blocked_auth",
+  "blocked_quota",
+]);
+
+export function followUpInstructionPrompt(
+  task: TaskRun,
+  instructions: string,
+): string {
+  return [
+    "The owner has a follow-up for this task, on the same clone and branch:",
+    "",
+    instructions,
+    "",
+    "Rules:",
+    ...taskLayout(task),
+    `- Check the current state first (git status, git log ${task.baseCommit ? `${task.baseCommit.slice(0, 12)}..HEAD` : ""}), then make the change.`,
+    `- Commit it on ${task.branch} with clear commit messages. Do not create or switch branches, rebase, amend or push: new commits update the same pull request.`,
+    "- Finish with no uncommitted or untracked files, and end with a short summary of what changed and how you checked it.",
   ].join("\n");
 }
 

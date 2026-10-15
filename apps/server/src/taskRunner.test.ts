@@ -985,6 +985,80 @@ describe("connections by reachability", () => {
   });
 });
 
+describe("follow-ups", () => {
+  it("continues a published task on the same branch and updates the same pull request", async () => {
+    const test = await setup({ permission: true });
+    const created = await test.runner.create(REQUEST, {
+      origin: { projectId: "home", sessionId: "chat-1" },
+    });
+    await test.waitForTurns(1);
+    test.endTurn("completed", { text: "Fixed it." });
+    await test.waitFor(created.id, "published");
+    expect(test.publisher.publish).toHaveBeenCalledOnce();
+    const turnsBefore = test.turns.length;
+
+    // From another chat: its outcomes now go there.
+    const continued = await test.runner.continueTask(
+      created.id,
+      "  Also mention the desktop app. ",
+      { origin: { projectId: "home", sessionId: "chat-2" } },
+    );
+    expect(continued.state).toBe("queued");
+    await test.waitForTurns(turnsBefore + 1);
+    const followUp = test.turns.at(-1)!;
+    // The same implementation chat, told the follow-up and the branch.
+    expect(followUp.sessionId).toBe(test.store.get(created.id)?.sessionId);
+    expect(followUp.text).toContain("Also mention the desktop app.");
+    expect(followUp.text).toContain(created.branch);
+    expect(test.store.get(created.id)).toMatchObject({
+      origin: { projectId: "home", sessionId: "chat-2" },
+      followUps: [{ instructions: "Also mention the desktop app." }],
+    });
+    expect(test.store.get(created.id)?.pendingFollowUp).toBeUndefined();
+
+    test.inspections.push({
+      branch: created.branch,
+      head: "c2",
+      clean: true,
+      status: "",
+      commits: ["c1", "c2"],
+    });
+    test.endTurn("completed", { text: "Mentioned it." });
+    await test.waitFor(created.id, "published");
+    expect(test.publisher.publish).toHaveBeenCalledTimes(2);
+    const second = test.publisher.publish.mock.calls[1]![0];
+    expect(second).toMatchObject({ branch: created.branch, commit: "c2" });
+    expect(second.body).toContain(
+      "### Follow-ups\n\n- Also mention the desktop app.",
+    );
+    expect(test.store.get(created.id)).toMatchObject({
+      pullRequest: { number: 7 },
+      publishedCommit: "c2",
+    });
+  });
+
+  it("refuses follow-ups for working, unstarted and unknown tasks", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    await expect(
+      test.runner.continueTask(created.id, "more"),
+    ).rejects.toMatchObject({ code: "task_busy" });
+    test.endTurn("failed");
+    await vi.waitFor(() =>
+      expect(test.store.get(created.id)?.state).not.toMatch(
+        /queued|preparing|implementing/u,
+      ),
+    );
+    await expect(
+      test.runner.continueTask(created.id, "   "),
+    ).rejects.toMatchObject({ code: "instructions_required" });
+    await expect(
+      test.runner.continueTask("ffffffffffff", "more"),
+    ).rejects.toMatchObject({ code: "task_not_found" });
+  });
+});
+
 describe("publishing tasks", () => {
   it("credits the connection and publishes an approved task on its own", async () => {
     const test = await setup({ permission: true, validation: ["npm test"] });

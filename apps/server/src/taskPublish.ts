@@ -111,6 +111,13 @@ export function pullRequestBody(task: TaskRun): string {
   const head = task.headCommit ?? "";
   const evidence = evidenceFor(task, head);
   const lines: string[] = [task.objective.trim(), ""];
+  if (task.followUps?.length) {
+    lines.push("### Follow-ups", "");
+    for (const followUp of task.followUps) {
+      lines.push(`- ${followUp.instructions.trim().replace(/\n+/gu, " ")}`);
+    }
+    lines.push("");
+  }
   if (task.summary) {
     lines.push("### Summary", "", task.summary.trim(), "");
   }

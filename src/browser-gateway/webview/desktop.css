@@ -2824,6 +2824,38 @@ html.quick-ask-document body {
   font-size: 12px;
 }
 
+/* The open chat's coding tasks, above the composer. */
+.browser-shell.browser-shell-desktop .assistant-chat-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-shell.browser-shell-desktop .assistant-chat-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-chat-task .assistant-task-open {
+  flex-direction: column;
+  flex-basis: 0;
+}
+
+.browser-shell.browser-shell-desktop .assistant-chat-task-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .browser-shell.browser-shell-desktop .assistant-task-summary > p {
   margin: 0 0 10px;
 }

@@ -382,6 +382,8 @@ describe("routing instructions", () => {
       repositories: true,
     });
     expect(full).toContain("start_task");
+    expect(full).toContain("continue_task");
+    expect(full).toContain("comes back to this chat by itself");
     expect(full).toContain("never ask the owner to switch project");
     expect(full).toContain("list_repositories");
     expect(full).toContain("schedule_job");
