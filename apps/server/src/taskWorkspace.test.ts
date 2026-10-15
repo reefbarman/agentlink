@@ -2,6 +2,7 @@ import {
   TASK_COMMIT_NAME,
   TaskWorkspaceError,
   createTaskWorkspaces,
+  setWritable,
 } from "./taskWorkspace.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGitCommand, createProcessRunner } from "./gitCommand.js";
@@ -288,6 +289,201 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
       }),
     ).rejects.toMatchObject({ code: "connection_signed_out" });
     expect(await workspaces.exists(failing)).toBe(false);
+  });
+
+  describe("references", () => {
+    /** A repository under `<dir>/github/octo/<name>`, with one commit. */
+    const upstream = async (dir: string, name: string) => {
+      const repository = path.join(dir, "github", "octo", name);
+      await fs.mkdir(repository, { recursive: true });
+      const run = (...args: string[]) =>
+        execFileSync(git!, args, {
+          cwd: repository,
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: dir,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            ...IDENTITY,
+          },
+          encoding: "utf8",
+        }).trim();
+      run("init", "-q", "-b", "main");
+      await fs.writeFile(path.join(repository, "README.md"), `# ${name}\n`);
+      run("add", "README.md");
+      run("commit", "-q", "-m", "init");
+      return { repository, run };
+    };
+
+    /** Workspaces whose git reads https://github.com/ from `<dir>/github`. */
+    const referenceSetup = async () => {
+      const base = await setup();
+      // Runs before the folder is deleted: references are read-only.
+      cleanup.push(() => setWritable(base.dir, true));
+      const processOptions = {
+        launcher: createLocalWorkspaceExecutionBackend(),
+        environment: {
+          PATH: "/usr/bin:/bin",
+          HOME: base.dir,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_COUNT: "2",
+          GIT_CONFIG_KEY_0: `url.file://${base.dir}/github/.insteadOf`,
+          GIT_CONFIG_VALUE_0: "https://github.com/",
+          GIT_CONFIG_KEY_1: "protocol.file.allow",
+          GIT_CONFIG_VALUE_1: "always",
+        },
+        ownerId: "test",
+      };
+      const workspaces = createTaskWorkspaces({
+        tasksRoot: base.tasksRoot,
+        git: createGitCommand({ ...processOptions, gitExecutable: git! }),
+        run: createProcessRunner(processOptions),
+        shell: "/bin/sh",
+      });
+      return { ...base, workspaces };
+    };
+
+    it("clones them read-only beside the clone, where the checks never look", async () => {
+      const { dir, workspaces, taskFor, run } = await referenceSetup();
+      const notes = await upstream(dir, "notes");
+      const secret = await upstream(dir, "secret-notes");
+      const base = taskFor("aaaaaaaaaaaa", {
+        references: [
+          "https://github.com/octo/notes",
+          "https://github.com/octo/secret-notes",
+        ],
+      });
+      const asked: string[] = [];
+      const task = {
+        ...base,
+        ...(await workspaces.prepare(base, {
+          // Only the private one comes from the publisher, as a bundle.
+          referenceSnapshot: (reference) =>
+            reference.endsWith("/secret-notes")
+              ? async (destination) => {
+                  asked.push(destination);
+                  secret.run("bundle", "create", "-q", destination, "main");
+                  return { branch: "main" };
+                }
+              : undefined,
+        })),
+      };
+      const folder = path.dirname(task.workspace);
+      const notesClone = path.join(folder, "refs", "octo", "notes");
+      const secretClone = path.join(folder, "refs", "octo", "secret-notes");
+      await expect(
+        fs.readFile(path.join(notesClone, "README.md"), "utf8"),
+      ).resolves.toBe("# notes\n");
+      await expect(
+        fs.readFile(path.join(secretClone, "README.md"), "utf8"),
+      ).resolves.toBe("# secret-notes\n");
+      expect(run(notesClone, "rev-parse", "HEAD")).toBe(
+        notes.run("rev-parse", "HEAD"),
+      );
+      // The bundle is gone, and origin names the repository, not the bundle.
+      expect(asked).toEqual([path.join(folder, "reference-1.bundle")]);
+      await expect(fs.stat(asked[0]!)).rejects.toThrow();
+      expect(run(secretClone, "remote", "get-url", "origin")).toBe(
+        "https://github.com/octo/secret-notes",
+      );
+
+      // Read-only (root ignores file permissions, so only check otherwise).
+      if (process.getuid?.() !== 0) {
+        await expect(
+          fs.writeFile(path.join(notesClone, "README.md"), "changed\n"),
+        ).rejects.toMatchObject({ code: "EACCES" });
+        await expect(
+          fs.writeFile(path.join(notesClone, "new.txt"), "x\n"),
+        ).rejects.toMatchObject({ code: "EACCES" });
+      }
+
+      // The clone's checks, validation and diff see only the clone.
+      await fs.writeFile(path.join(task.workspace, "fix.txt"), "fixed\n");
+      run(task.workspace, "add", "fix.txt");
+      run(task.workspace, "commit", "-q", "-m", "fix");
+      const inspection = await workspaces.inspect(task);
+      expect(inspection).toMatchObject({ clean: true, branch: task.branch });
+      expect(inspection.commits).toHaveLength(1);
+      const validation = await workspaces.validate(task, [
+        "test ! -e refs && test -f README.md",
+      ]);
+      expect(validation.passed).toBe(true);
+      const diff = await workspaces.diff(task);
+      expect(diff.stat).toContain("fix.txt");
+      expect(diff.stat).not.toContain("refs");
+
+      // Preparing again and removing work despite the read-only files.
+      await workspaces.prepare(base, {
+        referenceSnapshot: (reference) =>
+          reference.endsWith("/secret-notes")
+            ? async (destination) => {
+                secret.run("bundle", "create", "-q", destination, "main");
+                return { branch: "main" };
+              }
+            : undefined,
+      });
+      await expect(
+        fs.stat(path.join(task.workspace, "fix.txt")),
+      ).rejects.toThrow();
+      await workspaces.remove(task);
+      await expect(fs.stat(folder)).rejects.toThrow();
+    });
+
+    it("keeps each task's folder, references included, apart from other tasks", async () => {
+      const { dir, projects, workspaces, taskFor } = await referenceSetup();
+      await upstream(dir, "notes");
+      const first = taskFor("aaaaaaaaaaaa", {
+        references: ["https://github.com/octo/notes"],
+      });
+      const second = taskFor("bbbbbbbbbbbb");
+      await workspaces.prepare(first);
+      await workspaces.prepare(second);
+      // Each task's project root is its folder: none contains another.
+      const roots = [
+        path.dirname(first.workspace),
+        path.dirname(second.workspace),
+        path.join(projects, "home"),
+      ];
+      for (const root of roots) {
+        for (const other of roots) {
+          if (root === other) continue;
+          expect(path.relative(root, other).startsWith("..")).toBe(true);
+        }
+      }
+      const reference = path.join(roots[0]!, "refs", "octo", "notes");
+      expect(path.relative(roots[0]!, reference).startsWith("..")).toBe(false);
+      expect(path.relative(roots[1]!, reference).startsWith("..")).toBe(true);
+    });
+
+    it("fails with the reference's name when one cannot be cloned", async () => {
+      const { workspaces, taskFor } = await referenceSetup();
+      const task = taskFor("aaaaaaaaaaaa", {
+        references: ["https://github.com/octo/missing"],
+      });
+      await expect(workspaces.prepare(task)).rejects.toMatchObject({
+        code: "reference_failed",
+        detail: expect.stringContaining("https://github.com/octo/missing"),
+      });
+      const signedOut = taskFor("bbbbbbbbbbbb", {
+        references: ["https://github.com/octo/missing"],
+      });
+      await expect(
+        workspaces.prepare(signedOut, {
+          referenceSnapshot: () => async () => {
+            throw new TaskWorkspaceError("connection_signed_out");
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "reference_failed",
+        detail: expect.stringContaining("connection_signed_out"),
+      });
+      // Nothing half-made stays locked: the folder can still be removed.
+      await workspaces.remove(signedOut);
+      await expect(
+        fs.stat(path.dirname(signedOut.workspace)),
+      ).rejects.toThrow();
+    });
   });
 
   it("credits the connection's person on every commit", async () => {

@@ -76,9 +76,12 @@ describe("review prompt", () => {
         baseCommit: "base0",
         headCommit: "c1",
         branch: "agentlink/fix-1",
+        workspace: "/projects/.tasks/aaaaaaaaaaaa/clock",
       } as TaskRun,
       { stat: "a.ts | 2", patch: "+b", truncated: true },
     );
+    expect(prompt).toContain("The clone is the clock/ folder");
+    expect(prompt).not.toContain("Reference repositories");
     expect(prompt).toContain("Fix the clock");
     expect(prompt).toContain("base0..c1");
     expect(prompt).toContain("+b");
@@ -89,11 +92,31 @@ describe("review prompt", () => {
 
   it("tells the reviewer the owner's validation commands are in scope", () => {
     const prompt = reviewPrompt(
-      { objective: "Add SECURITY.md", branch: "agentlink/sec-1" } as TaskRun,
+      {
+        objective: "Add SECURITY.md",
+        branch: "agentlink/sec-1",
+        workspace: "/projects/.tasks/aaaaaaaaaaaa/site",
+      } as TaskRun,
       { stat: "", patch: "", truncated: false },
       ["test -f CODE_OF_CONDUCT.md"],
     );
     expect(prompt).toContain("$ test -f CODE_OF_CONDUCT.md");
     expect(prompt).toContain("do not ask for them to be removed");
+  });
+
+  it("lists the task's read-only references", () => {
+    const prompt = reviewPrompt(
+      {
+        objective: "Describe AgentLink",
+        branch: "agentlink/describe-1",
+        workspace: "/projects/.tasks/aaaaaaaaaaaa/site",
+        references: ["https://github.com/reefbarman/agentlink"],
+      } as unknown as TaskRun,
+      { stat: "", patch: "", truncated: false },
+    );
+    expect(prompt).toContain(
+      "  - https://github.com/reefbarman/agentlink at refs/reefbarman/agentlink/ (its default branch)",
+    );
+    expect(prompt).toContain("read but never change");
   });
 });

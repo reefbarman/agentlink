@@ -70,6 +70,8 @@ export interface Task {
   state: TaskState;
   baseBranch?: string;
   resolvedBaseBranch?: string;
+  /** Repositories the task reads, read-only. */
+  references?: string[];
   baseCommit?: string;
   headCommit?: string;
   commits?: string[];
@@ -508,6 +510,21 @@ function TaskDetailView({
               {shortRepository(task.repository)}
             </a>
           </dd>
+          {task.references && task.references.length > 0 && (
+            <>
+              <dt>Reads</dt>
+              <dd>
+                {task.references.map((reference, index) => (
+                  <>
+                    {index > 0 && ", "}
+                    <a href={reference} target="_blank" rel="noreferrer">
+                      {shortRepository(reference)}
+                    </a>
+                  </>
+                ))}
+              </dd>
+            </>
+          )}
           <dt>Branch</dt>
           <dd>
             <code>{task.branch}</code>

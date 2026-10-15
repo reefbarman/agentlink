@@ -21,8 +21,12 @@ import {
 } from "./taskRepositories.js";
 import { taskModelError } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
-import { GITHUB_APP_INSTALLATIONS_URL } from "./repositoryTools.js";
 import {
+  GITHUB_APP_INSTALLATIONS_URL,
+  githubRepositoryUrl,
+} from "./repositoryTools.js";
+import {
+  MAX_TASK_REFERENCES,
   MAX_TASKS,
   parseTaskRequest,
   type TaskRequest,
@@ -116,6 +120,15 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         return "validation must be at most 10 shell commands, each one line of at most 1,000 characters";
       case "task_limit_reached":
         return `there are already ${MAX_TASKS} tasks; the owner must delete some first`;
+      case "references_invalid":
+      case "reference_invalid":
+        return "references must be GitHub repositories, as owner/name or https://github.com/owner/name";
+      case "references_too_many":
+        return `references can name at most ${MAX_TASK_REFERENCES} repositories`;
+      case "reference_duplicate":
+        return "references must be different repositories, and not the task's own repository";
+      case "repository_folder_conflict":
+        return "a repository named refs cannot have references; start the task without them";
       default:
         return code;
     }
@@ -169,8 +182,22 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       ) {
         throw new HttpError(400, "objective_too_long");
       }
-      const { validation: proposedInput, ...rest } = input;
-      const request = parseTaskRequest({ ...rest });
+      const { validation: proposedInput, references, ...rest } = input;
+      const request = parseTaskRequest({
+        ...rest,
+        // owner/name is accepted here too, like read_repository.
+        ...(references !== undefined
+          ? {
+              references: Array.isArray(references)
+                ? references.map((reference) =>
+                    typeof reference === "string"
+                      ? (githubRepositoryUrl(reference) ?? reference)
+                      : reference,
+                  )
+                : references,
+            }
+          : {}),
+      });
       check(request);
       const proposed =
         proposedInput === undefined
@@ -198,6 +225,15 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           `Repository: ${request.repository}`,
           `Starts from: ${request.baseBranch ?? "the default branch"}`,
           `Model: ${request.model ?? "the server's default"}`,
+          ...(request.references?.length
+            ? [
+                `Reads (read-only, not changed): ${request.references
+                  .map((reference) =>
+                    reference.replace("https://github.com/", ""),
+                  )
+                  .join(", ")}`,
+              ]
+            : []),
           "It works on a new agentlink/ branch and commits there, without asking before each edit or command.",
           checks.length > 0
             ? `Checks the server runs on its commit: ${checks.join(" && ")}${saveValidation ? " (saved for future tasks on this repository)" : ""}`
@@ -361,6 +397,13 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           description:
             "https:// clone URL with no credentials, for example https://github.com/owner/name",
         },
+        references: {
+          type: "array",
+          maxItems: MAX_TASK_REFERENCES,
+          items: { type: "string", minLength: 1, maxLength: 300 },
+          description:
+            "Other GitHub repositories the task needs to read, for example a project whose README and screenshots a website page should describe: owner/name or https://github.com/owner/name (from list_repositories). Each is cloned read-only beside the task's repository at its default branch; the task cannot change them. Omit when the task only needs its own repository.",
+        },
         validation: {
           type: "array",
           maxItems: 10,
@@ -480,6 +523,8 @@ export function taskProblemHint(
     case "connection_signed_out":
     case "connection_missing":
       return "The GitHub connection is signed out: the owner must sign it in again in the Assistant's GitHub panel, then resume the task.";
+    case "reference_failed":
+      return `One of the task's reference repositories could not be cloned. If it is private, the AgentLink Assistant GitHub App must be installed on it (at ${GITHUB_APP_INSTALLATIONS_URL}); then resume the task.`;
     case "publish_permission_missing":
       return "It is ready but was not published: the repository has no GitHub account chosen to publish with. The owner can choose one in the GitHub panel, then publish it from Tasks.";
     default:

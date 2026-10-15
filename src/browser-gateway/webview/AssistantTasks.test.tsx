@@ -196,6 +196,23 @@ describe("TasksPanel", () => {
     expect(await screen.findByText(/need projectsRoot/u)).toBeTruthy();
   });
 
+  it("shows the repositories a task reads", async () => {
+    stubFetch({
+      "GET /api/tasks/t1": () =>
+        detail(
+          task({ references: ["https://github.com/reefbarman/agentlink"] }),
+        ),
+    });
+    render(
+      <TasksPanel revision={0} onClose={() => undefined} initialTaskId="t1" />,
+    );
+    expect(await screen.findByText("Reads")).toBeTruthy();
+    const link = screen.getByText("reefbarman/agentlink");
+    expect(link.getAttribute("href")).toBe(
+      "https://github.com/reefbarman/agentlink",
+    );
+  });
+
   it("publishes a ready task that did not publish itself", async () => {
     const calls = stubFetch({
       "GET /api/tasks/t1": () => detail(task()),

@@ -75,6 +75,55 @@ describe("task requests", () => {
     expect(code(ok)).toBe("accepted");
   });
 
+  it("accepts up to three distinct GitHub references", () => {
+    const code = (
+      references: unknown,
+      repository = "https://github.com/a/b",
+    ) => {
+      try {
+        parseTaskRequest({ repository, objective: "x", references });
+        return "accepted";
+      } catch (error) {
+        return (error as TaskInputError).code;
+      }
+    };
+    expect(
+      parseTaskRequest({
+        repository: "https://github.com/a/site",
+        objective: "x",
+        references: [
+          "https://github.com/a/agentlink.git",
+          "https://github.com/b/c",
+        ],
+      }).references,
+    ).toEqual(["https://github.com/a/agentlink", "https://github.com/b/c"]);
+    expect(
+      parseTaskRequest({
+        repository: "https://github.com/a/b",
+        objective: "x",
+        references: [],
+      }).references,
+    ).toBeUndefined();
+    expect(code("https://github.com/a/c")).toBe("references_invalid");
+    expect(code(["https://gitlab.com/a/c"])).toBe("reference_invalid");
+    expect(code(["https://token@github.com/a/c"])).toBe("reference_invalid");
+    expect(code(["https://github.com/A/B"])).toBe("reference_duplicate");
+    expect(code(["https://github.com/a/c", "https://github.com/a/c.git"])).toBe(
+      "reference_duplicate",
+    );
+    expect(
+      code([
+        "https://github.com/a/c",
+        "https://github.com/a/d",
+        "https://github.com/a/e",
+        "https://github.com/a/f",
+      ]),
+    ).toBe("references_too_many");
+    expect(code(["https://github.com/a/c"], "https://github.com/a/refs")).toBe(
+      "repository_folder_conflict",
+    );
+  });
+
   it("names branches from whole words under the agentlink prefix", () => {
     expect(
       taskBranchName("Fix the flaky clock test in X!", "abc123abc123"),

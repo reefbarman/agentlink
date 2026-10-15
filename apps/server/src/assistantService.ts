@@ -848,12 +848,18 @@ export async function startAssistantService(
       project: {
         readonly id: string;
         readonly root: string;
+        /** Commands run only inside this folder (a task's clone). */
+        readonly commandRoot?: string;
       },
-      /** A coding task's own clone: web tools only, no jobs or tasks. */
+      /** A coding task's own folder: web tools only, no jobs or tasks. */
       kind: "project" | "task" = "project",
     ) => {
       const autonomous = (request: { readonly sessionId: string }) =>
         approvalModes.get(project.id, request.sessionId) === "autonomous";
+      const commandOptions = commandHostOptions(config, worker, autonomous, {
+        policy: () => projectNetworkPolicy(catalog.get(project.id)),
+        key: policyKey,
+      });
       const webTools = projectWebTools(config, {
         policy: () => projectNetworkPolicy(catalog.get(project.id)),
         key: policyKey,
@@ -885,10 +891,15 @@ export async function startAssistantService(
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
         ...(kind === "project" ? { instructions: routingInstructions } : {}),
-        ...commandHostOptions(config, worker, autonomous, {
-          policy: () => projectNetworkPolicy(catalog.get(project.id)),
-          key: policyKey,
-        }),
+        ...commandOptions,
+        ...(commandOptions.commands && project.commandRoot
+          ? {
+              commands: {
+                ...commandOptions.commands,
+                root: project.commandRoot,
+              },
+            }
+          : {}),
         hostTools: async (request) => [
           ...(await webTools(request)),
           ...(kind === "project" ? await jobTools.readTools(request) : []),
@@ -1178,8 +1189,14 @@ export async function startAssistantService(
           });
           const openTaskProject = async (task: TaskRun) => {
             if (taskHosts.has(task.projectId)) return;
+            // The task folder: the clone plus read-only references under
+            // refs/. Commands still run only in the clone.
             const host = await openHost(
-              { id: task.projectId, root: task.workspace },
+              {
+                id: task.projectId,
+                root: path.dirname(task.workspace),
+                commandRoot: task.workspace,
+              },
               "task",
             );
             taskHosts.set(task.projectId, host);

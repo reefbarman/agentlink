@@ -20,6 +20,7 @@ import {
   describeFinding,
   parseReview,
   reviewPrompt,
+  taskLayout,
 } from "./taskReview.js";
 import {
   TaskInputError,
@@ -604,6 +605,49 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     };
   };
 
+  /**
+   * The connection to fetch a repository with: the one it publishes with,
+   * or else the one connection that can reach it; none for public ones.
+   */
+  const fetchConnection = async (task: TaskRun, repository: string) => {
+    const permission = options.repositories?.get(repository)?.publish;
+    const configured = permission
+      ? options.connections?.get(permission.connectionId)
+      : undefined;
+    if (configured || !options.reachableConnection) return configured;
+    const reachable = await options
+      .reachableConnection(repository)
+      .catch((error: unknown) => {
+        log(
+          `Task ${task.id}: could not look up a GitHub connection for ${repository}: ${describe(error)}`,
+        );
+        return undefined;
+      });
+    return reachable ? options.connections?.get(reachable) : undefined;
+  };
+
+  /** A base snapshot of `repository` fetched by the publisher. */
+  const publisherSnapshot =
+    (connectionId: string, repository: string, baseBranch?: string) =>
+    (destination: string) => {
+      const publisher = options.publisher!;
+      return publisher
+        .snapshot(
+          {
+            connectionId,
+            repository,
+            ...(baseBranch ? { baseBranch } : {}),
+          },
+          destination,
+        )
+        .catch((error: unknown) => {
+          if (error instanceof PublisherRequestError) {
+            throw new TaskWorkspaceError(error.code, error.detail);
+          }
+          throw error;
+        });
+    };
+
   /** Why this task cannot be published now, if it cannot. */
   const publishBlocker = (
     task: TaskRun,
@@ -719,19 +763,20 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       if (!entry.task.baseCommit || !(await workspaces.exists(entry.task))) {
         // Commits credit the connection the repository publishes with, or
         // else the one connection that can reach it.
-        let { connection } = publishTarget(entry.task);
-        if (!connection && options.reachableConnection) {
-          const reachable = await options
-            .reachableConnection(entry.task.repository)
-            .catch((error: unknown) => {
-              log(
-                `Task ${entry.task.id}: could not look up a GitHub connection: ${describe(error)}`,
-              );
-              return undefined;
-            });
-          connection = reachable
-            ? options.connections?.get(reachable)
-            : undefined;
+        const connection = await fetchConnection(
+          entry.task,
+          entry.task.repository,
+        );
+        // Each reference is fetched with its own connection, if it has one.
+        const referenceConnections = new Map<string, string>();
+        for (const reference of entry.task.references ?? []) {
+          const referenceConnection = await fetchConnection(
+            entry.task,
+            reference,
+          );
+          if (referenceConnection) {
+            referenceConnections.set(reference, referenceConnection.id);
+          }
         }
         await save(entry, {
           state: "preparing",
@@ -754,24 +799,21 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           // token, so private repositories work and the token stays there.
           ...(connection && publisher
             ? {
-                snapshot: (destination: string) =>
-                  publisher
-                    .snapshot(
-                      {
-                        connectionId: connection.id,
-                        repository: task.repository,
-                        ...(task.baseBranch
-                          ? { baseBranch: task.baseBranch }
-                          : {}),
-                      },
-                      destination,
-                    )
-                    .catch((error: unknown) => {
-                      if (error instanceof PublisherRequestError) {
-                        throw new TaskWorkspaceError(error.code, error.detail);
-                      }
-                      throw error;
-                    }),
+                snapshot: publisherSnapshot(
+                  connection.id,
+                  task.repository,
+                  task.baseBranch,
+                ),
+              }
+            : {}),
+          ...(publisher && referenceConnections.size > 0
+            ? {
+                referenceSnapshot: (reference: string) => {
+                  const connectionId = referenceConnections.get(reference);
+                  return connectionId
+                    ? publisherSnapshot(connectionId, reference)
+                    : undefined;
+                },
               }
             : {}),
         });
@@ -1056,7 +1098,8 @@ export function taskPrompt(task: TaskRun): string {
     task.objective,
     "",
     "Rules:",
-    `- Work only in this folder. It is on branch ${task.branch}, made from ${task.resolvedBaseBranch ?? task.baseBranch ?? "the default branch"} at ${task.baseCommit ?? "its latest commit"}.`,
+    ...taskLayout(task),
+    `- Change files only in the clone. It is on branch ${task.branch}, made from ${task.resolvedBaseBranch ?? task.baseBranch ?? "the default branch"} at ${task.baseCommit ?? "its latest commit"}.`,
     "- Make the change, then run the project's relevant tests or checks if you can.",
     `- Commit all of your work on ${task.branch} with clear commit messages. Do not create or switch branches, rebase, or push: the owner publishes the result.`,
     "- Finish with no uncommitted or untracked files: commit what belongs to the change and delete scratch files.",
@@ -1068,6 +1111,7 @@ export function taskPrompt(task: TaskRun): string {
 function resumePrompt(task: TaskRun): string {
   return [
     "This task was stopped before it finished and has now been resumed.",
+    ...taskLayout(task),
     `Check the current state of the clone (git status, git log ${task.baseCommit ? `${task.baseCommit.slice(0, 12)}..HEAD` : ""}), then continue the objective:`,
     task.objective,
     "",

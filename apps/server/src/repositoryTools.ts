@@ -437,6 +437,7 @@ export function assistantRoutingInstructions(capabilities: {
     ...(capabilities.read && capabilities.tasks
       ? [
           "- Before proposing a task on a repository, read it with read_repository: find where the change belongs, and if list_repositories shows no checks for it, propose them in start_task's validation (from its package.json scripts, Makefile or CI workflow). The owner approves everything on one card, so do not ask them about checks or publishing first.",
+          "- When a task needs another repository's content (for example a website page about a project, from that project's README and screenshots), pass that repository in start_task's references: the task can read it but not change it.",
         ]
       : []),
     "- Anything that should happen on a schedule or repeatedly: propose it with schedule_job.",

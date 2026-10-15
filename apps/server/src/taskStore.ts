@@ -1,5 +1,6 @@
 import { HttpError } from "./httpJson.js";
 import { promises as fs } from "node:fs";
+import { parseGitHubRepository } from "./githubApi.js";
 import path from "node:path";
 import { planRepositories } from "./projectCatalog.js";
 import { randomBytes } from "node:crypto";
@@ -81,7 +82,18 @@ export interface TaskRequest {
   readonly objective: string;
   /** `providerId/modelId`; the server's default model when absent. */
   readonly model?: string;
+  /**
+   * GitHub repositories the task may read (at most 3), as
+   * `https://github.com/<owner>/<name>`: cloned at their default branch
+   * head into `<task folder>/refs/<owner>/<name>`, never changed or pushed.
+   */
+  readonly references?: readonly string[];
 }
+
+/** Reference repositories a task may have. */
+export const MAX_TASK_REFERENCES = 3;
+/** The task folder's subfolder holding reference clones. */
+export const TASK_REFERENCES_FOLDER = "refs";
 
 /** One validation command's run, against the evidence's commit. */
 export interface ValidationCommandResult {
@@ -260,7 +272,13 @@ interface StoredTasks {
 
 /** Validate a task request from an untrusted body. Unknown keys are refused. */
 export function parseTaskRequest(body: Record<string, unknown>): TaskRequest {
-  const known = new Set(["repository", "baseBranch", "objective", "model"]);
+  const known = new Set([
+    "repository",
+    "baseBranch",
+    "objective",
+    "model",
+    "references",
+  ]);
   if (Object.keys(body).some((key) => !known.has(key))) {
     throw new TaskInputError("task_field_unknown");
   }
@@ -281,6 +299,7 @@ export function parseTaskRequest(body: Record<string, unknown>): TaskRequest {
     objective: string;
     baseBranch?: string;
     model?: string;
+    references?: string[];
   } = { repository: planned!.url, objective: objective.trim() };
   if (body.baseBranch !== undefined && body.baseBranch !== "") {
     if (
@@ -297,7 +316,48 @@ export function parseTaskRequest(body: Record<string, unknown>): TaskRequest {
     }
     request.model = body.model;
   }
+  if (body.references !== undefined) {
+    if (!Array.isArray(body.references)) {
+      throw new TaskInputError("references_invalid");
+    }
+    if (body.references.length > MAX_TASK_REFERENCES) {
+      throw new TaskInputError("references_too_many");
+    }
+    const target = parseGitHubRepository(request.repository);
+    const references: string[] = [];
+    for (const value of body.references) {
+      const parsed =
+        typeof value === "string" ? parseGitHubRepository(value) : undefined;
+      if (!parsed) throw new TaskInputError("reference_invalid");
+      const url = `https://github.com/${parsed.owner}/${parsed.name}`;
+      const key = url.toLowerCase();
+      if (
+        (target &&
+          key ===
+            `https://github.com/${target.owner}/${target.name}`.toLowerCase()) ||
+        references.some((existing) => existing.toLowerCase() === key)
+      ) {
+        throw new TaskInputError("reference_duplicate");
+      }
+      references.push(url);
+    }
+    // The target's own folder would hold the references otherwise.
+    if (
+      references.length > 0 &&
+      planned!.directory === TASK_REFERENCES_FOLDER
+    ) {
+      throw new TaskInputError("repository_folder_conflict");
+    }
+    if (references.length > 0) request.references = references;
+  }
   return request;
+}
+
+/** Where a reference is cloned, relative to the task folder. */
+export function referenceFolder(reference: string): string {
+  const parsed = parseGitHubRepository(reference);
+  if (!parsed) throw new TaskInputError("reference_invalid");
+  return path.join(TASK_REFERENCES_FOLDER, parsed.owner, parsed.name);
 }
 
 /**
@@ -500,7 +560,10 @@ function isStoredTask(value: unknown): value is TaskRun {
     Array.isArray(task.evidence) &&
     Array.isArray(task.effects) &&
     typeof task.createdAt === "number" &&
-    typeof task.updatedAt === "number"
+    typeof task.updatedAt === "number" &&
+    (task.references === undefined ||
+      (Array.isArray(task.references) &&
+        task.references.every((reference) => typeof reference === "string")))
   );
 }
 

@@ -310,7 +310,7 @@ async function setup(
     /** The publisher's answer to each publish, in order; then success. */
     readonly publishFailures?: PublisherRequestError[];
     /** The connection that can reach the repository, when none is set. */
-    readonly reachable?: string;
+    readonly reachable?: string | ((repository: string) => string | undefined);
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-runner-"));
@@ -384,7 +384,13 @@ async function setup(
     },
     publisher,
     ...(options.reachable !== undefined
-      ? { reachableConnection: vi.fn(async () => options.reachable) }
+      ? {
+          reachableConnection: vi.fn(async (repository: string) =>
+            typeof options.reachable === "function"
+              ? options.reachable(repository)
+              : options.reachable,
+          ),
+        }
       : {}),
     onTaskRecovered: (task) => recovered.push(task),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
@@ -938,6 +944,34 @@ describe("connections by reachability", () => {
     // Reaching a repository is not permission to publish to it.
     await test.waitFor(created.id, "ready");
     expect(test.publisher.publish).not.toHaveBeenCalled();
+  });
+
+  it("fetches each private reference with its own connection", async () => {
+    const PRIVATE = "https://github.com/reefbarman/notes";
+    const PUBLIC = "https://github.com/octo/handbook";
+    const test = await setup({
+      // The task's own repository is public; one reference is private.
+      reachable: (repository) =>
+        repository === PRIVATE ? CONNECTION.id : undefined,
+    });
+    const created = await test.runner.create({
+      ...REQUEST,
+      references: [PRIVATE, PUBLIC],
+    });
+    await test.waitForTurns(1);
+    const prepareOptions = test.workspaces.prepare.mock.calls[0]?.[1];
+    expect(prepareOptions?.snapshot).toBeUndefined();
+    expect(prepareOptions?.referenceSnapshot?.(PUBLIC)).toBeUndefined();
+    await prepareOptions?.referenceSnapshot?.(PRIVATE)?.("/r");
+    expect(test.publisher.snapshot).toHaveBeenCalledWith(
+      { connectionId: CONNECTION.id, repository: PRIVATE },
+      "/r",
+    );
+    // Reaching a reference neither credits nor binds the task to it.
+    expect(test.store.get(created.id)?.connectionId).toBeUndefined();
+    expect(test.store.get(created.id)?.references).toEqual([PRIVATE, PUBLIC]);
+    // The task's chat is told where its references are.
+    expect(test.turns[0]?.text).toContain("refs/reefbarman/notes/");
   });
 
   it("clones directly when no connection reaches it", async () => {

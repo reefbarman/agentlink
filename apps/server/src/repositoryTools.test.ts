@@ -369,6 +369,7 @@ describe("routing instructions", () => {
     });
     expect(withRead).toContain("read_repository");
     expect(withRead).toContain("start_task's validation");
+    expect(withRead).toContain("start_task's references");
     expect(withRead).not.toContain("\u2014");
     expect(
       assistantRoutingInstructions({ tasks: true, repositories: true }),

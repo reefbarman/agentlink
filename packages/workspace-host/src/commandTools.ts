@@ -54,6 +54,12 @@ export interface WorkspaceCommandSessionGrant {
 
 export interface CreateWorkspaceCommandToolsOptions {
   readonly projectRoot: string;
+  /**
+   * A folder inside the project that commands are confined to: their
+   * default working directory, and every `cwd` must be inside it. Defaults
+   * to the project root. A working-directory rule, not a sandbox.
+   */
+  readonly commandRoot?: string;
   readonly ownerId: string;
   readonly supervisor: WorkspaceCommandSupervisor;
   readonly mutations: WorkspaceMutationCoordinator;
@@ -116,6 +122,16 @@ export async function createWorkspaceCommandTools(
     );
   }
   const projectRoot = await fs.realpath(options.projectRoot);
+  if (
+    options.commandRoot !== undefined &&
+    !path.isAbsolute(options.commandRoot)
+  ) {
+    throw new Error("Workspace command root must be absolute");
+  }
+  const commandRoot = options.commandRoot
+    ? await canonicalPreparedCommandCwd(projectRoot, options.commandRoot)
+    : projectRoot;
+  const commandRootRelative = path.relative(projectRoot, commandRoot);
   const shellExecutable = options.shellExecutable ?? "/bin/zsh";
   if (!path.isAbsolute(shellExecutable)) {
     throw new Error("Workspace command shell must be absolute");
@@ -133,7 +149,7 @@ export async function createWorkspaceCommandTools(
     const command = requiredString(input.command, "command");
     const mode: WorkspaceCommandMode =
       input.background === true ? "background" : "foreground";
-    const cwd = await canonicalCommandCwd(projectRoot, input.cwd);
+    const cwd = await canonicalCommandCwd(projectRoot, commandRoot, input.cwd);
     const timeoutMs = boundedInteger(
       input.timeoutMs,
       DEFAULT_TIMEOUT_MS,
@@ -212,6 +228,7 @@ export async function createWorkspaceCommandTools(
         backgroundAcknowledgements.delete(commandId);
         return true;
       },
+      commandRootRelative,
     ),
     observeCommandTool(request, options.supervisor, options.ownerId),
     listCommandsTool(request, options.supervisor, options.ownerId),
@@ -288,7 +305,7 @@ export async function createWorkspaceCommandTools(
         return { ok: false, reason: "Prepared command launch changed" };
       }
       const cwd = await canonicalPreparedCommandCwd(
-        projectRoot,
+        commandRoot,
         launch.cwd,
       ).catch(() => undefined);
       if (cwd !== launch.cwd) {
@@ -339,6 +356,8 @@ function executeCommandTool(
     | undefined,
   environmentDigestSecret: string,
   consumeBackgroundAcknowledgement: (commandId: string) => boolean,
+  /** The command root relative to the project root; "" for the root. */
+  commandRootRelative = "",
 ): HostTool {
   return defineTool({
     name: "execute_command",
@@ -350,8 +369,9 @@ function executeCommandTool(
         command: { type: "string", minLength: 1, maxLength: 32_000 },
         cwd: {
           type: "string",
-          description:
-            "Project-relative working directory. Defaults to the project root.",
+          description: commandRootRelative
+            ? `Project-relative working directory, inside ${commandRootRelative}. Defaults to ${commandRootRelative}; commands cannot run anywhere else.`
+            : "Project-relative working directory. Defaults to the project root.",
         },
         background: { type: "boolean" },
         timeoutMs: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_MS },
@@ -625,13 +645,15 @@ function digest(value: unknown): string {
 
 async function canonicalCommandCwd(
   projectRoot: string,
+  commandRoot: string,
   requested: unknown,
 ): Promise<string> {
-  const text = requested === undefined ? "." : requiredString(requested, "cwd");
+  if (requested === undefined) return commandRoot;
+  const text = requiredString(requested, "cwd");
   if (path.isAbsolute(text))
     throw new Error("command_cwd_must_be_project_relative");
   return await canonicalPreparedCommandCwd(
-    projectRoot,
+    commandRoot,
     path.resolve(projectRoot, text),
   );
 }

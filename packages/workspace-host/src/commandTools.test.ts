@@ -15,6 +15,8 @@ async function fixture(
   options: {
     requiresApproval?: boolean;
     backgroundOwnerSessionId?: string;
+    /** Project-relative folder commands are confined to. */
+    commandRoot?: string;
   } = {},
 ) {
   const parent = await fs.mkdtemp(
@@ -23,6 +25,12 @@ async function fixture(
   const projectRoot = path.join(parent, "project");
   const stateDirectory = path.join(parent, "state");
   await fs.mkdir(projectRoot);
+  if (options.commandRoot) {
+    await fs.mkdir(path.join(projectRoot, options.commandRoot, "src"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(projectRoot, "refs"));
+  }
   const supervisor = await WorkspaceCommandSupervisor.create({
     stateDirectory,
     ownerId: "owner-a",
@@ -30,6 +38,9 @@ async function fixture(
   });
   const tools = await createWorkspaceCommandTools({
     projectRoot,
+    ...(options.commandRoot
+      ? { commandRoot: path.join(projectRoot, options.commandRoot) }
+      : {}),
     ownerId: "owner-a",
     supervisor,
     mutations: new WorkspaceMutationCoordinator(),
@@ -86,6 +97,43 @@ describe("workspace command tools", () => {
         },
       });
       expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
+
+  it("confines commands to the command root when one is set", async () => {
+    const test = await fixture({}, { commandRoot: "repo" });
+    const authorize = (cwd: string | undefined) =>
+      test.tools.authorizeToolCall({
+        ...test.request,
+        model: {
+          model: { providerId: "fixture", modelId: "fixture" },
+          source: "turn",
+        },
+        toolCallId: "call-1",
+        toolName: "execute_command",
+        input: { command: "printf ok", ...(cwd ? { cwd } : {}) },
+        effect: "write",
+      });
+    try {
+      await expect(authorize(undefined)).resolves.toMatchObject({
+        displayContent: { cwd: path.join(test.projectRoot, "repo") },
+      });
+      await expect(authorize("repo/src")).resolves.toMatchObject({
+        displayContent: { cwd: path.join(test.projectRoot, "repo", "src") },
+      });
+      await expect(authorize(".")).rejects.toThrow(
+        "command_cwd_outside_project",
+      );
+      await expect(authorize("refs")).rejects.toThrow(
+        "command_cwd_outside_project",
+      );
+      const [tool] = await test.tools.resolveTools(test.request as never);
+      expect(JSON.stringify(tool)).toContain(
+        "Project-relative working directory, inside repo",
+      );
     } finally {
       await test.supervisor.close();
       await fs.rm(test.parent, { recursive: true, force: true });

@@ -1,6 +1,11 @@
-import type { ReviewFinding, TaskRun } from "./taskStore.js";
+import {
+  referenceFolder,
+  type ReviewFinding,
+  type TaskRun,
+} from "./taskStore.js";
 
 import type { AgentModelReference } from "@agentlink/core";
+import path from "node:path";
 import type { TaskDiff } from "./taskWorkspace.js";
 
 /**
@@ -39,6 +44,26 @@ export function pickReviewModel(
   );
 }
 
+/**
+ * Where a task's files are: the clone is a folder of the task's project,
+ * with any reference repositories beside it under `refs/`.
+ */
+export function taskLayout(task: TaskRun): string[] {
+  const folder = path.basename(task.workspace);
+  return [
+    `- The clone is the ${folder}/ folder of this project: give file paths as ${folder}/<path>. Commands run in ${folder}/ (their cwd must be inside it).`,
+    ...(task.references?.length
+      ? [
+          "- Reference repositories, to read but never change (they are read-only and not part of the task):",
+          ...task.references.map(
+            (reference) =>
+              `  - ${reference} at ${referenceFolder(reference)}/ (its default branch)`,
+          ),
+        ]
+      : []),
+  ];
+}
+
 export function reviewPrompt(
   task: TaskRun,
   diff: TaskDiff,
@@ -57,7 +82,9 @@ export function reviewPrompt(
           "",
         ]
       : []),
-    `The change is ${task.baseCommit ?? "the base"}..${task.headCommit ?? "HEAD"} on branch ${task.branch}, checked out in this folder. You may read any file here for context. Do not edit files, run commands or start other agents: those requests will be refused.`,
+    `The change is ${task.baseCommit ?? "the base"}..${task.headCommit ?? "HEAD"} on branch ${task.branch}, checked out in this project. You may read any file here for context. Do not edit files, run commands or start other agents: those requests will be refused.`,
+    ...taskLayout(task),
+    "- In findings, give `file` relative to the repository (as in the diff).",
     "",
     "Changed files:",
     diff.stat || "(none)",

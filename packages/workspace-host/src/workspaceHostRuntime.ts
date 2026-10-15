@@ -128,6 +128,12 @@ export interface CreateWorkspaceHostOptions {
   readonly commands?: {
     readonly enabled: true;
     readonly shellExecutable?: string;
+    /**
+     * Absolute folder inside the project that commands are confined to
+     * (their default and allowed working directories). Defaults to the
+     * project root.
+     */
+    readonly root?: string;
     /** Required when a top-level `executionBackend` is supplied. */
     readonly resolveEnvironment?: () =>
       | NodeJS.ProcessEnv
@@ -424,6 +430,9 @@ export async function createWorkspaceHost(
     options.commands && supervisor
       ? await createWorkspaceCommandTools({
           projectRoot: project.root,
+          ...(options.commands.root
+            ? { commandRoot: options.commands.root }
+            : {}),
           ownerId: commandOwnerId,
           supervisor,
           mutations,

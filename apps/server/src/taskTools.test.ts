@@ -220,6 +220,43 @@ describe("one card to start a task", () => {
   });
 });
 
+describe("reference repositories on the card", () => {
+  it("lists them and starts the task with exactly those", async () => {
+    const test = await setup();
+    const approval = await test.prepare({
+      ...REQUEST,
+      references: ["reefbarman/agentlink", "https://github.com/octo/handbook"],
+    });
+    expect(cardText(approval)).toContain(
+      "Reads (read-only, not changed): reefbarman/agentlink, octo/handbook",
+    );
+    await test.run(prepared(approval));
+    expect(test.create).toHaveBeenCalledWith({
+      ...REQUEST,
+      references: [
+        "https://github.com/reefbarman/agentlink",
+        "https://github.com/octo/handbook",
+      ],
+    });
+  });
+
+  it("explains unusable references", async () => {
+    const test = await setup();
+    await expect(
+      test.prepare({ ...REQUEST, references: ["not a repository"] }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("GitHub repositories"),
+    });
+    await expect(
+      test.prepare({ ...REQUEST, references: [REQUEST.repository] }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("not the task's own repository"),
+    });
+  });
+});
+
 describe("task tools", () => {
   it("shows the exact task on the card and starts exactly that", async () => {
     const test = await setup();

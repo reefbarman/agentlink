@@ -7,13 +7,21 @@ import {
   type ProcessRunner,
 } from "./gitCommand.js";
 import { planRepositories } from "./projectCatalog.js";
-import type { TaskRun, ValidationCommandResult } from "./taskStore.js";
+import {
+  referenceFolder,
+  TASK_REFERENCES_FOLDER,
+  type TaskRun,
+  type ValidationCommandResult,
+} from "./taskStore.js";
 
 /**
  * Task workspaces: one fresh clone per task, at
- * `<tasksRoot>/<taskId>/<repository folder>`, on the task's own branch.
- * Nothing else uses a task's folder: it is mounted as its own hidden
- * project, so the task's file tools cannot reach other tasks or projects.
+ * `<tasksRoot>/<taskId>/<repository folder>`, on the task's own branch,
+ * with any reference repositories beside it, read-only, at
+ * `<tasksRoot>/<taskId>/refs/<owner>/<name>`. Nothing else uses a task's
+ * folder: it is mounted as its own hidden project, so the task's file tools
+ * cannot reach other tasks or projects. The checks, validation and diff
+ * only ever look at the clone, never at `refs/`.
  *
  * `tasksRoot` is `<projectsRoot>/.tasks`: a project ID cannot start with a
  * dot, so no project created in the app can ever own that folder.
@@ -93,6 +101,11 @@ export interface PrepareOptions {
    * work without a token reaching the clone.
    */
   readonly snapshot?: BaseSnapshot;
+  /**
+   * How to fetch each of the task's references (by URL): a bundle from the
+   * publisher for a private one, or else a shallow clone of the URL.
+   */
+  readonly referenceSnapshot?: (reference: string) => BaseSnapshot | undefined;
 }
 
 export interface PreparedWorkspace {
@@ -184,7 +197,7 @@ export function createTaskWorkspaces(options: {
     async prepare(task, prepareOptions = {}) {
       const { coAuthor, snapshot } = prepareOptions;
       const folder = taskFolder(task);
-      await fs.rm(folder, { recursive: true, force: true });
+      await removeTaskFolder(folder);
       await fs.mkdir(tasksRoot, { recursive: true, mode: 0o755 });
       await fs.mkdir(folder, { mode: 0o755 });
       const workspace = task.workspace;
@@ -262,6 +275,59 @@ export function createTaskWorkspaces(options: {
           { mode: 0o755 },
         );
       }
+      for (const [index, reference] of (task.references ?? []).entries()) {
+        const target = path.join(folder, referenceFolder(reference));
+        await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+        const referenceSnapshot = prepareOptions.referenceSnapshot?.(reference);
+        try {
+          if (referenceSnapshot) {
+            const bundle = path.join(folder, `reference-${index}.bundle`);
+            try {
+              const { branch } = await referenceSnapshot(bundle);
+              await run(
+                ["clone", "-q", "--branch", branch, "--", bundle, target],
+                folder,
+                "clone_failed",
+              );
+            } finally {
+              await fs.rm(bundle, { force: true });
+            }
+            await run(
+              ["remote", "set-url", "origin", reference],
+              target,
+              "config_failed",
+            );
+          } else {
+            await run(
+              [
+                "clone",
+                "-q",
+                "--depth=1",
+                "--single-branch",
+                "--",
+                reference,
+                target,
+              ],
+              folder,
+              "clone_failed",
+            );
+          }
+        } catch (error) {
+          const detail =
+            error instanceof TaskWorkspaceError
+              ? `${error.code}${error.detail ? `: ${error.detail}` : ""}`
+              : error instanceof Error
+                ? error.message
+                : String(error);
+          throw new TaskWorkspaceError(
+            "reference_failed",
+            `${reference}: ${detail}`.slice(0, MAX_DETAIL_LENGTH),
+          );
+        }
+      }
+      // References are for reading: take away write permission, so file
+      // tools and commands cannot change them by accident.
+      await setWritable(path.join(folder, TASK_REFERENCES_FOLDER), false);
       return {
         baseCommit,
         // `HEAD` when the base was a tag: the name asked for is the base.
@@ -316,7 +382,7 @@ export function createTaskWorkspaces(options: {
       }
     },
     async remove(task) {
-      await fs.rm(taskFolder(task), { recursive: true, force: true });
+      await removeTaskFolder(taskFolder(task));
     },
     async validate(task, commands) {
       taskFolder(task);
@@ -413,6 +479,45 @@ export function createTaskWorkspaces(options: {
       };
     },
   };
+}
+
+/** Delete a task folder, including its read-only references. */
+async function removeTaskFolder(folder: string): Promise<void> {
+  await setWritable(path.join(folder, TASK_REFERENCES_FOLDER), true);
+  await fs.rm(folder, { recursive: true, force: true });
+}
+
+/**
+ * Make a tree read-only (files 0444, folders 0555) or writable again by
+ * its owner. Links are never followed. A missing tree is left alone.
+ */
+export async function setWritable(
+  root: string,
+  writable: boolean,
+): Promise<void> {
+  let stat;
+  try {
+    stat = await fs.lstat(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    // Writable before descending (to remove), read-only after (to lock).
+    if (writable) await fs.chmod(root, 0o755);
+    for (const name of await fs.readdir(root)) {
+      await setWritable(path.join(root, name), writable);
+    }
+    if (!writable) await fs.chmod(root, 0o555);
+    return;
+  }
+  if (stat.isFile()) {
+    await fs.chmod(
+      root,
+      writable ? (stat.mode | 0o200) & 0o777 : stat.mode & 0o555,
+    );
+  }
 }
 
 /** git output is stdout and stderr together: a value is its last line. */
