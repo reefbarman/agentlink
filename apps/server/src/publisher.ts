@@ -54,6 +54,10 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const TOKEN_PATTERN = /^[A-Za-z0-9_]{20,255}$/u;
 /** Header naming the branch a snapshot bundle holds. */
 export const SNAPSHOT_BRANCH_HEADER = "x-agentlink-branch";
+/** Header naming the commit an archive holds. */
+export const ARCHIVE_COMMIT_HEADER = "x-agentlink-commit";
+/** Largest repository archive (a tar of one commit's files) sent. */
+export const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 
 export class PublisherError extends Error {
   constructor(
@@ -127,6 +131,25 @@ export interface SnapshotRequest {
   readonly repository: string;
   /** The branch to start from; the repository's default when absent. */
   readonly baseBranch?: string;
+}
+
+/**
+ * What the server asks for to let a chat read a repository: the files of
+ * its default branch head. Without a connection, only public repositories
+ * can be fetched.
+ */
+export interface ArchiveRequest {
+  readonly connectionId?: string;
+  /** `https://github.com/<owner>/<name>`. */
+  readonly repository: string;
+}
+
+/** A tar of one commit's files, in the publisher's scratch area. */
+export interface Archive {
+  readonly file: string;
+  readonly branch: string;
+  readonly commit: string;
+  release(): Promise<void>;
 }
 
 /** A git bundle of one branch, in the publisher's scratch area. */
@@ -282,6 +305,24 @@ export async function startPublisher(
       }
       return;
     }
+    if (url.pathname === "/v1/archive" && method === "POST") {
+      const body = await readBody(request);
+      const archive = await service.archive(parseArchive(body));
+      try {
+        const { size } = await fs.stat(archive.file);
+        response.writeHead(200, {
+          "content-type": "application/x-tar",
+          "content-length": size,
+          "cache-control": "no-store",
+          [SNAPSHOT_BRANCH_HEADER]: archive.branch,
+          [ARCHIVE_COMMIT_HEADER]: archive.commit,
+        });
+        await pipeline(createReadStream(archive.file), response);
+      } finally {
+        await archive.release();
+      }
+      return;
+    }
     const match =
       /^\/v1\/connections\/([^/]+)(\/device|\/token|\/repositories)?$/u.exec(
         url.pathname,
@@ -357,8 +398,11 @@ export function createPublisherService(dependencies: {
   readonly flows?: Map<string, DeviceFlow>;
   readonly refreshes?: Map<string, Promise<StoredCredential>>;
   readonly publishing?: Set<string>;
+  /** Largest archive sent (defaults to `MAX_ARCHIVE_BYTES`). */
+  readonly maxArchiveBytes?: number;
 }) {
   const { vault, github, git, now, log } = dependencies;
+  const maxArchiveBytes = dependencies.maxArchiveBytes ?? MAX_ARCHIVE_BYTES;
   const flows = dependencies.flows ?? new Map<string, DeviceFlow>();
   const refreshes =
     dependencies.refreshes ?? new Map<string, Promise<StoredCredential>>();
@@ -656,6 +700,70 @@ export function createPublisherService(dependencies: {
       }
     },
     /**
+     * The files of a repository's default branch head, fetched shallowly
+     * (with the connection's token, or none for a public repository) and
+     * archived as a tar. Nothing in it runs: git only fetches and archives.
+     */
+    async archive(request: ArchiveRequest): Promise<Archive> {
+      const repository = parseGitHubRepository(request.repository);
+      if (!repository) throw new PublisherError(400, "repository_invalid");
+      const token = request.connectionId
+        ? await usableToken(request.connectionId)
+        : "";
+      const authenticated = token !== "";
+      const scratch = await fs.mkdtemp(
+        path.join(dependencies.scratchRoot, "archive-"),
+      );
+      const release = () => fs.rm(scratch, { recursive: true, force: true });
+      try {
+        const remote = `https://github.com/${repository.owner}/${repository.name}.git`;
+        const { run } = githubGit({ git, scratch, token });
+        const head = await run(
+          ["ls-remote", "--symref", "--", remote, "HEAD"],
+          "fetch_failed",
+          { authenticated },
+        );
+        const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/mu.exec(head)?.[1];
+        if (!branch || !isSafeBranchName(branch)) {
+          throw new PublisherError(502, "default_branch_unknown");
+        }
+        await run(["init", "-q", "--bare", "."], "scratch_failed");
+        await run(
+          [
+            "fetch",
+            "-q",
+            "--depth=1",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--",
+            remote,
+            `+refs/heads/${branch}:refs/heads/${branch}`,
+          ],
+          "fetch_failed",
+          { authenticated },
+        );
+        const commit = (
+          await run(["rev-parse", `refs/heads/${branch}`], "fetch_failed")
+        )
+          .trim()
+          .split("\n")
+          .pop()!;
+        const file = path.join(scratch, "files.tar");
+        await run(
+          ["archive", "--format=tar", "-o", file, `refs/heads/${branch}`],
+          "archive_failed",
+        );
+        const { size } = await fs.stat(file);
+        if (size > maxArchiveBytes) {
+          throw new PublisherError(413, "repository_too_large");
+        }
+        return { file, branch, commit, release };
+      } catch (error) {
+        await release();
+        throw error;
+      }
+    },
+    /**
      * Fetch the base branch with the connection's token into a scratch
      * repository and bundle it. Works for private repositories; the token
      * stays here.
@@ -726,11 +834,10 @@ function githubGit(options: {
 }) {
   const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${options.token}`).toString("base64")}`;
   const redact = (text: string) =>
-    text
-      .split(options.token)
-      .join("[token]")
-      .split(header)
-      .join("[token]")
+    (options.token
+      ? text.split(options.token).join("[token]").split(header).join("[token]")
+      : text
+    )
       .trim()
       .slice(-2_000);
   const base: Record<string, string> = {
@@ -938,6 +1045,32 @@ export function parsePublish(body: Record<string, unknown>): PublishRequest {
     throw new PublisherError(400, "body_invalid");
   }
   return request;
+}
+
+/** Validate an archive request from the server. Unknown keys are refused. */
+export function parseArchive(body: Record<string, unknown>): ArchiveRequest {
+  if (
+    Object.keys(body).some(
+      (key) => !["connectionId", "repository"].includes(key),
+    )
+  ) {
+    throw new PublisherError(400, "field_unknown");
+  }
+  const { connectionId, repository } = body;
+  if (
+    connectionId !== undefined &&
+    (typeof connectionId !== "string" ||
+      !CONNECTION_ID_PATTERN.test(connectionId))
+  ) {
+    throw new PublisherError(400, "connectionId_invalid");
+  }
+  if (typeof repository !== "string") {
+    throw new PublisherError(400, "repository_invalid");
+  }
+  return {
+    repository,
+    ...(connectionId !== undefined ? { connectionId } : {}),
+  };
 }
 
 /** Validate a snapshot request from the server. Unknown keys are refused. */

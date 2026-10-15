@@ -99,6 +99,7 @@ function fakePublisher() {
     })),
     publish: vi.fn(),
     snapshot: vi.fn(),
+    archive: vi.fn(),
   } satisfies PublisherClient;
   return { publisher, statuses };
 }

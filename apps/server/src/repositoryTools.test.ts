@@ -2,12 +2,18 @@ import type {
   DirectoryRepository,
   RepositoryDirectoryList,
 } from "./githubRepositories.js";
+import type {
+  RepositorySnapshot,
+  RepositorySnapshots,
+} from "./repositorySnapshots.js";
 import {
   assistantRoutingInstructions,
   createRepositoryTools,
   searchRepositories,
 } from "./repositoryTools.js";
 import { describe, expect, it, vi } from "vitest";
+
+import { PublisherRequestError } from "./publisherClient.js";
 
 interface RunnableTool {
   readonly definition: { readonly name: string };
@@ -174,7 +180,201 @@ describe("list_repositories", () => {
   });
 });
 
+function snapshotOf(
+  files: Record<string, string | Buffer>,
+): RepositorySnapshot {
+  const entries = new Map(
+    Object.entries(files)
+      .sort(([left], [right]) => (left < right ? -1 : 1))
+      .map(([filePath, content], index) => [
+        filePath,
+        { offset: index, size: Buffer.from(content).length },
+      ]),
+  );
+  return {
+    repository: "https://github.com/reefbarman/site",
+    branch: "main",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    fetchedAt: 0,
+    files: entries,
+    truncated: false,
+    read: async (filePath, maxBytes) =>
+      Buffer.from(files[filePath]!).subarray(0, maxBytes),
+  };
+}
+
+function readSetup(options: {
+  readonly snapshot?: RepositorySnapshot;
+  readonly error?: unknown;
+  readonly reaches?: boolean;
+}) {
+  const snapshots: RepositorySnapshots = {
+    get: vi.fn(async () => {
+      if (options.error) throw options.error;
+      return options.snapshot!;
+    }),
+    sweep: vi.fn(),
+  };
+  const resolve = createRepositoryTools({
+    directory: {
+      list: vi.fn(),
+      resolveConnection: vi.fn(),
+      invalidate: vi.fn(),
+    },
+    connections: { get: () => undefined },
+    snapshots,
+    reaches: async () => options.reaches ?? false,
+  });
+  const run = async (input: Record<string, unknown>) => {
+    const tools = (await resolve({} as never)) as unknown as RunnableTool[];
+    const tool = tools.find(
+      (candidate) => candidate.definition.name === "read_repository",
+    );
+    const result = (await tool!.executeValidated(input, {} as never)) as {
+      modelContent: unknown;
+      isError?: boolean;
+    };
+    return { text: String(result.modelContent), isError: result.isError };
+  };
+  return { snapshots, run };
+}
+
+describe("read_repository", () => {
+  const SNAPSHOT = snapshotOf({
+    "README.md": "# Site\nBuilt with Astro.\n",
+    "package.json": '{"scripts":{"build":"astro build","test":"vitest"}}\n',
+    "src/pages/index.astro": "<h1>Hello</h1>\n",
+    "src/pages/about.astro": "<h1>About me</h1>\n",
+    "public/logo.png": Buffer.from([0x89, 0x50, 0x00, 0x01]),
+  });
+
+  it("is only offered with snapshots", async () => {
+    const names = async (snapshots?: RepositorySnapshots) => {
+      const resolve = createRepositoryTools({
+        directory: {
+          list: vi.fn(),
+          resolveConnection: vi.fn(),
+          invalidate: vi.fn(),
+        },
+        connections: { get: () => undefined },
+        ...(snapshots ? { snapshots } : {}),
+      });
+      return ((await resolve({} as never)) as unknown as RunnableTool[]).map(
+        (tool) => tool.definition.name,
+      );
+    };
+    expect(await names()).toEqual(["list_repositories"]);
+    expect(await names(readSetup({ snapshot: SNAPSHOT }).snapshots)).toEqual([
+      "list_repositories",
+      "read_repository",
+    ]);
+  });
+
+  it("lists files, reads one, lists a folder and searches", async () => {
+    const test = readSetup({ snapshot: SNAPSHOT });
+    const listing = await test.run({ repository: "reefbarman/site" });
+    expect(test.snapshots.get).toHaveBeenCalledWith(
+      "https://github.com/reefbarman/site",
+      { refresh: false },
+    );
+    expect(listing.text).toContain(
+      "reefbarman/site at main (commit 0123456789ab), 5 files",
+    );
+    expect(listing.text).toContain("untrusted data");
+    expect(listing.text).toContain("5 files:");
+    expect(listing.text).toContain("src/pages/about.astro");
+
+    const file = await test.run({
+      repository: "https://github.com/reefbarman/site",
+      path: "package.json",
+      refresh: true,
+    });
+    expect(test.snapshots.get).toHaveBeenLastCalledWith(
+      "https://github.com/reefbarman/site",
+      { refresh: true },
+    );
+    expect(file.text).toContain('"build":"astro build"');
+
+    const folder = await test.run({
+      repository: "reefbarman/site",
+      path: "src/pages/",
+    });
+    expect(folder.text).toContain("2 files under src/pages:");
+    expect(folder.text).not.toContain("README.md");
+
+    const search = await test.run({
+      repository: "reefbarman/site",
+      query: "ABOUT",
+    });
+    expect(search.text).toContain("src/pages/about.astro:1: <h1>About me</h1>");
+    expect(search.text).not.toContain("index.astro");
+
+    const binary = await test.run({
+      repository: "reefbarman/site",
+      path: "public/logo.png",
+    });
+    expect(binary.text).toContain(
+      "public/logo.png is a binary file of 4 bytes.",
+    );
+
+    const missing = await test.run({
+      repository: "reefbarman/site",
+      path: "nope",
+    });
+    expect(missing.text).toContain("No file or folder named nope.");
+  });
+
+  it("refuses something that is not a GitHub repository", async () => {
+    const test = readSetup({ snapshot: SNAPSHOT });
+    const result = await test.run({ repository: "https://gitlab.com/a/b" });
+    expect(result.isError).toBe(true);
+    expect(test.snapshots.get).not.toHaveBeenCalled();
+  });
+
+  it("explains a private repository no connection reaches", async () => {
+    const test = readSetup({
+      error: new PublisherRequestError(502, "fetch_failed"),
+    });
+    const result = await test.run({ repository: "someone/secret" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(
+      "someone/secret is private or does not exist. If it is one of the owner's, add the AgentLink Assistant app to it at https://github.com/settings/installations",
+    );
+  });
+
+  it("explains failures for a repository a connection reaches", async () => {
+    const reached = readSetup({
+      error: new PublisherRequestError(502, "fetch_failed"),
+      reaches: true,
+    });
+    expect(
+      (await reached.run({ repository: "reefbarman/site" })).text,
+    ).toContain("GitHub would not let the owner's connection fetch");
+    const large = readSetup({
+      error: new PublisherRequestError(413, "repository_too_large"),
+      reaches: true,
+    });
+    expect((await large.run({ repository: "reefbarman/site" })).text).toContain(
+      "too large to read here",
+    );
+  });
+});
+
 describe("routing instructions", () => {
+  it("asks for checks on the card once read_repository exists", () => {
+    const withRead = assistantRoutingInstructions({
+      tasks: true,
+      repositories: true,
+      read: true,
+    });
+    expect(withRead).toContain("read_repository");
+    expect(withRead).toContain("start_task's validation");
+    expect(withRead).not.toContain("\u2014");
+    expect(
+      assistantRoutingInstructions({ tasks: true, repositories: true }),
+    ).not.toContain("read_repository");
+  });
+
   it("covers the tools the chat actually has", () => {
     const full = assistantRoutingInstructions({
       tasks: true,

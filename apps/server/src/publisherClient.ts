@@ -4,7 +4,10 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 import {
+  ARCHIVE_COMMIT_HEADER,
+  MAX_ARCHIVE_BYTES,
   SNAPSHOT_BRANCH_HEADER,
+  type ArchiveRequest,
   type ConnectionStatus,
   type PublishRequest,
   type PublishResult,
@@ -52,6 +55,14 @@ export interface PublisherClient {
     request: SnapshotRequest,
     destination: string,
   ): Promise<{ readonly branch: string }>;
+  /**
+   * Write a tar of the repository's default branch head to `destination`,
+   * fetched by the publisher (with the connection's token, if any).
+   */
+  archive(
+    request: ArchiveRequest,
+    destination: string,
+  ): Promise<{ readonly branch: string; readonly commit: string }>;
 }
 
 export function createPublisherClient(options: {
@@ -125,6 +136,42 @@ export function createPublisherClient(options: {
   const connection = (id: string) =>
     `/v1/connections/${encodeURIComponent(id)}`;
 
+  /** Stream a body to `destination`, refusing more than `max` bytes. */
+  const download = async (
+    response: Response,
+    destination: string,
+    max: number,
+    code: string,
+  ) => {
+    if (!response.body) throw new PublisherRequestError(502, `${code}_invalid`);
+    let received = 0;
+    const limit = new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        received += chunk.length;
+        done(
+          received > max
+            ? new PublisherRequestError(413, "repository_too_large")
+            : null,
+          chunk,
+        );
+      },
+    });
+    try {
+      await pipeline(
+        Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
+        limit,
+        createWriteStream(destination, { mode: 0o644 }),
+      );
+    } catch (error) {
+      if (error instanceof PublisherRequestError) throw error;
+      throw new PublisherRequestError(
+        502,
+        `${code}_failed`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
   return {
     health: () => call("GET", "/v1/health"),
     startDeviceFlow: (id) => call("POST", `${connection(id)}/device`),
@@ -139,36 +186,20 @@ export function createPublisherClient(options: {
       const response = await send("POST", "/v1/snapshot", request);
       if (!response.ok) throw await failed(response);
       const branch = response.headers.get(SNAPSHOT_BRANCH_HEADER);
-      if (!branch || !response.body) {
-        throw new PublisherRequestError(502, "snapshot_invalid");
-      }
-      let received = 0;
-      const limit = new Transform({
-        transform(chunk: Buffer, _encoding, done) {
-          received += chunk.length;
-          done(
-            received > MAX_SNAPSHOT_BYTES
-              ? new PublisherRequestError(413, "repository_too_large")
-              : null,
-            chunk,
-          );
-        },
-      });
-      try {
-        await pipeline(
-          Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
-          limit,
-          createWriteStream(destination, { mode: 0o644 }),
-        );
-      } catch (error) {
-        if (error instanceof PublisherRequestError) throw error;
-        throw new PublisherRequestError(
-          502,
-          "snapshot_failed",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+      if (!branch) throw new PublisherRequestError(502, "snapshot_invalid");
+      await download(response, destination, MAX_SNAPSHOT_BYTES, "snapshot");
       return { branch };
+    },
+    async archive(request, destination) {
+      const response = await send("POST", "/v1/archive", request);
+      if (!response.ok) throw await failed(response);
+      const branch = response.headers.get(SNAPSHOT_BRANCH_HEADER);
+      const commit = response.headers.get(ARCHIVE_COMMIT_HEADER);
+      if (!branch || !commit) {
+        throw new PublisherRequestError(502, "archive_invalid");
+      }
+      await download(response, destination, MAX_ARCHIVE_BYTES, "archive");
+      return { branch, commit };
     },
   };
 }

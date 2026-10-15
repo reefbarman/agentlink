@@ -9,10 +9,16 @@ import type {
   WorkspaceHostToolApproval,
 } from "@agentlink/workspace-host";
 
+import type { GitHubConnectionStore } from "./githubConnections.js";
+import type { RepositoryDirectory } from "./githubRepositories.js";
 import { HttpError } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
+import { CONNECTION_ID_PATTERN } from "./publisherVault.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
-import type { RepositorySettingsStore } from "./taskRepositories.js";
+import {
+  parseValidationCommands,
+  type RepositorySettingsStore,
+} from "./taskRepositories.js";
 import { taskModelError } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
 import { GITHUB_APP_INSTALLATIONS_URL } from "./repositoryTools.js";
@@ -34,8 +40,11 @@ import {
  * - `list_tasks` reads the tasks, with no approval.
  * - `start_task` starts one. It always stops for the owner's approval,
  *   whatever the chat's approval mode: the card shows the exact repository,
- *   base branch, model and objective, and exactly that task starts once
- *   approved.
+ *   base branch, model, checks, publishing and objective, and exactly that
+ *   task starts once approved. For a repository not set up yet, the card
+ *   also carries its setup: the checks the chat proposed, and standing
+ *   permission to publish with the one GitHub account that reaches it.
+ *   Approving saves them, unless the owner set them meanwhile.
  */
 
 export const TASK_TOOL_NAMES = ["start_task"] as const;
@@ -46,10 +55,25 @@ const MAX_LISTED_TASKS = 20;
 
 export interface TaskToolsOptions {
   readonly store: TaskStore;
-  /** The owner's validation commands, shown on the approval card. */
-  readonly repositories?: Pick<RepositorySettingsStore, "get">;
+  /** The owner's settings per repository: shown on the card, saved on it. */
+  readonly repositories?: Pick<
+    RepositorySettingsStore,
+    "get" | "set" | "setPublish"
+  >;
+  /** Which connection reaches a repository, to offer publishing with it. */
+  readonly directory?: Pick<RepositoryDirectory, "resolveConnection">;
+  readonly connections?: Pick<GitHubConnectionStore, "get">;
   readonly runner: Pick<TaskRunner, "create">;
   readonly models: readonly AssistantServerModelChoice[];
+  readonly now?: () => number;
+}
+
+/** What approving the card also saves for the repository. */
+interface TaskSetup {
+  /** Checks for a repository that had none. */
+  readonly validation?: readonly string[];
+  /** Standing permission to publish, for a repository that had none. */
+  readonly publishConnectionId?: string;
 }
 
 export interface TaskTools {
@@ -57,12 +81,18 @@ export interface TaskTools {
   readonly approvalTools: WorkspaceApprovalHostTools;
 }
 
-/** Model input never has this key: the schema refuses unknown fields. */
+/** Model input never has these keys: the schema refuses unknown fields. */
 const PREPARED_KEY = "preparedTask";
+const SETUP_KEY = "preparedSetup";
 
 export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const { store, runner } = options;
   const models = modelsByKey(options.models);
+  const now = options.now ?? Date.now;
+  const accountName = (connectionId: string) => {
+    const connection = options.connections?.get(connectionId);
+    return connection?.login ? `@${connection.login}` : "your GitHub account";
+  };
 
   const explain = (code: string): string => {
     switch (code) {
@@ -80,6 +110,10 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         return `model must be one of: ${[...models.keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it for the server's default`;
       case "task_field_unknown":
         return "unknown field";
+      case "validation_invalid":
+      case "validation_command_invalid":
+      case "too_many_validation_commands":
+        return "validation must be at most 10 shell commands, each one line of at most 1,000 characters";
       case "task_limit_reached":
         return `there are already ${MAX_TASKS} tasks; the owner must delete some first`;
       default:
@@ -95,9 +129,39 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     }
   };
 
-  const prepare = (
+  /** How the task will publish, and whether the card grants it. */
+  const publishPlan = async (
+    repository: string,
+  ): Promise<{ line: string; grant?: string }> => {
+    const settings = options.repositories?.get(repository);
+    if (settings?.publish) {
+      return {
+        line: `When it passes review, it opens a draft pull request as ${accountName(settings.publish.connectionId)}.`,
+      };
+    }
+    const resolved =
+      options.directory && options.repositories
+        ? await options.directory.resolveConnection(repository).catch(() => ({
+            kind: "none" as const,
+          }))
+        : { kind: "none" as const };
+    if (resolved.kind === "one") {
+      return {
+        line: `When it passes review, it opens a draft pull request as ${accountName(resolved.connectionId)}, and may do so for future tasks on this repository too.`,
+        grant: resolved.connectionId,
+      };
+    }
+    return {
+      line:
+        resolved.kind === "ambiguous"
+          ? `Nothing is pushed: several GitHub accounts reach this repository (${resolved.connectionIds.map(accountName).join(", ")}). Choose one under GitHub to publish its tasks.`
+          : "Nothing is pushed: none of your GitHub accounts can publish to this repository. The finished work stays ready under Tasks.",
+    };
+  };
+
+  const prepare = async (
     input: Readonly<Record<string, unknown>>,
-  ): WorkspaceHostToolApproval => {
+  ): Promise<WorkspaceHostToolApproval> => {
     try {
       if (
         typeof input.objective === "string" &&
@@ -105,10 +169,26 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       ) {
         throw new HttpError(400, "objective_too_long");
       }
-      const request = parseTaskRequest({ ...input });
+      const { validation: proposedInput, ...rest } = input;
+      const request = parseTaskRequest({ ...rest });
       check(request);
-      const validation =
+      const proposed =
+        proposedInput === undefined
+          ? []
+          : parseValidationCommands(proposedInput);
+      const saved =
         options.repositories?.get(request.repository)?.validation ?? [];
+      // The owner's checks win; a proposal only fills a repository with none.
+      const saveValidation =
+        saved.length === 0 && proposed.length > 0 && options.repositories
+          ? proposed
+          : undefined;
+      const checks = saved.length > 0 ? saved : (saveValidation ?? []);
+      const publish = await publishPlan(request.repository);
+      const setup: TaskSetup = {
+        ...(saveValidation ? { validation: saveValidation } : {}),
+        ...(publish.grant ? { publishConnectionId: publish.grant } : {}),
+      };
       const display: TaskStartDisplay = {
         kind: TASK_START_DISPLAY_KIND,
         action: "create",
@@ -118,20 +198,24 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           `Repository: ${request.repository}`,
           `Starts from: ${request.baseBranch ?? "the default branch"}`,
           `Model: ${request.model ?? "the server's default"}`,
-          "It works on a new agentlink/ branch and commits there, without asking before each edit or command. Nothing is pushed.",
-          validation.length > 0
-            ? `Then the server runs: ${validation.join(" && ")}`
-            : "No validation commands are set for this repository.",
+          "It works on a new agentlink/ branch and commits there, without asking before each edit or command.",
+          checks.length > 0
+            ? `Checks the server runs on its commit: ${checks.join(" && ")}${saveValidation ? " (saved for future tasks on this repository)" : ""}`
+            : "No checks: review only.",
           "Then a model from another provider reviews the commit; it may be sent back to fix findings twice.",
+          publish.line,
           "Objective:",
           request.objective,
         ].join("\n"),
       };
+      const setsUp = saveValidation || publish.grant;
       return {
         decision: "require_user",
-        summary: `Start a coding task in ${request.repository}?`,
+        summary: setsUp
+          ? `Start a coding task in ${request.repository}, and save its setup?`
+          : `Start a coding task in ${request.repository}?`,
         displayContent: display,
-        preparedInput: { [PREPARED_KEY]: request },
+        preparedInput: { [PREPARED_KEY]: request, [SETUP_KEY]: setup },
       };
     } catch (error) {
       if (error instanceof HttpError) {
@@ -159,6 +243,66 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       if (error instanceof HttpError) return explain(error.code);
       throw error;
     }
+  };
+
+  /** The setup the card showed; nothing when it carried none. */
+  const approvedSetup = (
+    input: Readonly<Record<string, unknown>>,
+  ): TaskSetup => {
+    const raw = input[SETUP_KEY];
+    if (!raw || typeof raw !== "object") return {};
+    const { validation, publishConnectionId } = raw as Record<string, unknown>;
+    return {
+      ...(validation !== undefined
+        ? { validation: parseValidationCommands(validation) }
+        : {}),
+      ...(typeof publishConnectionId === "string" &&
+      CONNECTION_ID_PATTERN.test(publishConnectionId)
+        ? { publishConnectionId }
+        : {}),
+    };
+  };
+
+  /**
+   * Save what the card set up, except what the owner changed meanwhile.
+   * Returns notes for the chat about anything not saved.
+   */
+  const applySetup = async (
+    repository: string,
+    setup: TaskSetup,
+  ): Promise<string[]> => {
+    const repositories = options.repositories;
+    if (!repositories) return [];
+    const notes: string[] = [];
+    if (setup.validation?.length) {
+      const current = repositories.get(repository)?.validation ?? [];
+      if (current.length === 0) {
+        await repositories.set(repository, setup.validation, now());
+      } else if (current.join("\n") !== setup.validation.join("\n")) {
+        notes.push(
+          `The owner set other checks for this repository meanwhile; theirs apply: ${current.join(" && ")}`,
+        );
+      }
+    }
+    if (setup.publishConnectionId) {
+      const current = repositories.get(repository)?.publish;
+      if (!options.connections?.get(setup.publishConnectionId)) {
+        notes.push(
+          "The GitHub account the card named was removed meanwhile, so publishing was not allowed.",
+        );
+      } else if (!current) {
+        await repositories.setPublish(
+          repository,
+          setup.publishConnectionId,
+          now(),
+        );
+      } else if (current.connectionId !== setup.publishConnectionId) {
+        notes.push(
+          `The owner chose ${accountName(current.connectionId)} to publish this repository meanwhile; that applies.`,
+        );
+      }
+    }
+    return notes;
   };
 
   const listTasks = defineTool({
@@ -217,6 +361,13 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           description:
             "https:// clone URL with no credentials, for example https://github.com/owner/name",
         },
+        validation: {
+          type: "array",
+          maxItems: 10,
+          items: { type: "string", minLength: 1, maxLength: 1_000 },
+          description:
+            'Checks to propose for a repository that has none yet (list_repositories shows a repository\'s checks): shell commands the server runs in order on the task\'s commit, all of which must pass, for example ["npm ci", "npm test"]. Read the repository with read_repository first and take them from its package.json scripts, Makefile or CI workflow. The owner approves them on the card and they are saved for future tasks. Ignored when the repository already has checks; omit when there is nothing sensible to run.',
+        },
         objective: {
           type: "string",
           minLength: 1,
@@ -242,10 +393,23 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       if (typeof request === "string") {
         return { modelContent: `Not started: ${request}`, isError: true };
       }
+      let notes: string[];
+      try {
+        notes = await applySetup(request.repository, approvedSetup(input));
+      } catch (error) {
+        if (error instanceof HttpError) {
+          return {
+            modelContent: `Not started: ${explain(error.code)}`,
+            isError: true,
+          };
+        }
+        throw error;
+      }
       const task = await runner.create(request);
       return {
         modelContent: [
           `Started coding task ${task.id} on branch ${task.branch}.`,
+          ...notes,
           "It runs in its own chat; call list_tasks to see its state. The owner sees it under Tasks.",
         ].join("\n"),
         displayContent: { taskId: task.id, branch: task.branch },
@@ -262,9 +426,13 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       prepare: (request) => prepare(request.input),
       validatePending: ({ input }) => {
         const request = approvedRequest(input);
-        return typeof request === "string"
-          ? { ok: false, reason: request }
-          : { ok: true };
+        if (typeof request === "string") return { ok: false, reason: request };
+        try {
+          approvedSetup(input);
+        } catch {
+          return { ok: false, reason: "The task's setup is not valid" };
+        }
+        return { ok: true };
       },
     },
   };

@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ConnectionResolution } from "./githubRepositories.js";
+import { openRepositorySettings } from "./taskRepositories.js";
 import { openTaskStore, type TaskRequest, type TaskRun } from "./taskStore.js";
 import { isTaskStartDisplay } from "./taskStartDisplay.js";
 import {
@@ -30,7 +32,22 @@ const REQUEST = {
   objective: "Fix the clock test",
 };
 
-async function setup() {
+const PERSONAL = {
+  id: "c0ffee000001",
+  kind: "app" as const,
+  login: "reefbarman",
+  commitName: "Tristan",
+  commitEmail: "t@example.com",
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+async function setup(
+  options: {
+    /** What resolveConnection answers for every repository. */
+    readonly reach?: ConnectionResolution;
+  } = {},
+) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-tools-"));
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
   const store = await openTaskStore({ directory: dir });
@@ -47,10 +64,22 @@ async function setup() {
     createdAt: 1,
     updatedAt: 1,
   }));
+  const repositories = await openRepositorySettings({
+    file: path.join(dir, "repositories.json"),
+  });
+  const connections = new Map([[PERSONAL.id, PERSONAL]]);
   const tools = createTaskTools({
     store,
     runner: { create },
     models: [{ providerId: "codex", modelId: "gpt-5" }],
+    repositories,
+    connections: { get: (id) => connections.get(id) },
+    directory: {
+      resolveConnection: vi.fn(
+        async (): Promise<ConnectionResolution> =>
+          options.reach ?? { kind: "none" },
+      ),
+    },
   });
   const byName = async (name: string) =>
     [
@@ -64,8 +93,132 @@ async function setup() {
     startTask.executeValidated({ ...input }, {} as never);
   const prepare = async (input: Record<string, unknown>) =>
     tools.approvalTools.prepare({ toolName: "start_task", input } as never);
-  return { store, tools, create, run, prepare, byName };
+  return {
+    store,
+    tools,
+    create,
+    run,
+    prepare,
+    byName,
+    repositories,
+    connections,
+  };
 }
+
+const cardText = (approval: unknown) =>
+  (approval as { displayContent: { text: string } }).displayContent.text;
+const prepared = (approval: unknown) =>
+  (approval as { preparedInput: Record<string, unknown> }).preparedInput;
+
+describe("one card to start a task", () => {
+  const ONE = { kind: "one", connectionId: PERSONAL.id } as const;
+
+  it("proposes checks and publishing for a new repository, and saves them on approval", async () => {
+    const test = await setup({ reach: ONE });
+    const approval = await test.prepare({
+      ...REQUEST,
+      validation: ["npm ci", " npm test "],
+    });
+    expect(approval).toMatchObject({
+      summary:
+        "Start a coding task in https://github.com/reefbarman/demo, and save its setup?",
+    });
+    const text = cardText(approval);
+    expect(text).toContain(
+      "Checks the server runs on its commit: npm ci && npm test (saved for future tasks on this repository)",
+    );
+    expect(text).toContain(
+      "opens a draft pull request as @reefbarman, and may do so for future tasks on this repository too",
+    );
+    // Nothing is saved until the owner approves.
+    expect(test.repositories.get(REQUEST.repository)).toBeUndefined();
+    const result = await test.run(prepared(approval));
+    expect(result.isError).toBeUndefined();
+    expect(test.repositories.get(REQUEST.repository)).toMatchObject({
+      validation: ["npm ci", "npm test"],
+      publish: { connectionId: PERSONAL.id },
+    });
+    expect(test.create).toHaveBeenCalledWith(REQUEST);
+  });
+
+  it("shows a set-up repository's own checks and publishing, saving nothing", async () => {
+    const test = await setup({ reach: ONE });
+    await test.repositories.set(REQUEST.repository, ["make test"], 1);
+    await test.repositories.setPublish(REQUEST.repository, PERSONAL.id, 1);
+    const approval = await test.prepare({ ...REQUEST, validation: ["rm -rf"] });
+    expect(approval).toMatchObject({
+      summary: "Start a coding task in https://github.com/reefbarman/demo?",
+    });
+    const text = cardText(approval);
+    expect(text).toContain("Checks the server runs on its commit: make test");
+    expect(text).not.toContain("rm -rf");
+    expect(text).toContain(
+      "When it passes review, it opens a draft pull request as @reefbarman.",
+    );
+    expect(prepared(approval).preparedSetup).toEqual({});
+  });
+
+  it("says when nothing is checked or pushed", async () => {
+    const none = await setup();
+    const text = cardText(await none.prepare(REQUEST));
+    expect(text).toContain("No checks: review only.");
+    expect(text).toContain("Nothing is pushed: none of your GitHub accounts");
+    const several = await setup({
+      reach: {
+        kind: "ambiguous",
+        connectionIds: [PERSONAL.id, "c0ffee000002"],
+      },
+    });
+    const approval = await several.prepare(REQUEST);
+    expect(cardText(approval)).toContain(
+      "several GitHub accounts reach this repository (@reefbarman, your GitHub account)",
+    );
+    expect(prepared(approval).preparedSetup).toEqual({});
+  });
+
+  it("refuses unusable proposed checks", async () => {
+    const test = await setup();
+    await expect(
+      test.prepare({ ...REQUEST, validation: ["ok", ""] }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("at most 10 shell commands"),
+    });
+  });
+
+  it("keeps what the owner set in the GitHub panel while the card waited", async () => {
+    const test = await setup({ reach: ONE });
+    const approval = await test.prepare({
+      ...REQUEST,
+      validation: ["npm test"],
+    });
+    // Meanwhile, in the GitHub panel.
+    await test.repositories.set(REQUEST.repository, ["pnpm test"], 2);
+    await test.repositories.setPublish(REQUEST.repository, "c0ffee000002", 2);
+    test.connections.set("c0ffee000002", {
+      ...PERSONAL,
+      id: "c0ffee000002",
+      login: "work",
+    });
+    const result = await test.run(prepared(approval));
+    expect(test.repositories.get(REQUEST.repository)).toMatchObject({
+      validation: ["pnpm test"],
+      publish: { connectionId: "c0ffee000002" },
+    });
+    expect(result.modelContent).toContain("theirs apply: pnpm test");
+    expect(result.modelContent).toContain("chose @work to publish");
+    expect(test.create).toHaveBeenCalledOnce();
+  });
+
+  it("does not grant publishing with a connection removed while the card waited", async () => {
+    const test = await setup({ reach: ONE });
+    const approval = await test.prepare(REQUEST);
+    test.connections.delete(PERSONAL.id);
+    const result = await test.run(prepared(approval));
+    expect(test.repositories.get(REQUEST.repository)).toBeUndefined();
+    expect(result.modelContent).toContain("removed meanwhile");
+  });
+});
 
 describe("task tools", () => {
   it("shows the exact task on the card and starts exactly that", async () => {

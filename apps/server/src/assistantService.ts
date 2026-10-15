@@ -108,6 +108,7 @@ import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
+import { openRepositorySnapshots } from "./repositorySnapshots.js";
 import { createTaskWorkspaces } from "./taskWorkspace.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
@@ -755,20 +756,6 @@ export async function startAssistantService(
     // Bound once the runner exists; no turn can start before then.
     let jobRunner: JobRunner | undefined;
     let taskRunner: TaskRunner | undefined;
-    // Chats can propose coding tasks when there is somewhere to clone them.
-    const taskTools = config.projectsRoot
-      ? createTaskTools({
-          store: taskStore,
-          repositories: repositorySettings,
-          runner: {
-            create: async (request) => {
-              if (!taskRunner) throw new Error("Tasks are not ready yet");
-              return taskRunner.create(request);
-            },
-          },
-          models: configuredModels(config),
-        })
-      : undefined;
     // Every repository the owner's GitHub connections reach (asked of the
     // publisher), plus configured and project ones.
     const repositoryDirectory = createRepositoryDirectory({
@@ -784,14 +771,76 @@ export async function startAssistantService(
         ),
       log,
     });
+    // Chats can propose coding tasks when there is somewhere to clone them.
+    // The card carries proposed checks and, with the publisher, first-time
+    // publish permission; both are saved when the owner approves it.
+    const taskTools = config.projectsRoot
+      ? createTaskTools({
+          store: taskStore,
+          repositories: repositorySettings,
+          ...(publisher
+            ? { directory: repositoryDirectory, connections: githubConnections }
+            : {}),
+          runner: {
+            create: async (request) => {
+              if (!taskRunner) throw new Error("Tasks are not ready yet");
+              return taskRunner.create(request);
+            },
+          },
+          models: configuredModels(config),
+        })
+      : undefined;
+    // Read-only snapshots for read_repository, fetched by the publisher with
+    // a connection that reaches the repository (or none: public only). Any
+    // reaching connection will do for reading, so an ambiguous one is fine.
+    const repositorySnapshots = publisher
+      ? await openRepositorySnapshots({
+          root: path.join(config.dataRoot, "repository-snapshots"),
+          fetchArchive: async (repository, destination) => {
+            const resolved =
+              await repositoryDirectory.resolveConnection(repository);
+            const connectionId =
+              resolved.kind === "one"
+                ? resolved.connectionId
+                : resolved.kind === "ambiguous"
+                  ? resolved.connectionIds[0]
+                  : undefined;
+            return publisher.archive(
+              { repository, ...(connectionId ? { connectionId } : {}) },
+              destination,
+            );
+          },
+        })
+      : undefined;
+    // Snapshots are deleted 24 hours after they were fetched, used or not.
+    const snapshotSweep = repositorySnapshots
+      ? setInterval(
+          () => {
+            repositorySnapshots.sweep().catch((error: unknown) => {
+              log(`assistant: snapshot sweep failed: ${String(error)}`);
+            });
+          },
+          60 * 60 * 1_000,
+        )
+      : undefined;
+    snapshotSweep?.unref();
     const repositoryTools = createRepositoryTools({
       directory: repositoryDirectory,
       connections: githubConnections,
+      ...(repositorySnapshots
+        ? {
+            snapshots: repositorySnapshots,
+            reaches: async (repository: string) =>
+              (await repositoryDirectory.resolveConnection(repository)).kind !==
+              "none",
+          }
+        : {}),
     });
     // How a chat routes requests to the right tool, without asking.
     const routingInstructions = assistantRoutingInstructions({
       tasks: taskTools !== undefined,
       repositories: true,
+      read: repositorySnapshots !== undefined,
     });
     /** Why turns failed, beyond the public error code; owner-only. */
     const turnFailures = createTurnFailureLog();
@@ -1256,6 +1305,7 @@ export async function startAssistantService(
       },
       onClose: async () => {
         // Before the routes stop turns: open runs are recorded interrupted.
+        if (snapshotSweep) clearInterval(snapshotSweep);
         await jobs.close();
         await tasks?.runner.close();
         await taskStore.flush();

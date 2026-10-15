@@ -15,6 +15,7 @@ import { GitHubError } from "./githubApi.js";
 import {
   PublisherError,
   createPublisherService,
+  parseArchive,
   parsePublish,
   parseSnapshot,
   startPublisher,
@@ -177,6 +178,7 @@ async function service(options: {
   readonly now?: () => number;
   readonly withCredential?: boolean;
   readonly expiresAt?: number;
+  readonly maxArchiveBytes?: number;
 }) {
   const vault = await openCredentialVault({
     file: path.join(options.fixture.root, "vault", "connections.enc"),
@@ -208,6 +210,9 @@ async function service(options: {
       clientId: "Iv1.clientid",
       now: options.now ?? (() => 1_000),
       log: () => undefined,
+      ...(options.maxArchiveBytes !== undefined
+        ? { maxArchiveBytes: options.maxArchiveBytes }
+        : {}),
     }),
   };
 }
@@ -723,7 +728,146 @@ describe("snapshots", { timeout: 30_000 }, () => {
   });
 });
 
+describe("archives", { timeout: 30_000 }, () => {
+  it("archives the default branch head with the connection's token only in git's environment", async () => {
+    const setup = await fixture();
+    const { publisher } = await service({ fixture: setup });
+    const archive = await publisher.archive({
+      connectionId: CONNECTION,
+      repository: REPOSITORY,
+    });
+    expect(archive.branch).toBe("main");
+    expect(archive.commit).toBe(git(setup.remote, "rev-parse", "main"));
+    expect(archive.file.startsWith(setup.scratchRoot)).toBe(true);
+    const listed = execFileSync("tar", ["-tf", archive.file], {
+      encoding: "utf8",
+    });
+    expect(listed.trim().split("\n")).toEqual(["README.md"]);
+    await archive.release();
+    expect(await fs.readdir(setup.scratchRoot)).toEqual([]);
+
+    for (const call of setup.calls) {
+      expect(call.args.join(" ")).not.toContain(TOKEN);
+    }
+    const remoteCalls = setup.calls.filter((call) =>
+      call.args.includes(REMOTE_URL),
+    );
+    expect(remoteCalls.length).toBeGreaterThan(0);
+    for (const call of remoteCalls) {
+      expect(call.environment.GIT_CONFIG_VALUE_0).toContain("basic ");
+    }
+  });
+
+  it("fetches a public repository with no connection and no token", async () => {
+    const setup = await fixture();
+    const { publisher } = await service({
+      fixture: setup,
+      withCredential: false,
+    });
+    const archive = await publisher.archive({ repository: REPOSITORY });
+    expect(archive.branch).toBe("main");
+    await archive.release();
+    for (const call of setup.calls) {
+      expect(call.environment.GIT_CONFIG_VALUE_0).toBeUndefined();
+    }
+  });
+
+  it("refuses an archive over the size limit and leaves nothing behind", async () => {
+    const setup = await fixture();
+    const { publisher } = await service({
+      fixture: setup,
+      maxArchiveBytes: 100,
+    });
+    await expect(
+      publisher.archive({ connectionId: CONNECTION, repository: REPOSITORY }),
+    ).rejects.toMatchObject({ status: 413, code: "repository_too_large" });
+    expect(await fs.readdir(setup.scratchRoot)).toEqual([]);
+  });
+
+  it("fails cleanly for a missing connection or repository", async () => {
+    const setup = await fixture();
+    const { publisher } = await service({ fixture: setup });
+    await expect(
+      publisher.archive({
+        connectionId: "c0ffee00000f",
+        repository: REPOSITORY,
+      }),
+    ).rejects.toMatchObject({ code: "connection_missing" });
+    await expect(
+      publisher.archive({ repository: "https://gitlab.com/octo/hello" }),
+    ).rejects.toMatchObject({ code: "repository_invalid" });
+    // A repository git cannot fetch (private, with no token, or gone).
+    await fs.rm(setup.remote, { recursive: true, force: true });
+    await expect(
+      publisher.archive({ repository: REPOSITORY }),
+    ).rejects.toMatchObject({ code: "fetch_failed" });
+    expect(await fs.readdir(setup.scratchRoot)).toEqual([]);
+  });
+
+  it("parses archive requests strictly", () => {
+    expect(parseArchive({ repository: REPOSITORY })).toEqual({
+      repository: REPOSITORY,
+    });
+    expect(
+      parseArchive({ connectionId: CONNECTION, repository: REPOSITORY }),
+    ).toEqual({ connectionId: CONNECTION, repository: REPOSITORY });
+    expect(() =>
+      parseArchive({ repository: REPOSITORY, baseBranch: "main" }),
+    ).toThrow("field_unknown");
+    expect(() =>
+      parseArchive({ repository: REPOSITORY, connectionId: "../x" }),
+    ).toThrow("connectionId_invalid");
+    expect(() => parseArchive({})).toThrow("repository_invalid");
+  });
+});
+
 describe("publisher HTTP", { timeout: 30_000 }, () => {
+  it("streams an archive to the server's client", async () => {
+    const setup = await fixture();
+    const dataDirectory = path.join(setup.root, "publisher-data");
+    const publisher = await startPublisher({
+      host: "127.0.0.1",
+      port: 0,
+      token: "shared-token",
+      tasksRoot: setup.tasksRoot,
+      dataDirectory,
+      vaultKey: KEY,
+      github: fakeGitHub().api,
+      git: setup.localGit,
+    });
+    try {
+      const client = createPublisherClient({
+        host: "127.0.0.1",
+        port: publisher.port,
+        token: async () => "shared-token",
+      });
+      const destination = path.join(setup.root, "files.tar");
+      await expect(
+        client.archive({ repository: REPOSITORY }, destination),
+      ).resolves.toEqual({
+        branch: "main",
+        commit: git(setup.remote, "rev-parse", "main"),
+      });
+      expect(
+        execFileSync("tar", ["-tf", destination], { encoding: "utf8" }).trim(),
+      ).toBe("README.md");
+      await fs.rm(setup.remote, { recursive: true, force: true });
+      await expect(
+        client.archive(
+          { repository: REPOSITORY },
+          path.join(setup.root, "other.tar"),
+        ),
+      ).rejects.toMatchObject({ code: "fetch_failed" });
+      await vi.waitFor(async () =>
+        expect(await fs.readdir(path.join(dataDirectory, "scratch"))).toEqual(
+          [],
+        ),
+      );
+    } finally {
+      await publisher.close();
+    }
+  });
+
   it("streams a snapshot to the server's client", async () => {
     const setup = await fixture();
     const dataDirectory = path.join(setup.root, "publisher-data");
