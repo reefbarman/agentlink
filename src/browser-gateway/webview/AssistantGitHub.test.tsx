@@ -1,3 +1,10 @@
+import {
+  GitHubPanel,
+  connectionStatusLabel,
+  filterRepositories,
+  parseCommands,
+} from "./AssistantGitHub";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment jsdom
 import {
   cleanup,
@@ -6,13 +13,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/preact";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import {
-  GitHubPanel,
-  connectionStatusLabel,
-  parseCommands,
-} from "./AssistantGitHub";
 
 afterEach(() => {
   cleanup();
@@ -139,6 +139,73 @@ describe("GitHubPanel", () => {
         /1 validation command · Publishes draft PRs as @octocat/u,
       ),
     ).toBeTruthy();
+  });
+
+  it("lists the repositories the connections reach, and refreshes them", async () => {
+    const reachable = (names: string[]) => ({
+      publisherConfigured: true,
+      connections: [
+        { id: "conn-1", login: "octocat", status: "ok", repositories: 1 },
+        {
+          id: "conn-2",
+          login: "work",
+          status: "failed",
+          error: "connection_signed_out",
+          repositories: 0,
+        },
+      ],
+      repositories: names.map((fullName) => ({
+        repository: `https://github.com/${fullName}`,
+        fullName,
+        private: true,
+        description: "My website",
+        connectionIds: ["conn-1"],
+      })),
+    });
+    const calls = stubFetch({
+      "GET /api/github": () =>
+        configured([
+          {
+            connection: CONNECTION,
+            status: {
+              status: "connected",
+              kind: "app",
+              login: "octocat",
+              signedIn: true,
+            },
+          },
+        ]),
+      "GET /api/tasks/repositories": () => ({ repositories: [] }),
+      "GET /api/github/repositories": () => reachable([]),
+      "GET /api/github/repositories?refresh=1": () =>
+        reachable(["octocat/site"]),
+    });
+    render(<GitHubPanel onClose={() => undefined} />);
+    expect(await screen.findByText(/Choose which ones at/u)).toBeTruthy();
+    expect(screen.getByText(/@work/u).textContent).toContain("signed out");
+    fireEvent.click(screen.getByText("Refresh"));
+    expect(await screen.findByText("octocat/site")).toBeTruthy();
+    expect(screen.getByText(/Private · @octocat · My website/u)).toBeTruthy();
+    expect(calls.map((call) => call.path)).toContain(
+      "/api/github/repositories?refresh=1",
+    );
+  });
+
+  it("filters reachable repositories by every word", () => {
+    const entry = (fullName: string, description?: string) => ({
+      repository: `https://github.com/${fullName}`,
+      fullName,
+      connectionIds: ["c"],
+      ...(description ? { description } : {}),
+    });
+    const all = [
+      entry("reefbarman/agentlink"),
+      entry("reefbarman/tristancartledge.com", "Personal website"),
+    ];
+    expect(
+      filterRepositories(all, "reef website").map((item) => item.fullName),
+    ).toEqual(["reefbarman/tristancartledge.com"]);
+    expect(filterRepositories(all, "")).toHaveLength(2);
   });
 
   it("shows the device code and follows the sign-in until it completes", async () => {

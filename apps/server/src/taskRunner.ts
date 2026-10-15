@@ -108,6 +108,13 @@ export interface TaskRunnerOptions {
   readonly connections?: Pick<GitHubConnectionStore, "get">;
   /** Publishes ready tasks, and fetches connected repositories' bases. */
   readonly publisher?: Pick<PublisherClient, "publish" | "snapshot">;
+  /**
+   * The connection to clone a repository with when the owner set none for
+   * it: the one connection that can reach it, if there is one.
+   */
+  readonly reachableConnection?: (
+    repository: string,
+  ) => Promise<string | undefined>;
   readonly onTaskChanged?: (task: TaskRun) => void;
   /** A task a previous process left working, now recorded interrupted. */
   readonly onTaskRecovered?: (task: TaskRun) => void;
@@ -710,13 +717,27 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       }
       // No base commit yet: the clone was never made, or never finished.
       if (!entry.task.baseCommit || !(await workspaces.exists(entry.task))) {
-        // Commits credit the connection the repository publishes with.
-        const { permission, connection } = publishTarget(entry.task);
+        // Commits credit the connection the repository publishes with, or
+        // else the one connection that can reach it.
+        let { connection } = publishTarget(entry.task);
+        if (!connection && options.reachableConnection) {
+          const reachable = await options
+            .reachableConnection(entry.task.repository)
+            .catch((error: unknown) => {
+              log(
+                `Task ${entry.task.id}: could not look up a GitHub connection: ${describe(error)}`,
+              );
+              return undefined;
+            });
+          connection = reachable
+            ? options.connections?.get(reachable)
+            : undefined;
+        }
         await save(entry, {
           state: "preparing",
           sessionId: undefined,
           commits: [],
-          connectionId: connection ? permission!.connectionId : undefined,
+          connectionId: connection?.id,
         });
         const publisher = options.publisher;
         const task = entry.task;

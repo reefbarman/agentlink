@@ -1,4 +1,8 @@
-import { createGitHubApi, parseGitHubRepository } from "./githubApi.js";
+import {
+  MAX_REACHABLE_REPOSITORIES,
+  createGitHubApi,
+  parseGitHubRepository,
+} from "./githubApi.js";
 import { describe, expect, it } from "vitest";
 
 function respond(status: number, body: unknown): Response {
@@ -130,5 +134,108 @@ describe("GitHub API", () => {
       code: "pull_request_failed",
       detail: "Validation Failed",
     });
+  });
+
+  const repo = (fullName: string, extra: Record<string, unknown> = {}) => ({
+    full_name: fullName,
+    private: false,
+    archived: false,
+    default_branch: "main",
+    ...extra,
+  });
+
+  it("lists every installation's repositories for an app token, page by page", async () => {
+    const urls: string[] = [];
+    const page = Array.from({ length: 100 }, (_, index) =>
+      repo(`octo/r${index}`),
+    );
+    const api = createGitHubApi({
+      fetch: async (url, init) => {
+        const target = String(url);
+        urls.push(target);
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer ghu_x",
+        );
+        if (target.includes("/user/installations?")) {
+          return respond(200, { installations: [{ id: 1 }, { id: 2 }] });
+        }
+        if (target.includes("/installations/1/repositories")) {
+          return respond(200, {
+            repositories: target.endsWith("&page=1") ? page : [],
+          });
+        }
+        return respond(200, {
+          repositories: [
+            repo("reefbarman/site", {
+              private: true,
+              description: "  My\nwebsite ",
+              pushed_at: "2026-10-01T00:00:00Z",
+            }),
+            { full_name: "bad name/../x" },
+            repo("octo/r0"),
+          ],
+        });
+      },
+    });
+    const listed = await api.listRepositories("ghu_x", "app");
+    expect(listed.truncated).toBe(false);
+    // The duplicate across installations is listed once; malformed skipped.
+    expect(listed.repositories).toHaveLength(101);
+    expect(listed.repositories.find((entry) => entry.name === "site")).toEqual({
+      owner: "reefbarman",
+      name: "site",
+      private: true,
+      archived: false,
+      defaultBranch: "main",
+      description: "My website",
+      pushedAt: "2026-10-01T00:00:00Z",
+    });
+    expect(urls).toContain(
+      "https://api.github.com/user/installations/1/repositories?per_page=100&page=2",
+    );
+  });
+
+  it("lists /user/repos for a pasted token and stops at the limit", async () => {
+    let served = 0;
+    const api = createGitHubApi({
+      fetch: async (url) => {
+        expect(String(url)).toContain("/user/repos?sort=pushed&per_page=100");
+        const items = Array.from({ length: 100 }, () =>
+          repo(`octo/n${served++}`),
+        );
+        return respond(200, items);
+      },
+    });
+    const listed = await api.listRepositories("github_pat_x", "token");
+    expect(listed.truncated).toBe(true);
+    expect(listed.repositories).toHaveLength(MAX_REACHABLE_REPOSITORIES);
+  });
+
+  it("reports why GitHub refused to list", async () => {
+    const api = createGitHubApi({
+      fetch: async () => respond(403, { message: "Resource not accessible" }),
+    });
+    await expect(api.listRepositories("ghu_x", "app")).rejects.toMatchObject({
+      code: "github_installations_failed",
+      detail: "Resource not accessible",
+    });
+  });
+
+  it("stops reading pages that never end", async () => {
+    let calls = 0;
+    const api = createGitHubApi({
+      fetch: async () => {
+        calls += 1;
+        // The same full page, over and over.
+        return respond(
+          200,
+          Array.from({ length: 100 }, (_, index) => repo(`octo/same${index}`)),
+        );
+      },
+    });
+    const listed = await api.listRepositories("github_pat_x", "token");
+    expect(listed).toMatchObject({ truncated: true });
+    expect(listed.repositories).toHaveLength(100);
+    expect(calls).toBe(11);
   });
 });

@@ -12,6 +12,7 @@ import {
   parseGitHubRepository,
   type GitHubApi,
   type PullRequest,
+  type ReachableRepository,
 } from "./githubApi.js";
 import {
   CONNECTION_ID_PATTERN,
@@ -36,7 +37,9 @@ import { TASK_BRANCH_PREFIX, isSafeBranchName } from "./taskStore.js";
  *
  * It also fetches a repository's base branch for a new task (`snapshot`),
  * so private repositories can be cloned without their token reaching the
- * server: the server receives a git bundle and clones from that.
+ * server: the server receives a git bundle and clones from that. And it
+ * lists the repositories each connection can reach (names and metadata
+ * only), so the assistant can find them without a token.
  */
 
 export const PUBLISHER_PROTOCOL = 1;
@@ -132,6 +135,14 @@ export interface Snapshot {
   readonly branch: string;
   /** Delete the bundle once it has been sent. */
   release(): Promise<void>;
+}
+
+/** What a connection can reach, for the server's repository directory. */
+export interface ReachableRepositories {
+  readonly login: string;
+  readonly repositories: readonly ReachableRepository[];
+  /** More than `MAX_REACHABLE_REPOSITORIES`: the rest were left out. */
+  readonly truncated: boolean;
 }
 
 export interface PublishResult {
@@ -271,9 +282,10 @@ export async function startPublisher(
       }
       return;
     }
-    const match = /^\/v1\/connections\/([^/]+)(\/device|\/token)?$/u.exec(
-      url.pathname,
-    );
+    const match =
+      /^\/v1\/connections\/([^/]+)(\/device|\/token|\/repositories)?$/u.exec(
+        url.pathname,
+      );
     if (match) {
       const id = match[1]!;
       if (!CONNECTION_ID_PATTERN.test(id)) {
@@ -290,6 +302,10 @@ export async function startPublisher(
       }
       if (action === "/device" && method === "POST") {
         sendJson(response, 200, await service.startDeviceFlow(id));
+        return;
+      }
+      if (action === "/repositories" && method === "GET") {
+        sendJson(response, 200, await service.listRepositories(id));
         return;
       }
       if (action === "/token" && method === "PUT") {
@@ -562,6 +578,19 @@ export function createPublisherService(dependencies: {
       return connected(
         await storeToken(id, "token", { accessToken: token }, user.login),
       );
+    },
+    /** The repositories this connection can reach; never its token. */
+    async listRepositories(id: string): Promise<ReachableRepositories> {
+      const token = await usableToken(id);
+      const credential = vault.get(id)!;
+      const listed = await github
+        .listRepositories(token, credential.kind)
+        .catch(rethrowGitHub);
+      return {
+        login: credential.login,
+        repositories: listed.repositories,
+        truncated: listed.truncated,
+      };
     },
     async remove(id: string): Promise<boolean> {
       const flow = flows.get(id);

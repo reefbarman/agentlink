@@ -365,9 +365,15 @@ export function GitHubPanel({
               </ul>
             )}
           </section>
+          {info.configured && (
+            <ReachableRepositories
+              revision={reloads}
+              connectionName={connectionName}
+            />
+          )}
           <section class="assistant-inbox-group">
             <h3>
-              Repositories
+              Repository settings
               <button
                 type="button"
                 class="assistant-panel-action"
@@ -419,6 +425,200 @@ export function GitHubPanel({
         </>
       )}
     </Dialog>
+  );
+}
+
+/** Where the owner chooses which repositories the GitHub App can reach. */
+export const GITHUB_APP_INSTALLATIONS_URL =
+  "https://github.com/settings/installations";
+const MAX_SHOWN_REPOSITORIES = 50;
+
+export interface ReachableRepository {
+  repository: string;
+  fullName: string;
+  private?: boolean;
+  archived?: boolean;
+  description?: string;
+  connectionIds: string[];
+  projectIds?: string[];
+}
+
+export interface RepositoryDirectoryList {
+  publisherConfigured: boolean;
+  fetchedAt?: number;
+  connections: {
+    id: string;
+    login?: string;
+    status: "ok" | "failed";
+    error?: string;
+    repositories: number;
+    truncated?: boolean;
+  }[];
+  repositories: ReachableRepository[];
+}
+
+/** Repositories whose name or description has every word of `filter`. */
+export function filterRepositories(
+  repositories: readonly ReachableRepository[],
+  filter: string,
+): ReachableRepository[] {
+  const words = filter.toLowerCase().split(/\s+/u).filter(Boolean);
+  return repositories.filter((entry) => {
+    const text = `${entry.fullName} ${entry.description ?? ""}`.toLowerCase();
+    return words.every((word) => text.includes(word));
+  });
+}
+
+/**
+ * What the Assistant can find: every repository the connections reach
+ * (the GitHub App's installations), with which account reaches each.
+ */
+function ReachableRepositories({
+  revision,
+  connectionName,
+}: {
+  revision: number;
+  connectionName: (id: string | undefined) => string;
+}) {
+  const [list, setList] = useState<RepositoryDirectoryList | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const load = (refresh: boolean) =>
+    requestJson<RepositoryDirectoryList>(
+      `/api/github/repositories${refresh ? "?refresh=1" : ""}`,
+    );
+
+  useEffect(() => {
+    let cancelled = false;
+    load(false).then(
+      (body) => {
+        if (!cancelled) setList(body);
+      },
+      (caught: unknown) => {
+        if (!cancelled) setError(errorText(caught));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [revision]);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      setList(await load(true));
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const reached = (list?.repositories ?? []).filter(
+    (entry) => entry.connectionIds.length > 0,
+  );
+  const matching = filterRepositories(reached, filter);
+  const problems = (list?.connections ?? []).filter(
+    (connection) => connection.status === "failed",
+  );
+
+  return (
+    <section class="assistant-inbox-group">
+      <h3>
+        Repositories the Assistant can reach
+        <button
+          type="button"
+          class="assistant-panel-action"
+          disabled={refreshing}
+          onClick={() => void refresh()}
+        >
+          <i class="codicon codicon-refresh" aria-hidden="true" />{" "}
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </h3>
+      {error && <p class="assistant-project-error">{error}</p>}
+      {problems.map((connection) => (
+        <p class="assistant-project-error" key={connection.id}>
+          {connection.login ? `@${connection.login}` : "A connection"}:{" "}
+          {connection.error === "connection_signed_out"
+            ? "signed out, so its repositories cannot be listed. Sign it in again above."
+            : `its repositories could not be listed (${connection.error ?? "unknown error"}).`}
+        </p>
+      ))}
+      {!list ? (
+        <p class="assistant-project-hint">{error ? "" : "Loading…"}</p>
+      ) : reached.length === 0 ? (
+        <p class="assistant-project-hint">
+          None yet. Chats find repositories here, private ones included. Choose
+          which ones at{" "}
+          <a
+            href={GITHUB_APP_INSTALLATIONS_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            github.com/settings/installations
+          </a>{" "}
+          (AgentLink Assistant → Configure), then Refresh.
+        </p>
+      ) : (
+        <>
+          <p class="assistant-project-hint">
+            Chats find these by name, so you can ask for work on any of them.
+            Add more at{" "}
+            <a
+              href={GITHUB_APP_INSTALLATIONS_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              github.com/settings/installations
+            </a>
+            .
+          </p>
+          {reached.length > 8 && (
+            <input
+              class="assistant-github-filter"
+              type="search"
+              aria-label="Filter repositories"
+              placeholder="Filter repositories"
+              value={filter}
+              onInput={(event) => setFilter(event.currentTarget.value)}
+            />
+          )}
+          <ul class="assistant-job-list">
+            {matching.slice(0, MAX_SHOWN_REPOSITORIES).map((entry) => (
+              <li class="assistant-job" key={entry.repository}>
+                <div class="assistant-job-main">
+                  <strong>
+                    <a href={entry.repository} target="_blank" rel="noreferrer">
+                      {entry.fullName}
+                    </a>
+                  </strong>
+                  <span class="assistant-job-meta">
+                    {entry.private ? "Private" : "Public"}
+                    {entry.archived ? " · Archived" : ""}
+                    {" · "}
+                    {entry.connectionIds.map(connectionName).join(", ")}
+                    {entry.description ? ` · ${entry.description}` : ""}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {matching.length > MAX_SHOWN_REPOSITORIES && (
+            <p class="assistant-project-hint">
+              {matching.length - MAX_SHOWN_REPOSITORIES} more; filter to find
+              them.
+            </p>
+          )}
+          {matching.length === 0 && (
+            <p class="assistant-project-hint">No repository matches.</p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

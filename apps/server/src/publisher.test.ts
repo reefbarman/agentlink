@@ -11,6 +11,7 @@ import type {
   PullRequest,
   UserToken,
 } from "./githubApi.js";
+import { GitHubError } from "./githubApi.js";
 import {
   PublisherError,
   createPublisherService,
@@ -159,6 +160,12 @@ function fakeGitHub(overrides: Partial<GitHubApi> = {}) {
       Object.assign(pull, request);
       return pull;
     },
+    listRepositories: async () => ({
+      repositories: [
+        { owner: "reefbarman", name: "site", private: true, archived: false },
+      ],
+      truncated: false,
+    }),
     ...overrides,
   };
   return { api, pulls };
@@ -576,6 +583,56 @@ describe("connections", { timeout: 30_000 }, () => {
     expect(await publisher.remove("c0ffee000004")).toBe(true);
     expect(await publisher.status("c0ffee000004")).toEqual({
       status: "missing",
+    });
+  });
+});
+
+describe("repository listing", { timeout: 30_000 }, () => {
+  it("lists with the connection's own token and kind, returning no token", async () => {
+    const setup = await fixture();
+    const seen: { token: string; kind: string }[] = [];
+    const github = fakeGitHub({
+      listRepositories: async (token, kind) => {
+        seen.push({ token, kind });
+        return {
+          repositories: [
+            {
+              owner: "reefbarman",
+              name: "site",
+              private: true,
+              archived: false,
+            },
+          ],
+          truncated: false,
+        };
+      },
+    });
+    const { publisher } = await service({ fixture: setup, github: github.api });
+    const listed = await publisher.listRepositories(CONNECTION);
+    expect(seen).toEqual([{ token: TOKEN, kind: "app" }]);
+    expect(listed).toEqual({
+      login: "reefbarman",
+      repositories: [
+        { owner: "reefbarman", name: "site", private: true, archived: false },
+      ],
+      truncated: false,
+    });
+    expect(JSON.stringify(listed)).not.toContain(TOKEN);
+    await expect(
+      publisher.listRepositories("0123456789ab"),
+    ).rejects.toMatchObject({ code: "connection_missing" });
+  });
+
+  it("reports a signed-out connection instead of GitHub's 401", async () => {
+    const setup = await fixture();
+    const github = fakeGitHub({
+      listRepositories: async () => {
+        throw new GitHubError("github_unauthorized", "Bad credentials", 401);
+      },
+    });
+    const { publisher } = await service({ fixture: setup, github: github.api });
+    await expect(publisher.listRepositories(CONNECTION)).rejects.toMatchObject({
+      code: "connection_signed_out",
     });
   });
 });

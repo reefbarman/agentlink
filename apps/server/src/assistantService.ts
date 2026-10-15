@@ -99,6 +99,11 @@ import { pickReviewModel } from "./taskReview.js";
 import { createTaskRoutes } from "./taskRoutes.js";
 import { openGitHubConnections } from "./githubConnections.js";
 import { createGitHubRoutes } from "./githubRoutes.js";
+import { createRepositoryDirectory } from "./githubRepositories.js";
+import {
+  assistantRoutingInstructions,
+  createRepositoryTools,
+} from "./repositoryTools.js";
 import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
@@ -764,6 +769,30 @@ export async function startAssistantService(
           models: configuredModels(config),
         })
       : undefined;
+    // Every repository the owner's GitHub connections reach (asked of the
+    // publisher), plus configured and project ones.
+    const repositoryDirectory = createRepositoryDirectory({
+      connections: githubConnections,
+      publisher,
+      settings: repositorySettings,
+      projectRepositories: () =>
+        catalog.list().flatMap((project) =>
+          project.repositories.map((repository) => ({
+            projectId: project.id,
+            url: repository.url,
+          })),
+        ),
+      log,
+    });
+    const repositoryTools = createRepositoryTools({
+      directory: repositoryDirectory,
+      connections: githubConnections,
+    });
+    // How a chat routes requests to the right tool, without asking.
+    const routingInstructions = assistantRoutingInstructions({
+      tasks: taskTools !== undefined,
+      repositories: true,
+    });
     /** Why turns failed, beyond the public error code; owner-only. */
     const turnFailures = createTurnFailureLog();
     const openHost = async (
@@ -806,6 +835,7 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
+        ...(kind === "project" ? { instructions: routingInstructions } : {}),
         ...commandHostOptions(config, worker, autonomous, {
           policy: () => projectNetworkPolicy(catalog.get(project.id)),
           key: policyKey,
@@ -813,6 +843,7 @@ export async function startAssistantService(
         hostTools: async (request) => [
           ...(await webTools(request)),
           ...(kind === "project" ? await jobTools.readTools(request) : []),
+          ...(kind === "project" ? await repositoryTools(request) : []),
           ...(kind === "project" && taskTools
             ? await taskTools.readTools(request)
             : []),
@@ -1140,6 +1171,15 @@ export async function startAssistantService(
             repositories: repositorySettings,
             connections: githubConnections,
             ...(publisher ? { publisher } : {}),
+            // The one connection reaching a repository clones it when the
+            // owner chose none; several need the owner to choose.
+            reachableConnection: async (repository) => {
+              const resolved =
+                await repositoryDirectory.resolveConnection(repository);
+              return resolved.kind === "one"
+                ? resolved.connectionId
+                : undefined;
+            },
             log,
             failureDetail: (projectId, sessionId) =>
               turnFailures.take(projectId, sessionId),
@@ -1189,6 +1229,7 @@ export async function startAssistantService(
       connections: githubConnections,
       publisher,
       repositories: repositorySettings,
+      directory: repositoryDirectory,
       isOwner: (auth) =>
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,

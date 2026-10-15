@@ -7,6 +7,7 @@ import {
   type GitHubConnection,
   type GitHubConnectionStore,
 } from "./githubConnections.js";
+import type { RepositoryDirectory } from "./githubRepositories.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import type { ConnectionStatus } from "./publisher.js";
 import {
@@ -32,6 +33,9 @@ import type { RepositorySettingsStore } from "./taskRepositories.js";
  * - `PATCH /api/github/connections/:id` (`{ commitName?, commitEmail? }`)
  * - `DELETE /api/github/connections/:id`: also revokes every repository
  *   permission that uses it
+ * - `GET /api/github/repositories` (`?refresh=1` to ask GitHub again):
+ *   every repository the connections can reach, plus the configured and
+ *   project ones, with which connections reach each
  */
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -45,6 +49,8 @@ export interface GitHubRoutesOptions {
   /** Undefined when the server has no publisher configured. */
   readonly publisher: PublisherClient | undefined;
   readonly repositories: Pick<RepositorySettingsStore, "revokeConnection">;
+  /** What the connections reach; refreshed when a connection changes. */
+  readonly directory?: RepositoryDirectory;
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
   readonly now?: () => number;
 }
@@ -110,6 +116,8 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
       status.status === "connected" &&
       (status.login !== connection.login || status.kind !== connection.kind)
     ) {
+      // Newly signed in (or as someone else): it reaches other repositories.
+      options.directory?.invalidate();
       connection = await connections.update(
         connection.id,
         { login: status.login, kind: status.kind },
@@ -130,9 +138,29 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
     request: IncomingMessage,
     response: ServerResponse,
     auth: AssistantServerAuth,
-    pathname: string,
+    url: URL,
     method: string,
   ): Promise<boolean> => {
+    const pathname = url.pathname;
+    if (pathname === "/api/github/repositories") {
+      if (method !== "GET") throw new HttpError(405, "method_not_allowed");
+      if (!options.directory) {
+        sendJson(response, 200, {
+          publisherConfigured: false,
+          connections: [],
+          repositories: [],
+        });
+        return true;
+      }
+      sendJson(
+        response,
+        200,
+        await options.directory.list({
+          refresh: url.searchParams.get("refresh") === "1",
+        }),
+      );
+      return true;
+    }
     if (pathname === "/api/github") {
       if (method !== "GET") throw new HttpError(405, "method_not_allowed");
       let deviceFlow = false;
@@ -194,6 +222,7 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
               now(),
             )
           : connection;
+      options.directory?.invalidate();
       sendJson(response, 201, { connection: saved, status });
       return true;
     }
@@ -227,6 +256,7 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
       const token = readToken(body.token);
       await requireValid(auth);
       const status = await publisher.importToken(id, token);
+      options.directory?.invalidate();
       const saved =
         status.status === "connected"
           ? await connections.update(
@@ -267,6 +297,7 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
         });
       }
       await connections.delete(id);
+      options.directory?.invalidate();
       sendJson(response, 200, { ok: true });
       return true;
     }
@@ -285,7 +316,7 @@ export function createGitHubRoutes(options: GitHubRoutesOptions): GitHubRoutes {
       if (!options.isOwner(auth)) throw new HttpError(403, "github_forbidden");
       const method = (request.method ?? "GET").toUpperCase();
       try {
-        return await route(request, response, auth, url.pathname, method);
+        return await route(request, response, auth, url, method);
       } catch (error) {
         if (error instanceof PublisherRequestError) {
           // The publisher's reason, so the owner can act on it.

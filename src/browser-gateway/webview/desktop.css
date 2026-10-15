@@ -2674,6 +2674,19 @@ html.quick-ask-document body {
   background: var(--ag-accent-a12);
 }
 
+.browser-shell.browser-shell-desktop .assistant-github-filter {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+}
+
 .browser-shell.browser-shell-desktop .assistant-github-code p {
   margin: 0 0 8px;
 }

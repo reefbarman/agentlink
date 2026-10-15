@@ -8,6 +8,7 @@ import {
   type ConnectionStatus,
   type PublishRequest,
   type PublishResult,
+  type ReachableRepositories,
   type SnapshotRequest,
 } from "./publisher.js";
 
@@ -40,6 +41,8 @@ export interface PublisherClient {
   status(connectionId: string): Promise<ConnectionStatus>;
   importToken(connectionId: string, token: string): Promise<ConnectionStatus>;
   remove(connectionId: string): Promise<boolean>;
+  /** The repositories a connection can reach (names, never a token). */
+  repositories(connectionId: string): Promise<ReachableRepositories>;
   publish(request: PublishRequest): Promise<PublishResult>;
   /**
    * Write a git bundle of the repository's base branch to `destination`,
@@ -130,6 +133,7 @@ export function createPublisherClient(options: {
       call("PUT", `${connection(id)}/token`, { token }),
     remove: async (id) =>
       (await call<{ removed: boolean }>("DELETE", connection(id))).removed,
+    repositories: (id) => call("GET", `${connection(id)}/repositories`),
     publish: (request) => call("POST", "/v1/publish", request),
     async snapshot(request, destination) {
       const response = await send("POST", "/v1/snapshot", request);

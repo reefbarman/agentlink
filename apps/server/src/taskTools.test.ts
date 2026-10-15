@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { openTaskStore, type TaskRequest, type TaskRun } from "./taskStore.js";
 import { isTaskStartDisplay } from "./taskStartDisplay.js";
-import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
+import {
+  combineApprovalHostTools,
+  createTaskTools,
+  taskProblemHint,
+} from "./taskTools.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -135,6 +139,31 @@ describe("task tools", () => {
     const listed = await listTasks.executeValidated({}, {} as never);
     expect(listed.modelContent).toContain("aaaaaaaaaaaa: ready");
     expect(listed.modelContent).toContain("latest c1c1c1c1c1c1");
+    expect(listed.modelContent).not.toContain("What to tell the owner");
+  });
+
+  it("says what the owner can do about a task's problem", async () => {
+    const test = await setup();
+    await test.store.create({
+      ...(await test.create(REQUEST)),
+      state: "failed",
+      error: "clone_failed",
+    });
+    const listed = await (
+      await test.byName("list_tasks")
+    ).executeValidated({}, {} as never);
+    expect(listed.modelContent).toContain(
+      "What to tell the owner: The repository could not be cloned. If it is private, the AgentLink Assistant GitHub App is not installed on it",
+    );
+    expect(
+      taskProblemHint({ state: "blocked_auth", error: "turn_failed" }),
+    ).toMatch(/sign-in has expired/u);
+    expect(
+      taskProblemHint({ state: "ready", error: "publish_permission_missing" }),
+    ).toMatch(/GitHub panel/u);
+    expect(taskProblemHint({ state: "failed", error: "no_commits" })).toBe(
+      undefined,
+    );
   });
 
   it("routes each call to the tool set that offers it", async () => {

@@ -9,6 +9,7 @@ import {
   openGitHubConnections,
   parseCommitIdentity,
 } from "./githubConnections.js";
+import { createRepositoryDirectory } from "./githubRepositories.js";
 import { createGitHubRoutes } from "./githubRoutes.js";
 import { HttpError } from "./httpJson.js";
 import type { ConnectionStatus } from "./publisher.js";
@@ -84,6 +85,18 @@ function fakePublisher() {
       },
     ),
     remove: vi.fn(async (id: string) => statuses.delete(id)),
+    repositories: vi.fn(async (_id: string) => ({
+      login: "reefbarman",
+      repositories: [
+        {
+          owner: "reefbarman",
+          name: "site",
+          private: true,
+          archived: false,
+        },
+      ],
+      truncated: false,
+    })),
     publish: vi.fn(),
     snapshot: vi.fn(),
   } satisfies PublisherClient;
@@ -100,10 +113,17 @@ async function setup(options: { readonly publisher?: boolean } = {}) {
     file: path.join(dir, "repositories.json"),
   });
   const fake = fakePublisher();
+  const publisher = options.publisher === false ? undefined : fake.publisher;
+  const directory = createRepositoryDirectory({
+    connections,
+    publisher,
+    settings: repositories,
+  });
   const routes = createGitHubRoutes({
     connections,
-    publisher: options.publisher === false ? undefined : fake.publisher,
+    publisher,
     repositories,
+    directory,
     isOwner: (request) => request.principal.subjectId === "owner",
   });
   let caller = auth("owner");
@@ -289,6 +309,40 @@ describe("GitHub routes", () => {
       status: 409,
       body: { error: "publisher_not_configured" },
     });
+  });
+
+  it("lists reachable repositories, cached until refreshed or a connection changes", async () => {
+    const test = await setup();
+    const connection = await test.connections.create("app", IDENTITY, 1);
+    const listed = await test.call("GET", "/api/github/repositories");
+    expect(listed).toMatchObject({
+      status: 200,
+      body: {
+        publisherConfigured: true,
+        connections: [{ id: connection.id, status: "ok", repositories: 1 }],
+        repositories: [
+          {
+            repository: "https://github.com/reefbarman/site",
+            fullName: "reefbarman/site",
+            private: true,
+            connectionIds: [connection.id],
+          },
+        ],
+      },
+    });
+    await test.call("GET", "/api/github/repositories");
+    expect(test.publisher.repositories).toHaveBeenCalledOnce();
+    await test.call("GET", "/api/github/repositories?refresh=1");
+    expect(test.publisher.repositories).toHaveBeenCalledTimes(2);
+    await test.call("DELETE", `/api/github/connections/${connection.id}`);
+    await expect(
+      test.call("GET", "/api/github/repositories"),
+    ).resolves.toMatchObject({ body: { connections: [], repositories: [] } });
+
+    test.setCaller(auth("guest"));
+    await expect(
+      test.call("GET", "/api/github/repositories"),
+    ).resolves.toMatchObject({ status: 403 });
   });
 });
 

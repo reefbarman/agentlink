@@ -309,6 +309,8 @@ async function setup(
     readonly permission?: boolean;
     /** The publisher's answer to each publish, in order; then success. */
     readonly publishFailures?: PublisherRequestError[];
+    /** The connection that can reach the repository, when none is set. */
+    readonly reachable?: string;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-runner-"));
@@ -381,6 +383,9 @@ async function setup(
       get: (id) => (id === CONNECTION.id ? CONNECTION : undefined),
     },
     publisher,
+    ...(options.reachable !== undefined
+      ? { reachableConnection: vi.fn(async () => options.reachable) }
+      : {}),
     onTaskRecovered: (task) => recovered.push(task),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
     ...(options.approvalTimeoutMs
@@ -910,6 +915,39 @@ describe("task runner", () => {
     await expect(test.runner.stop(created.id)).rejects.toMatchObject({
       code: "task_not_found",
     });
+  });
+});
+
+describe("connections by reachability", () => {
+  it("clones with the one connection that reaches the repository, without publishing", async () => {
+    const test = await setup({ reachable: CONNECTION.id });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    const prepareOptions = test.workspaces.prepare.mock.calls[0]?.[1];
+    expect(prepareOptions?.coAuthor).toEqual({
+      name: "Tristan",
+      email: "tristan@example.com",
+    });
+    await prepareOptions?.snapshot?.("/b");
+    expect(test.publisher.snapshot).toHaveBeenCalledWith(
+      { connectionId: CONNECTION.id, repository: REQUEST.repository },
+      "/b",
+    );
+    expect(test.store.get(created.id)?.connectionId).toBe(CONNECTION.id);
+    test.endTurn("completed", { text: "Fixed it." });
+    // Reaching a repository is not permission to publish to it.
+    await test.waitFor(created.id, "ready");
+    expect(test.publisher.publish).not.toHaveBeenCalled();
+  });
+
+  it("clones directly when no connection reaches it", async () => {
+    const test = await setup({ reachable: "" });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    const prepareOptions = test.workspaces.prepare.mock.calls[0]?.[1];
+    expect(prepareOptions?.snapshot).toBeUndefined();
+    expect(prepareOptions?.coAuthor).toBeUndefined();
+    expect(test.store.get(created.id)?.connectionId).toBeUndefined();
   });
 });
 

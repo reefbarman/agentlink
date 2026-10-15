@@ -1,8 +1,9 @@
 /**
  * The few GitHub calls the publisher makes: the GitHub App device flow and
- * its token refresh, the signed-in user, and finding, opening and updating
- * a task's draft pull request. Only `github.com` and `api.github.com` are
- * ever contacted. Errors carry GitHub's message but never a token.
+ * its token refresh, the signed-in user, the repositories a connection can
+ * reach, and finding, opening and updating a task's draft pull request.
+ * Only `github.com` and `api.github.com` are ever contacted. Errors carry
+ * GitHub's message but never a token.
  */
 
 export const GITHUB_WEB = "https://github.com";
@@ -98,6 +99,67 @@ export interface PullRequest {
   readonly draft: boolean;
 }
 
+/** A repository a connection can reach: names and metadata, nothing else. */
+export interface ReachableRepository {
+  readonly owner: string;
+  readonly name: string;
+  readonly private: boolean;
+  readonly archived: boolean;
+  readonly defaultBranch?: string;
+  /** Shortened to `MAX_DESCRIPTION_LENGTH`. */
+  readonly description?: string;
+  /** ISO time of the last push, when GitHub says. */
+  readonly pushedAt?: string;
+}
+
+/** At most this many repositories per connection. */
+export const MAX_REACHABLE_REPOSITORIES = 1_000;
+const MAX_DESCRIPTION_LENGTH = 200;
+const PAGE_SIZE = 100;
+/** Pages read per list, whatever GitHub answers. */
+const MAX_PAGES = MAX_REACHABLE_REPOSITORIES / PAGE_SIZE + 1;
+/** Installations looked at per app connection. */
+const MAX_INSTALLATIONS = 50;
+
+/** One repository from GitHub's JSON, or undefined when it is malformed. */
+export function reachableRepository(
+  item: unknown,
+): ReachableRepository | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const record = item as Record<string, unknown>;
+  const fullName = record.full_name;
+  if (typeof fullName !== "string") return undefined;
+  const [owner, name, ...rest] = fullName.split("/");
+  if (
+    rest.length > 0 ||
+    !owner ||
+    !name ||
+    !NAME_PATTERN.test(owner) ||
+    !NAME_PATTERN.test(name)
+  ) {
+    return undefined;
+  }
+  const description =
+    typeof record.description === "string"
+      ? record.description.replace(/\s+/gu, " ").trim()
+      : "";
+  return {
+    owner,
+    name,
+    private: record.private === true,
+    archived: record.archived === true,
+    ...(typeof record.default_branch === "string" && record.default_branch
+      ? { defaultBranch: record.default_branch }
+      : {}),
+    ...(description
+      ? { description: description.slice(0, MAX_DESCRIPTION_LENGTH) }
+      : {}),
+    ...(typeof record.pushed_at === "string"
+      ? { pushedAt: record.pushed_at }
+      : {}),
+  };
+}
+
 export interface GitHubApi {
   requestDeviceCode(clientId: string): Promise<DeviceCode>;
   pollDeviceToken(clientId: string, deviceCode: string): Promise<DevicePoll>;
@@ -127,6 +189,18 @@ export interface GitHubApi {
     number: number,
     request: { readonly title: string; readonly body: string },
   ): Promise<PullRequest>;
+  /**
+   * The repositories a token can reach: for a GitHub App user token, those
+   * of the installations it can see; for a pasted token, `/user/repos`.
+   * Stops at `MAX_REACHABLE_REPOSITORIES` (`truncated`).
+   */
+  listRepositories(
+    token: string,
+    kind: "app" | "token",
+  ): Promise<{
+    readonly repositories: readonly ReachableRepository[];
+    readonly truncated: boolean;
+  }>;
 }
 
 export function createGitHubApi(
@@ -364,6 +438,75 @@ export function createGitHubApi(
       });
       if (result.status !== 200) return fail("pull_request_failed", result);
       return pullRequest(result.body);
+    },
+    async listRepositories(token, kind) {
+      const found = new Map<string, ReachableRepository>();
+      let truncated = false;
+      /** Read pages of `url` until one is short; false once full. */
+      const collect = async (
+        url: string,
+        items: (body: Record<string, unknown>) => unknown,
+      ): Promise<boolean> => {
+        for (let page = 1; page <= MAX_PAGES; page += 1) {
+          const separator = url.includes("?") ? "&" : "?";
+          const result = await send(
+            `${url}${separator}per_page=${PAGE_SIZE}&page=${page}`,
+            { method: "GET", token },
+          );
+          const list = items(result.body);
+          if (result.status !== 200 || !Array.isArray(list)) {
+            return fail("github_repositories_failed", result);
+          }
+          for (const item of list) {
+            const repository = reachableRepository(item);
+            if (!repository) continue;
+            if (found.size >= MAX_REACHABLE_REPOSITORIES) {
+              truncated = true;
+              return false;
+            }
+            found.set(
+              `${repository.owner}/${repository.name}`.toLowerCase(),
+              repository,
+            );
+          }
+          if (list.length < PAGE_SIZE) return true;
+        }
+        truncated = true;
+        return false;
+      };
+      if (kind === "token") {
+        await collect(`${GITHUB_API}/user/repos?sort=pushed`, (body) =>
+          Array.isArray(body.items) ? body.items : undefined,
+        );
+        return { repositories: [...found.values()], truncated };
+      }
+      const installations: number[] = [];
+      for (
+        let page = 1;
+        installations.length < MAX_INSTALLATIONS && page <= MAX_PAGES;
+        page += 1
+      ) {
+        const result = await send(
+          `${GITHUB_API}/user/installations?per_page=${PAGE_SIZE}&page=${page}`,
+          { method: "GET", token },
+        );
+        const list = result.body.installations;
+        if (result.status !== 200 || !Array.isArray(list)) {
+          return fail("github_installations_failed", result);
+        }
+        for (const item of list as Record<string, unknown>[]) {
+          if (typeof item?.id === "number") installations.push(item.id);
+        }
+        if (list.length < PAGE_SIZE) break;
+      }
+      for (const id of installations.slice(0, MAX_INSTALLATIONS)) {
+        const more = await collect(
+          `${GITHUB_API}/user/installations/${id}/repositories`,
+          (body) => body.repositories,
+        );
+        if (!more) break;
+      }
+      return { repositories: [...found.values()], truncated };
     },
   };
 }

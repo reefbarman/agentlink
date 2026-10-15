@@ -15,10 +15,12 @@ import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { RepositorySettingsStore } from "./taskRepositories.js";
 import { taskModelError } from "./taskRoutes.js";
 import type { TaskRunner } from "./taskRunner.js";
+import { GITHUB_APP_INSTALLATIONS_URL } from "./repositoryTools.js";
 import {
   MAX_TASKS,
   parseTaskRequest,
   type TaskRequest,
+  type TaskRun,
   type TaskStore,
 } from "./taskStore.js";
 import {
@@ -66,7 +68,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     switch (code) {
       case "repository_required":
       case "repository_url_invalid":
-        return "repository must be an https:// clone URL with no credentials, for example https://github.com/owner/name (private repositories need a GitHub connection set for them in the GitHub panel)";
+        return "repository must be an https:// clone URL with no credentials, for example https://github.com/owner/name; use list_repositories to find the owner's repositories, private ones included";
       case "objective_required":
         return "objective must describe what the task should achieve";
       case "objective_too_long":
@@ -181,6 +183,9 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           .map((task) =>
             [
               `- ${task.id}: ${task.state}${task.error ? ` (${task.error})` : ""}`,
+              ...(taskProblemHint(task)
+                ? [`  What to tell the owner: ${taskProblemHint(task)}`]
+                : []),
               `  Repository: ${task.repository} → ${task.branch}`,
               `  Objective: ${oneLine(task.objective, 300)}`,
               ...(task.commits?.length
@@ -202,7 +207,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const startTask = defineTool({
     name: "start_task",
     description:
-      "Start a coding task: the server makes a fresh clone of a repository (public, or private with a GitHub connection set for it) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
+      "Start a coding task: the server makes a fresh clone of a repository (public, or private when one of the owner's GitHub connections can reach it; find its URL with list_repositories rather than asking) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -287,6 +292,37 @@ export function combineApprovalHostTools(
     validatePending: (request) =>
       owner(request.toolName).validatePending?.(request) ?? { ok: true },
   };
+}
+
+/**
+ * What the owner should do about a task's problem, in plain words, for the
+ * errors they can fix themselves.
+ */
+export function taskProblemHint(
+  task: Pick<TaskRun, "error" | "connectionId" | "state">,
+): string | undefined {
+  switch (task.error) {
+    case "clone_failed":
+      return task.connectionId
+        ? "The repository could not be cloned with its GitHub connection; check the branch exists and the connection can still reach it."
+        : `The repository could not be cloned. If it is private, the AgentLink Assistant GitHub App is not installed on it: add it at ${GITHUB_APP_INSTALLATIONS_URL}, then resume the task.`;
+    case "fetch_failed":
+    case "default_branch_unknown":
+      return `GitHub would not let the connection fetch the repository. The AgentLink Assistant app may no longer be installed on it: check ${GITHUB_APP_INSTALLATIONS_URL}, then resume the task.`;
+    case "connection_signed_out":
+    case "connection_missing":
+      return "The GitHub connection is signed out: the owner must sign it in again in the Assistant's GitHub panel, then resume the task.";
+    case "publish_permission_missing":
+      return "It is ready but was not published: the repository has no GitHub account chosen to publish with. The owner can choose one in the GitHub panel, then publish it from Tasks.";
+    default:
+      if (task.state === "blocked_auth") {
+        return "A model provider's sign-in has expired: the owner must sign in again, then resume the task.";
+      }
+      if (task.state === "blocked_quota") {
+        return "A model provider's usage limit was reached: resume the task once it resets.";
+      }
+      return undefined;
+  }
 }
 
 function oneLine(text: string, max: number): string {
