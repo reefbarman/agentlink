@@ -1,0 +1,105 @@
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 57-62,125-134,152,231,308,359-360,372-374,648,651-652,656
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 23,608-622,626-644,648-650,766-768,770-779,802,805-806,809-815,1101-1102,1114
+  s_24483ddffabff7::t_1c77d39ba057a5 623-625,645-647,769,803-804,807-808,816
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 851-852,854,859-862,894-902,1192-1193,1197-1198
+  s_24483ddffabff7::t_6848acddfa0e03 1195-1196,1199
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 313,388-392,949-974
+  s_41cf5a4dc343de::t_44a472cf029342 387,393,975-976
+apps/server/src/taskTools.ts
+  h_e08a86bb3a33a2 25-29,123-131,185,187-199,228-236,400-405,526-527
+  s_24483ddffabff7::t_3ad274b480b869 186,200,406
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 440
+src/browser-gateway/webview/AssistantTasks.tsx
+  h_e08a86bb3a33a2 73-74,513-527
+src/browser-gateway/webview/AssistantTasks.test.tsx
+  h_e08a86bb3a33a2 199-215
+packages/workspace-host/src/commandTools.test.ts
+  h_e08a86bb3a33a2 18-19,28-33,41-43,106-136
+  s_02fa6951c37989::t_c433b0b00da7e9 137-142
+apps/server/README.md
+  h_e08a86bb3a33a2 408-409
+apps/server/src/taskStore.ts
+  h_e08a86bb3a33a2 3,85-90,93-96,279-280,302,319-351,356-360,563-566
+  s_02fa6951c37989::t_67aa883725a180 97,275-278,281,352,361-362
+apps/server/src/taskReview.test.ts
+  h_e08a86bb3a33a2 79,83-84,97-98,106-120
+  s_24483ddffabff7::t_696ce589706ba6 95-96,99,121
+apps/server/src/taskWorkspace.test.ts
+  h_e08a86bb3a33a2 5,294-488
+apps/server/src/taskStore.test.ts
+  h_e08a86bb3a33a2 78-126
+CHANGELOG.md
+  h_e08a86bb3a33a2 18
+apps/server/src/taskWorkspace.ts
+  h_e08a86bb3a33a2 10-14,19-24,104-108,200,278-326,328-330,385,484-520
+  s_d3307a3dad4e5a::t_16730c6908e388 15,327,521-522
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 131-136,433-435
+apps/server/src/taskReview.ts
+  h_e08a86bb3a33a2 1-4,8,47-66,85-87
+  s_02fa6951c37989::t_13bc92a8a3211b 5
+apps/server/src/taskTools.test.ts
+  s_46949d0fe3b3f1::t_dc1658fa912b9a 223-259
+apps/server/src/repositoryTools.test.ts
+  h_e08a86bb3a33a2 372
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "24572597e878e1a919b6d837a13309ac268b964c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02fa6951c37989": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba92401e-6549-433e-9daf-2c614a7b9ab3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_24483ddffabff7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b6e101a-bc91-40bf-b47c-91aaec002d91",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_41cf5a4dc343de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67c92591-cb8d-47d5-9674-0718fb4cc379",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_46949d0fe3b3f1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95381d39-616e-45bf-9cb7-95e62b900245",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_d3307a3dad4e5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "263fd0d2-571d-42c5-ba3a-a1a36102ccdb",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
