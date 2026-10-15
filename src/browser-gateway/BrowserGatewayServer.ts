@@ -2616,7 +2616,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(
       res,
       200,
-      this.chatViewProvider.submitBrowserAskAgentMcpTools(),
+      await this.chatViewProvider.submitBrowserAskAgentMcpTools(),
     );
   }
 

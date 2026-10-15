@@ -1114,7 +1114,7 @@ export const findAndReplaceSchema = {
     .boolean()
     .optional()
     .describe(
-      "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other dollar tokens stay literal.",
+      "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar, \\n \\t \\\\ escapes. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other $ and \\ tokens stay literal.",
     ),
   max_replacements: z.coerce
     .number()

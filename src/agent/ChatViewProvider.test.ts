@@ -382,14 +382,19 @@ describe("tool terminal reveal messages", () => {
       { fsPath: "/tmp/ext" } as never,
       { get: vi.fn(), update: vi.fn() } as never,
     );
+    const connect = vi.fn(async () => undefined);
     (
       provider as unknown as {
         askAgentMcpHub: {
+          disconnectAll(): Promise<void>;
+          connect(): Promise<void>;
           getToolDefs(): unknown[];
           getParallelToolCallServerNames(): string[];
         };
       }
     ).askAgentMcpHub = {
+      disconnectAll: async () => undefined,
+      connect,
       getToolDefs: () => [
         {
           name: "parallel__read",
@@ -405,11 +410,16 @@ describe("tool terminal reveal messages", () => {
       getParallelToolCallServerNames: () => ["parallel"],
     };
 
-    expect(provider.submitBrowserAskAgentMcpTools()).toMatchObject({
+    await expect(
+      provider.submitBrowserAskAgentMcpTools(),
+    ).resolves.toMatchObject({
       ok: true,
       parallelSafeToolNames: ["parallel__read"],
       parallelSafeServerNames: ["parallel"],
     });
+    // The first Ask Agent request connects the window hub; later ones reuse it.
+    await provider.submitBrowserAskAgentMcpTools();
+    expect(connect).toHaveBeenCalledOnce();
   }, 15_000);
 
   it("opens the Agent Plugin Manager with help for an empty /plugin command", async () => {
@@ -770,6 +780,7 @@ vi.mock("vscode", () => ({
     },
     findFiles: mockFindFiles,
     openTextDocument: mockOpenTextDocument,
+    getWorkspaceFolder: vi.fn(() => undefined),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     createFileSystemWatcher: vi.fn(() => ({
       onDidChange: vi.fn(),
@@ -2754,6 +2765,34 @@ describe("ChatViewProvider session state sync", () => {
     expect(calls).toEqual(["disconnect", "connect"]);
     expect(disconnectAll).toHaveBeenCalledOnce();
     expect(connect).toHaveBeenCalledOnce();
+    provider.dispose();
+  });
+
+  it("does not connect the Ask Agent MCP hub during window initialization", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const internals = provider as unknown as {
+      askAgentMcpHub: { connect(...args: unknown[]): Promise<void> };
+      ensureStartupMcpConnection(): Promise<void>;
+      getWorkspaceProjects(): unknown[];
+      getCurrentSlashCommands(): Promise<unknown[]>;
+      setupFileWatchers(): void;
+    };
+    // Keep the test hermetic: no project hubs or real global MCP servers.
+    vi.spyOn(internals, "ensureStartupMcpConnection").mockResolvedValue();
+    vi.spyOn(internals, "getWorkspaceProjects").mockReturnValue([]);
+    vi.spyOn(internals, "getCurrentSlashCommands").mockResolvedValue([]);
+    vi.spyOn(internals, "setupFileWatchers").mockReturnValue();
+    const connect = vi
+      .spyOn(internals.askAgentMcpHub, "connect")
+      .mockResolvedValue(undefined);
+
+    await provider.initialize("/tmp/agentlink-ask-agent-lazy");
+
+    expect(connect).not.toHaveBeenCalled();
     provider.dispose();
   });
 

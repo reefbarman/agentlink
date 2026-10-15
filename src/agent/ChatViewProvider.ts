@@ -1227,6 +1227,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Compatibility-only fallback for tests/pre-initialization; production requests lease project hubs. */
   private mcpHub: McpClientHub;
   private askAgentMcpHub: McpClientHub;
+  /**
+   * Latest Ask Agent MCP (re)connection. Undefined until the browser Ask Agent
+   * first needs this window's hub, so a window does not launch a second copy of
+   * every global stdio server alongside its project hub at activation.
+   */
+  private askAgentMcpConnection: Promise<void> | undefined;
   private fileWatchers: vscode.Disposable[] = [];
   private readonly watchedCustomizationProjectIds = new Set<string>();
   private readonly pendingRetrySessionIds = new Set<string>();
@@ -2585,7 +2591,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.ensureStartupMcpConnection(scope),
       ),
     );
-    await this.refreshAskAgentMcpConnections();
+    // The Ask Agent hub connects lazily on its first browser request.
 
     // File watchers for hot reload
     for (const scope of projectScopes.values()) {
@@ -2946,9 +2952,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     })?.name;
   }
 
-  private async refreshAskAgentMcpConnections(
+  /** Connects the Ask Agent hub on first use; later calls reuse that connection. */
+  private ensureAskAgentMcpConnected(): Promise<void> {
+    return this.askAgentMcpConnection ?? this.refreshAskAgentMcpConnections();
+  }
+
+  private refreshAskAgentMcpConnections(
     options: McpConnectOptions = { trigger: "ask-agent-refresh" },
   ): Promise<void> {
+    const connection = this.connectAskAgentMcp(options);
+    this.askAgentMcpConnection = connection;
+    return connection;
+  }
+
+  private async connectAskAgentMcp(options: McpConnectOptions): Promise<void> {
     if (!this.askAgentMcpHub) return;
     try {
       const configs = await loadAskAgentMcpConfigs();
@@ -5541,6 +5558,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!toolName) return { ok: false, error: "invalid_request" };
     const sessionId =
       input.sessionId?.trim() || "browser-gateway:ask-agent:mcp";
+    await this.ensureAskAgentMcpConnected();
     const mcpToolDefs = this.askAgentMcpHub.getToolDefs();
     const codeMode = BUILT_IN_MODES[0];
     const tools = getAgentTools(codeMode, mcpToolDefs).filter(
@@ -5575,6 +5593,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     infos: McpServerInfo[];
     configSnapshot: McpConfigSnapshot;
   }> {
+    await this.ensureAskAgentMcpConnected();
     const infos = this.askAgentMcpHub.getServerInfos();
     return {
       ok: true,
@@ -5635,12 +5654,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public submitBrowserAskAgentMcpTools(): {
+  public async submitBrowserAskAgentMcpTools(): Promise<{
     ok: boolean;
     tools: ReturnType<typeof getAgentTools>;
     parallelSafeToolNames: string[];
     parallelSafeServerNames: string[];
-  } {
+  }> {
+    await this.ensureAskAgentMcpConnected();
     const parallelSafeServerNames =
       this.askAgentMcpHub.getParallelToolCallServerNames();
     const parallelSafeServers = new Set(parallelSafeServerNames);
@@ -7103,6 +7123,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ),
         );
         const reloadAskAgentMcp = () => {
+          // Before first use there is nothing to reload; the first request
+          // reads the current config.
+          if (!this.askAgentMcpConnection) return;
           void this.refreshAskAgentMcpConnections({
             interactiveForNewServers: true,
             trigger: "config-watcher",
