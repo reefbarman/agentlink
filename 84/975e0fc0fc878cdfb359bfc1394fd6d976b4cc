@@ -1,0 +1,23 @@
+package-lock.json
+  s_d3c22514869777::t_dedf61eaec9d71 3,9
+package.json
+  s_d3c22514869777::t_8444a6acb447f7 5
+resources/builtin-skills/documentation/references/package-contract.md
+  s_d3c22514869777::t_c1a18e384a93c5 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84975e0fc0fc878cdfb359bfc1394fd6d976b4cc",
+  "prompts": {},
+  "sessions": {
+    "s_d3c22514869777": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "76e30927-4392-4073-9cb3-5c9de9fb63d2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
