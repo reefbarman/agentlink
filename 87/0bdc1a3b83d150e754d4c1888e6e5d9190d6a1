@@ -1,0 +1,57 @@
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 2619
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 90
+src/tools/findAndReplace.test.ts
+  h_e08a86bb3a33a2 396-427
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1117
+src/tools/findAndReplace.ts
+  h_e08a86bb3a33a2 42-53,58-70,77,80
+  s_e86caffaec593c::t_4046f12f62b301 57,71-76,79
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 22,315-361
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 385,389-390,396-397,413-415,420-422,783,2771-2795
+  s_e86caffaec593c::t_771317c608aa79 2796-2798
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 162-188
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 1230-1235,2594,2955-2957,2960,2963-2968,5561,5596,5657,5662-5663,7126-7128
+  s_e86caffaec593c::t_fd995b81b8578f 2958-2959
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_e5ac9aec9e277a::t_b1fffeae311f27 682-684,727-729
+resources/builtin-skills/documentation/references/release-notes.md
+  s_e86caffaec593c::t_7aa7307d2ce66b 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e5ac9aec9e277a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1457edef-8e01-4b72-b334-f3db8bef68ee",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_e86caffaec593c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7d3d3478-fa05-4c73-a66b-0e245539f694",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
