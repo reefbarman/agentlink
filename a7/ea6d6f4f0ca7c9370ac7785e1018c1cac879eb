@@ -1,0 +1,98 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 14,16
+apps/server/src/pushService.test.ts
+  h_e08a86bb3a33a2 295-314
+src/browser-gateway/webview/DesktopSidebar.test.tsx
+  h_e08a86bb3a33a2 1-7,131-198
+  s_aac135dca3a129::t_572c1d076bdec9 199-200
+src/browser-gateway/webview/AssistantNotifications.tsx
+  h_e08a86bb3a33a2 24-25,30,40,207-208,220-221,224,232,322
+  s_223ad018b07196::t_1e2cc338b8fbc2 23,26,206,209
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 4-5,11,116-250,252-265
+  s_209ebc2f6501b2::t_c466993b17e3f7 2-3,6
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 3,93,97-100,108-109,150-153,404-406,411-416,425-427,443,456,471-475,481,500-508,1141,1147-1148,1221,1230-1232,1239-1246,1248-1249,1255,1266-1275,1278-1279
+  s_22b47ce406ea66::t_c0ce050dcecee9 92,94-96,403,476-480,1222,1233-1235,1247,1250-1252,1254,1256-1264,1276-1277
+src/browser-gateway/webview/AssistantTasks.tsx
+  h_e08a86bb3a33a2 1-820
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 69-71,104,997-998,1011-1012,1020,1027-1042,1146-1149,1221
+  s_209ebc2f6501b2::t_32f285326f3167 67-68,72,999-1010,1043-1047
+src/browser-gateway/webview/AssistantNotifications.test.tsx
+  h_e08a86bb3a33a2 166-169,174
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 389-394,908-909,1568-1609,1614-1618,1636-1637,1706-1708,2264-2266,2269-2270,2275-2281,2283,2318-2351,2778-2948
+  s_88c16f21bc3a48::t_95e71fefa9f9f4 1610-1611,1638-1639,1709-1710,2263,2267,2352-2353
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 445-481,485-500
+src/browser-gateway/webview/AssistantTasks.test.tsx
+  h_e08a86bb3a33a2 1-305
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 5,10-142,316
+  s_aac135dca3a129::t_891211f7304a5b 9
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 2,11-13,27-32,46-47,59,66-67,158-312,357,361-364,390-391
+  s_209ebc2f6501b2::t_7ea88602116baf 26,392
+apps/server/README.md
+  h_e08a86bb3a33a2 415-416,419,422-428
+  s_22b47ce406ea66::t_64e8b23a9185be 417-418,420-421
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 155-159,163-165,168-170,195-197
+  s_209ebc2f6501b2::t_a4f7fd423eeeb9 162,193-194
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 14,16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_209ebc2f6501b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c3c49b2-f262-4676-b3e9-2a00c5cdf5e9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_223ad018b07196": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea2c92f1-f2d6-4efe-bf8c-4631a99f48cf",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_22b47ce406ea66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d103f176-a8ad-44da-9980-891af2d4d087",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_88c16f21bc3a48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7eeb4210-8863-4659-85cc-24b033605a6c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_aac135dca3a129": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f9278e5d-7f38-461f-8b5a-57dd7afae46d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
