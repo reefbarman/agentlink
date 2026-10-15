@@ -111,6 +111,12 @@ export type EmbeddedAgentTurnEvent =
       readonly text: string;
     })
   | (EmbeddedAgentTurnEventBase & {
+      /** A message the user sent while the turn ran was admitted into it. */
+      readonly type: "user.interjected";
+      readonly interjectionId: string;
+      readonly text: string;
+    })
+  | (EmbeddedAgentTurnEventBase & {
       readonly type: "tool.requested" | "tool.started";
       readonly toolCallId: string;
       readonly toolName: string;
@@ -880,6 +886,12 @@ export function reduceEmbeddedAgentTurnEvent(
       };
     case "text.delta":
       return { ...base, blocks: appendText(base.blocks, event.text) };
+    case "user.interjected":
+      // The user's own message; surfaces show it where they keep the
+      // transcript. The assistant's reply continues in a new text block.
+      return base.blocks.at(-1)?.type === "text"
+        ? { ...base, blocks: [...base.blocks, { type: "text", text: "" }] }
+        : base;
     case "tool.requested":
       return {
         ...base,
@@ -997,6 +1009,10 @@ function isEmbeddedAgentTurnEvent(
       );
     case "text.delta":
       return typeof value.text === "string";
+    case "user.interjected":
+      return (
+        isNonEmptyString(value.interjectionId) && typeof value.text === "string"
+      );
     case "tool.requested":
     case "tool.started":
     case "tool.completed":

@@ -497,6 +497,13 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
       };
     case "text.delta":
       return { ...base, type: event.type, text: event.text };
+    case "user.interjected":
+      return {
+        ...base,
+        type: event.type,
+        interjectionId: event.interjectionId,
+        text: event.text,
+      };
     case "tool.requested":
       return {
         ...base,

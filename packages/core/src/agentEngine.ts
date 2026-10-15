@@ -1023,6 +1023,9 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
           durableState = structuredClone(state);
           args.runOptions.onDurableState?.(structuredClone(state));
         },
+        ...(args.runOptions.takeInterjections
+          ? { takeInterjections: args.runOptions.takeInterjections }
+          : {}),
       });
       stream = prepared.stream;
       let pendingTerminalEvent: AgentTurnEvent | undefined;

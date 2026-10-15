@@ -151,6 +151,12 @@ export interface TaskRunner {
    * on the same clone and branch; it is then checked, validated, reviewed
    * and (with permission) published to the same pull request again.
    */
+  /**
+   * The owner wrote in the task's chat. While it works, the message goes to
+   * the chat when its current step ends (before it can be called ready);
+   * otherwise it continues the task like `continueTask`.
+   */
+  steer(taskId: string, instructions: string): Promise<TaskRun>;
   continueTask(
     taskId: string,
     instructions: string,
@@ -562,6 +568,12 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         const outcome = await runTurn(entry, sessionId, prompt, "implement");
         if (outcome.state !== "implementing") return outcome;
         if (outcome.summary) await save(entry, { summary: outcome.summary });
+        // The owner wrote in the chat while it worked: that goes first.
+        const steering = await takeSteering(entry);
+        if (steering !== undefined) {
+          prompt = steering;
+          continue;
+        }
       }
       const inspection = await workspaces.inspect(entry.task);
       await save(entry, {
@@ -649,8 +661,22 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         prompt = reviewFixPrompt(entry.task, blocking, commands);
         continue;
       }
+      // Written while it validated or was reviewed: not ready yet.
+      const steering = await takeSteering(entry);
+      if (steering !== undefined) {
+        prompt = steering;
+        continue;
+      }
       return { state: "ready", openFindings: blocking.length };
     }
+  };
+
+  /** The owner's message waiting for the chat, as its next prompt. */
+  const takeSteering = async (entry: LiveTask) => {
+    const pending = entry.task.pendingFollowUp;
+    if (pending === undefined) return undefined;
+    await save(entry, { pendingFollowUp: undefined });
+    return followUpInstructionPrompt(entry.task, pending);
   };
 
   /** The repository's permission and connection, if it may publish. */
@@ -1007,7 +1033,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     return task;
   };
 
-  return {
+  const runner: TaskRunner = {
     async start() {
       const at = now();
       for (const task of store.list()) {
@@ -1032,6 +1058,31 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           // A broken listener must not stop the start.
         }
       }
+    },
+    async steer(taskId, instructions) {
+      if (closed) throw new HttpError(503, "server_closing");
+      const task = requireTask(taskId);
+      const entry = live.get(taskId);
+      const text = instructions.trim();
+      if (!text) throw new TaskInputError("instructions_required");
+      if (text.length > MAX_FOLLOW_UP_LENGTH) {
+        throw new TaskInputError("instructions_too_long");
+      }
+      // Not working: the message continues it instead.
+      if (!entry || entry.stopping || entry.mode === "publish") {
+        return runner.continueTask(taskId, text);
+      }
+      const at = now();
+      const pending = entry.task.pendingFollowUp;
+      await save(entry, {
+        followUps: [
+          ...(entry.task.followUps ?? []),
+          { instructions: text, at },
+        ].slice(-MAX_FOLLOW_UPS),
+        // Several messages before the chat's turn ends arrive together.
+        pendingFollowUp: pending ? `${pending}\n\n${text}` : text,
+      });
+      return requireTask(task.id);
     },
     async continueTask(taskId, instructions, extras = {}) {
       if (closed) throw new HttpError(503, "server_closing");
@@ -1142,6 +1193,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       await store.flush();
     },
   };
+  return runner;
 }
 
 /** Why the finished chat's work is not acceptable yet, if it is not. */
@@ -1238,6 +1290,8 @@ const CONTINUABLE_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   "blocked_review",
   "blocked_auth",
   "blocked_quota",
+  "cancelled",
+  "interrupted",
 ]);
 
 export function followUpInstructionPrompt(

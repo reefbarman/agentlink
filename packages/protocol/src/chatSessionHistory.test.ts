@@ -21,6 +21,7 @@ describe("chat session history protocol", () => {
       lastActiveAt: 2,
       activity: "unread",
       scheduled: true,
+      kind: "job_run",
     };
 
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
@@ -40,6 +41,10 @@ describe("chat session history protocol", () => {
       | "lastActiveAt"
       | "activity"
       | "scheduled"
+      | "kind"
+    >();
+    expectTypeOf<ChatSessionHistorySummary["kind"]>().toEqualTypeOf<
+      "chat" | "task" | "job_run" | undefined
     >();
     expectTypeOf<ChatSessionHistorySummary["activity"]>().toEqualTypeOf<
       "running" | "needs-you" | "unread" | undefined

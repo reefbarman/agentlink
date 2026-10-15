@@ -831,6 +831,23 @@ export class BrowserGatewayAskAgentSessionStore {
     return this.getActiveSession().queuedMessages?.shift() ?? null;
   }
 
+  /**
+   * Remove one queued message from whichever chat holds it, for example one
+   * a running turn took in before its turn to be sent came.
+   */
+  removeQueuedMessage(
+    messageId: string,
+  ): BrowserGatewayAskAgentQueuedMessage | null {
+    for (const session of this.sessions) {
+      const queue = session.queuedMessages;
+      const index = queue?.findIndex((message) => message.id === messageId);
+      if (queue && index !== undefined && index >= 0) {
+        return queue.splice(index, 1)[0] ?? null;
+      }
+    }
+    return null;
+  }
+
   getAvailableModels(): WebviewModelInfo[] {
     return this.availableModels.map((model) => ({
       ...model,

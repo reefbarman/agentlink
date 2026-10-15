@@ -5,6 +5,7 @@ import {
   type AgentPrincipal,
   type AgentTurnAttachment,
   type AgentTurnEvent,
+  type AgentTurnInterjection,
   type AgentTurnResult,
   type AuthorizeToolCallRequest,
   type CoreReasoningEffort,
@@ -340,6 +341,8 @@ export interface WorkspaceHost {
       readonly attachments?: readonly AgentTurnAttachment[];
       readonly signal?: AbortSignal;
       readonly onEvent?: (event: AgentTurnEvent) => void;
+      /** Messages the user sent while the turn runs, admitted into it. */
+      readonly takeInterjections?: () => readonly AgentTurnInterjection[];
     },
   ): Promise<AgentTurnResult>;
   cancel(sessionId: string, reason?: string): Promise<void>;
@@ -1316,6 +1319,9 @@ export async function createWorkspaceHost(
           modelRequest: {
             conversationState: getResponsesConversationState(sessionId),
           },
+          ...(runOptions.takeInterjections
+            ? { takeInterjections: runOptions.takeInterjections }
+            : {}),
         },
       );
       return await collectTurn(stream, runOptions.onEvent);
@@ -1349,6 +1355,8 @@ function serializeMcpToolExecution(
 export interface WorkspaceResumeInteractionOptions {
   readonly signal?: AbortSignal;
   readonly onEvent?: (event: AgentTurnEvent) => void;
+  /** Messages the user sent while the turn runs, admitted into it. */
+  readonly takeInterjections?: () => readonly AgentTurnInterjection[];
   /**
    * The exact interaction the decision answers. When set, the resume fails
    * with code `stale_interaction` unless it is still the pending interaction,
@@ -1417,6 +1425,9 @@ async function resumeWorkspaceInteraction(
     {
       signal: runOptions.signal,
       modelRequest: { conversationState },
+      ...(runOptions.takeInterjections
+        ? { takeInterjections: runOptions.takeInterjections }
+        : {}),
     },
   );
   return await collectTurn(stream, runOptions.onEvent);

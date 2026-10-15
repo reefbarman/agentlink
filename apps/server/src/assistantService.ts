@@ -105,6 +105,7 @@ import {
   assistantRoutingInstructions,
   createRepositoryTools,
 } from "./repositoryTools.js";
+import { HttpError } from "./httpJson.js";
 import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
@@ -1071,8 +1072,20 @@ export async function startAssistantService(
           inboxUnread: inbox.unreadCount(),
           revision: assistantRevision,
         }),
-        // Stop in a run's chat stops the run, recorded as cancelled.
+        // Stop in a run's chat stops the run, recorded as cancelled; in a
+        // task's chat, it stops the task (which can be resumed).
         stopRun: async (workspaceSessionId) => {
+          const task = taskStore
+            .list()
+            .find(
+              (candidate) =>
+                candidate.sessionId === workspaceSessionId &&
+                isActiveTask(candidate),
+            );
+          if (task) {
+            await taskRunner?.stop(task.id);
+            return;
+          }
           const job = jobStore
             .list()
             .find((candidate) =>
@@ -1087,6 +1100,17 @@ export async function startAssistantService(
         },
         chatTasks: (workspaceSessionId) =>
           chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
+        // Written in a task's own chat: its runner reads it in its next
+        // step, or continues the task with it once it has stopped.
+        linkedMessage: async (workspaceSessionId, text) => {
+          const task = taskStore
+            .list()
+            .find((candidate) => candidate.sessionId === workspaceSessionId);
+          if (!task || !taskRunner) {
+            throw new HttpError(409, "ask_agent_turn_in_progress");
+          }
+          await taskRunner.steer(task.id, text);
+        },
       });
     for (const { id } of hosts) {
       const opened = await openBridge(id);
@@ -1201,6 +1225,42 @@ export async function startAssistantService(
         detach: () => auth,
       };
       return auth;
+    };
+    /** Whether each task was working when last seen, to follow or adopt its chat. */
+    const taskChatActivity = new Map<string, boolean>();
+    /**
+     * A task's own chat is a chat like any other: listed (tagged as a task)
+     * in the chat list it was started from, or the first, live while it
+     * works, and written to like the VS Code chat it is.
+     */
+    const showTaskChat = (task: TaskRun) => {
+      const sessionId = task.sessionId;
+      if (!sessionId) return;
+      const bridge =
+        bridges.get(task.origin?.projectId ?? "") ??
+        bridges.values().next().value;
+      const auth = ownerDeliveryAuth();
+      if (!bridge || !auth) return;
+      const title = `Task: ${task.objective.split("\n", 1)[0]!.slice(0, 80)}`;
+      const active = isActiveTask(task);
+      const was = taskChatActivity.get(task.id);
+      taskChatActivity.set(task.id, active);
+      void (async () => {
+        await bridge.linkSession(auth, sessionId, {
+          projectId: task.projectId,
+          title,
+        });
+        if (active && was !== true) {
+          bridge.followSession(auth, sessionId, {
+            title,
+            prompt: task.objective,
+          });
+        } else if (!active && was === true) {
+          await bridge.adoptSession(auth, sessionId, title);
+        }
+      })().catch((error: unknown) => {
+        log(`Could not show task ${task.id}'s chat: ${message(error)}`);
+      });
     };
     // A task's outcomes go back to the chat that started it, once each.
     const taskDeliveries = await openTaskDeliveries({
@@ -1335,14 +1395,22 @@ export async function startAssistantService(
               assistantChanged();
               recordTaskInInbox(task);
               taskDeliveries.taskChanged(task);
+              showTaskChat(task);
             },
           });
           return {
             runner: {
               ...runner,
               async delete(taskId: string) {
+                const sessionId = taskStore.get(taskId)?.sessionId;
                 await runner.delete(taskId);
                 taskDeliveries.forget(taskId);
+                taskChatActivity.delete(taskId);
+                if (sessionId) {
+                  for (const bridge of bridges.values()) {
+                    await bridge.unlinkSession(sessionId);
+                  }
+                }
               },
             },
             workspaces,
@@ -1473,6 +1541,7 @@ export async function startAssistantService(
         await tasks.openTaskProject(task).catch((error: unknown) => {
           log(`Could not open task ${task.id}'s clone: ${message(error)}`);
         });
+        showTaskChat(task);
       }
       // Outcomes reached while the server was down, not yet delivered.
       taskDeliveries.start(taskStore.list());

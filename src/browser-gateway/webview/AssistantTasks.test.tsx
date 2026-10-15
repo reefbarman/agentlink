@@ -376,4 +376,23 @@ describe("TasksPanel", () => {
     fireEvent.click(screen.getByText("Back to the task", { exact: false }));
     expect(await screen.findByText("npm test")).toBeTruthy();
   });
+
+  it("opens a task's own chat in the chat list, where it can be written to", async () => {
+    stubFetch({
+      "GET /api/tasks/t1": () =>
+        detail(task({ origin: { projectId: "home", sessionId: "chat-1" } })),
+    });
+    const openTaskChat = vi.fn();
+    render(
+      <TasksPanel
+        revision={0}
+        onClose={() => undefined}
+        initialTaskId="t1"
+        openTaskChat={openTaskChat}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Open chat"));
+    expect(openTaskChat).toHaveBeenCalledWith("home", "impl-1");
+    expect(screen.queryByText("Implementation chat")).toBeNull();
+  });
 });

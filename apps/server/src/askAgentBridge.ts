@@ -4,13 +4,17 @@ import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-g
 
 import { isJobChangeDisplay } from "./jobChangeDisplay.js";
 import { isTaskStartDisplay } from "./taskStartDisplay.js";
-import type { ChatSessionActivity } from "@agentlink/protocol/chat-session-history";
+import type {
+  ChatSessionActivity,
+  ChatSessionKind,
+} from "@agentlink/protocol/chat-session-history";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import {
   isCoreReasoningEffort,
   type CoreReasoningEffort,
   type EmbeddedAgentTurnEvent,
 } from "@agentlink/protocol";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -163,7 +167,19 @@ export interface AskAgentBridgeOptions {
    * first, shown as live cards above the composer.
    */
   readonly chatTasks?: (workspaceSessionId: string) => readonly ChatTaskCard[];
+  /**
+   * A message the owner wrote in a linked chat (a coding task's). The task
+   * runner takes it (steering a working task, continuing a finished one),
+   * so the server's checks still run; the chat then follows its work.
+   */
+  readonly linkedMessage?: (
+    workspaceSessionId: string,
+    text: string,
+  ) => Promise<void>;
 }
+
+/** What a chat is, for badges and filters in the chat list. */
+export type ChatKind = ChatSessionKind;
 
 /** A coding task as the chat that started it shows it. */
 export interface ChatTaskCard {
@@ -208,6 +224,17 @@ export interface AskAgentBridge {
   /** Make a chat the open one, for links from the inbox or jobs. */
   openSession(auth: AssistantServerAuth, sessionId: string): Promise<boolean>;
   /**
+   * Show another project's chat (a coding task's implementation chat) in
+   * this chat list, as a chat the owner can open, read and write to.
+   */
+  linkSession(
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    link: { readonly projectId: string; readonly title: string },
+  ): Promise<void>;
+  /** Remove a linked chat (its task was deleted). */
+  unlinkSession(workspaceSessionId: string): Promise<void>;
+  /**
    * Hand a coding task's outcome to the chat that started it: a notice in
    * the chat, then a turn so the assistant reports it. Runs after any turn
    * already running or queued there. `chat_missing` when the chat is gone.
@@ -237,6 +264,8 @@ interface BridgeState {
   unread: string[];
   /** Workspace sessions started by scheduled jobs. */
   scheduled: string[];
+  /** Other projects' chats shown here (coding tasks), by workspace session. */
+  linked: Record<string, { projectId: string; kind: "task" }>;
 }
 
 type ApprovalMode = "autonomous" | "ask";
@@ -252,7 +281,8 @@ interface FollowedRun {
   readonly workspaceSessionId: string;
   /** Held by the store too: its updates land here. */
   readonly session: BrowserGatewayAskAgentPersistedSession;
-  readonly messageId: string;
+  /** Where streamed text goes; a new message after the owner writes. */
+  messageId: string;
   readonly toolStarts: Map<string, number>;
   approval:
     | (PendingInteraction & { readonly request: ApprovalRequest })
@@ -277,6 +307,17 @@ export async function createAskAgentBridge(
     options.models.available.map((model) => [modelKey(model), model]),
   );
   const state = await readState(options.stateFile);
+  /** The project a workspace session belongs to: this one, or a link's. */
+  const projectOf = (workspaceSessionId: string) =>
+    state.linked[workspaceSessionId]?.projectId ?? projectId;
+  const kindOf = (workspaceSessionId: string | undefined): ChatKind =>
+    !workspaceSessionId
+      ? "chat"
+      : state.linked[workspaceSessionId]
+        ? "task"
+        : state.scheduled.includes(workspaceSessionId)
+          ? "job_run"
+          : "chat";
   /** Last known model of each workspace session. */
   const sessionModels = new Map<string, AgentModelReference>();
   /** Last known thinking level of each workspace session. */
@@ -357,8 +398,27 @@ export async function createAskAgentBridge(
   let pendingInteraction: PendingInteraction | undefined;
   /** Scheduled runs' chats shown live, by workspace session. */
   const followed = new Map<string, FollowedRun>();
+  /** Linked chats whose history is read before they are followed. */
+  const pendingFollows = new Set<string>();
   /** The UI session whose turn is running, if any. */
   let runningSession: string | undefined;
+  /** The workspace session of that turn, once it has started. */
+  let runningWorkspaceSession: string | undefined;
+  /**
+   * Queued messages a running turn took in (VS Code's interjection): their
+   * sends must not run them as turns of their own afterwards.
+   */
+  const admittedInterjections = new Set<string>();
+  /** Interjections already in their chat (sent into a task's chat). */
+  const shownInterjections = new Set<string>();
+  /**
+   * Messages handed to a working task's turn and not yet taken: given to the
+   * task's runner instead if that turn ends first.
+   */
+  const pendingTaskInterjections = new Map<
+    string,
+    { readonly workspaceSessionId: string; readonly text: string }
+  >();
   let loaded: Promise<void> | undefined;
   let closed = false;
   /** Serializes turns: queued sends wait here for the previous one. */
@@ -461,7 +521,11 @@ export async function createAskAgentBridge(
   ): Promise<BrowserGatewayAskAgentPersistedSession | undefined> => {
     let read;
     try {
-      read = await operations.readSession(auth, projectId, sessionId);
+      read = await operations.readSession(
+        auth,
+        projectOf(sessionId),
+        sessionId,
+      );
     } catch {
       return undefined;
     }
@@ -476,7 +540,11 @@ export async function createAskAgentBridge(
     // Agents that ended before this server started are not reported
     // again; ones still running are, when they finish.
     try {
-      const agents = await operations.listAgents(auth, projectId, sessionId);
+      const agents = await operations.listAgents(
+        auth,
+        projectOf(sessionId),
+        sessionId,
+      );
       for (const agent of agents) {
         if (isTerminalAgent(agent)) {
           delivery.handled.add(agent.childSessionId);
@@ -496,7 +564,8 @@ export async function createAskAgentBridge(
       createdAt: read.createdAt,
       lastActiveAt: read.updatedAt,
       messages,
-      nextMessageSequence: 1,
+      // Past every ID in the history: new messages must not reuse one.
+      nextMessageSequence: messages.length + 1,
     };
   };
 
@@ -515,6 +584,16 @@ export async function createAskAgentBridge(
           auth,
           summary.sessionId,
           reverse.get(summary.sessionId),
+        );
+        if (session) sessions.push(session);
+      }
+      // Other projects' chats linked here (coding tasks).
+      for (const workspaceSessionId of Object.keys(state.linked)) {
+        if (hidden.has(workspaceSessionId)) continue;
+        const session = await readHistorySession(
+          auth,
+          workspaceSessionId,
+          undefined,
         );
         if (session) sessions.push(session);
       }
@@ -549,7 +628,11 @@ export async function createAskAgentBridge(
         if (!sessionId || !auth || closed) return;
         let records: readonly WorkspaceBackgroundRecord[];
         try {
-          records = await operations.listAgents(auth, projectId, sessionId);
+          records = await operations.listAgents(
+            auth,
+            projectOf(sessionId),
+            sessionId,
+          );
         } catch {
           // Keep the last known cards; a later event or request retries.
           return;
@@ -589,7 +672,7 @@ export async function createAskAgentBridge(
     agentWatch.sessionId = sessionId;
     agentWatch.records = [];
     if (!sessionId || closed) return;
-    const key = operations.sessionKey(projectId, sessionId);
+    const key = operations.sessionKey(projectOf(sessionId), sessionId);
     agentWatch.subscription = options.events.subscribe(
       key,
       options.events.latestSequence(key),
@@ -627,7 +710,10 @@ export async function createAskAgentBridge(
 
   const trackParent = (workspaceSessionId: string) => {
     if (delivery.parents.has(workspaceSessionId) || closed) return;
-    const key = operations.sessionKey(projectId, workspaceSessionId);
+    const key = operations.sessionKey(
+      projectOf(workspaceSessionId),
+      workspaceSessionId,
+    );
     delivery.parents.set(
       workspaceSessionId,
       options.events.subscribe(
@@ -646,7 +732,11 @@ export async function createAskAgentBridge(
     if (!auth || closed || delivery.queued.has(workspaceSessionId)) return;
     let agents: readonly WorkspaceBackgroundRecord[];
     try {
-      agents = await operations.listAgents(auth, projectId, workspaceSessionId);
+      agents = await operations.listAgents(
+        auth,
+        projectOf(workspaceSessionId),
+        workspaceSessionId,
+      );
     } catch {
       return;
     }
@@ -691,7 +781,7 @@ export async function createAskAgentBridge(
     if (!storeSessionId) return;
     const agents = await operations.listAgents(
       auth,
-      projectId,
+      projectOf(workspaceSessionId),
       workspaceSessionId,
     );
     // Re-read now: the parent may have collected a result in its last turn.
@@ -906,11 +996,16 @@ export async function createAskAgentBridge(
     if (existing) {
       const current = sessionModels.get(existing);
       if (!current || modelKey(current) !== modelKey(model)) {
-        await operations.setModel(auth, projectId, existing, model);
+        await operations.setModel(auth, projectOf(existing), existing, model);
         sessionModels.set(existing, model);
       }
       if (effort && sessionEfforts.get(existing) !== effort) {
-        await operations.setReasoningEffort(auth, projectId, existing, effort);
+        await operations.setReasoningEffort(
+          auth,
+          projectOf(existing),
+          existing,
+          effort,
+        );
         sessionEfforts.set(existing, effort);
       }
       return existing;
@@ -933,7 +1028,7 @@ export async function createAskAgentBridge(
       pendingMode
         ? await operations.setApprovalMode(
             auth,
-            projectId,
+            projectOf(sessionId),
             sessionId,
             pendingMode,
           )
@@ -959,7 +1054,7 @@ export async function createAskAgentBridge(
         workspaceSessionId,
         await operations.setApprovalMode(
           auth,
-          projectId,
+          projectOf(workspaceSessionId),
           workspaceSessionId,
           mode,
         ),
@@ -1023,6 +1118,42 @@ export async function createAskAgentBridge(
         { label: "Deny", value: "reject", isDanger: true },
       ],
     };
+  };
+
+  /**
+   * A message the user sent into a running turn was taken in: show it where
+   * it landed (once), drop it from the queue, and return the message the
+   * rest of the reply streams into, below it.
+   */
+  const admitInterjection = (
+    storeSessionId: string,
+    interjectionId: string,
+    text: string,
+  ): string => {
+    store.removeQueuedMessage(interjectionId);
+    // A task chat's message has no send waiting to skip it afterwards.
+    if (!pendingTaskInterjections.delete(interjectionId)) {
+      admittedInterjections.add(interjectionId);
+    }
+    const at = now();
+    const active = store.getActiveSessionId() === storeSessionId;
+    if (!shownInterjections.delete(interjectionId)) {
+      if (active) {
+        store.appendUserMessage({ id: interjectionId, text, now: at });
+      } else {
+        store.appendSessionMessage(storeSessionId, {
+          role: "user",
+          content: text,
+          blocks: [{ type: "text", text }],
+          now: at,
+        });
+      }
+    }
+    const reply = store.startAssistantMessage(
+      active ? { now: at } : { now: at, sessionId: storeSessionId },
+    );
+    schedule();
+    return reply.id;
   };
 
   /**
@@ -1102,8 +1233,15 @@ export async function createAskAgentBridge(
     readonly turn: AskAgentControllerTurn;
     readonly text: string;
   }): Promise<void> => {
-    const { messageId, turn, workspaceSessionId } = params;
-    const key = operations.sessionKey(projectId, workspaceSessionId);
+    const { turn, workspaceSessionId } = params;
+    // Moves below each message the user sends into the turn.
+    let messageId = params.messageId;
+    const storeSessionId = runningSession ?? store.getActiveSessionId();
+    runningWorkspaceSession = workspaceSessionId;
+    const key = operations.sessionKey(
+      projectOf(workspaceSessionId),
+      workspaceSessionId,
+    );
     const toolStarts = new Map<string, number>();
     let settle!: () => void;
     const settled = new Promise<void>((resolve) => {
@@ -1118,6 +1256,14 @@ export async function createAskAgentBridge(
     const onTurnEvent = (event: EmbeddedAgentTurnEvent) => {
       if (projectTurnContent(messageId, toolStarts, event)) return;
       switch (event.type) {
+        case "user.interjected":
+          messageId = admitInterjection(
+            storeSessionId,
+            event.interjectionId,
+            event.text,
+          );
+          controller.retargetTurn(turn, messageId);
+          return;
         case "interaction.required": {
           pendingInteraction = {
             workspaceSessionId,
@@ -1204,7 +1350,7 @@ export async function createAskAgentBridge(
     try {
       await operations.startTurn(
         params.auth,
-        projectId,
+        projectOf(workspaceSessionId),
         workspaceSessionId,
         params.text,
       );
@@ -1223,6 +1369,9 @@ export async function createAskAgentBridge(
       subscription.unsubscribe();
       if (pendingInteraction?.workspaceSessionId === workspaceSessionId) {
         pendingInteraction = undefined;
+      }
+      if (runningWorkspaceSession === workspaceSessionId) {
+        runningWorkspaceSession = undefined;
       }
     }
   };
@@ -1246,8 +1395,61 @@ export async function createAskAgentBridge(
     const requestedSessionId =
       typeof body.sessionId === "string" ? body.sessionId.trim() : "";
     if (closed) throw new HttpError(503, "server_closing");
+    const targetSessionId = requestedSessionId || store.getActiveSessionId();
+    // A coding task's chat: its runner takes the message, so the server's
+    // checks still run. Working, it reads it when its current step ends.
+    const linkedSessionId = workspaceSessionFor(targetSessionId);
+    if (linkedSessionId && state.linked[linkedSessionId]) {
+      if (!options.linkedMessage) {
+        throw new HttpError(409, "ask_agent_turn_in_progress");
+      }
+      if (!(await auth.revalidate()).valid) {
+        throw new HttpError(401, "authentication_required");
+      }
+      const run = followed.get(linkedSessionId);
+      // Working: its running turn takes the message in at its next break,
+      // like a queued message in VS Code. Otherwise its runner gets it.
+      const interjectionId =
+        id ?? `ask-agent-interjection-${now()}-${randomSuffix()}`;
+      const queued = run
+        ? await operations
+            .interject(auth, projectOf(linkedSessionId), linkedSessionId, {
+              id: interjectionId,
+              text,
+            })
+            .then((result) => result.queued)
+            .catch(() => false)
+        : false;
+      if (queued) {
+        shownInterjections.add(interjectionId);
+        pendingTaskInterjections.set(interjectionId, {
+          workspaceSessionId: linkedSessionId,
+          text,
+        });
+      } else {
+        await options.linkedMessage(linkedSessionId, text);
+      }
+      // Shown now; the chat's record replaces it once the work is read.
+      store.appendSessionMessage(targetSessionId, {
+        role: "user",
+        content: text,
+        blocks: [{ type: "text", text }],
+        now: now(),
+      });
+      if (run && !queued) {
+        // Its streamed reply goes on below the message.
+        run.messageId = store.startAssistantMessage({
+          now: now(),
+          sessionId: linkedSessionId,
+        }).id;
+      }
+      markRead(targetSessionId);
+      const publication = await publishNow();
+      sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
+      return;
+    }
     // A scheduled run is working in that chat: write once it has finished.
-    if (followed.has(requestedSessionId || store.getActiveSessionId())) {
+    if (followed.has(targetSessionId)) {
       throw new HttpError(409, "ask_agent_turn_in_progress");
     }
     if (
@@ -1273,12 +1475,21 @@ export async function createAskAgentBridge(
     ) {
       throw new HttpError(409, "ask_agent_turn_in_progress");
     }
-    const queueId = id ?? `ask-agent-queued-${now()}-${Math.random()}`;
+    const queueId = id ?? `ask-agent-queued-${now()}-${randomSuffix()}`;
     if (busy) {
       if (!store.enqueueMessage({ id: queueId, text, source: "browser" })) {
         throw new HttpError(409, "queue_full");
       }
       void publishNow();
+      // Also offered to the running turn, which takes it in at its next
+      // break (VS Code's interjection); if it ends first, the message runs
+      // as the next turn from the queue, as before.
+      const running = runningWorkspaceSession;
+      if (running) {
+        void operations
+          .interject(auth, projectOf(running), running, { id: queueId, text })
+          .catch(() => undefined);
+      }
     }
     const previous = turnChain;
     let release!: () => void;
@@ -1288,8 +1499,18 @@ export async function createAskAgentBridge(
     try {
       await previous;
       if (busy) {
-        // FIFO: this message is first in the queue now.
-        store.dequeueMessage();
+        // Taken in by the turn it waited for: already answered there.
+        if (admittedInterjections.delete(queueId)) {
+          const publication = await publishNow();
+          if (!response.writableEnded && !response.destroyed) {
+            sendJson(response, 200, {
+              ok: true,
+              snapshot: publication.snapshot,
+            });
+          }
+          return;
+        }
+        store.removeQueuedMessage(queueId);
         if (auth.signal.aborted || closed) {
           void publishNow();
           return;
@@ -1357,7 +1578,7 @@ export async function createAskAgentBridge(
       }
       await operations.answerAgentApproval(
         auth,
-        projectId,
+        projectOf(agentWatch.sessionId ?? ""),
         watchedAgent(agentApproval.childSessionId),
         agentApproval.childSessionId,
         {
@@ -1378,7 +1599,7 @@ export async function createAskAgentBridge(
       if (!run || !waiting) throw new HttpError(404, "approval_not_found");
       await operations.answerInteraction(
         auth,
-        projectId,
+        projectOf(run.workspaceSessionId),
         run.workspaceSessionId,
         {
           interactionId: waiting.interactionId,
@@ -1398,7 +1619,7 @@ export async function createAskAgentBridge(
     }
     await operations.answerInteraction(
       auth,
-      projectId,
+      projectOf(pending.workspaceSessionId),
       pending.workspaceSessionId,
       {
         interactionId: pending.interactionId,
@@ -1426,7 +1647,11 @@ export async function createAskAgentBridge(
       if (options.stopRun) await options.stopRun(run.workspaceSessionId);
       else {
         await operations
-          .cancel(auth, projectId, run.workspaceSessionId)
+          .cancel(
+            auth,
+            projectOf(run.workspaceSessionId),
+            run.workspaceSessionId,
+          )
           .catch(() => undefined);
       }
       const publication = await publishNow();
@@ -1452,7 +1677,7 @@ export async function createAskAgentBridge(
       const workspaceSessionId = workspaceSessionFor(storeSessionId);
       if (workspaceSessionId) {
         await operations
-          .cancel(auth, projectId, workspaceSessionId)
+          .cancel(auth, projectOf(workspaceSessionId), workspaceSessionId)
           .catch(() => undefined);
       }
       return publishNow();
@@ -1486,28 +1711,39 @@ export async function createAskAgentBridge(
     return true;
   };
 
-  /** Follow a scheduled run's chat: project its events as they happen. */
+  /**
+   * Follow a chat something else works in (a scheduled run, a coding task):
+   * project its events as they happen, below its history when it has one.
+   */
   const followRun = (
     workspaceSessionId: string,
-    run: { readonly title: string; readonly prompt: string },
+    run: {
+      readonly title: string;
+      readonly prompt: string;
+      readonly history?: BrowserGatewayAskAgentPersistedSession;
+    },
   ) => {
     const at = now();
-    const session: BrowserGatewayAskAgentPersistedSession = {
-      id: workspaceSessionId,
-      title: run.title,
-      createdAt: at,
-      lastActiveAt: at,
-      messages: [
-        {
-          id: `${workspaceSessionId}-prompt`,
-          role: "user",
-          content: run.prompt,
-          timestamp: at,
-          blocks: [{ type: "text", text: run.prompt }],
-        },
-      ],
-      nextMessageSequence: 1,
-    };
+    const session: BrowserGatewayAskAgentPersistedSession = run.history
+      ? { ...run.history, title: run.title, lastActiveAt: at }
+      : {
+          id: workspaceSessionId,
+          title: run.title,
+          createdAt: at,
+          lastActiveAt: at,
+          messages: run.prompt
+            ? [
+                {
+                  id: `${workspaceSessionId}-prompt`,
+                  role: "user",
+                  content: run.prompt,
+                  timestamp: at,
+                  blocks: [{ type: "text", text: run.prompt }],
+                },
+              ]
+            : [],
+          nextMessageSequence: 1,
+        };
     store.upsertSession(session);
     const message = store.startAssistantMessage({
       now: at,
@@ -1531,10 +1767,20 @@ export async function createAskAgentBridge(
           entry.approval = undefined;
           void publishNow();
         }
+        if (event.state !== "started")
+          handOverInterjections(workspaceSessionId);
         return;
       }
       if (event.kind !== "turn") return;
       const turnEvent = event.event;
+      if (turnEvent.type === "user.interjected") {
+        entry.messageId = admitInterjection(
+          workspaceSessionId,
+          turnEvent.interjectionId,
+          turnEvent.text,
+        );
+        return;
+      }
       if (projectTurnContent(entry.messageId, entry.toolStarts, turnEvent)) {
         return;
       }
@@ -1552,7 +1798,10 @@ export async function createAskAgentBridge(
         void publishNow();
       }
     };
-    const key = operations.sessionKey(projectId, workspaceSessionId);
+    const key = operations.sessionKey(
+      projectOf(workspaceSessionId),
+      workspaceSessionId,
+    );
     // From the start: events before this call belong to the run too.
     const subscription = options.events.subscribe(key, 0, onEvent);
     entry.subscription = subscription;
@@ -1562,8 +1811,25 @@ export async function createAskAgentBridge(
     void publishNow();
   };
 
+  /**
+   * A task's turn ended without taking messages sent into it: its runner
+   * gets them, so it reads them in its next step.
+   */
+  const handOverInterjections = (workspaceSessionId: string) => {
+    for (const [id, pending] of pendingTaskInterjections) {
+      if (pending.workspaceSessionId !== workspaceSessionId) continue;
+      pendingTaskInterjections.delete(id);
+      shownInterjections.delete(id);
+      void options
+        .linkedMessage?.(workspaceSessionId, pending.text)
+        ?.catch(() => undefined);
+    }
+  };
+
   /** Stop following a run; its chat stays. */
   const unfollowRun = (workspaceSessionId: string) => {
+    handOverInterjections(workspaceSessionId);
+    pendingFollows.delete(workspaceSessionId);
     const entry = followed.get(workspaceSessionId);
     if (!entry) return;
     entry.subscription?.unsubscribe();
@@ -1632,7 +1898,7 @@ export async function createAskAgentBridge(
       case "/api/ask-agent/background/transcript": {
         const transcript = await operations.readAgentTranscript(
           auth,
-          projectId,
+          projectOf(parent),
           parent,
           childSessionId,
         );
@@ -1643,7 +1909,12 @@ export async function createAskAgentBridge(
         return;
       }
       case "/api/ask-agent/background/stop":
-        await operations.stopAgent(auth, projectId, parent, childSessionId);
+        await operations.stopAgent(
+          auth,
+          projectOf(parent),
+          parent,
+          childSessionId,
+        );
         // The owner stopped it: nothing to report back to the chat.
         delivery.handled.add(childSessionId);
         break;
@@ -1651,7 +1922,7 @@ export async function createAskAgentBridge(
         const message = typeof body.message === "string" ? body.message : "";
         await operations.steerAgent(
           auth,
-          projectId,
+          projectOf(parent),
           parent,
           childSessionId,
           message,
@@ -1705,13 +1976,12 @@ export async function createAskAgentBridge(
             sessions: store.listSessions().map((session) => {
               const activity = activityOf(session.id);
               const workspaceSessionId = workspaceSessionFor(session.id);
-              const scheduled =
-                workspaceSessionId !== undefined &&
-                state.scheduled.includes(workspaceSessionId);
+              const kind = kindOf(workspaceSessionId);
               return {
                 ...session,
                 ...(activity ? { activity } : {}),
-                ...(scheduled ? { scheduled } : {}),
+                ...(kind === "job_run" ? { scheduled: true } : {}),
+                kind,
               };
             }),
           });
@@ -1877,7 +2147,10 @@ export async function createAskAgentBridge(
       if (closed) return;
       unfollowRun(workspaceSessionId);
       state.titles[workspaceSessionId] = title.slice(0, MAX_TITLE_LENGTH);
-      if (!state.scheduled.includes(workspaceSessionId)) {
+      if (
+        !state.linked[workspaceSessionId] &&
+        !state.scheduled.includes(workspaceSessionId)
+      ) {
         state.scheduled.push(workspaceSessionId);
       }
       // Unread unless the owner is watching it finish.
@@ -1914,17 +2187,78 @@ export async function createAskAgentBridge(
       }
     },
     deliverTaskResult,
-    followSession(_auth, workspaceSessionId, run) {
-      if (closed || followed.has(workspaceSessionId)) return;
+    followSession(auth, workspaceSessionId, run) {
+      if (
+        closed ||
+        followed.has(workspaceSessionId) ||
+        pendingFollows.has(workspaceSessionId)
+      ) {
+        return;
+      }
       state.titles[workspaceSessionId] = run.title.slice(0, MAX_TITLE_LENGTH);
-      if (!state.scheduled.includes(workspaceSessionId)) {
+      const linked = state.linked[workspaceSessionId] !== undefined;
+      if (!linked && !state.scheduled.includes(workspaceSessionId)) {
         state.scheduled.push(workspaceSessionId);
       }
       void saveState().catch(() => undefined);
-      followRun(workspaceSessionId, {
-        title: state.titles[workspaceSessionId]!,
-        prompt: run.prompt,
-      });
+      if (!linked) {
+        followRun(workspaceSessionId, {
+          title: state.titles[workspaceSessionId]!,
+          prompt: run.prompt,
+        });
+        return;
+      }
+      // A task's chat: its history stays, and its new work streams below.
+      pendingFollows.add(workspaceSessionId);
+      void (async () => {
+        const history = await readHistorySession(
+          auth,
+          workspaceSessionId,
+          undefined,
+        ).catch(() => undefined);
+        // Ended (adopted) while its history was read: nothing to follow.
+        if (!pendingFollows.delete(workspaceSessionId) || closed) return;
+        followRun(workspaceSessionId, {
+          title: state.titles[workspaceSessionId]!,
+          prompt: history ? "" : run.prompt,
+          ...(history ? { history } : {}),
+        });
+      })();
+    },
+    async linkSession(auth, workspaceSessionId, link) {
+      if (closed) return;
+      const known = state.linked[workspaceSessionId];
+      if (known?.projectId === link.projectId) return;
+      state.linked[workspaceSessionId] = {
+        projectId: link.projectId,
+        kind: "task",
+      };
+      state.titles[workspaceSessionId] = link.title.slice(0, MAX_TITLE_LENGTH);
+      await saveState().catch(() => undefined);
+      // Not loaded yet: it loads with every other chat on the first visit.
+      if (!loaded) return;
+      await loaded.catch(() => undefined);
+      if (closed || followed.has(workspaceSessionId)) return;
+      const session = await readHistorySession(
+        auth,
+        workspaceSessionId,
+        undefined,
+      );
+      if (!session || closed) return;
+      store.upsertSession(session);
+      await publishNow();
+    },
+    async unlinkSession(workspaceSessionId) {
+      if (!state.linked[workspaceSessionId]) return;
+      unfollowRun(workspaceSessionId);
+      delete state.linked[workspaceSessionId];
+      delete state.titles[workspaceSessionId];
+      state.unread = state.unread.filter((id) => id !== workspaceSessionId);
+      await saveState().catch(() => undefined);
+      if (store.hasSession(workspaceSessionId)) {
+        store.deleteSession(workspaceSessionId, now());
+        await publishNow().catch(() => undefined);
+      }
     },
     async openSession(auth, sessionId) {
       if (closed) return false;
@@ -1961,7 +2295,14 @@ async function readState(file: string): Promise<BridgeState> {
     raw = await fs.readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { aliases: {}, titles: {}, hidden: [], unread: [], scheduled: [] };
+      return {
+        aliases: {},
+        titles: {},
+        hidden: [],
+        unread: [],
+        scheduled: [],
+        linked: {},
+      };
     }
     throw error;
   }
@@ -1977,7 +2318,20 @@ async function readState(file: string): Promise<BridgeState> {
     hidden: stringList(parsed.hidden),
     unread: stringList(parsed.unread),
     scheduled: stringList(parsed.scheduled),
+    linked: linkedRecord(parsed.linked),
   };
+}
+
+function linkedRecord(value: unknown): BridgeState["linked"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const linked: BridgeState["linked"] = {};
+  for (const [sessionId, link] of Object.entries(value)) {
+    const projectId = (link as { projectId?: unknown } | null)?.projectId;
+    if (typeof projectId === "string") {
+      linked[sessionId] = { projectId, kind: "task" };
+    }
+  }
+  return linked;
 }
 
 function stringList(value: unknown): string[] {
@@ -2001,6 +2355,10 @@ function isReasoningEffort(value: string): value is CoreReasoningEffort {
 
 function hasItems(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
+}
+
+function randomSuffix(): string {
+  return randomUUID().slice(0, 8);
 }
 
 function deriveTitle(text: string): string {

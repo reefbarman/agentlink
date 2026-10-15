@@ -78,6 +78,8 @@ export interface Task {
   fixRounds?: number;
   openFindings?: number;
   sessionId?: string;
+  /** The chat that started the task; its own chat is listed beside it. */
+  origin?: { projectId: string; sessionId: string };
   pullRequest?: { number: number; url: string };
   publishedCommit?: string;
   summary?: string;
@@ -315,11 +317,17 @@ export function TasksPanel({
   revision,
   onClose,
   initialTaskId,
+  openTaskChat,
 }: {
   revision: number;
   onClose: () => void;
   /** Open this task's detail first (a link from the Inbox). */
   initialTaskId?: string;
+  /**
+   * Open a task's own chat in the chat list, where it can be written to and
+   * stopped like any chat. Without it, the chat opens read-only here.
+   */
+  openTaskChat?: (projectId: string, sessionId: string) => void;
 }) {
   const [view, setView] = useState<View>(
     initialTaskId ? { kind: "task", taskId: initialTaskId } : { kind: "list" },
@@ -344,6 +352,7 @@ export function TasksPanel({
         revision={revision}
         onClose={onClose}
         onBack={() => setView({ kind: "list" })}
+        openTaskChat={openTaskChat}
         openChat={(projectId, sessionId, title) =>
           setView({
             kind: "chat",
@@ -469,12 +478,14 @@ function TaskDetailView({
   onClose,
   onBack,
   openChat,
+  openTaskChat,
 }: {
   taskId: string;
   revision: number;
   onClose: () => void;
   onBack: () => void;
   openChat: (projectId: string, sessionId: string, title: string) => void;
+  openTaskChat?: (projectId: string, sessionId: string) => void;
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -632,16 +643,31 @@ function TaskDetailView({
       </section>
 
       <div class="assistant-task-actions">
-        {task.sessionId && (
+        {task.sessionId && openTaskChat && task.origin ? (
           <button
             type="button"
             onClick={() =>
-              openChat(task.projectId, task.sessionId!, "Implementation chat")
+              openTaskChat(task.origin!.projectId, task.sessionId!)
             }
           >
             <i class="codicon codicon-comment-discussion" aria-hidden="true" />{" "}
-            Implementation chat
+            Open chat
           </button>
+        ) : (
+          task.sessionId && (
+            <button
+              type="button"
+              onClick={() =>
+                openChat(task.projectId, task.sessionId!, "Implementation chat")
+              }
+            >
+              <i
+                class="codicon codicon-comment-discussion"
+                aria-hidden="true"
+              />{" "}
+              Implementation chat
+            </button>
+          )
         )}
         {review && (
           <button

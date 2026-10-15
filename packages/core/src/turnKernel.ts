@@ -920,6 +920,17 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         tools.get(call.name)?.parallelSafe === true &&
         (tools.get(call.name)?.authorization === undefined ||
           tools.get(call.name)?.authorization === "none"),
+      takeInterjections: () =>
+        (runOptions.takeInterjections?.() ?? []).flatMap((interjection) => {
+          const text = interjection.text.trim();
+          if (!text) return [];
+          emit({
+            type: "user.interjected",
+            interjectionId: interjection.id,
+            text,
+          });
+          return [{ role: "user" as const, content: text }];
+        }),
       onIterationMessagesComplete: (messages) => {
         durableIterationMessages = structuredClone(messages);
         durableMessages = [

@@ -140,6 +140,16 @@ describe("task outcomes", () => {
       ),
     ).toHaveLength(MAX_CHAT_TASK_CARDS);
   });
+
+  it("show in the task's own chat too", () => {
+    const tasks = [
+      task({ id: "mine", sessionId: "ws-task" }),
+      task({ id: "else", sessionId: "ws-other" }),
+    ];
+    expect(
+      chatTaskCards(tasks, "home", "ws-task").map((card) => card.id),
+    ).toEqual(["mine"]);
+  });
 });
 
 describe("task outcome delivery", () => {

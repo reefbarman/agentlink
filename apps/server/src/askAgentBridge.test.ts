@@ -39,6 +39,10 @@ afterEach(async () => {
 interface ChatMessage {
   readonly role: string;
   readonly content: string;
+  readonly blocks?: ReadonlyArray<{
+    readonly type: string;
+    readonly text?: string;
+  }>;
 }
 
 interface Snapshot {
@@ -62,9 +66,15 @@ function createFakeOperations(events: SessionEventHub) {
       reasoningEffort?: CoreReasoningEffort;
       approvalMode?: "autonomous" | "ask";
       messages: unknown[];
+      /** Another project's session (a task's); "home" when absent. */
+      projectId?: string;
     }
   >();
   const agents = new Map<string, WorkspaceBackgroundRecord[]>();
+  /** Messages handed to running turns, and whether one is running. */
+  const interjections: Array<{ sessionId: string; id: string; text: string }> =
+    [];
+  let acceptInterjections = true;
   let next = 0;
   const key = (projectId: string, sessionId: string) =>
     `${projectId}/${sessionId}`;
@@ -85,11 +95,13 @@ function createFakeOperations(events: SessionEventHub) {
   };
   const operations = {
     sessionKey: key,
-    listSessions: vi.fn(async () =>
-      [...sessions.keys()].map((sessionId) => ({
-        sessionId,
-        updatedAt: Date.now(),
-      })),
+    listSessions: vi.fn(async (_auth, projectId: string) =>
+      [...sessions.entries()]
+        .filter(([, session]) => (session.projectId ?? "home") === projectId)
+        .map(([sessionId]) => ({
+          sessionId,
+          updatedAt: Date.now(),
+        })),
     ),
     readSession: vi.fn(async (_auth, _projectId, sessionId: string) => {
       const session = sessions.get(sessionId)!;
@@ -137,11 +149,24 @@ function createFakeOperations(events: SessionEventHub) {
         sessions.get(sessionId)!.reasoningEffort = effort;
       },
     ),
-    startTurn: vi.fn(async (_auth, _projectId, sessionId: string) =>
-      run(sessionId),
+    startTurn: vi.fn(
+      async (_auth, _projectId, sessionId: string, _text: string) =>
+        run(sessionId),
     ),
     answerInteraction: vi.fn(async (_auth, _projectId, sessionId: string) =>
       run(sessionId),
+    ),
+    interject: vi.fn(
+      async (
+        _auth,
+        _projectId,
+        sessionId: string,
+        interjection: { id: string; text: string },
+      ) => {
+        if (!acceptInterjections) return { queued: false };
+        interjections.push({ sessionId, ...interjection });
+        return { queued: true };
+      },
     ),
     cancel: vi.fn(async () => undefined),
     listAgents: vi.fn(
@@ -190,8 +215,28 @@ function createFakeOperations(events: SessionEventHub) {
     operations,
     sessions,
     agents,
+    interjections,
+    acceptInterjections(accept: boolean) {
+      acceptInterjections = accept;
+    },
     turn,
     publish,
+    /** Publish any event to another project's session (a task's). */
+    publishEventTo: (
+      projectId: string,
+      sessionId: string,
+      event: AssistantSessionEvent,
+    ) => events.publish(key(projectId, sessionId), event),
+    /** Publish to another project's session (a task's). */
+    publishTo: (
+      projectId: string,
+      sessionId: string,
+      event: Record<string, unknown>,
+    ) =>
+      events.publish(key(projectId, sessionId), {
+        kind: "turn",
+        event: { emittedAt: Date.now(), ...event } as EmbeddedAgentTurnEvent,
+      }),
     setScript(next: (sessionId: string, taskId: string) => void) {
       script = next;
     },
@@ -207,6 +252,9 @@ async function startBridge(
     readonly chatTasks?: Parameters<
       typeof createAskAgentBridge
     >[0]["chatTasks"];
+    readonly linkedMessage?: Parameters<
+      typeof createAskAgentBridge
+    >[0]["linkedMessage"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -237,6 +285,7 @@ async function startBridge(
       ? { agentRefreshMs: options.agentRefreshMs }
       : {}),
     ...(options.chatTasks ? { chatTasks: options.chatTasks } : {}),
+    ...(options.linkedMessage ? { linkedMessage: options.linkedMessage } : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -365,6 +414,109 @@ describe("Ask Agent bridge", () => {
         }
       ).session.foreground.reasoningEffort,
     ).toBe("max");
+  });
+
+  describe("messages sent while a turn runs", () => {
+    /** A turn that works until `release`, taking interjections meanwhile. */
+    const scriptTurn = (
+      fake: Awaited<ReturnType<typeof startBridge>>["fake"],
+    ) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fake.setScript(async (sessionId, taskId) => {
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "started",
+          taskId,
+          operation: "turn",
+          actor: { subjectId: "owner", deviceId: "d" },
+        });
+        fake.turn(sessionId, { type: "text.delta", text: "Working" });
+        await released;
+        for (const taken of fake.interjections.splice(0)) {
+          fake.turn(sessionId, {
+            type: "user.interjected",
+            interjectionId: taken.id,
+            text: taken.text,
+          });
+          fake.turn(sessionId, { type: "text.delta", text: "Got it" });
+        }
+        fake.turn(sessionId, { type: "turn.completed", result: { text: "" } });
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "finished",
+          taskId,
+          status: "completed",
+        });
+      });
+      return release;
+    };
+    const textOf = (message: ChatMessage) =>
+      message.content ||
+      (message.blocks ?? []).map((block) => block.text ?? "").join("");
+
+    it("go into the running turn, like VS Code's queued messages", async () => {
+      const { fake, call } = await startBridge();
+      const release = scriptTurn(fake);
+      const first = call("/api/ask-agent/send", { text: "fix the site" });
+      await vi.waitFor(async () => {
+        const { projectedMessages } = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        ).session.foreground;
+        expect(projectedMessages.map(textOf)).toContain("Working");
+      });
+
+      const second = call("/api/ask-agent/send", {
+        text: "use the blue logo",
+        id: "queued-1",
+      });
+      await vi.waitFor(() =>
+        expect(fake.interjections).toEqual([
+          expect.objectContaining({
+            id: "queued-1",
+            text: "use the blue logo",
+          }),
+        ]),
+      );
+      release();
+      const [, answered] = await Promise.all([first, second]);
+
+      expect(answered.status).toBe(200);
+      // One turn: the message was answered inside it, not as a turn of its own.
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+      const messages = snapshotOf((await call("/api/ask-agent/session")).body)
+        .session.foreground.projectedMessages;
+      expect(
+        messages.map((message) => [message.role, textOf(message)]),
+      ).toEqual([
+        ["user", "fix the site"],
+        ["assistant", "Working"],
+        ["user", "use the blue logo"],
+        ["assistant", "Got it"],
+      ]);
+    });
+
+    it("run as the next turn when the running turn cannot take them", async () => {
+      const { fake, call } = await startBridge();
+      fake.acceptInterjections(false);
+      const release = scriptTurn(fake);
+      const first = call("/api/ask-agent/send", { text: "fix the site" });
+      await vi.waitFor(() =>
+        expect(fake.operations.startTurn).toHaveBeenCalledTimes(1),
+      );
+      const second = call("/api/ask-agent/send", { text: "and the footer" });
+      await vi.waitFor(() =>
+        expect(fake.operations.interject).toHaveBeenCalledTimes(1),
+      );
+      release();
+      await Promise.all([first, second]);
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+      expect(fake.operations.startTurn.mock.calls[1]?.[3]).toBe(
+        "and the footer",
+      );
+    });
   });
 
   it("streams a turn into the shared UI's session snapshot", async () => {
@@ -785,6 +937,143 @@ describe("Ask Agent bridge", () => {
       ]);
       await call("/api/ask-agent/session/new", {});
       expect(await tasksOf()).toEqual([]);
+    });
+
+    it("shows a task's chat in the chat list, live, and hands it messages", async () => {
+      const linkedMessage = vi.fn(async () => undefined);
+      const { fake, call, bridge, detached } = await startBridge(undefined, {
+        linkedMessage,
+      });
+      fake.sessions.set("ws-task", {
+        projectId: "task-aaaaaaaaaaaa",
+        model: MODEL,
+        messages: [
+          { role: "user", content: "Update the page" },
+          { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        ],
+      });
+      const list = async () =>
+        (await call("/api/ask-agent/sessions")).body.sessions as Array<{
+          id: string;
+          title: string;
+          kind: string;
+        }>;
+      // Another project's chat: not listed until linked.
+      expect(await list()).toEqual([]);
+      await bridge.linkSession(detached, "ws-task", {
+        projectId: "task-aaaaaaaaaaaa",
+        title: "Task: Update the page",
+      });
+      expect(await list()).toEqual([
+        expect.objectContaining({
+          id: "ws-task",
+          kind: "task",
+          title: "Task: Update the page",
+        }),
+      ]);
+      expect(fake.operations.readSession).toHaveBeenCalledWith(
+        expect.anything(),
+        "task-aaaaaaaaaaaa",
+        "ws-task",
+      );
+
+      // While the task works, its chat streams below its history.
+      bridge.followSession(detached, "ws-task", {
+        title: "Task: Update the page",
+        prompt: "Update the page",
+      });
+      await call("/api/ask-agent/session/load", { sessionId: "ws-task" });
+      await vi.waitFor(async () => {
+        fake.publishTo("task-aaaaaaaaaaaa", "ws-task", {
+          type: "text.delta",
+          text: "Working",
+        });
+        const messages = snapshotOf((await call("/api/ask-agent/session")).body)
+          .session.foreground.projectedMessages;
+        // History keeps its text in blocks; live messages in content.
+        const text = (message: (typeof messages)[number]) =>
+          message.content ||
+          (message.blocks ?? []).map((block) => block.text ?? "").join("");
+        expect(messages.map(text)).toEqual([
+          "Update the page",
+          "Done.",
+          expect.stringContaining("Working"),
+        ]);
+      });
+
+      // Writing to it while it works goes into its running turn, not a
+      // turn of its own here.
+      const sent = await call("/api/ask-agent/send", {
+        text: "Use the blue logo",
+        sessionId: "ws-task",
+        id: "steer-1",
+      });
+      expect(sent.status).toBe(200);
+      expect(fake.operations.interject).toHaveBeenCalledWith(
+        expect.anything(),
+        "task-aaaaaaaaaaaa",
+        "ws-task",
+        { id: "steer-1", text: "Use the blue logo" },
+      );
+      expect(linkedMessage).not.toHaveBeenCalled();
+      expect(fake.operations.startTurn).not.toHaveBeenCalled();
+      expect(
+        snapshotOf(sent.body).session.foreground.projectedMessages.at(-1),
+      ).toMatchObject({ role: "user", content: "Use the blue logo" });
+
+      // Taken in: shown once, and the reply goes on below it.
+      fake.publishTo("task-aaaaaaaaaaaa", "ws-task", {
+        type: "user.interjected",
+        interjectionId: "steer-1",
+        text: "Use the blue logo",
+      });
+      fake.publishTo("task-aaaaaaaaaaaa", "ws-task", {
+        type: "text.delta",
+        text: "Switching",
+      });
+      await vi.waitFor(async () => {
+        const messages = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        ).session.foreground.projectedMessages.map(
+          (message) =>
+            message.content ||
+            (message.blocks ?? []).map((block) => block.text ?? "").join(""),
+        );
+        expect(messages.slice(-2)).toEqual(["Use the blue logo", "Switching"]);
+        expect(
+          messages.filter((message) => message === "Use the blue logo"),
+        ).toHaveLength(1);
+      });
+
+      // One its turn ended without taking goes to the task's runner.
+      await call("/api/ask-agent/send", {
+        text: "And the footer",
+        sessionId: "ws-task",
+        id: "steer-2",
+      });
+      fake.publishEventTo("task-aaaaaaaaaaaa", "ws-task", {
+        kind: "task",
+        state: "finished",
+        taskId: "t-1",
+        status: "completed",
+      });
+      await vi.waitFor(() =>
+        expect(linkedMessage).toHaveBeenCalledWith("ws-task", "And the footer"),
+      );
+
+      // Not working: its runner gets the message straight away.
+      await bridge.adoptSession(detached, "ws-task", "Task: Update the page");
+      fake.operations.interject.mockClear();
+      await call("/api/ask-agent/send", {
+        text: "Thanks",
+        sessionId: "ws-task",
+      });
+      expect(fake.operations.interject).not.toHaveBeenCalled();
+      expect(linkedMessage).toHaveBeenLastCalledWith("ws-task", "Thanks");
+
+      // A deleted task's chat goes away.
+      await bridge.unlinkSession("ws-task");
+      expect(await list()).toEqual([]);
     });
 
     it("skips a chat that is gone or was deleted", async () => {

@@ -162,8 +162,9 @@ export function withTaskResultNotices(messages: ChatMessage[]): ChatMessage[] {
 export const MAX_CHAT_TASK_CARDS = 3;
 
 /**
- * The live cards for a chat: its tasks (by origin), newest first. The same
- * records as the Tasks panel, so the two never disagree.
+ * The live cards for a chat: the tasks it started (by origin), or the task
+ * it is the chat of, newest first. The same records as the Tasks panel, so
+ * the two never disagree.
  */
 export function chatTaskCards(
   tasks: readonly TaskRun[],
@@ -173,8 +174,9 @@ export function chatTaskCards(
   return tasks
     .filter(
       (task) =>
-        task.origin?.projectId === projectId &&
-        task.origin.sessionId === sessionId,
+        (task.origin?.projectId === projectId &&
+          task.origin.sessionId === sessionId) ||
+        task.sessionId === sessionId,
     )
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, MAX_CHAT_TASK_CARDS)

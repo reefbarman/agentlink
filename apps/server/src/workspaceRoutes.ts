@@ -3,6 +3,7 @@ import {
   projectEmbeddedAgentTurnEvent,
   type AgentModelReference,
   type AgentTurnEvent,
+  type AgentTurnInterjection,
   type AgentTurnResult,
 } from "@agentlink/core";
 import type { CoreReasoningEffort } from "@agentlink/protocol";
@@ -38,6 +39,7 @@ import {
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 const MAX_TURN_TEXT_LENGTH = 100_000;
+const INTERJECTION_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const MAX_TURN_BODY_BYTES = 512 * 1024;
 const DEFAULT_HEARTBEAT_MS = 15_000;
 /**
@@ -201,6 +203,18 @@ export interface AssistantSessionOperations {
       readonly decision: "allow" | "deny";
     },
   ): Promise<{ readonly taskId: string }>;
+  /**
+   * Hand a message to the session's running turn, which takes it in at its
+   * next break (like a queued message in VS Code) and reports it with a
+   * `user.interjected` event carrying the same id. `queued: false` when no
+   * turn is running: start the next turn with it instead.
+   */
+  interject(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    interjection: { readonly id: string; readonly text: string },
+  ): Promise<{ readonly queued: boolean }>;
   cancel(
     auth: AssistantServerAuth,
     projectId: string,
@@ -298,6 +312,11 @@ interface RunningTask {
   readonly text: string | undefined;
   readonly controller: AbortController;
   readonly done: Promise<void>;
+  /**
+   * Messages sent while the turn runs, taken by it oldest first. What it
+   * never takes is dropped when it ends: the sender still has them queued.
+   */
+  readonly interjections: AgentTurnInterjection[];
 }
 
 /**
@@ -447,11 +466,13 @@ export function createAssistantWorkspaceRoutes(
     run: (
       signal: AbortSignal,
       onEvent: (event: AgentTurnEvent) => void,
+      takeInterjections: () => readonly AgentTurnInterjection[],
     ) => Promise<AgentTurnResult>,
     text?: string,
   ): string => {
     const key = sessionKey(projectId, sessionId);
     const taskId = randomUUID();
+    const interjections: AgentTurnInterjection[] = [];
     // Deliberately not `auth.signal`: closing the browser must not stop work.
     const controller = new AbortController();
     const started = hub.publish(key, {
@@ -466,12 +487,16 @@ export function createAssistantWorkspaceRoutes(
     });
     const done = (async () => {
       try {
-        const result = await run(controller.signal, (event) => {
-          hub.publish(key, {
-            kind: "turn",
-            event: projectEmbeddedAgentTurnEvent(event),
-          });
-        });
+        const result = await run(
+          controller.signal,
+          (event) => {
+            hub.publish(key, {
+              kind: "turn",
+              event: projectEmbeddedAgentTurnEvent(event),
+            });
+          },
+          () => interjections.splice(0),
+        );
         hub.publish(key, {
           kind: "task",
           state: "finished",
@@ -496,6 +521,7 @@ export function createAssistantWorkspaceRoutes(
       text: text?.slice(0, MAX_TRANSCRIPT_TEXT_LENGTH),
       controller,
       done,
+      interjections,
     });
     return taskId;
   };
@@ -673,11 +699,33 @@ export function createAssistantWorkspaceRoutes(
         sessionId,
         "turn",
         auth,
-        (signal, onEvent) =>
-          mount.host.runTurn(sessionId, text, { signal, onEvent }),
+        (signal, onEvent, takeInterjections) =>
+          mount.host.runTurn(sessionId, text, {
+            signal,
+            onEvent,
+            takeInterjections,
+          }),
         text,
       );
       return { taskId };
+    },
+    async interject(auth, projectId, sessionId, interjection) {
+      assertSessionId(sessionId);
+      await authorize(auth, projectId, "write");
+      const text = interjection.text;
+      if (!text.trim() || text.length > MAX_TURN_TEXT_LENGTH) {
+        throw new HttpError(400, "text_invalid");
+      }
+      if (!INTERJECTION_ID_PATTERN.test(interjection.id)) {
+        throw new HttpError(400, "interjection_id_invalid");
+      }
+      await assertStillAuthorized(auth);
+      const task = tasks.get(sessionKey(projectId, sessionId));
+      // Nothing running (idle, or waiting on an approval): the sender keeps
+      // it queued and starts the next turn with it.
+      if (!task || task.controller.signal.aborted) return { queued: false };
+      task.interjections.push({ id: interjection.id, text });
+      return { queued: true };
     },
     async answerInteraction(auth, projectId, sessionId, answer) {
       assertSessionId(sessionId);
@@ -704,12 +752,13 @@ export function createAssistantWorkspaceRoutes(
         sessionId,
         "resume",
         auth,
-        (signal, onEvent) =>
+        (signal, onEvent, takeInterjections) =>
           // The host re-checks this binding and passes it to the engine's
           // atomic resume, so the decision cannot reach a replacement.
           mount.host.resumeInteraction(sessionId, decision, {
             signal,
             onEvent,
+            takeInterjections,
             expected: { interactionId, interactionRevision },
           }),
       );

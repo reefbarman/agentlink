@@ -515,6 +515,9 @@ export function AssistantHub({
           revision={revision}
           onClose={() => setView(null)}
           initialTaskId={taskId}
+          openTaskChat={(projectId, sessionId) =>
+            void openChat(projectId, sessionId)
+          }
         />
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}

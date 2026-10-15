@@ -59,6 +59,8 @@ export interface AskAgentControllerTurn {
 }
 
 interface ActiveAskAgentControllerTurn extends AskAgentControllerTurn {
+  /** Changes when the turn continues in a new message. */
+  messageId: string;
   readonly controller: AbortController;
   readonly settled: Promise<void>;
   stopped: boolean;
@@ -420,6 +422,17 @@ export class AskAgentController {
 
   getActiveTurnMessageId(): string | null {
     return this.activeTurn?.messageId ?? null;
+  }
+
+  /**
+   * Stream the rest of the active turn into another message, for example
+   * the reply below a message the user sent into the running turn. Stopping
+   * the turn then finishes that message.
+   */
+  retargetTurn(turn: AskAgentControllerTurn, messageId: string): boolean {
+    if (this.activeTurn !== turn) return false;
+    this.activeTurn.messageId = messageId;
+    return true;
   }
 
   /**

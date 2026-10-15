@@ -1123,6 +1123,47 @@ describe("follow-ups", () => {
     });
   });
 
+  it("takes the owner's messages while it works, before it can be ready", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    // Written in the task's chat while its turn runs: queued, together.
+    await test.runner.steer(created.id, "Use the blue logo.");
+    await test.runner.steer(created.id, "And keep the footer.");
+    expect(test.store.get(created.id)?.state).toBe("implementing");
+    test.endTurn("completed");
+    await test.waitForTurns(2);
+    const steered = test.turns[1]!;
+    expect(steered.sessionId).toBe(test.turns[0]!.sessionId);
+    expect(steered.text).toContain(
+      "Use the blue logo.\n\nAnd keep the footer.",
+    );
+    expect(test.store.get(created.id)).toMatchObject({
+      followUps: [
+        { instructions: "Use the blue logo." },
+        { instructions: "And keep the footer." },
+      ],
+    });
+    expect(test.store.get(created.id)?.pendingFollowUp).toBeUndefined();
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    expect(test.turns).toHaveLength(2);
+  });
+
+  it("continues a finished or stopped task when the owner writes to it", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    await test.runner.stop(created.id);
+    expect(test.store.get(created.id)?.state).toBe("cancelled");
+    await test.runner.steer(created.id, "Carry on, but smaller.");
+    await test.waitForTurns(2);
+    expect(test.turns[1]!.sessionId).toBe(test.turns[0]!.sessionId);
+    expect(test.turns[1]!.text).toContain("Carry on, but smaller.");
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+  });
+
   it("refuses follow-ups for working, unstarted and unknown tasks", async () => {
     const test = await setup();
     const created = await test.runner.create(REQUEST);

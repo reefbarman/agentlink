@@ -1,6 +1,7 @@
 import type {
   ChatSessionActivity,
   ChatSessionHistorySummary,
+  ChatSessionKind,
 } from "@agentlink/protocol/chat-session-history";
 import { useEffect, useRef, useState } from "preact/hooks";
 
@@ -157,6 +158,26 @@ interface DesktopSidebarProps {
   assistantLink?: ComponentChildren;
 }
 
+/** What a chat is for; hosts that predate `kind` mark only scheduled runs. */
+function kindOf(session: ChatSessionHistorySummary): ChatSessionKind {
+  return session.kind ?? (session.scheduled ? "job_run" : "chat");
+}
+
+type ChatFilter = "all" | ChatSessionKind;
+
+const CHAT_FILTERS: ReadonlyArray<{ id: ChatFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "chat", label: "Chats" },
+  { id: "task", label: "Tasks" },
+  { id: "job_run", label: "Scheduled" },
+];
+
+const KIND_NOTES: Record<ChatSessionKind, string | undefined> = {
+  chat: undefined,
+  task: "task",
+  job_run: "scheduled run",
+};
+
 const ACTIVITY_LABELS: Record<ChatSessionActivity, string> = {
   running: "Working",
   "needs-you": "Needs you",
@@ -197,9 +218,16 @@ export function DesktopSidebar({
   assistantLink,
 }: DesktopSidebarProps) {
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<ChatFilter>("all");
   const query = search.trim().toLocaleLowerCase();
-  const visibleSessions = sessions.filter((session) =>
-    session.title.toLocaleLowerCase().includes(query),
+  // Filters appear once there is more than one kind of chat to tell apart.
+  const kinds = new Set(sessions.map(kindOf));
+  const filtering = kinds.size > 1;
+  const activeFilter = filtering ? filter : "all";
+  const visibleSessions = sessions.filter(
+    (session) =>
+      session.title.toLocaleLowerCase().includes(query) &&
+      (activeFilter === "all" || kindOf(session) === activeFilter),
   );
 
   return (
@@ -254,11 +282,33 @@ export function DesktopSidebar({
           />
         </label>
         <h2 class="desktop-sidebar-heading">Your chats</h2>
+        {filtering && (
+          <div
+            class="desktop-chat-filters"
+            role="group"
+            aria-label="Show chats"
+          >
+            {CHAT_FILTERS.filter(
+              (option) => option.id === "all" || kinds.has(option.id),
+            ).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                class="desktop-chat-filter"
+                aria-pressed={activeFilter === option.id}
+                onClick={() => setFilter(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        )}
         <nav class="desktop-chat-list" aria-label="Saved chats">
           {visibleSessions.map((session) => {
             const title = session.title || "Untitled chat";
+            const kind = kindOf(session);
             const notes = [
-              session.scheduled ? "scheduled run" : undefined,
+              KIND_NOTES[kind],
               session.activity ? ACTIVITY_LABELS[session.activity] : undefined,
             ].filter(Boolean);
             const label = notes.length
@@ -276,9 +326,15 @@ export function DesktopSidebar({
                 aria-label={label}
                 onClick={() => onSelect(session.id)}
               >
-                {session.scheduled && (
+                {kind === "job_run" && (
                   <i
                     class="codicon codicon-history desktop-chat-scheduled"
+                    aria-hidden="true"
+                  />
+                )}
+                {kind === "task" && (
+                  <i
+                    class="codicon codicon-git-pull-request desktop-chat-task"
                     aria-hidden="true"
                   />
                 )}
@@ -291,7 +347,7 @@ export function DesktopSidebar({
           })}
           {visibleSessions.length === 0 && (
             <p class="desktop-sidebar-empty">
-              {query
+              {query || activeFilter !== "all"
                 ? "No matching chats."
                 : "Your conversations will appear here."}
             </p>

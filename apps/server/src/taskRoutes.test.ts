@@ -62,6 +62,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     stop: vi.fn(async (taskId: string) => store.get(taskId)!),
     resume: vi.fn(async (taskId: string) => store.get(taskId)!),
     continueTask: vi.fn(async (taskId: string) => store.get(taskId)!),
+    steer: vi.fn(async (taskId: string) => store.get(taskId)!),
     publish: vi.fn(
       async (taskId: string, _options?: { allowUnreviewed?: boolean }) =>
         store.get(taskId)!,

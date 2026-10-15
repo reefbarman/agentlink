@@ -2253,11 +2253,43 @@ html.quick-ask-document body {
   }
 }
 
-/* A chat a scheduled job started: a small clock before its title. */
-.browser-shell.browser-shell-desktop .desktop-chat-scheduled {
+/*
+ * A chat a scheduled job started (a small clock) or a coding task works in
+ * (a pull request), before its title.
+ */
+.browser-shell.browser-shell-desktop .desktop-chat-scheduled,
+.browser-shell.browser-shell-desktop .desktop-chat-task {
   flex: none;
   color: var(--ag-muted);
   font-size: 13px;
+}
+
+/* Show all chats, or only one kind: conversations, tasks, scheduled runs. */
+.browser-shell.browser-shell-desktop .desktop-chat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-filter {
+  padding: 2px 8px;
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.12));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ag-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-filter:hover {
+  color: var(--ag-text);
+}
+
+.browser-shell.browser-shell-desktop .desktop-chat-filter[aria-pressed="true"] {
+  border-color: var(--ag-accent, currentColor);
+  color: var(--ag-text);
 }
 
 /*

@@ -42,6 +42,57 @@ describe("DesktopSidebar", () => {
       }),
     ).toBeTruthy();
     expect(container.querySelector(".desktop-chat-scheduled")).not.toBeNull();
+    // One kind of chat: nothing to filter.
+    expect(screen.queryByRole("group", { name: "Show chats" })).toBeNull();
+  });
+
+  it("tags task chats and filters the list by kind", () => {
+    const chat = (
+      id: string,
+      title: string,
+      extra: { kind?: "chat" | "task" | "job_run"; scheduled?: boolean },
+    ) => ({
+      id,
+      title,
+      mode: "ask",
+      model: "test-model",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      messageCount: 2,
+      createdAt: 1,
+      lastActiveAt: 2,
+      ...extra,
+    });
+    const { container } = render(
+      <DesktopSidebar
+        sessions={[
+          chat("talk", "Plan the week", {}),
+          chat("task", "Task: Update the page", { kind: "task" }),
+          chat("run", "Brief · 12 Oct", { scheduled: true }),
+        ]}
+        currentSessionId={null}
+        onSelect={() => undefined}
+        onNew={() => undefined}
+        onManage={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Task: Update the page (task)" }),
+    ).toBeTruthy();
+    expect(container.querySelector(".desktop-chat-task")).not.toBeNull();
+
+    const titles = () =>
+      [...container.querySelectorAll(".desktop-chat-title")].map(
+        (title) => title.textContent,
+      );
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(titles()).toEqual(["Task: Update the page"]);
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled" }));
+    expect(titles()).toEqual(["Brief · 12 Oct"]);
+    fireEvent.click(screen.getByRole("button", { name: "Chats" }));
+    expect(titles()).toEqual(["Plan the week"]);
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(titles()).toHaveLength(3);
   });
 
   it("searches chats and forwards the selected session and navigation actions", () => {

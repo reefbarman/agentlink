@@ -760,6 +760,93 @@ describe("assistant workspace routes", () => {
     await expect(readPending(harness, base)).resolves.toBeUndefined();
   });
 
+  it("takes a message sent during a turn into that turn", async () => {
+    const harness = await startHarness();
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    const auth: AssistantServerAuth = {
+      principal: {
+        tenantId: "agentlink-server",
+        subjectId: harness.server.store.ownerId!,
+      },
+      session: {
+        ownerId: harness.server.store.ownerId!,
+        sessionId: "s",
+        deviceId: harness.owner.deviceId,
+        deviceLabel: "Laptop",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => auth,
+    };
+    const { operations } = harness.routes;
+    const message = { id: "queued-1", text: "use the blue logo" };
+    // Nothing running yet: the sender starts a turn with it instead.
+    await expect(
+      operations.interject(auth, "home", sessionId, message),
+    ).resolves.toEqual({ queued: false });
+
+    let release!: () => void;
+    harness.fetch
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve(completion("Done with the page."));
+          }),
+      )
+      .mockResolvedValueOnce(completion("Switched to the blue logo."));
+    const stream = await harness.events(harness.owner, sessionId);
+    await stream.waitFor((event) => event.event === "ready");
+    await harness.request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: harness.owner,
+      body: { text: "update the page" },
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    await expect(
+      operations.interject(auth, "home", sessionId, message),
+    ).resolves.toEqual({ queued: true });
+    release();
+    await harness.routes.whenIdle("home", sessionId);
+
+    // The model answered it in the same turn, as its own user message.
+    expect(harness.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.stringify(lastUser(harness.fetch.mock.calls[1]![1] as RequestInit)),
+    ).toContain("use the blue logo");
+    const interjected = await stream.waitFor((event) => {
+      const data = event.data as {
+        event?: { kind?: string; event?: { type?: string } };
+      };
+      return data.event?.event?.type === "user.interjected";
+    });
+    expect(
+      (interjected.data as { event: { event: unknown } }).event.event,
+    ).toMatchObject({ interjectionId: "queued-1", text: "use the blue logo" });
+    stream.close();
+    await expect(
+      harness.request({ path: base, session: harness.owner }),
+    ).resolves.toMatchObject({
+      body: {
+        transcript: {
+          entries: [
+            { kind: "user", text: "update the page" },
+            { kind: "assistant", text: "Done with the page." },
+            { kind: "user", text: "use the blue logo" },
+            { kind: "assistant", text: "Switched to the blue logo." },
+          ],
+        },
+      },
+    });
+    // Finished: nothing to take it now.
+    await expect(
+      operations.interject(auth, "home", sessionId, message),
+    ).resolves.toEqual({ queued: false });
+  });
+
   it("routes sessions to the selected model or role", async () => {
     const harness = await startHarness();
     const { owner, request } = harness;
