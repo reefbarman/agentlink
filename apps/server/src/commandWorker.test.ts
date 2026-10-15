@@ -241,6 +241,11 @@ describe("command worker", () => {
       http_proxy: proxy,
     });
     expect(options().resolveEnvironment!()).toEqual(COMMAND_WORKER_ENVIRONMENT);
+    // Nothing can answer a prompt: tools take their non-interactive path.
+    expect(COMMAND_WORKER_ENVIRONMENT).toMatchObject({
+      CI: "true",
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    });
   });
 
   it("signs the project's current network policy into each command's proxy URL", async () => {

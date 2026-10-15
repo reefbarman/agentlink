@@ -181,6 +181,26 @@ describe("StreamingText lazy special-block renderers", () => {
     expect(vscodeLink?.querySelector(".external-link-flourish")).toBeNull();
   });
 
+  it("opens web links in a new tab, but not file or vscode links", () => {
+    render(
+      <StreamingText
+        text={
+          "[docs](https://example.com/docs), [action](vscode://agentlink.open) and [app](src/App.tsx)"
+        }
+        streaming={false}
+      />,
+    );
+
+    const webLink = screen.getByText("docs").closest("a");
+    expect(webLink?.target).toBe("_blank");
+    expect(webLink?.rel).toBe("noopener noreferrer");
+    for (const label of ["action", "app"]) {
+      const link = screen.getByText(label).closest("a");
+      expect(link?.target).toBe("");
+      expect(link?.querySelector(".external-link-flourish")).toBeNull();
+    }
+  });
+
   it("loads only the Mermaid renderer for a Mermaid fence", async () => {
     rendererMocks.renderMermaid.mockResolvedValue("<svg>diagram</svg>");
     render(

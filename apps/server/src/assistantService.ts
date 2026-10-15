@@ -257,6 +257,9 @@ export const COMMAND_WORKER_ENVIRONMENT: Readonly<Record<string, string>> = {
   // pnpm and yarn come through Corepack, which fetches the version a
   // repository asks for on first use: never stop to ask, nobody can answer.
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+  // No terminal is attached: tools that would stop to ask (pnpm removing a
+  // modules folder, for one) must take their non-interactive path instead.
+  CI: "true",
 };
 
 /**
