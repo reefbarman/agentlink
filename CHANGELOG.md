@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `web_fetch` through the Codex web route now says when a page came back incomplete. If the provider reports more lines than it can serve (for example a 595-line source file that stops at line 405), the warning names the missing line range and tells the agent to use another web tool for the rest, instead of only saying pagination did not advance.
+
 ## 1.31.1
 
 - With Approve for Me, `pkill -f`, `killall -m`, and `pkill`/`killall` commands with options after the first pattern now always ask you directly instead of going to automatic command review. On macOS, `pkill` treats options after a pattern as extra patterns, so a command like `pkill -f 'name$' -P 1` could match almost every process and close VS Code. Narrow forms such as `pkill -9 node` are reviewed as before.

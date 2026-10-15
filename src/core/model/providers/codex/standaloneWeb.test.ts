@@ -596,6 +596,58 @@ describe("executeCodexStandaloneWeb", () => {
     },
   );
 
+  it("names the unserved line range when the provider stops short of the reported total", async () => {
+    // Observed: a 595-line raw source file stopped at L405 and the provider
+    // could not serve a continuation, with no hint that content was missing.
+    const outputs = [
+      "Source: open(...); Total lines: 595\nL0: package lint\nL405: suggestionsTitle := fmt.Sprin...",
+      "Total lines: 595\nL300: earlier window",
+    ];
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        }),
+    );
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/lint.go", max_length: 1000 },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: fetch as typeof globalThis.fetch,
+      retainOutput: () => "/tmp/partial.txt",
+    });
+    expect(result.output_warning).toContain("did not advance");
+    expect(result.output_warning).toContain(
+      "INCOMPLETE: retrieved lines up to L405 of 595",
+    );
+    expect(result.output_warning).toContain("Lines L406-L594 are unavailable");
+    expect(result.output_warning).toContain("another approved web transport");
+  });
+
+  it("does not report missing lines when a stalled page already reached the total", async () => {
+    const outputs = ["Total lines: 2\nL0: zero\nL1: one", "Internal Error ()"];
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        }),
+    );
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/", max_length: 5 },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: fetch as typeof globalThis.fetch,
+      retainOutput: () => "/tmp/complete.txt",
+    });
+    expect(result.output_warning ?? "").not.toContain("INCOMPLETE");
+  });
+
   it.each([undefined, "GetOwnedGames"])(
     "fails for hosted fallback when an explicit start line is ignored (find: %s)",
     async (find) => {
