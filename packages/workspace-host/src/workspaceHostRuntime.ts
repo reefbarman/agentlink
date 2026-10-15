@@ -10,6 +10,7 @@ import {
   type CoreReasoningEffort,
   type HostTool,
   type HostToolResolver,
+  type TurnExecutionLimits,
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
@@ -101,6 +102,12 @@ export interface CreateWorkspaceHostOptions {
   readonly defaultModel: AgentModelReference;
   readonly defaultReasoningEffort?: CoreReasoningEffort;
   readonly requestLimits?: WorkspaceModelRequestLimits;
+  /**
+   * How much one turn may do (model calls, tool calls, elapsed time, tool
+   * output replayed). Without it, the core's defaults for headless turns
+   * apply, which suit short tasks only.
+   */
+  readonly turnLimits?: TurnExecutionLimits;
   readonly instructions?: string;
   /**
    * Optional assistant identity. When set, prompts lead with
@@ -776,6 +783,7 @@ export async function createWorkspaceHost(
     defaultModel: options.defaultModel,
     defaultReasoningEffort: options.defaultReasoningEffort,
     maxOutputTokens: 4_096,
+    ...(options.turnLimits ? { limits: options.turnLimits } : {}),
     ...(options.onTurnError
       ? {
           onTurnError: ({ sessionId, turnId, error, publicError }) =>

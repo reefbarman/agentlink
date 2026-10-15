@@ -720,6 +720,8 @@ export function taskProblemHint(
       return `One of the task's reference repositories could not be cloned. If it is private, the AgentLink Assistant GitHub App must be installed on it (at ${GITHUB_APP_INSTALLATIONS_URL}); then resume the task.`;
     case "publish_permission_missing":
       return "It is ready but was not published: the repository has no GitHub account chosen to publish with. The owner can choose one in the GitHub panel, then publish it from Tasks.";
+    case "turn_execution_limit_reached":
+      return "It is a big job and paused after a long stretch of work (nothing is lost). Resume it to keep going from where it stopped, or continue it with narrower instructions.";
     default:
       if (task.state === "blocked_auth") {
         return "A model provider's sign-in has expired: the owner must sign in again, then resume the task.";

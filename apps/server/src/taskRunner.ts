@@ -85,6 +85,12 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
 const MAX_REVIEW_DENIALS = 10;
 const MAX_SUMMARY_LENGTH = 2_000;
 const MAX_FEEDBACK_OUTPUT = 3_000;
+/** The host's per-turn step limit: a checkpoint for a task, not a failure. */
+const TURN_LIMIT_ERROR = "turn_execution_limit_reached";
+/** Times a task's chat carries on after reaching the per-turn limit. */
+const MAX_TURN_CONTINUATIONS = 10;
+const CONTINUE_PROMPT =
+  "You reached the limit for one turn; nothing is lost. Continue the task from where you stopped.";
 const TASK_PROJECT_PREFIX = "task-";
 
 export interface TaskRunnerOptions {
@@ -318,11 +324,37 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
   };
 
   /**
+   * Send a message to a chat and wait for its work to end. A turn that
+   * reaches the host's per-turn step limit is a checkpoint, not a failure:
+   * the same chat is told to carry on, up to `MAX_TURN_CONTINUATIONS`
+   * times, after which the task fails and can be resumed.
+   */
+  const runTurn = async (
+    entry: LiveTask,
+    sessionId: string,
+    text: string,
+    role: "implement" | "review",
+  ): Promise<Outcome> => {
+    let outcome = await runOneTurn(entry, sessionId, text, role);
+    for (
+      let continued = 0;
+      continued < MAX_TURN_CONTINUATIONS &&
+      outcome.state === "failed" &&
+      outcome.error === TURN_LIMIT_ERROR &&
+      !entry.stopping;
+      continued += 1
+    ) {
+      outcome = await runOneTurn(entry, sessionId, CONTINUE_PROMPT, role);
+    }
+    return outcome;
+  };
+
+  /**
    * Send one message to a chat and wait for its turn to end. In the
    * implementation chat an approval waits for the owner; in a review chat
    * every tool request is refused, so the reviewer cannot change anything.
    */
-  const runTurn = async (
+  const runOneTurn = async (
     entry: LiveTask,
     sessionId: string,
     text: string,
@@ -1257,6 +1289,11 @@ function classifyFailure(result: TurnResult | undefined): Outcome {
   const error = result?.error;
   if (error?.category === "authentication") {
     return { state: "blocked_auth", error: error.code };
+  }
+  // The host's own step limit is not the provider refusing: the runner
+  // continues it, and once that runs out the task fails (resumable).
+  if (error?.code === TURN_LIMIT_ERROR) {
+    return { state: "failed", error: TURN_LIMIT_ERROR };
   }
   if (error?.category === "rate_limit" || error?.category === "capacity") {
     return { state: "blocked_quota", error: error.code };

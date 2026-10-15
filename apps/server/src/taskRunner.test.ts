@@ -9,6 +9,7 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import { SessionEventHub } from "./SessionEventHub.js";
 import { createTaskRunner, taskPrompt } from "./taskRunner.js";
+import { taskProblemHint } from "./taskTools.js";
 import {
   evidenceFor,
   openTaskStore,
@@ -801,6 +802,42 @@ describe("task runner", () => {
       error: "rate_limited",
       errorDetail: "Usage limit reached",
     });
+  });
+
+  it("carries on in the same chat when a turn reaches its step limit", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    const limit = {
+      error: { code: "turn_execution_limit_reached", category: "capacity" },
+    };
+    await test.waitForTurns(1);
+    test.endTurn("failed", limit);
+    await test.waitForTurns(2);
+    // The same chat, told to continue; not blocked as a provider limit.
+    expect(test.turns[1]!.sessionId).toBe(test.turns[0]!.sessionId);
+    expect(test.turns[1]!.text).toContain("Continue the task");
+    expect(test.store.get(created.id)?.state).toBe("implementing");
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+  });
+
+  it("fails, resumable, once the continuations run out", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    const limit = {
+      error: { code: "turn_execution_limit_reached", category: "capacity" },
+    };
+    // The first turn and ten continuations.
+    for (let turn = 1; turn <= 11; turn += 1) {
+      await test.waitForTurns(turn);
+      test.endTurn("failed", limit);
+    }
+    await test.waitFor(created.id, "failed");
+    expect(test.store.get(created.id)?.error).toBe(
+      "turn_execution_limit_reached",
+    );
+    expect(test.turns).toHaveLength(11);
+    expect(taskProblemHint(test.store.get(created.id)!)).toContain("Resume");
   });
 
   it("waits for approvals, and gives up when they expire", async () => {

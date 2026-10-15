@@ -140,6 +140,29 @@ export interface AssistantService {
   close(): Promise<void>;
 }
 
+/**
+ * How much one chat turn may do before it stops and says so. The core's
+ * defaults for headless turns (16 model calls, 64 tool calls, 5 minutes)
+ * cut real work short; these are a runaway guard, not a work budget.
+ */
+export const CHAT_TURN_LIMITS = {
+  maxModelCalls: 100,
+  maxToolCalls: 400,
+  maxElapsedMs: 30 * 60_000,
+  maxToolResultBytes: 8 * 1024 * 1024,
+} as const;
+
+/**
+ * A coding task's turns. A task that reaches these carries on in the same
+ * chat by itself (the task runner continues it), up to its own cap.
+ */
+export const TASK_TURN_LIMITS = {
+  maxModelCalls: 250,
+  maxToolCalls: 1_000,
+  maxElapsedMs: 90 * 60_000,
+  maxToolResultBytes: 16 * 1024 * 1024,
+} as const;
+
 /** Where the access store (owner, devices, sessions) lives under the data root. */
 export function serverAccessDataRoot(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "server");
@@ -896,6 +919,7 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
+        turnLimits: kind === "task" ? TASK_TURN_LIMITS : CHAT_TURN_LIMITS,
         ...(kind === "project" ? { instructions: routingInstructions } : {}),
         ...commandOptions,
         ...(commandOptions.commands && project.commandRoot

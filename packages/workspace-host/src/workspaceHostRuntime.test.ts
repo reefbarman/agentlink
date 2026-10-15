@@ -15,7 +15,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-function toolCall(name: string, input: Record<string, unknown>): Response {
+function toolCall(
+  name: string,
+  input: Record<string, unknown>,
+  id = "call-1",
+): Response {
   return new Response(
     `data: ${JSON.stringify({
       id: "tool-response",
@@ -26,7 +30,7 @@ function toolCall(name: string, input: Record<string, unknown>): Response {
             tool_calls: [
               {
                 index: 0,
-                id: "call-1",
+                id,
                 type: "function",
                 function: { name, arguments: JSON.stringify(input) },
               },
@@ -638,6 +642,68 @@ describe("createWorkspaceHost", () => {
       expect(refused).not.toBe("completed");
       expect(fetch).not.toHaveBeenCalled();
       expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the host's turn limits to every turn", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const lookup = defineTool({
+      name: "host_lookup",
+      description: "Look something up",
+      inputSchema: { type: "object", properties: {} },
+      effect: "read",
+      handler: async () => ({ modelContent: "more to do" }),
+    });
+    let calls = 0;
+    // A model that never stops calling tools.
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async () =>
+        toolCall("host_lookup", {}, `call-${(calls += 1)}`),
+      );
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "turn-limits",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      hostTools: () => [lookup],
+      turnLimits: { maxModelCalls: 3 },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      const result = await host
+        .runTurn(sessionId, "keep going")
+        .catch((error: unknown) => ({
+          status: "rejected",
+          error: error as { code?: string },
+        }));
+      expect(result).toMatchObject({
+        error: { code: "turn_execution_limit_reached" },
+      });
+      // Not the core's default of 16.
+      expect(fetch).toHaveBeenCalledTimes(3);
     } finally {
       await host.close();
       await fs.rm(parent, { recursive: true, force: true });
