@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import { SessionEventHub } from "./SessionEventHub.js";
+import { AUTO_CONTINUE_PROMPT } from "./sessionProgress.js";
 import { createTaskRunner, taskPrompt } from "./taskRunner.js";
 import { taskProblemHint } from "./taskTools.js";
 import {
@@ -223,6 +224,24 @@ function createFakeOperations(events: SessionEventHub) {
       result,
     );
   };
+  /** A tool call in the latest turn, finished. */
+  const completeTool = (toolName: string, displayContent: unknown) => {
+    const turn = turns.at(-1)!;
+    events.publish(`${turn.projectId}/${turn.sessionId}`, {
+      kind: "turn",
+      event: {
+        schemaVersion: 1,
+        sessionId: turn.sessionId,
+        turnId: "turn",
+        sequence: 1,
+        emittedAt: Date.now(),
+        type: "tool.completed",
+        toolCallId: `call-${toolName}`,
+        toolName,
+        displayContent,
+      } as unknown as EmbeddedAgentTurnEvent,
+    });
+  };
   return {
     operations: calls as unknown as AssistantSessionOperations,
     calls,
@@ -230,6 +249,7 @@ function createFakeOperations(events: SessionEventHub) {
     reviewTurns,
     reviewReplies,
     endTurn,
+    completeTool,
   };
 }
 
@@ -868,6 +888,44 @@ describe("task runner", () => {
     expect(test.store.get(created.id)?.state).toBe("implementing");
     test.endTurn("completed");
     await test.waitFor(created.id, "ready");
+  });
+
+  it("carries on by itself while its todo list has unfinished items", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    const todo = (id: string, status: string) => ({
+      id,
+      content: id,
+      activeForm: id,
+      status,
+    });
+    await test.waitForTurns(1);
+    test.completeTool("todo_write", {
+      todos: [todo("plan", "completed"), todo("build", "in_progress")],
+    });
+    test.endTurn("completed");
+    await test.waitForTurns(2);
+    expect(test.turns[1]).toMatchObject({
+      sessionId: test.turns[0]!.sessionId,
+      text: AUTO_CONTINUE_PROMPT,
+    });
+    // A turn that changed nothing is not continued again, as in VS Code.
+    test.completeTool("read_file", { path: "README.md" });
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    expect(test.turns).toHaveLength(2);
+  });
+
+  it("stops carrying on once the list is done", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    test.completeTool("todo_write", {
+      todos: [{ id: "a", content: "a", activeForm: "a", status: "completed" }],
+    });
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    expect(test.turns).toHaveLength(1);
   });
 
   it("fails, resumable, once the continuations run out", async () => {

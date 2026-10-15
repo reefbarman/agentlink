@@ -162,6 +162,14 @@ export interface CreateWorkspaceHostOptions {
      * child, for example `review`. Children otherwise use the parent's model.
      */
     readonly modelRoles?: Readonly<Record<string, AgentModelReference>>;
+    /**
+     * A child's commands and file writes use its parent's session grant, so
+     * they run without asking when the parent's would. Off by default: every
+     * child command and write pauses for the foreground. Children stay inside
+     * their file scopes, protected paths and command rules still apply, and
+     * MCP calls still ask.
+     */
+    readonly inheritSessionGrants?: boolean;
     readonly onApprovalAvailable?: (request: {
       readonly parentSessionId: string;
       readonly childSessionId: string;
@@ -429,6 +437,19 @@ export async function createWorkspaceHost(
   const hostFileSystem =
     options.executionBackend?.fileSystem ?? createNodeHostLocalFileSystem();
   let backgroundSupervisor: WorkspaceBackgroundSupervisor | undefined;
+  const inheritSessionGrants =
+    options.background?.inheritSessionGrants === true;
+  /** A child's grant check asks about its parent; others are unchanged. */
+  const grantRequest = <T extends { readonly sessionId: string }>(
+    request: T,
+  ): T => {
+    const parentSessionId = backgroundSupervisor?.getRecordForSession(
+      request.sessionId,
+    )?.parentSessionId;
+    return parentSessionId
+      ? { ...request, sessionId: parentSessionId }
+      : request;
+  };
   const supervisor = options.commands
     ? await WorkspaceCommandSupervisor.create({
         stateDirectory: path.join(projectDataRoot, "commands"),
@@ -450,10 +471,18 @@ export async function createWorkspaceHost(
           shellExecutable: options.commands.shellExecutable,
           environmentDigestSecret: approvalSecret!,
           resolveEnvironment: options.commands.resolveEnvironment,
-          hasSessionGrant: options.commands.hasSessionGrant,
+          hasSessionGrant:
+            inheritSessionGrants && options.commands.hasSessionGrant
+              ? (proposal, request) =>
+                  options.commands!.hasSessionGrant!(
+                    proposal,
+                    grantRequest(request),
+                  )
+              : options.commands.hasSessionGrant,
           requiresApproval: (_proposal, request) =>
+            !inheritSessionGrants &&
             backgroundSupervisor?.getRecordForSession(request.sessionId) !==
-            undefined,
+              undefined,
           resolveBackgroundOwnerSessionId: (request) =>
             backgroundSupervisor?.getRecordForSession(request.sessionId)
               ?.parentSessionId,
@@ -663,16 +692,19 @@ export async function createWorkspaceHost(
   const fileTools = options.files
     ? createWorkspaceFileTools({
         projectRoot: project.root,
-        // A background child never inherits a session grant: its writes
-        // pause for the foreground, like its commands and MCP calls.
+        // Unless the host lets children inherit it, a background child never
+        // has a session grant: its writes pause for the foreground, like its
+        // commands and MCP calls.
         approvalPolicy: options.files.approvalPolicy?.hasSessionGrant
           ? {
               hasSessionGrant: (proposal, request) =>
-                backgroundSupervisor?.getRecordForSession(request.sessionId) ===
-                  undefined &&
+                (inheritSessionGrants ||
+                  backgroundSupervisor?.getRecordForSession(
+                    request.sessionId,
+                  ) === undefined) &&
                 options.files!.approvalPolicy!.hasSessionGrant!(
                   proposal,
-                  request,
+                  grantRequest(request),
                 ),
             }
           : options.files.approvalPolicy,

@@ -1428,6 +1428,15 @@ function sessionKey(projectId: string, sessionId: string): string {
   return `${projectId}\u0000${sessionId}`;
 }
 
+/** The project and session an event hub key names. */
+export function parseSessionKey(
+  key: string,
+): { readonly projectId: string; readonly sessionId: string } | undefined {
+  const split = key.indexOf("\u0000");
+  if (split <= 0 || split === key.length - 1) return undefined;
+  return { projectId: key.slice(0, split), sessionId: key.slice(split + 1) };
+}
+
 function readCursor(
   url: URL,
   lastEventId: string | undefined,

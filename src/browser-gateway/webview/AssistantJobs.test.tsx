@@ -421,6 +421,47 @@ describe("InboxPanel", () => {
     expect(screen.queryByText(/Mark all/u)).toBeNull();
   });
 
+  it("stops a chat or lets it keep going from its runaway notice", async () => {
+    const stuck = (id: string): InboxEntry => ({
+      id,
+      kind: "session_stuck",
+      createdAt: Date.now(),
+      title: `Chat ${id} may be stuck`,
+      projectId: "home",
+      sessionId: `chat-${id}`,
+      read: false,
+    });
+    const calls = stubFetch({
+      "GET /api/inbox": () => ({ entries: [stuck("a"), stuck("b")] }),
+      "POST /api/inbox/act": () => ({ ok: true, unread: 0 }),
+    });
+    render(
+      <InboxPanel
+        revision={0}
+        onClose={() => undefined}
+        openChat={async () => undefined}
+      />,
+    );
+    const [stopA] = await screen.findAllByText("Stop");
+    fireEvent.click(stopA!);
+    await waitFor(() =>
+      expect(calls.map((call) => call.body)).toContainEqual({
+        id: "a",
+        action: "stop",
+      }),
+    );
+    // Handled: only the other notice still offers its choices.
+    expect(screen.getAllByText("Stop")).toHaveLength(1);
+    fireEvent.click(screen.getByText("Keep going"));
+    await waitFor(() =>
+      expect(calls.map((call) => call.body)).toContainEqual({
+        id: "b",
+        action: "keep_going",
+      }),
+    );
+    expect(screen.queryByText("Keep going")).toBeNull();
+  });
+
   it("marks everything read from the header", async () => {
     const calls = stubFetch({
       "GET /api/inbox": () => ({

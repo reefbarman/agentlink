@@ -1,5 +1,6 @@
 import type { AgentModelReference } from "@agentlink/core";
 import type { EmbeddedAgentTurnEvent } from "@agentlink/protocol";
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
 import type { GitHubConnectionStore } from "./githubConnections.js";
@@ -9,6 +10,11 @@ import {
   type PublisherClient,
 } from "./publisherClient.js";
 import type { SessionEventHub } from "./SessionEventHub.js";
+import {
+  AUTO_CONTINUE_PROMPT,
+  TurnProgress,
+  shouldAutoContinue,
+} from "./sessionProgress.js";
 import {
   publishProblem,
   pullRequestBody,
@@ -85,7 +91,10 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
 const MAX_REVIEW_DENIALS = 10;
 const MAX_SUMMARY_LENGTH = 2_000;
 const MAX_FEEDBACK_OUTPUT = 3_000;
-/** The host's per-turn step limit: a checkpoint for a task, not a failure. */
+/**
+ * The host's per-turn step limit: a checkpoint for a task, not a failure.
+ * The service sets no limit, so this only applies to hosts that do.
+ */
 const TURN_LIMIT_ERROR = "turn_execution_limit_reached";
 /** Times a task's chat carries on after reaching the per-turn limit. */
 const MAX_TURN_CONTINUATIONS = 10;
@@ -208,6 +217,8 @@ interface LiveTask {
   activeSessionId: string | undefined;
   /** Ends the turn being waited for, if any. */
   endTurn: ((outcome: Outcome) => void) | undefined;
+  /** Each chat's todo list as its turns last set it, for Auto Continue. */
+  readonly todos: Map<string, TodoItem[]>;
   done: Promise<void> | undefined;
 }
 
@@ -294,6 +305,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       allowUnreviewed,
       controller,
       auth: taskAuth(task.id, options.ownerId() ?? "", controller),
+      todos: new Map(),
       stopping: undefined,
       activeSessionId: undefined,
       endTurn: undefined,
@@ -330,10 +342,13 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
   };
 
   /**
-   * Send a message to a chat and wait for its work to end. A turn that
-   * reaches the host's per-turn step limit is a checkpoint, not a failure:
-   * the same chat is told to carry on, up to `MAX_TURN_CONTINUATIONS`
-   * times, after which the task fails and can be resumed.
+   * Send a message to a chat and wait for its work to end. The
+   * implementation chat carries on by itself (Auto Continue, as in VS Code)
+   * while its todo list has unfinished items and each turn makes progress;
+   * Stop always wins. A turn that reaches a host's per-turn step limit is a
+   * checkpoint, not a failure: the same chat is told to carry on, up to
+   * `MAX_TURN_CONTINUATIONS` times, after which the task fails and can be
+   * resumed.
    */
   const runTurn = async (
     entry: LiveTask,
@@ -341,16 +356,46 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     text: string,
     role: "implement" | "review",
   ): Promise<Outcome> => {
-    let outcome = await runOneTurn(entry, sessionId, text, role);
-    for (
-      let continued = 0;
-      continued < MAX_TURN_CONTINUATIONS &&
-      outcome.state === "failed" &&
-      outcome.error === TURN_LIMIT_ERROR &&
-      !entry.stopping;
-      continued += 1
-    ) {
-      outcome = await runOneTurn(entry, sessionId, CONTINUE_PROMPT, role);
+    let progress = new TurnProgress();
+    let outcome = await runOneTurn(entry, sessionId, text, role, progress);
+    let limitContinuations = 0;
+    while (!entry.stopping) {
+      if (progress.todos) entry.todos.set(sessionId, progress.todos);
+      if (
+        outcome.state === "failed" &&
+        outcome.error === TURN_LIMIT_ERROR &&
+        limitContinuations < MAX_TURN_CONTINUATIONS
+      ) {
+        limitContinuations += 1;
+        progress = new TurnProgress();
+        outcome = await runOneTurn(
+          entry,
+          sessionId,
+          CONTINUE_PROMPT,
+          role,
+          progress,
+        );
+        continue;
+      }
+      if (
+        role === "implement" &&
+        shouldAutoContinue({
+          completed: outcome.state === "implementing",
+          madeProgress: progress.madeProgress,
+          todos: entry.todos.get(sessionId) ?? [],
+        })
+      ) {
+        progress = new TurnProgress();
+        outcome = await runOneTurn(
+          entry,
+          sessionId,
+          AUTO_CONTINUE_PROMPT,
+          role,
+          progress,
+        );
+        continue;
+      }
+      break;
     }
     return outcome;
   };
@@ -365,6 +410,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     sessionId: string,
     text: string,
     role: "implement" | "review",
+    progress: TurnProgress,
   ): Promise<Outcome> => {
     const { projectId } = entry.task;
     const workingState = entry.task.state;
@@ -404,6 +450,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       ({ event }) => {
         if (event.kind === "turn") {
           const turnEvent = event.event;
+          progress.observe(turnEvent);
           if (turnEvent.type === "interaction.required") {
             pending = {
               interactionId: turnEvent.interaction.interactionId,

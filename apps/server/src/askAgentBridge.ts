@@ -9,6 +9,7 @@ import type {
   ChatSessionKind,
 } from "@agentlink/protocol/chat-session-history";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 import {
   isCoreReasoningEffort,
   type CoreReasoningEffort,
@@ -66,7 +67,21 @@ import type {
   SequencedSessionEvent,
   SessionEventHub,
 } from "./SessionEventHub.js";
+import {
+  AUTO_CONTINUE_PROMPT,
+  TurnProgress,
+  shouldAutoContinue,
+  todosFromToolResult,
+  withoutAutoContinuePrompts,
+} from "./sessionProgress.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
+
+/** How one turn ended, for Auto Continue. */
+interface TurnEnd {
+  /** Completed normally: not stopped, failed, or left waiting. */
+  readonly completed: boolean;
+  readonly madeProgress: boolean;
+}
 
 /**
  * Serves the shared Ask Agent browser UI's `/api/ask-agent/*` contract from
@@ -244,6 +259,12 @@ export interface AskAgentBridge {
     workspaceSessionId: string,
     task: TaskRun,
   ): Promise<TaskDeliveryResult>;
+  /**
+   * Stop one of this project's chats, as its Stop button does: the running
+   * turn is cancelled and it does not carry on by itself (Auto Continue)
+   * until the owner writes to it again.
+   */
+  stop(auth: AssistantServerAuth, workspaceSessionId: string): Promise<void>;
   /** Republish the snapshot (the inbox or jobs changed). */
   refresh(): void;
   close(): Promise<void>;
@@ -423,6 +444,13 @@ export async function createAskAgentBridge(
   let closed = false;
   /** Serializes turns: queued sends wait here for the previous one. */
   let turnChain: Promise<void> = Promise.resolve();
+  /**
+   * Sends waiting for the turn before them and not taken into it. Auto
+   * Continue gives way to them: the owner is steering.
+   */
+  const waitingSends = new Set<string>();
+  /** Each chat's todo list as its last `todo_write` set it. */
+  const sessionTodos = new Map<string, TodoItem[]>();
   let stateWrite: Promise<void> = Promise.resolve();
 
   const saveState = () => {
@@ -532,9 +560,11 @@ export async function createAskAgentBridge(
     sessionModels.set(sessionId, read.model);
     sessionEfforts.set(sessionId, read.reasoningEffort);
     sessionApprovalModes.set(sessionId, read.approvalMode);
-    const messages = withTaskResultNotices(
-      withAgentResultCards(
-        agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+    const messages = withoutAutoContinuePrompts(
+      withTaskResultNotices(
+        withAgentResultCards(
+          agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+        ),
       ),
     );
     // Agents that ended before this server started are not reported
@@ -807,9 +837,10 @@ export async function createAskAgentBridge(
     const turn = controller.beginTurn(assistant.id);
     if (!turn) return;
     runningSession = storeSessionId;
+    let end: TurnEnd;
     try {
       await publishNow();
-      await runTurn({
+      end = await runTurn({
         auth,
         workspaceSessionId,
         messageId: assistant.id,
@@ -821,6 +852,7 @@ export async function createAskAgentBridge(
       runningSession = undefined;
       await flagUnread(storeSessionId, workspaceSessionId);
     }
+    await continueWork(auth, workspaceSessionId, storeSessionId, end);
     await publishNow();
   };
 
@@ -876,9 +908,10 @@ export async function createAskAgentBridge(
       return "delivered";
     }
     runningSession = storeSessionId;
+    let end: TurnEnd | undefined;
     try {
       await publishNow();
-      await runTurn({
+      end = await runTurn({
         auth,
         workspaceSessionId,
         messageId: assistant.id,
@@ -891,6 +924,11 @@ export async function createAskAgentBridge(
       controller.completeTurn(turn);
       runningSession = undefined;
       await flagUnread(storeSessionId, workspaceSessionId);
+    }
+    if (end) {
+      await continueWork(auth, workspaceSessionId, storeSessionId, end).catch(
+        () => undefined,
+      );
     }
     await publishNow();
     return "delivered";
@@ -1131,6 +1169,8 @@ export async function createAskAgentBridge(
     text: string,
   ): string => {
     store.removeQueuedMessage(interjectionId);
+    // Taken in: Auto Continue need not give way to it.
+    waitingSends.delete(interjectionId);
     // A task chat's message has no send waiting to skip it afterwards.
     if (!pendingTaskInterjections.delete(interjectionId)) {
       admittedInterjections.add(interjectionId);
@@ -1222,6 +1262,71 @@ export async function createAskAgentBridge(
     }
   };
 
+  /** Keep a chat's todo list from its `todo_write` calls; shown when open. */
+  const noteTodos = (
+    workspaceSessionId: string,
+    event: EmbeddedAgentTurnEvent,
+  ) => {
+    if (event.type !== "tool.completed") return;
+    const todos = todosFromToolResult(event.toolName, event.displayContent);
+    if (!todos) return;
+    sessionTodos.set(workspaceSessionId, todos);
+    if (
+      workspaceSessionFor(store.getActiveSessionId()) === workspaceSessionId
+    ) {
+      store.setTodos(todos);
+      schedule();
+    }
+  };
+
+  /**
+   * Auto Continue, as in VS Code: after a turn completes with unfinished
+   * todos and progress made, the chat carries on by itself with the same
+   * hidden prompt. Stop wins, as does any message the owner sends.
+   */
+  const continueWork = async (
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+    storeSessionId: string,
+    end: TurnEnd,
+  ): Promise<void> => {
+    // Later turns run after the request that started the first has closed.
+    const detached = auth.detach();
+    let last = end;
+    while (
+      !closed &&
+      waitingSends.size === 0 &&
+      !delivery.stopped.has(workspaceSessionId) &&
+      shouldAutoContinue({
+        ...last,
+        todos: sessionTodos.get(workspaceSessionId) ?? [],
+      })
+    ) {
+      if (!(await detached.revalidate()).valid) return;
+      const assistant = store.startAssistantMessage({
+        now: now(),
+        sessionId: storeSessionId,
+      });
+      const turn = controller.beginTurn(assistant.id);
+      if (!turn) return;
+      runningSession = storeSessionId;
+      try {
+        await publishNow();
+        last = await runTurn({
+          auth: detached,
+          workspaceSessionId,
+          messageId: assistant.id,
+          turn,
+          text: AUTO_CONTINUE_PROMPT,
+        });
+      } finally {
+        controller.completeTurn(turn);
+        runningSession = undefined;
+        await flagUnread(storeSessionId, workspaceSessionId);
+      }
+    }
+  };
+
   /**
    * Run one turn and project its events until it settles, including any
    * approval pauses (each resume is a new task on the same session).
@@ -1232,10 +1337,12 @@ export async function createAskAgentBridge(
     readonly messageId: string;
     readonly turn: AskAgentControllerTurn;
     readonly text: string;
-  }): Promise<void> => {
+  }): Promise<TurnEnd> => {
     const { turn, workspaceSessionId } = params;
     // Moves below each message the user sends into the turn.
     let messageId = params.messageId;
+    const progress = new TurnProgress();
+    let completed = false;
     const storeSessionId = runningSession ?? store.getActiveSessionId();
     runningWorkspaceSession = workspaceSessionId;
     const key = operations.sessionKey(
@@ -1254,6 +1361,8 @@ export async function createAskAgentBridge(
     };
 
     const onTurnEvent = (event: EmbeddedAgentTurnEvent) => {
+      progress.observe(event);
+      noteTodos(workspaceSessionId, event);
       if (projectTurnContent(messageId, toolStarts, event)) return;
       switch (event.type) {
         case "user.interjected":
@@ -1277,6 +1386,7 @@ export async function createAskAgentBridge(
           return;
         }
         case "turn.completed":
+          completed = !controller.isTurnStopped(turn);
           controller.finishAssistantSuccess({
             messageId,
             text: event.result.text ?? "",
@@ -1374,6 +1484,7 @@ export async function createAskAgentBridge(
         runningWorkspaceSession = undefined;
       }
     }
+    return { completed, madeProgress: progress.madeProgress };
   };
 
   const handleSend = async (
@@ -1496,8 +1607,10 @@ export async function createAskAgentBridge(
     turnChain = new Promise<void>((resolve) => {
       release = resolve;
     });
+    waitingSends.add(queueId);
     try {
       await previous;
+      waitingSends.delete(queueId);
       if (busy) {
         // Taken in by the turn it waited for: already answered there.
         if (admittedInterjections.delete(queueId)) {
@@ -1534,9 +1647,10 @@ export async function createAskAgentBridge(
       const turn = controller.beginTurn(assistant.id);
       if (!turn) throw new HttpError(409, "ask_agent_turn_in_progress");
       runningSession = storeSessionId;
+      let end: TurnEnd;
       try {
         await publishNow();
-        await runTurn({
+        end = await runTurn({
           auth,
           workspaceSessionId,
           messageId: assistant.id,
@@ -1556,7 +1670,13 @@ export async function createAskAgentBridge(
       if (!response.writableEnded && !response.destroyed) {
         sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
       }
+      // The send is answered; the chat carries on while it has work left.
+      await continueWork(auth, workspaceSessionId, storeSessionId, end).catch(
+        () => undefined,
+      );
+      void publishNow().catch(() => undefined);
     } finally {
+      waitingSends.delete(queueId);
       release();
     }
   };
@@ -1708,6 +1828,9 @@ export async function createAskAgentBridge(
       ? sessionModels.get(workspaceSessionId)
       : undefined;
     if (model) store.setModel(modelKey(model));
+    store.setTodos(
+      (workspaceSessionId && sessionTodos.get(workspaceSessionId)) || [],
+    );
     return true;
   };
 
@@ -1773,6 +1896,7 @@ export async function createAskAgentBridge(
       }
       if (event.kind !== "turn") return;
       const turnEvent = event.event;
+      noteTodos(workspaceSessionId, turnEvent);
       if (turnEvent.type === "user.interjected") {
         entry.messageId = admitInterjection(
           workspaceSessionId,
@@ -2267,6 +2391,30 @@ export async function createAskAgentBridge(
       watchActiveAgents(auth);
       await publishNow();
       return true;
+    },
+    async stop(auth, workspaceSessionId) {
+      delivery.stopped.add(workspaceSessionId);
+      if (
+        runningWorkspaceSession === workspaceSessionId &&
+        controller.hasActiveTurn()
+      ) {
+        await controller.cancelActiveTurn(async (messageId) => {
+          controller.finishAssistantError({
+            messageId,
+            text: "Stopped.",
+            code: "model_stopped",
+            retryable: false,
+          });
+          await operations
+            .cancel(auth, projectOf(workspaceSessionId), workspaceSessionId)
+            .catch(() => undefined);
+          return publishNow();
+        });
+        return;
+      }
+      await operations
+        .cancel(auth, projectOf(workspaceSessionId), workspaceSessionId)
+        .catch(() => undefined);
     },
     refresh() {
       if (closed || sse.size === 0) return;

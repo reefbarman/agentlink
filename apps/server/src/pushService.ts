@@ -157,6 +157,10 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
   task_ready: "Ready, but not published. Open it to see why.",
   task_blocked: "Blocked. Open it to see what it needs.",
   task_failed: "Failed. Open it to see what happened.",
+  session_long_running:
+    "Still working. Open it to check in, or stop it from the Inbox.",
+  session_stuck:
+    "It may be stuck. Open the Inbox to stop it or let it keep going.",
 };
 
 /**
@@ -194,7 +198,9 @@ export function pushMessageForEntry(
       ? `run:${entry.runId}`
       : entry.taskId
         ? `task:${entry.taskId}`
-        : entry.id,
+        : entry.sessionId
+          ? `session:${entry.projectId}:${entry.sessionId}`
+          : entry.id,
     ...(entry.kind === "needs_approval"
       ? { urgency: "high" as const, ttlSeconds: 12 * 60 * 60 }
       : {}),

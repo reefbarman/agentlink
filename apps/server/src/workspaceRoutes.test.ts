@@ -87,6 +87,8 @@ async function startHarness(
     commandWorker?: boolean;
     /** Wire per-session approval modes as the service does (default autonomous). */
     approvalModes?: boolean;
+    /** Children use their parent's grant, as the service sets up. */
+    inheritSessionGrants?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
@@ -193,6 +195,7 @@ async function startHarness(
       modelRoles: {
         review: { providerId: "claude", modelId: "claude-review" },
       },
+      ...(options.inheritSessionGrants ? { inheritSessionGrants: true } : {}),
       onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
         agentNotifier?.notifyAgentApproval({
           projectId: "home",
@@ -1299,6 +1302,103 @@ describe("assistant workspace routes", () => {
         sessionId,
       ),
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("lets a child of an autonomous chat write without asking when children inherit its grant", async () => {
+    const harness = await startHarness({
+      approvalModes: true,
+      inheritSessionGrants: true,
+    });
+    const { owner, request } = harness;
+    harness.fetch.mockImplementation(async (_url, init) => {
+      if (lastUser(init) === "write child.txt") {
+        return hasToolResult(init)
+          ? completion("child done")
+          : toolCall("write_file", {
+              path: "child.txt",
+              content: "from child\n",
+              expectedAbsent: true,
+            });
+      }
+      return hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Write child.txt",
+            message: "write child.txt",
+            read_paths: [],
+            write_paths: [{ path: "child.txt", kind: "file" }],
+          });
+    });
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "delegate" },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        request({ path: `${base}/agents`, session: owner }),
+      ).resolves.toMatchObject({
+        body: {
+          agents: [{ lifecycle: "completed", resultText: "child done" }],
+        },
+      });
+    });
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
+    ).resolves.toBe("from child\n");
+
+    // A chat set to ask: its child asks too.
+    await request({
+      method: "POST",
+      path: `${base}/approval-mode`,
+      session: owner,
+      body: { mode: "ask" },
+    });
+    // This turn's own tool result, not the first turn's.
+    const answered = (init: RequestInit | undefined) =>
+      requestBody(init).messages?.at(-1)?.role === "tool";
+    harness.fetch.mockImplementation(async (_url, init) => {
+      if (lastUser(init) === "write second.txt") {
+        return answered(init)
+          ? completion("child done")
+          : toolCall("write_file", {
+              path: "second.txt",
+              content: "from child\n",
+              expectedAbsent: true,
+            });
+      }
+      return answered(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Write second.txt",
+            message: "write second.txt",
+            read_paths: [],
+            write_paths: [{ path: "second.txt", kind: "file" }],
+          });
+    });
+    await vi.waitFor(async () => {
+      const turn = await request({
+        method: "POST",
+        path: `${base}/turns`,
+        session: owner,
+        body: { text: "delegate again" },
+      });
+      expect(turn.status).toBe(202);
+    });
+    await vi.waitFor(async () => {
+      const listed = await request({ path: `${base}/agents`, session: owner });
+      expect(
+        (listed.body as { agents: { lifecycle: string }[] }).agents.map(
+          (agent) => agent.lifecycle,
+        ),
+      ).toContain("awaiting_approval");
+    });
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "second.txt"), "utf8"),
+    ).rejects.toThrow();
   });
 
   it("steers and stops a running agent, scoped to its parent", async () => {

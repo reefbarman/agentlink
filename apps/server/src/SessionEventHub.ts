@@ -108,6 +108,9 @@ export const SERVER_RESTARTED_ERROR = "server_restarted";
 export class SessionEventHub {
   readonly epoch: string;
   private readonly channels = new Map<string, SessionChannel>();
+  private readonly observers = new Set<
+    (key: string, event: SequencedSessionEvent) => void
+  >();
   private closed = false;
 
   constructor(
@@ -140,7 +143,13 @@ export class SessionEventHub {
     const channel = this.channel(key);
     const sequenced = this.record(key, channel, event);
     // Snapshot: a listener may unsubscribe while events are delivered.
-    for (const listener of Array.from(channel.listeners)) {
+    for (const listener of [
+      ...Array.from(channel.listeners),
+      ...Array.from(
+        this.observers,
+        (observer) => (event: SequencedSessionEvent) => observer(key, event),
+      ),
+    ]) {
       try {
         listener(sequenced);
       } catch {
@@ -148,6 +157,19 @@ export class SessionEventHub {
       }
     }
     return sequenced;
+  }
+
+  /**
+   * Every live event of every session, after the session's own subscribers.
+   * No replay. Returns a function that stops observing.
+   */
+  observe(
+    observer: (key: string, event: SequencedSessionEvent) => void,
+  ): () => void {
+    this.observers.add(observer);
+    return () => {
+      this.observers.delete(observer);
+    };
   }
 
   /**

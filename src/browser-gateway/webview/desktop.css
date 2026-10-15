@@ -2820,6 +2820,15 @@ html.quick-ask-document body {
   margin-right: 8px;
 }
 
+.browser-shell.browser-shell-desktop .assistant-inbox-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-right: 8px;
+}
+
 .browser-shell.browser-shell-desktop
   :is(.kind-task_published, .kind-task_ready)
   .assistant-inbox-open

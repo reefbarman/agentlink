@@ -17,6 +17,7 @@ import {
   SessionEventHub,
   type AssistantSessionEvent,
 } from "./SessionEventHub.js";
+import { AUTO_CONTINUE_PROMPT } from "./sessionProgress.js";
 import { parseTaskResultPrompt } from "./taskResultDelivery.js";
 import type { TaskRun } from "./taskStore.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
@@ -414,6 +415,179 @@ describe("Ask Agent bridge", () => {
         }
       ).session.foreground.reasoningEffort,
     ).toBe("max");
+  });
+
+  describe("Auto Continue", () => {
+    const todo = (id: string, status: string) => ({
+      id,
+      content: id,
+      activeForm: id,
+      status,
+    });
+    /** Each started turn runs the next step; the last repeats. */
+    const scriptSteps = (
+      fake: Awaited<ReturnType<typeof startBridge>>["fake"],
+      steps: Array<{
+        tools?: Array<{ name: string; display?: unknown }>;
+        text: string;
+        hold?: Promise<void>;
+      }>,
+    ) => {
+      let index = 0;
+      fake.setScript(async (sessionId, taskId) => {
+        const step = steps[Math.min(index, steps.length - 1)]!;
+        index += 1;
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "started",
+          taskId,
+          operation: "turn",
+          actor: { subjectId: "owner", deviceId: "d" },
+        });
+        await step.hold;
+        for (const [n, tool] of (step.tools ?? []).entries()) {
+          fake.turn(sessionId, {
+            type: "tool.completed",
+            toolCallId: `${taskId}-${n}`,
+            toolName: tool.name,
+            displayContent: tool.display,
+          });
+        }
+        fake.turn(sessionId, { type: "text.delta", text: step.text });
+        fake.turn(sessionId, {
+          type: "turn.completed",
+          result: { text: step.text },
+        });
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "finished",
+          taskId,
+          status: "completed",
+        });
+      });
+    };
+
+    it("carries on by itself while todos are unfinished, hiding its prompt", async () => {
+      const { fake, call } = await startBridge();
+      scriptSteps(fake, [
+        {
+          tools: [
+            {
+              name: "todo_write",
+              display: {
+                todos: [
+                  todo("plan", "completed"),
+                  todo("build", "in_progress"),
+                ],
+              },
+            },
+          ],
+          text: "Planned",
+        },
+        {
+          tools: [
+            { name: "write_file", display: { path: "a.txt" } },
+            {
+              name: "todo_write",
+              display: {
+                todos: [todo("plan", "completed"), todo("build", "completed")],
+              },
+            },
+          ],
+          text: "Built",
+        },
+      ]);
+      await call("/api/ask-agent/send", { text: "build it" });
+      await vi.waitFor(() =>
+        expect(fake.operations.startTurn).toHaveBeenCalledTimes(2),
+      );
+      expect(fake.operations.startTurn.mock.calls[1]?.[3]).toBe(
+        AUTO_CONTINUE_PROMPT,
+      );
+      await vi.waitFor(async () => {
+        const { foreground } = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        ).session;
+        expect(
+          foreground.projectedMessages.map((message) => message.role),
+        ).toEqual(["user", "assistant", "assistant"]);
+        expect(
+          (foreground as unknown as { todos: Array<{ status: string }> }).todos,
+        ).toEqual([
+          expect.objectContaining({ status: "completed" }),
+          expect.objectContaining({ status: "completed" }),
+        ]);
+      });
+      // Done: no third turn.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops after a turn that made no progress", async () => {
+      const { fake, call } = await startBridge();
+      scriptSteps(fake, [
+        {
+          tools: [
+            { name: "todo_write", display: { todos: [todo("a", "pending")] } },
+          ],
+          text: "Planned",
+        },
+        { tools: [{ name: "read_file" }], text: "Looked around" },
+      ]);
+      await call("/api/ask-agent/send", { text: "do it" });
+      await vi.waitFor(() =>
+        expect(fake.operations.startTurn).toHaveBeenCalledTimes(2),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it("gives way to a message the owner sends, and Stop ends it", async () => {
+      const { fake, call } = await startBridge();
+      fake.acceptInterjections(false);
+      let release!: () => void;
+      const hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const plan = {
+        name: "todo_write",
+        display: { todos: [todo("a", "in_progress")] },
+      };
+      scriptSteps(fake, [
+        { tools: [plan], text: "Planned", hold },
+        { tools: [plan], text: "On it" },
+      ]);
+      const first = call("/api/ask-agent/send", { text: "do it" });
+      await vi.waitFor(() =>
+        expect(fake.operations.startTurn).toHaveBeenCalledTimes(1),
+      );
+      const second = call("/api/ask-agent/send", { text: "use blue" });
+      await vi.waitFor(() =>
+        expect(fake.operations.interject).toHaveBeenCalledTimes(1),
+      );
+      release();
+      await Promise.all([first, second]);
+      // The owner's message ran next, not the continuation prompt.
+      expect(fake.operations.startTurn.mock.calls[1]?.[3]).toBe("use blue");
+      // Its turn left work too, so the chat carries on, until Stop.
+      await vi.waitFor(() =>
+        expect(
+          fake.operations.startTurn.mock.calls.length,
+        ).toBeGreaterThanOrEqual(3),
+      );
+      expect(fake.operations.startTurn.mock.calls[2]?.[3]).toBe(
+        AUTO_CONTINUE_PROMPT,
+      );
+      await call("/api/ask-agent/stop", {});
+      const stoppedAt = fake.operations.startTurn.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(fake.operations.startTurn.mock.calls.length).toBeLessThanOrEqual(
+        stoppedAt + 1,
+      );
+      const settled = fake.operations.startTurn.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(settled);
+    });
   });
 
   describe("messages sent while a turn runs", () => {

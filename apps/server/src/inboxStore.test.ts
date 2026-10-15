@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inboxEntryForRun,
+  inboxEntryForSessionAlert,
   inboxEntryForTask,
   openInboxStore,
 } from "./inboxStore.js";
@@ -433,5 +434,134 @@ describe("inbox routes", () => {
       status: 403,
       body: { error: "inbox_forbidden" },
     });
+  });
+
+  it("stops a chat, or lets it keep going, from its runaway notice", async () => {
+    const store = await openInboxStore({ directory: await tempDir() });
+    const act = vi.fn(async () => undefined);
+    const routes = createInboxRoutes({
+      store,
+      isOwner: (caller) => caller.principal.subjectId === "owner",
+      act,
+    });
+    const server = http.createServer((request, response) => {
+      routes.handleRequest(request, response, auth("owner")).then(
+        () => undefined,
+        (error: unknown) => {
+          response.writeHead(error instanceof HttpError ? error.status : 500);
+          response.end(
+            JSON.stringify({
+              error: error instanceof HttpError ? error.code : String(error),
+            }),
+          );
+        },
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", () => resolve()),
+    );
+    cleanup.push(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const port = (server.address() as { port: number }).port;
+    const post = async (body: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/inbox/act`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: response.status,
+        body: (await response.json()) as Record<string, unknown>,
+      };
+    };
+    const stuck = (await store.add(
+      inboxEntryForSessionAlert(
+        {
+          projectId: "home",
+          sessionId: "chat-1",
+          kind: "repeating",
+          elapsedMs: 600_000,
+          toolName: "execute_command",
+          repeats: 8,
+        },
+        undefined,
+      ),
+      1,
+    ))!;
+    const done = (await store.add(
+      { kind: "run_completed", title: "Done", projectId: "home" },
+      2,
+    ))!;
+
+    await expect(post({ id: stuck.id, action: "stop" })).resolves.toEqual({
+      status: 200,
+      body: { ok: true, unread: 1 },
+    });
+    expect(act).toHaveBeenCalledWith(
+      expect.objectContaining({ id: stuck.id, sessionId: "chat-1" }),
+      "stop",
+      expect.anything(),
+    );
+    expect(store.list().find((entry) => entry.id === stuck.id)?.read).toBe(
+      true,
+    );
+    expect((await post({ id: done.id, action: "stop" })).status).toBe(409);
+    expect((await post({ id: stuck.id, action: "pause" })).status).toBe(400);
+    expect((await post({ id: "missing", action: "keep_going" })).status).toBe(
+      404,
+    );
+  });
+});
+
+describe("inboxEntryForSessionAlert", () => {
+  const alert = {
+    projectId: "task-t1",
+    sessionId: "chat-9",
+    elapsedMs: 2.5 * 3_600_000,
+  };
+
+  it("says a chat is still working, or may be stuck, without stopping it", () => {
+    expect(
+      inboxEntryForSessionAlert(
+        { ...alert, kind: "long_running" },
+        "Fix the site",
+      ),
+    ).toEqual({
+      projectId: "task-t1",
+      sessionId: "chat-9",
+      kind: "session_long_running",
+      title: '"Fix the site" is still working',
+      body: "It has been working for 2 hours. It keeps going until it finishes or you stop it.",
+    });
+    expect(
+      inboxEntryForSessionAlert(
+        { ...alert, kind: "repeating", toolName: "read_file", repeats: 8 },
+        undefined,
+      ),
+    ).toMatchObject({
+      kind: "session_stuck",
+      title: "A chat may be stuck",
+      body: expect.stringContaining("read_file with the same input 8 times"),
+    });
+    expect(
+      inboxEntryForSessionAlert({ ...alert, kind: "quiet" }, undefined).kind,
+    ).toBe("session_stuck");
+  });
+
+  it("keeps one unread notice per chat and kind", async () => {
+    const store = await openInboxStore({ directory: await tempDir() });
+    const entry = inboxEntryForSessionAlert(
+      { ...alert, kind: "quiet" },
+      undefined,
+    );
+    expect(await store.add(entry, 1)).toBeDefined();
+    expect(await store.add(entry, 2)).toBeUndefined();
+    expect(
+      await store.add({ ...entry, sessionId: "another-chat" }, 3),
+    ).toBeDefined();
+    await store.markRead("all");
+    expect(await store.add(entry, 4)).toBeDefined();
   });
 });

@@ -1,4 +1,5 @@
 import type { JobDefinition, JobRun } from "./jobStore.js";
+import type { SessionAlert } from "./sessionWatch.js";
 import { evidenceFor, type TaskRun } from "./taskStore.js";
 
 import { promises as fs } from "node:fs";
@@ -29,7 +30,11 @@ export type InboxEntryKind =
   /** A task is ready with its evidence but was not published. */
   | "task_ready"
   | "task_blocked"
-  | "task_failed";
+  | "task_failed"
+  /** A chat or task has been working a long time (the runaway guard). */
+  | "session_long_running"
+  /** A chat or task looks stuck: repeating itself, or gone quiet. */
+  | "session_stuck";
 
 export interface InboxEntry {
   readonly id: string;
@@ -253,6 +258,46 @@ export function inboxEntryForTask(task: TaskRun): NewInboxEntry | undefined {
   }
 }
 
+/**
+ * The inbox entry for a runaway-guard alert. Only a notice: the work goes
+ * on until the owner stops it. `name` is the chat's or task's name.
+ */
+export function inboxEntryForSessionAlert(
+  alert: SessionAlert,
+  name: string | undefined,
+): NewInboxEntry {
+  const label = name ? `"${truncate(name, 80)}"` : "A chat";
+  const base = {
+    projectId: alert.projectId,
+    sessionId: alert.sessionId,
+  };
+  const hours = Math.max(1, Math.floor(alert.elapsedMs / 3_600_000));
+  const running = `It has been working for ${hours === 1 ? "an hour" : `${hours} hours`}.`;
+  switch (alert.kind) {
+    case "long_running":
+      return {
+        ...base,
+        kind: "session_long_running",
+        title: `${label} is still working`,
+        body: `${running} It keeps going until it finishes or you stop it.`,
+      };
+    case "repeating":
+      return {
+        ...base,
+        kind: "session_stuck",
+        title: `${label} may be stuck`,
+        body: `It has run ${alert.toolName ?? "the same tool"} with the same input ${alert.repeats ?? "many"} times in a row. Stop it, or let it keep going.`,
+      };
+    case "quiet":
+      return {
+        ...base,
+        kind: "session_stuck",
+        title: `${label} may be stuck`,
+        body: "It has shown no new output or results for a while. Stop it, or let it keep going.",
+      };
+  }
+}
+
 /** The objective's first line, short enough for a title. */
 function taskName(objective: string): string {
   const line =
@@ -366,6 +411,19 @@ export async function openInboxStore(options: {
       ) {
         return undefined;
       }
+      // One unread runaway notice per chat and kind.
+      if (
+        isSessionAlertKind(input.kind) &&
+        entries.some(
+          (entry) =>
+            !entry.read &&
+            entry.kind === input.kind &&
+            entry.projectId === input.projectId &&
+            entry.sessionId === input.sessionId,
+        )
+      ) {
+        return undefined;
+      }
       const entry: InboxEntry = {
         ...input,
         title: truncate(input.title, MAX_TITLE_LENGTH),
@@ -414,6 +472,11 @@ async function readEntries(file: string): Promise<InboxEntry[]> {
   } catch {
     return [];
   }
+}
+
+/** Runaway-guard notices, which offer Stop and Keep going. */
+export function isSessionAlertKind(kind: InboxEntryKind): boolean {
+  return kind === "session_long_running" || kind === "session_stuck";
 }
 
 function isEntry(value: unknown): value is InboxEntry {

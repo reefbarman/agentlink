@@ -67,11 +67,14 @@ import {
 import { createInboxRoutes } from "./inboxRoutes.js";
 import {
   inboxEntryForRun,
+  inboxEntryForSessionAlert,
   inboxEntryForTask,
   openInboxStore,
   type NewInboxEntry,
 } from "./inboxStore.js";
 import { createPushRoutes } from "./pushRoutes.js";
+import { AUTO_CONTINUE_INSTRUCTIONS } from "./sessionProgress.js";
+import { createSessionWatch } from "./sessionWatch.js";
 import {
   connectorPushTransport,
   openPushService,
@@ -117,6 +120,7 @@ import { bundledWebAssets } from "./webAssets.js";
 import {
   createAssistantWorkspaceRoutes,
   ownerProjectAccess,
+  parseSessionKey,
   type AuthorizeAssistantProject,
 } from "./workspaceRoutes.js";
 
@@ -142,26 +146,17 @@ export interface AssistantService {
 }
 
 /**
- * How much one chat turn may do before it stops and says so. The core's
- * defaults for headless turns (16 model calls, 64 tool calls, 5 minutes)
- * cut real work short; these are a runaway guard, not a work budget.
+ * How much one turn may do: no limit (zero), for chats and tasks alike, as
+ * in VS Code. The core's defaults for headless turns (16 model calls, 64
+ * tool calls, 5 minutes) would cut real work short. Work runs until it is
+ * done or the owner stops it; the runaway guard (`sessionWatch.ts`) only
+ * tells the owner when something runs long or looks stuck.
  */
-export const CHAT_TURN_LIMITS = {
-  maxModelCalls: 100,
-  maxToolCalls: 400,
-  maxElapsedMs: 30 * 60_000,
-  maxToolResultBytes: 8 * 1024 * 1024,
-} as const;
-
-/**
- * A coding task's turns. A task that reaches these carries on in the same
- * chat by itself (the task runner continues it), up to its own cap.
- */
-export const TASK_TURN_LIMITS = {
-  maxModelCalls: 250,
-  maxToolCalls: 1_000,
-  maxElapsedMs: 90 * 60_000,
-  maxToolResultBytes: 16 * 1024 * 1024,
+export const SESSION_TURN_LIMITS = {
+  maxModelCalls: 0,
+  maxToolCalls: 0,
+  maxElapsedMs: 0,
+  maxToolResultBytes: 0,
 } as const;
 
 /** Where the access store (owner, devices, sessions) lives under the data root. */
@@ -926,8 +921,14 @@ export async function startAssistantService(
         providers,
         defaultModel: config.defaultModel,
         promptIdentity: { role: "a personal assistant" },
-        turnLimits: kind === "task" ? TASK_TURN_LIMITS : CHAT_TURN_LIMITS,
-        ...(kind === "project" ? { instructions: routingInstructions } : {}),
+        turnLimits: SESSION_TURN_LIMITS,
+        // The todo list, for Auto Continue; no ask_user (approval cards and
+        // messages are how a chat reaches the owner).
+        sessionInteractions: {},
+        instructions:
+          kind === "project"
+            ? `${routingInstructions}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`
+            : AUTO_CONTINUE_INSTRUCTIONS,
         ...commandOptions,
         ...(commandOptions.commands && project.commandRoot
           ? {
@@ -975,10 +976,12 @@ export async function startAssistantService(
             : {}),
         },
         // Children are one level deep, use the parent's model unless a role
-        // (for example `review`) is requested, and pause for the owner's
-        // approval like the parent does.
+        // (for example `review`) is requested, and ask for approval when the
+        // parent would: an autonomous chat's children run commands and write
+        // inside their scopes without asking.
         background: {
           enabled: true,
+          inheritSessionGrants: true,
           ...(config.modelRoles ? { modelRoles: config.modelRoles } : {}),
           onApprovalAvailable: ({ parentSessionId, childSessionId }) =>
             agentNotifier?.notifyAgentApproval({
@@ -1052,6 +1055,38 @@ export async function startAssistantService(
           : {}),
       };
     };
+    /**
+     * Stop the task or scheduled run working in a chat: a task is recorded
+     * as stopped (it can be resumed), a run as cancelled. False when neither
+     * works there.
+     */
+    const stopTaskOrRun = async (workspaceSessionId: string) => {
+      const task = taskStore
+        .list()
+        .find(
+          (candidate) =>
+            candidate.sessionId === workspaceSessionId &&
+            isActiveTask(candidate),
+        );
+      if (task && taskRunner) {
+        await taskRunner.stop(task.id);
+        return true;
+      }
+      const job = jobStore
+        .list()
+        .find((candidate) =>
+          jobStore
+            .runs(candidate.id)
+            .some(
+              (run) => isActiveRun(run) && run.sessionId === workspaceSessionId,
+            ),
+        );
+      if (job) {
+        await jobs.stopJob(job.id, "cancelled");
+        return true;
+      }
+      return false;
+    };
     // Each project has its own chats; the HTTP API serves them all.
     const legacyChatProject = config.projects[0]?.id;
     const openBridge = (projectId: string) =>
@@ -1075,28 +1110,7 @@ export async function startAssistantService(
         // Stop in a run's chat stops the run, recorded as cancelled; in a
         // task's chat, it stops the task (which can be resumed).
         stopRun: async (workspaceSessionId) => {
-          const task = taskStore
-            .list()
-            .find(
-              (candidate) =>
-                candidate.sessionId === workspaceSessionId &&
-                isActiveTask(candidate),
-            );
-          if (task) {
-            await taskRunner?.stop(task.id);
-            return;
-          }
-          const job = jobStore
-            .list()
-            .find((candidate) =>
-              jobStore
-                .runs(candidate.id)
-                .some(
-                  (run) =>
-                    isActiveRun(run) && run.sessionId === workspaceSessionId,
-                ),
-            );
-          if (job) await jobs.stopJob(job.id, "cancelled");
+          await stopTaskOrRun(workspaceSessionId);
         },
         chatTasks: (workspaceSessionId) =>
           chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
@@ -1164,6 +1178,36 @@ export async function startAssistantService(
           });
       }
     };
+    // The runaway guard: tells the owner when a chat or task has worked a
+    // long time or looks stuck. Notices only; it never stops anything.
+    const sessionWatch = createSessionWatch({
+      onAlert: (alert) => {
+        const task = taskStore
+          .list()
+          .find(
+            (candidate) =>
+              candidate.projectId === alert.projectId &&
+              candidate.sessionId === alert.sessionId,
+          );
+        const name = task?.objective
+          .split("\n")
+          .map((line) => line.trim())
+          .find(Boolean);
+        addToInbox(inboxEntryForSessionAlert(alert, name))
+          .then(() => assistantChanged())
+          .catch((error: unknown) => {
+            log(`Could not update the inbox: ${message(error)}`);
+          });
+      },
+    });
+    const stopWatching = routes.events.observe((key, { event }) => {
+      const session = parseSessionKey(key);
+      if (session) {
+        sessionWatch.observe(session.projectId, session.sessionId, event);
+      }
+    });
+    const watchTimer = setInterval(() => sessionWatch.tick(), 60_000);
+    watchTimer.unref();
     /** Raise or settle the inbox entry a run's new record calls for. */
     const recordInInbox = (run: JobRun, job: JobDefinition) => {
       void (async () => {
@@ -1445,6 +1489,23 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
       onChanged: assistantChanged,
+      // Stop or Keep going on a "still working" or "may be stuck" notice.
+      act: async (entry, action, auth) => {
+        if (!entry.sessionId) return;
+        if (action === "keep_going") {
+          sessionWatch.keepGoing(entry.projectId, entry.sessionId);
+          return;
+        }
+        if (await stopTaskOrRun(entry.sessionId)) return;
+        const bridge = bridges.get(entry.projectId);
+        if (bridge) {
+          await bridge.stop(auth.detach(), entry.sessionId);
+          return;
+        }
+        await routes.operations
+          .cancel(auth, entry.projectId, entry.sessionId)
+          .catch(() => undefined);
+      },
     });
     const pushRoutes = createPushRoutes({
       push,
@@ -1489,6 +1550,8 @@ export async function startAssistantService(
         await taskDeliveries.flush();
         await taskStore.flush();
         await taskInboxWrites;
+        clearInterval(watchTimer);
+        stopWatching();
         await inbox.flush();
         await push.close();
         await chat.close();

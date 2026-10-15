@@ -97,7 +97,9 @@ export interface InboxEntry {
     | "task_published"
     | "task_ready"
     | "task_blocked"
-    | "task_failed";
+    | "task_failed"
+    | "session_long_running"
+    | "session_stuck";
   createdAt: number;
   title: string;
   body?: string;
@@ -151,7 +153,16 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   task_ready: "pass",
   task_blocked: "warning",
   task_failed: "error",
+  session_long_running: "watch",
+  session_stuck: "warning",
 };
+
+/** Runaway-guard notices: the chat keeps working until the owner stops it. */
+function offersStop(entry: InboxEntry): boolean {
+  return (
+    entry.kind === "session_long_running" || entry.kind === "session_stuck"
+  );
+}
 
 /** The browser's own time zone, the default for new daily and weekly jobs. */
 export function browserTimeZone(): string {
@@ -1198,6 +1209,25 @@ export function InboxPanel({
     }
   };
 
+  const act = async (entry: InboxEntry, action: "stop" | "keep_going") => {
+    setError(null);
+    setEntries(
+      (current) =>
+        current?.map((candidate) =>
+          candidate.id === entry.id ? { ...candidate, read: true } : candidate,
+        ) ?? current,
+    );
+    try {
+      await requestJson("/api/inbox/act", {
+        method: "POST",
+        body: { id: entry.id, action },
+      });
+    } catch (caught) {
+      setError(errorText(caught));
+      setReloads((count) => count + 1);
+    }
+  };
+
   const unread = entries?.filter((entry) => !entry.read).length ?? 0;
 
   return (
@@ -1275,7 +1305,29 @@ export function InboxPanel({
                         {formatClock(entry.createdAt)}
                       </time>
                     </button>
-                    {!entry.read && (
+                    {!entry.read && offersStop(entry) && (
+                      <span class="assistant-inbox-actions">
+                        <button
+                          type="button"
+                          class="assistant-panel-action"
+                          onClick={() => void act(entry, "stop")}
+                        >
+                          <i
+                            class="codicon codicon-debug-stop"
+                            aria-hidden="true"
+                          />{" "}
+                          Stop
+                        </button>
+                        <button
+                          type="button"
+                          class="assistant-panel-action"
+                          onClick={() => void act(entry, "keep_going")}
+                        >
+                          Keep going
+                        </button>
+                      </span>
+                    )}
+                    {!entry.read && !offersStop(entry) && (
                       <button
                         type="button"
                         class="icon-button"
