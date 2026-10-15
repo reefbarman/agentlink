@@ -1,5 +1,6 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { GitHubPanel } from "./AssistantGitHub";
+import { TasksPanel } from "./AssistantTasks";
 import {
   NotificationSettings,
   useLocalInboxNotifications,
@@ -88,7 +89,15 @@ export interface Job {
 
 export interface InboxEntry {
   id: string;
-  kind: "run_completed" | "run_failed" | "run_blocked" | "needs_approval";
+  kind:
+    | "run_completed"
+    | "run_failed"
+    | "run_blocked"
+    | "needs_approval"
+    | "task_published"
+    | "task_ready"
+    | "task_blocked"
+    | "task_failed";
   createdAt: number;
   title: string;
   body?: string;
@@ -96,6 +105,8 @@ export interface InboxEntry {
   sessionId?: string;
   jobId?: string;
   runId?: string;
+  /** A coding task's entry opens the task, not its chat. */
+  taskId?: string;
   read: boolean;
 }
 
@@ -136,6 +147,10 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   run_failed: "error",
   run_blocked: "warning",
   needs_approval: "shield",
+  task_published: "git-pull-request",
+  task_ready: "pass",
+  task_blocked: "warning",
+  task_failed: "error",
 };
 
 /** The browser's own time zone, the default for new daily and weekly jobs. */
@@ -385,13 +400,20 @@ export function AssistantHub({
   loadSession: (sessionId: string) => void;
   reloadPage: () => void;
 }) {
-  const [view, setView] = useState<"jobs" | "inbox" | "github" | null>(null);
+  const [view, setView] = useState<
+    "jobs" | "inbox" | "github" | "tasks" | null
+  >(null);
+  const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const openChat = async (projectId: string, sessionId: string) => {
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
     setView(null);
   };
-  // A notification (or its link) marks its entry read and opens its chat,
-  // or the inbox when it has none.
+  const openTask = (id?: string) => {
+    setTaskId(id);
+    setView("tasks");
+  };
+  // A notification (or its link) marks its entry read and opens its task
+  // or chat, or the inbox when it has neither.
   const openTarget = (target: OpenTarget) => {
     void (async () => {
       if (target.entryId) {
@@ -400,7 +422,9 @@ export function AssistantHub({
           body: { ids: [target.entryId] },
         }).catch(() => undefined);
       }
-      if (target.projectId && target.sessionId) {
+      if (target.taskId) {
+        openTask(target.taskId);
+      } else if (target.projectId && target.sessionId) {
         await openChat(target.projectId, target.sessionId);
       } else {
         setView("inbox");
@@ -416,6 +440,7 @@ export function AssistantHub({
           type="button"
           class="assistant-hub-button"
           aria-haspopup="dialog"
+          title="Scheduled jobs"
           onClick={() => setView("jobs")}
         >
           <i class="codicon codicon-history" aria-hidden="true" />
@@ -428,6 +453,7 @@ export function AssistantHub({
           aria-label={
             inboxUnread > 0 ? `Inbox (${inboxUnread} unread)` : "Inbox"
           }
+          title={inboxUnread > 0 ? `Inbox (${inboxUnread} unread)` : "Inbox"}
           onClick={() => setView("inbox")}
         >
           <i class="codicon codicon-inbox" aria-hidden="true" />
@@ -442,6 +468,17 @@ export function AssistantHub({
           type="button"
           class="assistant-hub-button"
           aria-haspopup="dialog"
+          title="Coding tasks"
+          onClick={() => openTask()}
+        >
+          <i class="codicon codicon-git-pull-request" aria-hidden="true" />
+          <span>Tasks</span>
+        </button>
+        <button
+          type="button"
+          class="assistant-hub-button"
+          aria-haspopup="dialog"
+          title="GitHub connections"
           onClick={() => setView("github")}
         >
           <i class="codicon codicon-github" aria-hidden="true" />
@@ -460,6 +497,15 @@ export function AssistantHub({
           revision={revision}
           onClose={() => setView(null)}
           openChat={openChat}
+          openTask={openTask}
+        />
+      )}
+      {view === "tasks" && (
+        <TasksPanel
+          key={taskId ?? "list"}
+          revision={revision}
+          onClose={() => setView(null)}
+          initialTaskId={taskId}
         />
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
@@ -1092,11 +1138,14 @@ export function InboxPanel({
   revision,
   onClose,
   openChat,
+  openTask,
   now = Date.now,
 }: {
   revision: number;
   onClose: () => void;
   openChat: (projectId: string, sessionId: string) => Promise<void>;
+  /** Opens a coding task's entry; without it those entries open nothing. */
+  openTask?: (taskId: string) => void;
   now?: () => number;
 }) {
   const [entries, setEntries] = useState<InboxEntry[] | null>(null);
@@ -1169,8 +1218,8 @@ export function InboxPanel({
         <div class="assistant-panel-empty">
           <i class="codicon codicon-inbox" aria-hidden="true" />
           <p>
-            Nothing here yet. Finished jobs, failures and approvals waiting for
-            you show up here.
+            Nothing here yet. Finished jobs and coding tasks, failures and
+            approvals waiting for you show up here.
           </p>
         </div>
       ) : (
@@ -1178,49 +1227,56 @@ export function InboxPanel({
           <section class="assistant-inbox-group" key={group.label}>
             <h3>{group.label}</h3>
             <ul class="assistant-inbox-list">
-              {group.entries.map((entry) => (
-                <li
-                  key={entry.id}
-                  class={`assistant-inbox-entry kind-${entry.kind}${entry.read ? "" : " unread"}`}
-                >
-                  <button
-                    type="button"
-                    class="assistant-inbox-open"
-                    disabled={!entry.sessionId && entry.read}
-                    aria-label={`${entry.read ? "" : "Unread: "}${entry.title}`}
-                    onClick={() => {
-                      if (!entry.read) void markRead({ ids: [entry.id] });
-                      if (!entry.sessionId) return;
-                      openChat(entry.projectId, entry.sessionId).catch(
-                        (caught: unknown) => setError(errorText(caught)),
-                      );
-                    }}
+              {group.entries.map((entry) => {
+                const opensTask = Boolean(entry.taskId && openTask);
+                return (
+                  <li
+                    key={entry.id}
+                    class={`assistant-inbox-entry kind-${entry.kind}${entry.read ? "" : " unread"}`}
                   >
-                    <i
-                      class={`codicon codicon-${INBOX_ICONS[entry.kind] ?? "bell"}`}
-                      aria-hidden="true"
-                    />
-                    <span class="assistant-inbox-text">
-                      <strong>{entry.title}</strong>
-                      {entry.body && <span>{entry.body}</span>}
-                    </span>
-                    <time dateTime={new Date(entry.createdAt).toISOString()}>
-                      {formatClock(entry.createdAt)}
-                    </time>
-                  </button>
-                  {!entry.read && (
                     <button
                       type="button"
-                      class="icon-button"
-                      aria-label={`Mark "${entry.title}" read`}
-                      title="Mark read"
-                      onClick={() => void markRead({ ids: [entry.id] })}
+                      class="assistant-inbox-open"
+                      disabled={!opensTask && !entry.sessionId && entry.read}
+                      aria-label={`${entry.read ? "" : "Unread: "}${entry.title}`}
+                      onClick={() => {
+                        if (!entry.read) void markRead({ ids: [entry.id] });
+                        if (opensTask && entry.taskId) {
+                          openTask?.(entry.taskId);
+                          return;
+                        }
+                        if (!entry.sessionId) return;
+                        openChat(entry.projectId, entry.sessionId).catch(
+                          (caught: unknown) => setError(errorText(caught)),
+                        );
+                      }}
                     >
-                      <i class="codicon codicon-check" aria-hidden="true" />
+                      <i
+                        class={`codicon codicon-${INBOX_ICONS[entry.kind] ?? "bell"}`}
+                        aria-hidden="true"
+                      />
+                      <span class="assistant-inbox-text">
+                        <strong>{entry.title}</strong>
+                        {entry.body && <span>{entry.body}</span>}
+                      </span>
+                      <time dateTime={new Date(entry.createdAt).toISOString()}>
+                        {formatClock(entry.createdAt)}
+                      </time>
                     </button>
-                  )}
-                </li>
-              ))}
+                    {!entry.read && (
+                      <button
+                        type="button"
+                        class="icon-button"
+                        aria-label={`Mark "${entry.title}" read`}
+                        title="Mark read"
+                        onClick={() => void markRead({ ids: [entry.id] })}
+                      >
+                        <i class="codicon codicon-check" aria-hidden="true" />
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))

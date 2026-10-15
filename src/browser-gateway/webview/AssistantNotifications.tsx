@@ -20,10 +20,14 @@ export const SERVICE_WORKER_URL = "/browser-gateway-notifications.js";
 export const LOCAL_NOTIFICATIONS_KEY =
   "agentlink.assistant.localNotifications.v1";
 
-/** A notification's or link's chat (and the inbox entry it came from). */
+/**
+ * A notification's or link's coding task or chat (and the inbox entry it
+ * came from).
+ */
 export interface OpenTarget {
   projectId?: string;
   sessionId?: string;
+  taskId?: string;
   entryId?: string;
 }
 
@@ -33,6 +37,7 @@ interface InboxEntryLike {
   body?: string;
   projectId: string;
   sessionId?: string;
+  taskId?: string;
   read: boolean;
 }
 
@@ -198,7 +203,10 @@ function setLocalNotifications(
   }
 }
 
-/** The chat a link like `/?openProject=…&openSession=…&inboxEntry=…` opens. */
+/**
+ * The chat a link like `/?openProject=…&openSession=…&inboxEntry=…` opens,
+ * or the task `/?openTask=…&inboxEntry=…` opens.
+ */
 export function openTargetFromUrl(href: string): OpenTarget | null {
   let url: URL;
   try {
@@ -209,9 +217,11 @@ export function openTargetFromUrl(href: string): OpenTarget | null {
   const projectId = url.searchParams.get("openProject") ?? undefined;
   const sessionId = url.searchParams.get("openSession") ?? undefined;
   const entryId = url.searchParams.get("inboxEntry") ?? undefined;
-  if (!entryId && !(projectId && sessionId)) return null;
+  const taskId = url.searchParams.get("openTask") ?? undefined;
+  if (!entryId && !taskId && !(projectId && sessionId)) return null;
   return {
     ...(projectId && sessionId ? { projectId, sessionId } : {}),
+    ...(taskId ? { taskId } : {}),
     ...(entryId ? { entryId } : {}),
   };
 }
@@ -219,7 +229,7 @@ export function openTargetFromUrl(href: string): OpenTarget | null {
 /** The same URL without the open-chat parameters. */
 export function withoutOpenTarget(href: string): string {
   const url = new URL(href);
-  for (const name of ["openProject", "openSession", "inboxEntry"]) {
+  for (const name of ["openProject", "openSession", "openTask", "inboxEntry"]) {
     url.searchParams.delete(name);
   }
   return `${url.pathname}${url.search}${url.hash}`;
@@ -309,6 +319,7 @@ export function useLocalInboxNotifications(
                 ...(entry.sessionId
                   ? { projectId: entry.projectId, sessionId: entry.sessionId }
                   : {}),
+                ...(entry.taskId ? { taskId: entry.taskId } : {}),
               }),
           });
         }

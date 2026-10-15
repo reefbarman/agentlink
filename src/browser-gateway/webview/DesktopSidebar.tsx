@@ -2,10 +2,144 @@ import type {
   ChatSessionActivity,
   ChatSessionHistorySummary,
 } from "@agentlink/protocol/chat-session-history";
+import { useEffect, useRef, useState } from "preact/hooks";
 
 import type { ComponentChildren } from "preact";
 import type { DesktopMode } from "../../shared/desktopBridge";
-import { useState } from "preact/hooks";
+
+export const SIDEBAR_WIDTH_KEY = "agentlink.desktopSidebarWidth";
+export const MIN_SIDEBAR_WIDTH = 200;
+export const MAX_SIDEBAR_WIDTH = 480;
+/** The chat keeps at least this much room beside the sidebar. */
+const MIN_MAIN_WIDTH = 360;
+const KEYBOARD_STEP = 16;
+
+/**
+ * A sidebar width the window has room for: between the minimum and
+ * maximum, and never squeezing the chat below `MIN_MAIN_WIDTH`.
+ */
+export function clampSidebarWidth(width: number, viewport: number): number {
+  const roomy = Math.min(MAX_SIDEBAR_WIDTH, viewport - MIN_MAIN_WIDTH);
+  return Math.round(Math.max(MIN_SIDEBAR_WIDTH, Math.min(width, roomy)));
+}
+
+function storedSidebarWidth(): number | undefined {
+  try {
+    const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function storeSidebarWidth(width: number | undefined): void {
+  try {
+    if (width === undefined) {
+      window.localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+    } else {
+      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+    }
+  } catch {
+    // Private windows may refuse storage; the width lasts this page only.
+  }
+}
+
+/**
+ * Drag (or arrow keys) to resize the sidebar; double-click returns it to
+ * the default. The chosen width is kept per browser and set as
+ * `--desktop-sidebar-user-width` on the shell, which the stylesheet still
+ * clamps to the window, so small windows stay usable.
+ */
+function SidebarResizeHandle() {
+  const handleRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number | undefined>(storedSidebarWidth);
+
+  useEffect(() => {
+    const shell = handleRef.current?.closest<HTMLElement>(".browser-shell");
+    if (!shell) return;
+    if (width === undefined) {
+      shell.style.removeProperty("--desktop-sidebar-user-width");
+    } else {
+      shell.style.setProperty("--desktop-sidebar-user-width", `${width}px`);
+    }
+  }, [width]);
+
+  /** The width shown now (the stylesheet may have clamped the chosen one). */
+  const current = () =>
+    handleRef.current?.parentElement?.getBoundingClientRect().width ||
+    width ||
+    264;
+  const commit = (next: number | undefined) => {
+    setWidth(next);
+    storeSidebarWidth(next);
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = current();
+    let latest = startWidth;
+    document.body.classList.add("desktop-sidebar-resizing");
+    const move = (moveEvent: PointerEvent) => {
+      latest = clampSidebarWidth(
+        startWidth + moveEvent.clientX - startX,
+        window.innerWidth,
+      );
+      setWidth(latest);
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      document.body.classList.remove("desktop-sidebar-resizing");
+      commit(latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    const step =
+      event.key === "ArrowLeft"
+        ? -KEYBOARD_STEP
+        : event.key === "ArrowRight"
+          ? KEYBOARD_STEP
+          : 0;
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      commit(
+        clampSidebarWidth(
+          event.key === "Home" ? MIN_SIDEBAR_WIDTH : MAX_SIDEBAR_WIDTH,
+          window.innerWidth,
+        ),
+      );
+      return;
+    }
+    if (!step) return;
+    event.preventDefault();
+    commit(clampSidebarWidth(current() + step, window.innerWidth));
+  };
+
+  return (
+    <div
+      ref={handleRef}
+      class="desktop-sidebar-resize-handle"
+      role="separator"
+      aria-label="Resize sidebar"
+      aria-orientation="vertical"
+      aria-valuemin={MIN_SIDEBAR_WIDTH}
+      aria-valuemax={MAX_SIDEBAR_WIDTH}
+      aria-valuenow={width ?? undefined}
+      tabIndex={0}
+      title="Drag to resize the sidebar, double-click to reset"
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+      onDblClick={() => commit(undefined)}
+    />
+  );
+}
 
 interface DesktopSidebarProps {
   sessions: ChatSessionHistorySummary[];
@@ -179,6 +313,7 @@ export function DesktopSidebar({
           the Assistant's server.
         </p>
       )}
+      <SidebarResizeHandle />
     </aside>
   );
 }

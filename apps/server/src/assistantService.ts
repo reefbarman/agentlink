@@ -64,7 +64,12 @@ import {
   type JobRun,
 } from "./jobStore.js";
 import { createInboxRoutes } from "./inboxRoutes.js";
-import { inboxEntryForRun, openInboxStore } from "./inboxStore.js";
+import {
+  inboxEntryForRun,
+  inboxEntryForTask,
+  openInboxStore,
+  type NewInboxEntry,
+} from "./inboxStore.js";
 import { createPushRoutes } from "./pushRoutes.js";
 import {
   connectorPushTransport,
@@ -96,7 +101,7 @@ import { openGitHubConnections } from "./githubConnections.js";
 import { createGitHubRoutes } from "./githubRoutes.js";
 import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
-import { openTaskStore, type TaskRun } from "./taskStore.js";
+import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
 import { createTaskWorkspaces } from "./taskWorkspace.js";
 import { bundledWebAssets } from "./webAssets.js";
@@ -989,6 +994,22 @@ export async function startAssistantService(
         return bridge;
       },
     });
+    /** Add an inbox entry and notify about it; never throws. */
+    const addToInbox = async (entry: NewInboxEntry | undefined) => {
+      const added = entry ? await inbox.add(entry, Date.now()) : undefined;
+      // Best effort, never awaited: the inbox entry is the record.
+      if (added) {
+        push
+          .notifyAll(
+            pushMessageForEntry(added, {
+              includeSummary: config.notifications?.includeSummary === true,
+            }),
+          )
+          .catch((error: unknown) => {
+            log(`Push: could not send a notification: ${message(error)}`);
+          });
+      }
+    };
     /** Raise or settle the inbox entry a run's new record calls for. */
     const recordInInbox = (run: JobRun, job: JobDefinition) => {
       void (async () => {
@@ -996,21 +1017,29 @@ export async function startAssistantService(
         if (run.status === "running") {
           await inbox.markRunRead(run.runId, "needs_approval");
         }
-        const entry = inboxEntryForRun(run, job);
-        const added = entry ? await inbox.add(entry, Date.now()) : undefined;
-        // Best effort, never awaited: the inbox entry is the record.
-        if (added) {
-          push
-            .notifyAll(
-              pushMessageForEntry(added, {
-                includeSummary: config.notifications?.includeSummary === true,
-              }),
-            )
-            .catch((error: unknown) => {
-              log(`Push: could not send a notification: ${message(error)}`);
-            });
-        }
+        await addToInbox(inboxEntryForRun(run, job));
       })()
+        .catch((error: unknown) => {
+          log(`Could not update the inbox: ${message(error)}`);
+        })
+        .finally(assistantChanged);
+    };
+    /**
+     * Raise or settle the inbox entry a task's new record calls for. A task
+     * working again (resumed, or its approval answered) settles its earlier
+     * entries; the next outcome raises a new one.
+     */
+    let taskInboxWrites: Promise<void> = Promise.resolve();
+    const recordTaskInInbox = (task: TaskRun) => {
+      // In order: a quick ready then publishing must not race.
+      taskInboxWrites = taskInboxWrites
+        .then(async () => {
+          if (isActiveTask(task) && task.state !== "awaiting_approval") {
+            await inbox.markTaskRead(task.id);
+            return;
+          }
+          await addToInbox(inboxEntryForTask(task));
+        })
         .catch((error: unknown) => {
           log(`Could not update the inbox: ${message(error)}`);
         })
@@ -1114,7 +1143,10 @@ export async function startAssistantService(
             log,
             failureDetail: (projectId, sessionId) =>
               turnFailures.take(projectId, sessionId),
-            onTaskChanged: () => assistantChanged(),
+            onTaskChanged: (task) => {
+              assistantChanged();
+              recordTaskInInbox(task);
+            },
           });
           return { runner, workspaces, openTaskProject };
         })()
@@ -1186,6 +1218,7 @@ export async function startAssistantService(
         await jobs.close();
         await tasks?.runner.close();
         await taskStore.flush();
+        await taskInboxWrites;
         await inbox.flush();
         await push.close();
         await chat.close();

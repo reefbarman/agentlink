@@ -386,7 +386,12 @@
   --vscode-button-secondaryBackground: #303030;
   --vscode-button-secondaryForeground: var(--ag-text);
   --vscode-button-secondaryHoverBackground: #3a3a3a;
-  --desktop-sidebar-width: 264px;
+  /* A dragged width (set by the sidebar's handle) within what fits. */
+  --desktop-sidebar-width: clamp(
+    200px,
+    var(--desktop-sidebar-user-width, 264px),
+    max(200px, min(480px, calc(100vw - 360px)))
+  );
   --desktop-column-width: 760px;
   background:
     radial-gradient(ellipse at 25% 0%, var(--ag-accent-a10), transparent 48%),
@@ -900,6 +905,8 @@
 }
 
 .browser-shell.browser-shell-desktop .desktop-sidebar {
+  position: relative;
+  container: desktop-sidebar / inline-size;
   grid-column: 1;
   grid-row: 1;
   display: flex;
@@ -1558,9 +1565,57 @@
   }
 }
 
+.browser-shell.browser-shell-desktop .desktop-sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 5;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.browser-shell.browser-shell-desktop .desktop-sidebar-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition: background 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-sidebar-resize-handle:is(:hover, :focus-visible)::after,
+body.desktop-sidebar-resizing
+  .browser-shell.browser-shell-desktop
+  .desktop-sidebar-resize-handle::after {
+  background: var(--ag-accent-a35);
+}
+
+.browser-shell.browser-shell-desktop .desktop-sidebar-resize-handle:focus {
+  outline: none;
+}
+
+body.desktop-sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Iframes would swallow the pointer while dragging over them. */
+body.desktop-sidebar-resizing iframe {
+  pointer-events: none;
+}
+
 @media (max-width: 960px) {
   .browser-shell.browser-shell-desktop {
-    --desktop-sidebar-width: 220px;
+    --desktop-sidebar-width: clamp(
+      180px,
+      var(--desktop-sidebar-user-width, 220px),
+      max(180px, min(480px, calc(100vw - 360px)))
+    );
   }
 
   .browser-shell.browser-shell-desktop .browser-transcript > .chat-messages {
@@ -1576,6 +1631,10 @@
 @media (max-width: 700px) {
   .browser-shell.browser-shell-desktop {
     --desktop-sidebar-width: 180px;
+  }
+
+  .browser-shell.browser-shell-desktop .desktop-sidebar-resize-handle {
+    display: none;
   }
 
   .browser-shell.browser-shell-desktop .browser-header {
@@ -1642,6 +1701,11 @@
     width: min(264px, calc(100% - 48px));
     z-index: 30;
     box-shadow: 16px 0 32px #00000040;
+  }
+
+  /* An overlay on small screens: nothing beside it to resize against. */
+  .browser-shell.browser-shell-web .desktop-sidebar-resize-handle {
+    display: none;
   }
 
   .browser-shell.browser-shell-web.desktop-sidebar-open .browser-header {
@@ -2196,14 +2260,27 @@ html.quick-ask-document body {
   font-size: 13px;
 }
 
-/* Assistant Jobs and Inbox: sidebar entries and their panels. */
+/*
+ * Assistant Jobs, Inbox, Tasks and GitHub: sidebar entries and their
+ * panels. The entries sit two by two in a normal sidebar, in one row when
+ * it is dragged wide, and as icons only when it is narrow.
+ */
 .browser-shell.browser-shell-desktop .assistant-hub {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   flex-shrink: 0;
   gap: 6px;
 }
 
+.browser-shell.browser-shell-desktop .assistant-hub-button > span:not([class]) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .browser-shell.browser-shell-desktop .assistant-hub-button {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
@@ -2236,6 +2313,42 @@ html.quick-ask-document body {
   color: var(--ag-accent-ink);
   font-size: 11px;
   font-weight: 700;
+}
+
+@container desktop-sidebar (min-width: 400px) {
+  .browser-shell.browser-shell-desktop .assistant-hub {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container desktop-sidebar (max-width: 219px) {
+  .browser-shell.browser-shell-desktop .assistant-hub {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-hub-button {
+    justify-content: center;
+    padding-inline: 4px;
+  }
+
+  /* Hidden visually only: still each button's accessible name. */
+  .browser-shell.browser-shell-desktop
+    .assistant-hub-button
+    > span:not([class]) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-hub-badge {
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    margin-left: 0;
+  }
 }
 
 .browser-shell.browser-shell-desktop .assistant-project-dialog.assistant-panel {
@@ -2660,6 +2773,177 @@ html.quick-ask-document body {
 
 .browser-shell.browser-shell-desktop .assistant-inbox-entry > .icon-button {
   margin-right: 8px;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.kind-task_published, .kind-task_ready)
+  .assistant-inbox-open
+  > .codicon {
+  color: #79e2bd;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.kind-task_failed, .kind-task_blocked)
+  .assistant-inbox-open
+  > .codicon {
+  color: var(--vscode-errorForeground, #ff8f8f);
+}
+
+/* Coding tasks. */
+.browser-shell.browser-shell-desktop .assistant-task-open {
+  display: flex;
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ag-accent-text);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-summary > p {
+  margin: 0 0 10px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-facts dt {
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-actions > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-actions > button.primary {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-actions > button.danger {
+  color: var(--vscode-errorForeground, #ff8f8f);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-task-actions
+  > button:not(.primary):hover:not(:disabled) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-actions > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(
+    .assistant-task-checks,
+    .assistant-task-findings,
+    .assistant-task-events,
+    .assistant-task-transcript
+  ) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-checks summary {
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-checks .codicon-pass {
+  color: #79e2bd;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-checks .codicon-error {
+  color: var(--vscode-errorForeground, #ff8f8f);
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-checks pre {
+  max-height: 240px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-task-findings
+  .severity-blocking
+  strong {
+  color: #f0b44c;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-events time {
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-transcript > li {
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-transcript > li.tool {
+  padding: 4px 10px;
+  color: var(--ag-muted);
+  font-size: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {

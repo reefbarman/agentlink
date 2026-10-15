@@ -163,11 +163,15 @@ describe("notification links", () => {
       openTargetFromUrl("/?inboxEntry=e1&openProject=home&openSession=s1"),
     ).toEqual({ projectId: "home", sessionId: "s1", entryId: "e1" });
     expect(openTargetFromUrl("/?inboxEntry=e1")).toEqual({ entryId: "e1" });
+    expect(openTargetFromUrl("/?inboxEntry=e1&openTask=t1")).toEqual({
+      taskId: "t1",
+      entryId: "e1",
+    });
     expect(openTargetFromUrl("/?openProject=home")).toBeNull();
     expect(openTargetFromUrl("/")).toBeNull();
     expect(
       withoutOpenTarget(
-        "https://a.local/?keep=1&inboxEntry=e1&openProject=p&openSession=s#x",
+        "https://a.local/?keep=1&inboxEntry=e1&openProject=p&openSession=s&openTask=t#x",
       ),
     ).toBe("/?keep=1#x");
   });

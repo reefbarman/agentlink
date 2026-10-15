@@ -292,6 +292,26 @@ describe("push service", () => {
 });
 
 describe("pushMessageForEntry", () => {
+  it("opens a task's entry at the task, one notification per task", () => {
+    expect(
+      pushMessageForEntry(
+        entry({
+          kind: "task_published",
+          title: "Draft PR ready: Fix it",
+          runId: undefined,
+          jobId: undefined,
+          projectId: "task-aaaaaaaaaaaa",
+          taskId: "aaaaaaaaaaaa",
+        }),
+      ),
+    ).toEqual({
+      title: "Draft PR ready: Fix it",
+      body: "Its draft pull request is open. Open it to see the evidence.",
+      url: "/?inboxEntry=e1&openTask=aaaaaaaaaaaa",
+      tag: "task:aaaaaaaaaaaa",
+    });
+  });
+
   it("carries the title and a fixed description unless summaries are on", () => {
     expect(pushMessageForEntry(entry())).toEqual({
       title: "Morning brief finished",

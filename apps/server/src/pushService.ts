@@ -152,12 +152,22 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
   run_failed: "Failed. Open the chat to see what happened.",
   run_blocked: "Blocked. It needs you to sign in again or wait for limits.",
   needs_approval: "Waiting for your approval.",
+  task_published:
+    "Its draft pull request is open. Open it to see the evidence.",
+  task_ready: "Ready, but not published. Open it to see why.",
+  task_blocked: "Blocked. Open it to see what it needs.",
+  task_failed: "Failed. Open it to see what happened.",
 };
 
-/** The same-origin link that opens an entry's chat (and marks it read). */
+/**
+ * The same-origin link that opens an entry's task, or its chat (and marks
+ * it read).
+ */
 export function inboxEntryUrl(entry: InboxEntry): string {
   const query = new URLSearchParams({ inboxEntry: entry.id });
-  if (entry.sessionId) {
+  if (entry.taskId) {
+    query.set("openTask", entry.taskId);
+  } else if (entry.sessionId) {
     query.set("openProject", entry.projectId);
     query.set("openSession", entry.sessionId);
   }
@@ -180,7 +190,11 @@ export function pushMessageForEntry(
     title: entry.title,
     body: truncate(summary?.trim() || ENTRY_DESCRIPTIONS[entry.kind], 200),
     url: inboxEntryUrl(entry),
-    tag: entry.runId ? `run:${entry.runId}` : entry.id,
+    tag: entry.runId
+      ? `run:${entry.runId}`
+      : entry.taskId
+        ? `task:${entry.taskId}`
+        : entry.id,
     ...(entry.kind === "needs_approval"
       ? { urgency: "high" as const, ttlSeconds: 12 * 60 * 60 }
       : {}),

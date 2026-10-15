@@ -1,8 +1,13 @@
+import {
+  DesktopSidebar,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_KEY,
+  clampSidebarWidth,
+} from "./DesktopSidebar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
-
-import { DesktopSidebar } from "./DesktopSidebar";
 
 afterEach(cleanup);
 
@@ -121,5 +126,75 @@ describe("DesktopSidebar", () => {
     screen.getByRole("button", { name: "Notes (New reply)" });
     screen.getByRole("button", { name: "Quiet" });
     expect(document.querySelectorAll(".desktop-chat-activity")).toHaveLength(3);
+  });
+});
+
+describe("sidebar resizing", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    document.body.classList.remove("desktop-sidebar-resizing");
+  });
+
+  it("keeps widths within the limits and leaves the chat room", () => {
+    expect(clampSidebarWidth(100, 1600)).toBe(MIN_SIDEBAR_WIDTH);
+    expect(clampSidebarWidth(320.4, 1600)).toBe(320);
+    expect(clampSidebarWidth(900, 1600)).toBe(MAX_SIDEBAR_WIDTH);
+    // A 700px window keeps 360px for the chat.
+    expect(clampSidebarWidth(420, 700)).toBe(340);
+    // Never below the minimum, even when the window is tiny.
+    expect(clampSidebarWidth(420, 400)).toBe(MIN_SIDEBAR_WIDTH);
+  });
+
+  function renderInShell() {
+    const shell = document.createElement("div");
+    shell.className = "browser-shell";
+    document.body.appendChild(shell);
+    render(
+      <DesktopSidebar
+        sessions={[]}
+        currentSessionId={null}
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+        onManage={vi.fn()}
+      />,
+      { container: shell },
+    );
+    return {
+      shell,
+      handle: screen.getByRole("separator", { name: "Resize sidebar" }),
+      width: () => shell.style.getPropertyValue("--desktop-sidebar-user-width"),
+    };
+  }
+
+  it("resizes by dragging, remembers the width, and resets on double-click", () => {
+    const { handle, width } = renderInShell();
+    expect(width()).toBe("");
+    // jsdom has no layout, so the drag starts from the default width.
+    fireEvent.pointerDown(handle, { button: 0, clientX: 264 });
+    expect(document.body.classList.contains("desktop-sidebar-resizing")).toBe(
+      true,
+    );
+    fireEvent.pointerMove(window, { clientX: 300 });
+    fireEvent.pointerUp(window);
+    expect(width()).toBe("300px");
+    expect(window.localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("300");
+    expect(document.body.classList.contains("desktop-sidebar-resizing")).toBe(
+      false,
+    );
+    fireEvent.dblClick(handle);
+    expect(width()).toBe("");
+    expect(window.localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBeNull();
+  });
+
+  it("restores a saved width and resizes from the keyboard", () => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "320");
+    const { handle, width } = renderInShell();
+    expect(width()).toBe("320px");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(width()).toBe(`${MIN_SIDEBAR_WIDTH}px`);
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(window.localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe(
+      String(MIN_SIDEBAR_WIDTH + 16),
+    );
   });
 });

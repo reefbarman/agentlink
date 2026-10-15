@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { inboxEntryForRun, openInboxStore } from "./inboxStore.js";
+import {
+  inboxEntryForRun,
+  inboxEntryForTask,
+  openInboxStore,
+} from "./inboxStore.js";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import type { JobRun } from "./jobStore.js";
+import type { TaskRun } from "./taskStore.js";
 import { createInboxRoutes } from "./inboxRoutes.js";
 import { promises as fs } from "node:fs";
 import http from "node:http";
@@ -108,7 +113,156 @@ describe("inboxEntryForRun", () => {
   });
 });
 
+const HEAD = "0123456789abcdef0123456789abcdef01234567";
+
+const task = (patch: Partial<TaskRun>): TaskRun => ({
+  id: "aaaaaaaaaaaa",
+  projectId: "task-aaaaaaaaaaaa",
+  repository: "https://github.com/reefbarman/demo",
+  objective: "Fix the flaky clock test\n\nIt fails around midnight.",
+  branch: "agentlink/fix-the-flaky-clock-test-aaaaaaaaaaaa",
+  workspace: "/srv/agentlink/projects/.tasks/aaaaaaaaaaaa/demo",
+  state: "ready",
+  attempts: 1,
+  sessionId: "chat-9",
+  headCommit: HEAD,
+  evidence: [
+    { kind: "implementation", commit: HEAD, at: 1 },
+    {
+      kind: "validation",
+      commit: HEAD,
+      at: 2,
+      passed: true,
+      commands: [
+        {
+          command: "npm test",
+          exitCode: 0,
+          timedOut: false,
+          durationMs: 10,
+          outputTail: "",
+        },
+      ],
+    },
+    {
+      kind: "review",
+      commit: HEAD,
+      at: 3,
+      model: "claude/opus",
+      sessionId: "review-1",
+      verdict: "approve",
+      findings: [],
+    },
+  ],
+  effects: [],
+  createdAt: 1,
+  updatedAt: 1,
+  ...patch,
+});
+
+describe("inboxEntryForTask", () => {
+  it("reports a published task with its PR and evidence", () => {
+    expect(
+      inboxEntryForTask(
+        task({
+          state: "published",
+          pullRequest: {
+            number: 7,
+            url: "https://github.com/reefbarman/demo/pull/7",
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "task_published",
+      title: "Draft PR ready: Fix the flaky clock test",
+      body: "#7 https://github.com/reefbarman/demo/pull/7\nCommit 0123456, validation passed (1/1), approved by claude/opus.",
+      projectId: "task-aaaaaaaaaaaa",
+      taskId: "aaaaaaaaaaaa",
+      sessionId: "chat-9",
+    });
+  });
+
+  it("says why a ready task was not published", () => {
+    expect(inboxEntryForTask(task({}))?.body).toMatch(
+      /^Not published: give the repository a GitHub connection/u,
+    );
+    expect(inboxEntryForTask(task({ openFindings: 2 }))?.body).toMatch(
+      /blocking findings/u,
+    );
+    expect(
+      inboxEntryForTask(
+        task({ error: "connection_signed_out", errorDetail: "Sign in again." }),
+      ),
+    ).toMatchObject({
+      kind: "task_ready",
+      body: expect.stringMatching(
+        /^Publishing failed \(connection_signed_out\)\. Sign in again\./u,
+      ),
+    });
+  });
+
+  it("reports blocked, failed, interrupted and approval states", () => {
+    expect(inboxEntryForTask(task({ state: "blocked_review" }))?.kind).toBe(
+      "task_blocked",
+    );
+    expect(inboxEntryForTask(task({ state: "blocked_auth" }))?.kind).toBe(
+      "task_blocked",
+    );
+    expect(
+      inboxEntryForTask(
+        task({
+          state: "failed",
+          error: "validation_failed",
+          errorDetail: "npm test exited 1",
+        }),
+      ),
+    ).toMatchObject({
+      kind: "task_failed",
+      title: "Task failed: Fix the flaky clock test",
+      body: expect.stringContaining("npm test exited 1"),
+    });
+    expect(inboxEntryForTask(task({ state: "interrupted" }))).toMatchObject({
+      kind: "task_failed",
+      body: expect.stringContaining("Resume it"),
+    });
+    expect(inboxEntryForTask(task({ state: "awaiting_approval" }))?.kind).toBe(
+      "needs_approval",
+    );
+    expect(
+      inboxEntryForTask(task({ state: "cancelled", error: "approval_expired" }))
+        ?.kind,
+    ).toBe("task_failed");
+  });
+
+  it("raises nothing while working or when the owner cancelled it", () => {
+    for (const state of [
+      "queued",
+      "implementing",
+      "reviewing",
+      "publishing",
+    ] as const) {
+      expect(inboxEntryForTask(task({ state }))).toBeUndefined();
+    }
+    expect(
+      inboxEntryForTask(task({ state: "cancelled", error: "task_stopped" })),
+    ).toBeUndefined();
+  });
+});
+
 describe("openInboxStore", () => {
+  it("keeps one unread entry per task outcome and settles them on resume", async () => {
+    const store = await openInboxStore({ directory: await tempDir() });
+    const ready = inboxEntryForTask(task({ state: "ready" }))!;
+    expect(await store.add(ready, 1)).toBeDefined();
+    expect(await store.add(ready, 2)).toBeUndefined();
+    // Another task's same outcome is its own entry.
+    expect(
+      await store.add({ ...ready, taskId: "bbbbbbbbbbbb" }, 3),
+    ).toBeDefined();
+    expect(await store.markTaskRead("aaaaaaaaaaaa")).toBe(1);
+    expect(store.unreadCount()).toBe(1);
+    expect(await store.add(ready, 4)).toBeDefined();
+  });
+
   it("adds, de-duplicates, marks read and persists", async () => {
     const directory = await tempDir();
     const store = await openInboxStore({ directory });

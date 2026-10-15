@@ -442,9 +442,62 @@ describe("InboxPanel", () => {
     );
     expect(screen.queryByText(/Mark all/u)).toBeNull();
   });
+
+  it("opens a coding task's entry on the task, not its chat", async () => {
+    const calls = stubFetch({
+      "GET /api/inbox": () => ({
+        entries: [
+          {
+            id: "e3",
+            kind: "task_ready",
+            createdAt: Date.now(),
+            title: "Fix the README is ready",
+            projectId: "task-t1",
+            sessionId: "chat-1",
+            taskId: "t1",
+            read: true,
+          },
+        ],
+        unread: 0,
+      }),
+    });
+    const openChat = vi.fn(async () => undefined);
+    const openTask = vi.fn();
+    render(
+      <InboxPanel
+        revision={0}
+        onClose={() => undefined}
+        openChat={openChat}
+        openTask={openTask}
+      />,
+    );
+    const entry = await screen.findByLabelText("Fix the README is ready");
+    // Read task entries still open their task.
+    expect((entry as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(entry);
+    expect(openTask).toHaveBeenCalledWith("t1");
+    expect(openChat).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+  });
 });
 
 describe("AssistantHub", () => {
+  it("opens the Tasks panel", async () => {
+    stubFetch({
+      "GET /api/inbox": () => ({ entries: [], unread: 0 }),
+      "GET /api/tasks": () => ({ tasks: [], enabled: true }),
+    });
+    render(
+      <AssistantHub
+        revision={1}
+        loadSession={() => undefined}
+        reloadPage={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByText("Tasks"));
+    expect(await screen.findByText(/No coding tasks yet/u)).toBeTruthy();
+  });
+
   it("shows the unread count and opens the panels", async () => {
     stubFetch({
       "GET /api/inbox": () => ({ entries: [], unread: 0 }),

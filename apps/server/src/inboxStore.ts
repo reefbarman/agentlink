@@ -1,4 +1,5 @@
 import type { JobDefinition, JobRun } from "./jobStore.js";
+import { evidenceFor, type TaskRun } from "./taskStore.js";
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -7,8 +8,9 @@ import { writeFileAtomic } from "./atomicFile.js";
 
 /**
  * The owner's inbox: things the Assistant did or needs while nobody was
- * watching (finished, failed or blocked job runs, and runs waiting for an
- * approval). Kept in `<dataRoot>/inbox/inbox.json`, replaced atomically.
+ * watching (finished, failed or blocked job runs and coding tasks, and runs
+ * or tasks waiting for an approval). Kept in `<dataRoot>/inbox/inbox.json`,
+ * replaced atomically.
  * The inbox is the record of these events; notifications are best effort.
  */
 
@@ -21,7 +23,13 @@ export type InboxEntryKind =
   | "run_completed"
   | "run_failed"
   | "run_blocked"
-  | "needs_approval";
+  | "needs_approval"
+  /** A task's draft pull request was opened or updated. */
+  | "task_published"
+  /** A task is ready with its evidence but was not published. */
+  | "task_ready"
+  | "task_blocked"
+  | "task_failed";
 
 export interface InboxEntry {
   readonly id: string;
@@ -35,6 +43,8 @@ export interface InboxEntry {
   readonly sessionId?: string;
   readonly jobId?: string;
   readonly runId?: string;
+  /** The coding task it is about. */
+  readonly taskId?: string;
   readonly read: boolean;
 }
 
@@ -46,13 +56,15 @@ export interface InboxStore {
   unreadCount(): number;
   /**
    * Add an entry, unless an unread one of the same kind for the same run
-   * is already there. Resolves to the entry added, if any.
+   * or task is already there. Resolves to the entry added, if any.
    */
   add(entry: NewInboxEntry, now: number): Promise<InboxEntry | undefined>;
   /** Mark entries read: these IDs, or every entry. Resolves to how many. */
   markRead(ids: readonly string[] | "all"): Promise<number>;
   /** Mark a run's unread entries of one kind read (it moved on). */
   markRunRead(runId: string, kind: InboxEntryKind): Promise<number>;
+  /** Mark a task's unread entries read (it is working again). */
+  markTaskRead(taskId: string): Promise<number>;
   flush(): Promise<void>;
 }
 
@@ -143,6 +155,161 @@ export function inboxEntryForRun(
   }
 }
 
+/**
+ * The inbox entry a task's record calls for, if any: published, ready but
+ * not published, blocked, failed, or waiting for an approval. Working,
+ * queued and owner-cancelled tasks raise none.
+ */
+export function inboxEntryForTask(task: TaskRun): NewInboxEntry | undefined {
+  const name = taskName(task.objective);
+  const base = {
+    projectId: task.projectId,
+    taskId: task.id,
+    ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+  };
+  const evidence = taskEvidenceLine(task);
+  switch (task.state) {
+    case "published":
+      return {
+        ...base,
+        kind: "task_published",
+        title: `Draft PR ready: ${name}`,
+        body: joinLines(
+          task.pullRequest
+            ? `#${task.pullRequest.number} ${task.pullRequest.url}`
+            : undefined,
+          evidence,
+        ),
+      };
+    case "ready":
+      return {
+        ...base,
+        kind: "task_ready",
+        title: `Task ready: ${name}`,
+        body: joinLines(notPublishedReason(task), evidence),
+      };
+    case "awaiting_approval":
+      return {
+        ...base,
+        kind: "needs_approval",
+        title: `Task needs your approval: ${name}`,
+        body: "The task is paused until you allow or deny its request.",
+      };
+    case "blocked_review":
+      return {
+        ...base,
+        kind: "task_blocked",
+        title: `Task not reviewed: ${name}`,
+        body: joinLines(
+          "No reviewer on another provider could review it. Resume it once one is available, or publish it without a review.",
+          task.errorDetail,
+        ),
+      };
+    case "blocked_auth":
+      return {
+        ...base,
+        kind: "task_blocked",
+        title: `Task blocked: ${name}`,
+        body: withDetail(
+          "The model provider's sign-in is missing or has expired.",
+          task.errorDetail,
+        ),
+      };
+    case "blocked_quota":
+      return {
+        ...base,
+        kind: "task_blocked",
+        title: `Task blocked: ${name}`,
+        body: withDetail(
+          "The model provider refused it (usage or rate limits).",
+          task.errorDetail,
+        ),
+      };
+    case "failed":
+      return {
+        ...base,
+        kind: "task_failed",
+        title: `Task failed: ${name}`,
+        body: joinLines(task.errorDetail ?? task.error, evidence),
+      };
+    case "interrupted":
+      return {
+        ...base,
+        kind: "task_failed",
+        title: `Task interrupted: ${name}`,
+        body: "The server restarted while it worked. Resume it to continue in the same chat and clone.",
+      };
+    case "cancelled":
+      return task.error === "approval_expired"
+        ? {
+            ...base,
+            kind: "task_failed",
+            title: `Task cancelled: ${name}`,
+            body: "Nobody answered its approval in time.",
+          }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** The objective's first line, short enough for a title. */
+function taskName(objective: string): string {
+  const line =
+    objective
+      .split("\n")
+      .map((entry) => entry.trim())
+      .find(Boolean) ?? "Coding task";
+  return truncate(line, 80);
+}
+
+/** Commit, validation and review for the task's head commit. */
+function taskEvidenceLine(task: TaskRun): string | undefined {
+  const head = task.headCommit;
+  if (!head) return undefined;
+  const { validation, review } = evidenceFor(task, head);
+  const parts = [`Commit ${head.slice(0, 7)}`];
+  if (validation) {
+    const passed = validation.commands.filter(
+      (command) => command.exitCode === 0 && !command.timedOut,
+    ).length;
+    parts.push(
+      validation.passed
+        ? `validation passed (${passed}/${validation.commands.length})`
+        : `validation failed (${passed}/${validation.commands.length} passed)`,
+    );
+  }
+  if (review) {
+    const blocking = review.findings.filter(
+      (finding) => finding.severity === "blocking",
+    ).length;
+    parts.push(
+      review.verdict === "approve"
+        ? `approved by ${review.model}`
+        : `${blocking} open finding${blocking === 1 ? "" : "s"} from ${review.model}`,
+    );
+  } else if (task.state !== "failed") {
+    parts.push("not reviewed");
+  }
+  return `${parts.join(", ")}.`;
+}
+
+/** Why a ready task is waiting for the owner instead of published. */
+function notPublishedReason(task: TaskRun): string {
+  if (task.error) {
+    return withDetail(`Publishing failed (${task.error}).`, task.errorDetail);
+  }
+  if (task.openFindings) {
+    return "The review still has blocking findings: publish it yourself if they can wait.";
+  }
+  return "Not published: give the repository a GitHub connection to publish it, or publish it from Tasks.";
+}
+
+function joinLines(...lines: (string | undefined)[]): string | undefined {
+  const text = lines.filter(Boolean).join("\n");
+  return text || undefined;
+}
+
 export async function openInboxStore(options: {
   readonly directory: string;
   /** Entries kept (tests); `MAX_INBOX_ENTRIES` by default. */
@@ -187,12 +354,14 @@ export async function openInboxStore(options: {
     unreadCount: () => entries.filter((entry) => !entry.read).length,
     async add(input, now) {
       if (
-        input.runId &&
+        (input.runId || input.taskId) &&
         entries.some(
           (entry) =>
             !entry.read &&
-            entry.runId === input.runId &&
-            entry.kind === input.kind,
+            entry.kind === input.kind &&
+            (input.runId
+              ? entry.runId === input.runId
+              : entry.taskId === input.taskId),
         )
       ) {
         return undefined;
@@ -217,6 +386,9 @@ export async function openInboxStore(options: {
     },
     markRunRead(runId, kind) {
       return markWhere((entry) => entry.runId === runId && entry.kind === kind);
+    },
+    markTaskRead(taskId) {
+      return markWhere((entry) => entry.taskId === taskId);
     },
     async flush() {
       await writes;
