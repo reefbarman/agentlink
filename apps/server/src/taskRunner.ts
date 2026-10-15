@@ -153,7 +153,7 @@ export interface TaskRunner {
   start(): Promise<void>;
   create(
     request: TaskRequest,
-    extras?: { readonly origin?: TaskRun["origin"] },
+    extras?: { readonly origin?: TaskRun["origin"]; readonly here?: boolean },
   ): Promise<TaskRun>;
   /**
    * Send a follow-up instruction to a finished task's implementation chat,
@@ -169,7 +169,7 @@ export interface TaskRunner {
   continueTask(
     taskId: string,
     instructions: string,
-    extras?: { readonly origin?: TaskRun["origin"] },
+    extras?: { readonly origin?: TaskRun["origin"]; readonly here?: boolean },
   ): Promise<TaskRun>;
   /** Stop a queued or working task; it can be resumed. */
   stop(taskId: string): Promise<TaskRun>;
@@ -1150,7 +1150,10 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       const at = now();
       const updated: TaskRun = {
         ...task,
-        ...(extras.origin ? { origin: extras.origin } : {}),
+        ...(extras.origin
+          ? // The latest asker decides where it is shown.
+            { origin: extras.origin, here: extras.here === true }
+          : {}),
         followUps: [
           ...(task.followUps ?? []),
           { instructions: text, at },
@@ -1168,6 +1171,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       const task: TaskRun = {
         ...request,
         ...(extras.origin ? { origin: extras.origin } : {}),
+        ...(extras.origin && extras.here ? { here: true } : {}),
         id,
         projectId: taskProjectId(id),
         branch: taskBranchName(request.objective, id),

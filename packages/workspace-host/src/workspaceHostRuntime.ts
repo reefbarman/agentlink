@@ -218,8 +218,10 @@ export interface CreateWorkspaceHostOptions {
 
 /**
  * Tools whose every call is checked and described by the host, then
- * approved or denied by the owner. The host can refuse a call but never
- * allow one by itself.
+ * approved or denied by the owner. The host can refuse a call, and can
+ * allow one only when `prepare` says so for a foreground session (for
+ * example repeat work the owner already approved); a background child's
+ * call always goes to the owner.
  */
 export interface WorkspaceApprovalHostTools {
   /** Names of the tools `resolveTools` offers, known before any turn. */
@@ -249,7 +251,11 @@ export interface WorkspaceApprovalHostTools {
 export type WorkspaceHostToolApproval =
   | { readonly decision: "deny"; readonly reason: string }
   | {
-      readonly decision: "require_user";
+      /**
+       * `allow` runs the call without a card, with `preparedInput`. In a
+       * background child it is shown to the owner as `require_user`.
+       */
+      readonly decision: "require_user" | "allow";
       readonly summary: string;
       readonly displayContent?: unknown;
       readonly preparedInput?: Readonly<Record<string, unknown>>;
@@ -897,13 +903,27 @@ export async function createWorkspaceHost(
             interactions: persistence.interactions,
             interactionTokens,
             authorizeToolCall: async (request) => {
-              // Never allowed by the host: refused, or the owner decides.
+              // Refused, allowed by the host for a foreground session when
+              // `prepare` says so, or the owner decides.
               if (
                 approvalHostTools &&
                 approvalToolNames.has(request.toolName)
               ) {
                 const approval = await approvalHostTools.prepare(request);
-                return approval.decision === "require_user"
+                if (
+                  approval.decision === "allow" &&
+                  backgroundSupervisor?.getRecordForSession(
+                    request.sessionId,
+                  ) === undefined
+                ) {
+                  return {
+                    decision: "allow" as const,
+                    ...(approval.preparedInput
+                      ? { preparedInput: approval.preparedInput }
+                      : {}),
+                  };
+                }
+                return approval.decision !== "deny"
                   ? {
                       decision: "require_user" as const,
                       summary: approval.summary,

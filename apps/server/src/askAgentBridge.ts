@@ -76,6 +76,22 @@ import {
 } from "./sessionProgress.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
 
+/** A task's working chat shown live in the chat that started it. */
+interface WorkMirror {
+  /** The chat showing it (the store's ID). */
+  readonly storeSessionId: string;
+  /** The task's working session and its project. */
+  readonly workspaceSessionId: string;
+  readonly projectId: string;
+  /** Streamed output goes here, below the latest notice or message. */
+  messageId: string;
+  readonly toolStarts: Map<string, number>;
+  approval: FollowedRun["approval"];
+  /** Messages sent from this chat, already shown in it. */
+  readonly shown: Set<string>;
+  subscription: { unsubscribe(): void } | undefined;
+}
+
 /** How one turn ended, for Auto Continue. */
 interface TurnEnd {
   /** Completed normally: not stopped, failed, or left waiting. */
@@ -265,6 +281,26 @@ export interface AskAgentBridge {
    * until the owner writes to it again.
    */
   stop(auth: AssistantServerAuth, workspaceSessionId: string): Promise<void>;
+  /**
+   * "Work here": show the working chat of a task (another project's session)
+   * live in the chat that started it, below its conversation. While it is
+   * attached, the owner's messages there go to the task (taken in at its
+   * next break, or read in its next step), its approvals appear there, and
+   * Stop stops it. Replaces any earlier work shown in that chat.
+   */
+  attachWork(
+    auth: AssistantServerAuth,
+    originWorkspaceSessionId: string,
+    work: {
+      readonly projectId: string;
+      readonly workspaceSessionId: string;
+      readonly title: string;
+    },
+  ): Promise<void>;
+  /** The work ended: the chat is its own again. */
+  detachWork(originWorkspaceSessionId: string): void;
+  /** A short notice in that chat (a check passed, a review came back). */
+  noteWork(originWorkspaceSessionId: string, text: string): void;
   /** Republish the snapshot (the inbox or jobs changed). */
   refresh(): void;
   close(): Promise<void>;
@@ -451,6 +487,8 @@ export async function createAskAgentBridge(
   const waitingSends = new Set<string>();
   /** Each chat's todo list as its last `todo_write` set it. */
   const sessionTodos = new Map<string, TodoItem[]>();
+  /** "Work here": a task's work shown in its chat, by that chat's store ID. */
+  const mirrors = new Map<string, WorkMirror>();
   let stateWrite: Promise<void> = Promise.resolve();
 
   const saveState = () => {
@@ -499,6 +537,7 @@ export async function createAskAgentBridge(
       approval:
         controller.getPendingApproval() ??
         followed.get(store.getActiveSessionId())?.approval?.request ??
+        mirrors.get(store.getActiveSessionId())?.approval?.request ??
         agentApprovalRequest(agentWatch.records),
       memoryCandidateNudge: null,
     });
@@ -972,9 +1011,9 @@ export async function createAskAgentBridge(
     ) {
       return "needs-you";
     }
-    const run = workspaceSessionId
-      ? followed.get(workspaceSessionId)
-      : undefined;
+    const run =
+      (workspaceSessionId ? followed.get(workspaceSessionId) : undefined) ??
+      mirrors.get(storeSessionId);
     if (run) return run.approval ? "needs-you" : "running";
     const watched =
       workspaceSessionId !== undefined &&
@@ -1507,10 +1546,14 @@ export async function createAskAgentBridge(
       typeof body.sessionId === "string" ? body.sessionId.trim() : "";
     if (closed) throw new HttpError(503, "server_closing");
     const targetSessionId = requestedSessionId || store.getActiveSessionId();
-    // A coding task's chat: its runner takes the message, so the server's
-    // checks still run. Working, it reads it when its current step ends.
-    const linkedSessionId = workspaceSessionFor(targetSessionId);
-    if (linkedSessionId && state.linked[linkedSessionId]) {
+    // A coding task's chat, or a chat a task works here in: the task's
+    // runner takes the message, so the server's checks still run. Working,
+    // it reads it when its current step ends.
+    const mirror = mirrors.get(targetSessionId);
+    const linkedSessionId = mirror
+      ? mirror.workspaceSessionId
+      : workspaceSessionFor(targetSessionId);
+    if (linkedSessionId && (mirror || state.linked[linkedSessionId])) {
       if (!options.linkedMessage) {
         throw new HttpError(409, "ask_agent_turn_in_progress");
       }
@@ -1522,17 +1565,21 @@ export async function createAskAgentBridge(
       // like a queued message in VS Code. Otherwise its runner gets it.
       const interjectionId =
         id ?? `ask-agent-interjection-${now()}-${randomSuffix()}`;
-      const queued = run
-        ? await operations
-            .interject(auth, projectOf(linkedSessionId), linkedSessionId, {
-              id: interjectionId,
-              text,
-            })
-            .then((result) => result.queued)
-            .catch(() => false)
-        : false;
+      const linkedProject = mirror?.projectId ?? projectOf(linkedSessionId);
+      const queued =
+        run || mirror
+          ? await operations
+              .interject(auth, linkedProject, linkedSessionId, {
+                id: interjectionId,
+                text,
+              })
+              .then((result) => result.queued)
+              .catch(() => false)
+          : false;
       if (queued) {
-        shownInterjections.add(interjectionId);
+        // Shown here already; the task's own chat shows it once taken in.
+        if (mirror) mirror.shown.add(interjectionId);
+        else shownInterjections.add(interjectionId);
         pendingTaskInterjections.set(interjectionId, {
           workspaceSessionId: linkedSessionId,
           text,
@@ -1552,6 +1599,12 @@ export async function createAskAgentBridge(
         run.messageId = store.startAssistantMessage({
           now: now(),
           sessionId: linkedSessionId,
+        }).id;
+      }
+      if (mirror) {
+        mirror.messageId = store.startAssistantMessage({
+          now: now(),
+          sessionId: targetSessionId,
         }).id;
       }
       markRead(targetSessionId);
@@ -1712,14 +1765,14 @@ export async function createAskAgentBridge(
       return;
     }
     if (body.id.startsWith(RUN_APPROVAL_PREFIX)) {
-      const run = [...followed.values()].find(
+      const run = [...followed.values(), ...mirrors.values()].find(
         (candidate) => candidate.approval?.request.id === body.id,
       );
       const waiting = run?.approval;
       if (!run || !waiting) throw new HttpError(404, "approval_not_found");
       await operations.answerInteraction(
         auth,
-        projectOf(run.workspaceSessionId),
+        "projectId" in run ? run.projectId : projectOf(run.workspaceSessionId),
         run.workspaceSessionId,
         {
           interactionId: waiting.interactionId,
@@ -1727,7 +1780,12 @@ export async function createAskAgentBridge(
           decision: ALLOW_DECISIONS.has(body.decision) ? "allow" : "deny",
         },
       );
-      if (run.approval === waiting) run.approval = undefined;
+      // The same request may be shown in the task's chat and here.
+      for (const candidate of [...followed.values(), ...mirrors.values()]) {
+        if (candidate.approval?.request.id === body.id) {
+          candidate.approval = undefined;
+        }
+      }
       const publication = await publishNow();
       sendJson(response, 200, { ok: true, snapshot: publication.snapshot });
       return;
@@ -1761,6 +1819,23 @@ export async function createAskAgentBridge(
     response: ServerResponse,
     auth: AssistantServerAuth,
   ) => {
+    // Stop pressed in a chat a task works here in: stop the task.
+    const working = mirrors.get(store.getActiveSessionId());
+    if (working) {
+      if (options.stopRun) await options.stopRun(working.workspaceSessionId);
+      else {
+        await operations
+          .cancel(auth, working.projectId, working.workspaceSessionId)
+          .catch(() => undefined);
+      }
+      const publication = await publishNow();
+      sendJson(response, 200, {
+        ok: true,
+        stopped: true,
+        snapshot: publication.snapshot,
+      });
+      return;
+    }
     // Stop pressed in a chat a scheduled run is working in: stop the run.
     const run = followed.get(store.getActiveSessionId());
     if (run) {
@@ -1817,6 +1892,7 @@ export async function createAskAgentBridge(
       !store.loadSession(sessionId, {
         streaming:
           followed.has(sessionId) ||
+          mirrors.has(sessionId) ||
           (runningSession === sessionId && controller.hasActiveTurn()),
       })
     ) {
@@ -1948,6 +2024,14 @@ export async function createAskAgentBridge(
         .linkedMessage?.(workspaceSessionId, pending.text)
         ?.catch(() => undefined);
     }
+  };
+
+  /** Stop showing a task's work in a chat; what was shown stays. */
+  const detachMirror = (storeSessionId: string) => {
+    const mirror = mirrors.get(storeSessionId);
+    if (!mirror) return;
+    mirror.subscription?.unsubscribe();
+    mirrors.delete(storeSessionId);
   };
 
   /** Stop following a run; its chat stays. */
@@ -2392,6 +2476,120 @@ export async function createAskAgentBridge(
       await publishNow();
       return true;
     },
+    async attachWork(auth, originWorkspaceSessionId, work) {
+      if (closed) return;
+      await ensureLoaded(auth);
+      const storeSessionId = storeSessionFor(originWorkspaceSessionId);
+      if (!storeSessionId || closed) return;
+      const current = mirrors.get(storeSessionId);
+      if (current?.workspaceSessionId === work.workspaceSessionId) return;
+      if (current) detachMirror(storeSessionId);
+      const at = now();
+      const notice = `**Working here:** ${work.title}`;
+      store.appendSessionMessage(storeSessionId, {
+        role: "assistant",
+        content: notice,
+        blocks: [{ type: "text", text: notice }],
+        now: at,
+      });
+      const mirror: WorkMirror = {
+        storeSessionId,
+        workspaceSessionId: work.workspaceSessionId,
+        projectId: work.projectId,
+        messageId: store.startAssistantMessage({
+          now: at,
+          sessionId: storeSessionId,
+        }).id,
+        toolStarts: new Map(),
+        approval: undefined,
+        shown: new Set(),
+        subscription: undefined,
+      };
+      mirrors.set(storeSessionId, mirror);
+      const onEvent = ({ event }: SequencedSessionEvent) => {
+        if (mirrors.get(storeSessionId) !== mirror) return;
+        if (event.kind === "task") {
+          // Answered (here, in its own chat, or on another device).
+          if (event.state === "started" && mirror.approval) {
+            mirror.approval = undefined;
+            void publishNow();
+          }
+          return;
+        }
+        if (event.kind !== "turn") return;
+        const turnEvent = event.event;
+        if (turnEvent.type === "user.interjected") {
+          // Sent from elsewhere (its own chat): show it here too.
+          if (!mirror.shown.delete(turnEvent.interjectionId)) {
+            store.appendSessionMessage(storeSessionId, {
+              role: "user",
+              content: turnEvent.text,
+              blocks: [{ type: "text", text: turnEvent.text }],
+              now: now(),
+            });
+          }
+          mirror.messageId = store.startAssistantMessage({
+            now: now(),
+            sessionId: storeSessionId,
+          }).id;
+          schedule();
+          return;
+        }
+        if (
+          projectTurnContent(mirror.messageId, mirror.toolStarts, turnEvent)
+        ) {
+          return;
+        }
+        if (turnEvent.type === "interaction.required") {
+          mirror.approval = {
+            workspaceSessionId: work.workspaceSessionId,
+            interactionId: turnEvent.interaction.interactionId,
+            interactionRevision: turnEvent.interactionRevision,
+            request: {
+              ...approvalFor(turnEvent),
+              id: `${RUN_APPROVAL_PREFIX}${work.workspaceSessionId}:${turnEvent.interaction.interactionId}`,
+            },
+          };
+          void publishNow();
+        }
+      };
+      const key = operations.sessionKey(
+        work.projectId,
+        work.workspaceSessionId,
+      );
+      mirror.subscription = options.events.subscribe(
+        key,
+        options.events.latestSequence(key),
+        onEvent,
+      );
+      await publishNow();
+    },
+    detachWork(originWorkspaceSessionId) {
+      const storeSessionId = storeSessionFor(originWorkspaceSessionId);
+      if (storeSessionId && mirrors.has(storeSessionId)) {
+        detachMirror(storeSessionId);
+        void publishNow().catch(() => undefined);
+      }
+    },
+    noteWork(originWorkspaceSessionId, text) {
+      const storeSessionId = storeSessionFor(originWorkspaceSessionId);
+      if (!storeSessionId || closed) return;
+      store.appendSessionMessage(storeSessionId, {
+        role: "assistant",
+        content: text,
+        blocks: [{ type: "text", text }],
+        now: now(),
+      });
+      // Later output goes on below the notice.
+      const mirror = mirrors.get(storeSessionId);
+      if (mirror) {
+        mirror.messageId = store.startAssistantMessage({
+          now: now(),
+          sessionId: storeSessionId,
+        }).id;
+      }
+      schedule();
+    },
     async stop(auth, workspaceSessionId) {
       delivery.stopped.add(workspaceSessionId);
       if (
@@ -2423,6 +2621,7 @@ export async function createAskAgentBridge(
     async close() {
       closed = true;
       for (const id of followed.keys()) unfollowRun(id);
+      for (const id of mirrors.keys()) detachMirror(id);
       agentWatch.subscription?.unsubscribe();
       for (const subscription of delivery.parents.values()) {
         subscription.unsubscribe();

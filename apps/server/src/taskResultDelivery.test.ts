@@ -12,6 +12,7 @@ import {
   parseTaskResultPrompt,
   taskOutcomeKey,
   withTaskResultNotices,
+  workNotice,
   type TaskDeliveryResult,
 } from "./taskResultDelivery.js";
 import type { TaskRun } from "./taskStore.js";
@@ -149,6 +150,81 @@ describe("task outcomes", () => {
     expect(
       chatTaskCards(tasks, "home", "ws-task").map((card) => card.id),
     ).toEqual(["mine"]);
+  });
+});
+
+describe("work here notices", () => {
+  const commit = "abcdef1234567";
+  const passing = {
+    kind: "validation" as const,
+    commit,
+    at: 3,
+    passed: true,
+    commands: [
+      {
+        command: "npm test",
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 1,
+        outputTail: "",
+      },
+    ],
+  };
+
+  it("say what the task is doing at each gate", () => {
+    expect(workNotice(task({ state: "validating", headCommit: commit }))).toBe(
+      "Running the repository's checks on commit `abcdef1`.",
+    );
+    expect(
+      workNotice(
+        task({ state: "reviewing", headCommit: commit, evidence: [passing] }),
+      ),
+    ).toBe(
+      "Checks passed (1 of 1). A model from another provider is reviewing commit `abcdef1`.",
+    );
+    expect(
+      workNotice(
+        task({
+          state: "fixing",
+          headCommit: commit,
+          evidence: [
+            {
+              ...passing,
+              passed: false,
+              commands: [{ ...passing.commands[0]!, exitCode: 1 }],
+            },
+          ],
+        }),
+      ),
+    ).toBe("A check failed: `npm test`. Fixing it.");
+    expect(
+      workNotice(
+        task({
+          state: "fixing",
+          headCommit: commit,
+          evidence: [
+            passing,
+            {
+              kind: "review",
+              commit,
+              at: 4,
+              model: "openai/gpt",
+              sessionId: "r1",
+              verdict: "changes_requested",
+              findings: [
+                { severity: "blocking", reason: "a" },
+                { severity: "blocking", reason: "b" },
+                { severity: "suggestion", reason: "c" },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toBe("The review by openai/gpt found 2 blocking issues. Fixing them.");
+  });
+
+  it("stay quiet for outcomes, which arrive as the delivered result", () => {
+    expect(workNotice(task())).toBeUndefined();
   });
 });
 

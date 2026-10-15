@@ -236,6 +236,12 @@ export interface TaskRun extends TaskRequest {
    * outcomes are delivered there.
    */
   readonly origin?: { readonly projectId: string; readonly sessionId: string };
+  /**
+   * "Work here": the origin chat shows this work live and takes the owner's
+   * messages for it while it is active. Otherwise it is a separate work
+   * session whose outcome comes back to the origin chat.
+   */
+  readonly here?: boolean;
   /** The owner's follow-up instructions, oldest first (`continue_task`). */
   readonly followUps?: readonly TaskFollowUp[];
   /** A follow-up approved but not yet sent to the implementation chat. */

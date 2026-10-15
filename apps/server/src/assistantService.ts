@@ -114,7 +114,11 @@ import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
 import { openRepositorySnapshots } from "./repositorySnapshots.js";
-import { chatTaskCards, openTaskDeliveries } from "./taskResultDelivery.js";
+import {
+  chatTaskCards,
+  openTaskDeliveries,
+  workNotice,
+} from "./taskResultDelivery.js";
 import { createTaskWorkspaces } from "./taskWorkspace.js";
 import { bundledWebAssets } from "./webAssets.js";
 import {
@@ -805,6 +809,9 @@ export async function startAssistantService(
       ? createTaskTools({
           store: taskStore,
           repositories: repositorySettings,
+          // Repeat work in an Auto-run chat starts without a card.
+          autonomous: ({ projectId, sessionId }) =>
+            approvalModes.get(projectId, sessionId) === "autonomous",
           ...(publisher
             ? { directory: repositoryDirectory, connections: githubConnections }
             : {}),
@@ -1306,6 +1313,58 @@ export async function startAssistantService(
         log(`Could not show task ${task.id}'s chat: ${message(error)}`);
       });
     };
+    /** "Work here": the chat each task is shown in, and its last state. */
+    const workShownIn = new Map<
+      string,
+      { readonly projectId: string; readonly sessionId: string }
+    >();
+    const workStates = new Map<string, TaskRun["state"]>();
+    /**
+     * "Work here": while a task works, the chat that asked for it shows the
+     * work live and takes the owner's messages for it, with a line for each
+     * check and review. Once it stops working, the chat is its own again
+     * and the outcome is delivered there like any task's.
+     */
+    const showWorkHere = (task: TaskRun) => {
+      const origin = task.here ? task.origin : undefined;
+      const active = isActiveTask(task);
+      const shown = workShownIn.get(task.id);
+      if (
+        shown &&
+        (!active ||
+          shown.projectId !== origin?.projectId ||
+          shown.sessionId !== origin.sessionId)
+      ) {
+        bridges.get(shown.projectId)?.detachWork(shown.sessionId);
+        workShownIn.delete(task.id);
+      }
+      const previous = workStates.get(task.id);
+      if (!origin || !active) {
+        workStates.delete(task.id);
+        return;
+      }
+      workStates.set(task.id, task.state);
+      const bridge = bridges.get(origin.projectId);
+      const auth = ownerDeliveryAuth();
+      if (!bridge || !auth || !task.sessionId) return;
+      const workspaceSessionId = task.sessionId;
+      void (async () => {
+        if (!workShownIn.has(task.id)) {
+          workShownIn.set(task.id, origin);
+          await bridge.attachWork(auth, origin.sessionId, {
+            projectId: task.projectId,
+            workspaceSessionId,
+            title: task.objective.split("\n", 1)[0]!.slice(0, 120),
+          });
+        }
+        const notice = previous !== task.state ? workNotice(task) : undefined;
+        if (notice) bridge.noteWork(origin.sessionId, notice);
+      })().catch((error: unknown) => {
+        log(
+          `Could not show task ${task.id}'s work in its chat: ${message(error)}`,
+        );
+      });
+    };
     // A task's outcomes go back to the chat that started it, once each.
     const taskDeliveries = await openTaskDeliveries({
       file: path.join(serverTasksDirectory(config), "deliveries.json"),
@@ -1438,6 +1497,8 @@ export async function startAssistantService(
             onTaskChanged: (task) => {
               assistantChanged();
               recordTaskInInbox(task);
+              // Before the outcome is delivered: the chat is its own again.
+              showWorkHere(task);
               taskDeliveries.taskChanged(task);
               showTaskChat(task);
             },
@@ -1450,6 +1511,12 @@ export async function startAssistantService(
                 await runner.delete(taskId);
                 taskDeliveries.forget(taskId);
                 taskChatActivity.delete(taskId);
+                const shown = workShownIn.get(taskId);
+                if (shown) {
+                  bridges.get(shown.projectId)?.detachWork(shown.sessionId);
+                  workShownIn.delete(taskId);
+                }
+                workStates.delete(taskId);
                 if (sessionId) {
                   for (const bridge of bridges.values()) {
                     await bridge.unlinkSession(sessionId);

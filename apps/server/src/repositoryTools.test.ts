@@ -391,6 +391,17 @@ describe("routing instructions", () => {
     expect(full).toContain("start_task");
     expect(full).toContain("continue_task");
     expect(full).toContain("comes back to this chat by itself");
+    // The four ways, chosen by the assistant, never by the owner.
+    for (const way of [
+      "Answer here",
+      "Work here",
+      "Start a work session",
+      "Schedule",
+    ]) {
+      expect(full).toContain(`- ${way}:`);
+    }
+    expect(full).toContain("here: true");
+    expect(full).toContain("Never ask them to choose a mode");
     expect(full).toContain("never ask the owner to switch project");
     expect(full).toContain("list_repositories");
     expect(full).toContain("schedule_job");

@@ -48,6 +48,8 @@ async function setup(
     readonly reach?: ConnectionResolution;
     /** Use the approval tools of this project's chats. */
     readonly projectId?: string;
+    /** The asking chat runs without asking (Auto-run). */
+    readonly autonomous?: boolean;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-tools-"));
@@ -83,6 +85,8 @@ async function setup(
     models: [{ providerId: "codex", modelId: "gpt-5" }],
     repositories,
     connections: { get: (id) => connections.get(id) },
+    autonomous: ({ sessionId }) =>
+      options.autonomous === true && sessionId === "chat-1",
     directory: {
       resolveConnection: vi.fn(
         async (): Promise<ConnectionResolution> =>
@@ -106,12 +110,20 @@ async function setup(
   const run = (input: Record<string, unknown>) =>
     startTask.executeValidated({ ...input }, context);
   const prepare = async (input: Record<string, unknown>) =>
-    approval.prepare({ toolName: "start_task", input } as never);
+    approval.prepare({
+      toolName: "start_task",
+      input,
+      sessionId: "chat-1",
+    } as never);
   const continueTool = await byName("continue_task");
   const runContinue = (input: Record<string, unknown>) =>
     continueTool.executeValidated({ ...input }, context);
   const prepareContinue = async (input: Record<string, unknown>) =>
-    approval.prepare({ toolName: "continue_task", input } as never);
+    approval.prepare({
+      toolName: "continue_task",
+      input,
+      sessionId: "chat-1",
+    } as never);
   const validateContinue = async (input: Record<string, unknown>) =>
     approval.validatePending!({ toolName: "continue_task", input } as never);
   return {
@@ -278,6 +290,61 @@ describe("tasks in the conversation", () => {
     );
   });
 
+  it("works here when asked, and says so to the chat", async () => {
+    const test = await setup({ projectId: "home" });
+    const approval = await test.prepare({ ...REQUEST, here: true });
+    expect(approval).toMatchObject({ decision: "require_user" });
+    const result = await test.run(prepared(approval));
+    expect(test.create).toHaveBeenCalledWith(REQUEST, {
+      origin: { projectId: "home", sessionId: "chat-1" },
+      here: true,
+    });
+    expect(String(result.modelContent)).toContain("It works here");
+    await expect(
+      test.prepare({ ...REQUEST, here: "yes" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("here must be true"),
+    });
+  });
+
+  it("starts repeat work on an approved repository without a card in an Auto-run chat", async () => {
+    // First time on a repository: the card, even in an Auto-run chat.
+    const fresh = await setup({ projectId: "home", autonomous: true });
+    await expect(fresh.prepare(REQUEST)).resolves.toMatchObject({
+      decision: "require_user",
+    });
+    // A task on it before: no card.
+    const repeat = await setup({ projectId: "home", autonomous: true });
+    await repeat.store.create(finished());
+    const allowed = await repeat.prepare({ ...REQUEST, here: true });
+    expect(allowed).toMatchObject({ decision: "allow" });
+    await repeat.run(prepared(allowed));
+    expect(repeat.create).toHaveBeenCalledWith(REQUEST, {
+      origin: { projectId: "home", sessionId: "chat-1" },
+      here: true,
+    });
+    // ...unless the card would save new setup (checks proposed for a
+    // repository with none).
+    await expect(
+      repeat.prepare({ ...REQUEST, validation: ["npm test"] }),
+    ).resolves.toMatchObject({ decision: "require_user" });
+    // A chat set to ask still gets the card.
+    const asking = await setup({ projectId: "home" });
+    await asking.store.create(finished());
+    await expect(asking.prepare(REQUEST)).resolves.toMatchObject({
+      decision: "require_user",
+    });
+    // Follow-ups on an approved task: no card in an Auto-run chat.
+    await expect(
+      repeat.prepareContinue({
+        taskId: "bbbbbbbbbbbb",
+        instructions: "Also the footer",
+        here: true,
+      }),
+    ).resolves.toMatchObject({ decision: "allow" });
+  });
+
   it("continues a finished task after the owner approves the exact follow-up", async () => {
     const test = await setup({ projectId: "home" });
     await test.store.create(finished());
@@ -307,6 +374,20 @@ describe("tasks in the conversation", () => {
       "bbbbbbbbbbbb",
       "Also mention the desktop app.",
       { origin: { projectId: "home", sessionId: "chat-1" } },
+    );
+    await test.runContinue({
+      ...prepared(
+        await test.prepareContinue({
+          taskId: "bbbbbbbbbbbb",
+          instructions: "And the footer.",
+          here: true,
+        }),
+      ),
+    });
+    expect(test.continueTask).toHaveBeenLastCalledWith(
+      "bbbbbbbbbbbb",
+      "And the footer.",
+      { origin: { projectId: "home", sessionId: "chat-1" }, here: true },
     );
     // A call the owner never approved does nothing.
     await expect(

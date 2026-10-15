@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ChatTaskCard } from "./askAgentBridge.js";
 import { writeFileAtomic } from "./atomicFile.js";
 import { inboxEntryForTask } from "./inboxStore.js";
-import type { TaskRun, TaskState } from "./taskStore.js";
+import { evidenceFor, type TaskRun, type TaskState } from "./taskStore.js";
 import { taskProblemHint } from "./taskTools.js";
 
 /**
@@ -23,6 +23,45 @@ import { taskProblemHint } from "./taskTools.js";
 const OPEN_TAG = "<coding_task_result>";
 const CLOSE_TAG = "</coding_task_result>";
 const MAX_SUMMARY_CHARS = 2_000;
+
+/**
+ * "Work here": the line shown in the origin chat as the task moves through
+ * its gates, or undefined when this step needs none. Outcomes (ready,
+ * published, a problem) come through the delivered result instead.
+ */
+export function workNotice(task: TaskRun): string | undefined {
+  const commit = task.headCommit?.slice(0, 7);
+  const { validation, review } = evidenceFor(task, task.headCommit);
+  switch (task.state) {
+    case "validating":
+      return `Running the repository's checks on commit \`${commit ?? "?"}\`.`;
+    case "reviewing": {
+      const checks = validation
+        ? `Checks passed (${validation.commands.length} of ${validation.commands.length}). `
+        : "";
+      return `${checks}A model from another provider is reviewing commit \`${commit ?? "?"}\`.`;
+    }
+    case "fixing": {
+      if (validation && !validation.passed) {
+        const failed = validation.commands.find(
+          (command) => command.exitCode !== 0 || command.timedOut,
+        );
+        return failed
+          ? `A check failed: \`${failed.command}\`. Fixing it.`
+          : "The checks changed files they should not. Fixing it.";
+      }
+      if (review) {
+        const blocking = review.findings.filter(
+          (finding) => finding.severity === "blocking",
+        ).length;
+        return `The review by ${review.model} found ${blocking} blocking issue${blocking === 1 ? "" : "s"}. Fixing ${blocking === 1 ? "it" : "them"}.`;
+      }
+      return "Fixing what the checks found.";
+    }
+    default:
+      return undefined;
+  }
+}
 
 /** Outcomes the origin chat hears about. */
 export const DELIVERED_STATES: ReadonlySet<TaskState> = new Set<TaskState>([

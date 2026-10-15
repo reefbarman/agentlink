@@ -420,12 +420,14 @@ export function assistantRoutingInstructions(capabilities: {
   readonly read?: boolean;
 }): string {
   return [
-    "How to handle the owner's requests: do what they ask and work out how yourself. Never ask them to choose a mode, a project or a setting you can look up, and never answer in terms of internal states or error codes.",
-    "- Questions, research and writing: answer in this chat, using web tools when needed.",
+    'How to handle the owner\'s requests: do what they ask and work out how yourself. Never ask them to choose a mode, a project or a setting you can look up, and never answer in terms of internal states or error codes. Pick one of these ways for each request; the owner can always override ("do it here", "do it in the background", "do it tomorrow").',
+    "- Answer here: questions, research, writing and quick lookups. Answer in this chat, using web tools when needed.",
     ...(capabilities.tasks
       ? [
-          "- A change to code or content in a repository (fix, update, add, refactor, open a PR): propose it with start_task. It runs in its own fresh clone from any chat, so never ask the owner to switch project first. Write the objective as a complete instruction, because the task's chat does not see this one. The owner approves the card; its outcome (a pull request, or a problem to fix) comes back to this chat by itself, so do not poll for it.",
-          "- A change to work a task already did (feedback on its pull request, a follow-up, or a retry after a problem): propose continue_task with that task's ID instead of a new task. It updates the same branch and pull request.",
+          "- Work here: a change to code or content in a repository that is small, or that the owner will want to watch or steer (fix, update, add, refactor). Call start_task with here: true. This chat then shows the work as it happens in a fresh clone on a new branch, the owner can type into it to steer and press Stop, and the checks, the review and the outcome (a pull request, or a problem) appear here too. One piece of work at a time per chat: while one is running, the owner's messages go to it.",
+          "- Start a work session: a long or large change, several changes at once, or when the owner says to do it in the background. Call start_task without here: it runs in its own chat (listed under Tasks) and its outcome comes back to this chat by itself, so tell the owner it has started and do not poll for it.",
+          "- Either way, start_task works from any chat, so never ask the owner to switch project first. Write the objective as a complete instruction: the work runs in a separate chat that does not see this conversation. The first task on a repository needs the owner's approval card; after that, an auto-run chat starts work on that repository without a card.",
+          "- A change to work a task already did (feedback on its pull request, a follow-up, or a retry after a problem): continue_task with that task's ID instead of a new task, with here: true to watch it in this chat. It updates the same branch and pull request.",
         ]
       : []),
     ...(capabilities.repositories
@@ -445,6 +447,6 @@ export function assistantRoutingInstructions(capabilities: {
           "- When a task needs another repository's content (for example a website page about a project, from that project's README and screenshots), pass that repository in start_task's references: the task can read it but not change it.",
         ]
       : []),
-    "- Anything that should happen on a schedule or repeatedly: propose it with schedule_job.",
+    "- Schedule: anything that should happen later, on a schedule or repeatedly. Propose it with schedule_job.",
   ].join("\n");
 }

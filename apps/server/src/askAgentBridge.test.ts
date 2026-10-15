@@ -256,6 +256,7 @@ async function startBridge(
     readonly linkedMessage?: Parameters<
       typeof createAskAgentBridge
     >[0]["linkedMessage"];
+    readonly stopRun?: Parameters<typeof createAskAgentBridge>[0]["stopRun"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -287,6 +288,7 @@ async function startBridge(
       : {}),
     ...(options.chatTasks ? { chatTasks: options.chatTasks } : {}),
     ...(options.linkedMessage ? { linkedMessage: options.linkedMessage } : {}),
+    ...(options.stopRun ? { stopRun: options.stopRun } : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -415,6 +417,133 @@ describe("Ask Agent bridge", () => {
         }
       ).session.foreground.reasoningEffort,
     ).toBe("max");
+  });
+
+  describe("work here", () => {
+    const textOf = (message: ChatMessage) =>
+      message.content ||
+      (message.blocks ?? []).map((block) => block.text ?? "").join("");
+
+    it("shows a task's work in the chat that asked, routes the chat to it, then hands the chat back", async () => {
+      const linkedMessage = vi.fn(async () => undefined);
+      const stopRun = vi.fn(async () => undefined);
+      const { bridge, fake, call, detached } = await startBridge(undefined, {
+        linkedMessage,
+        stopRun,
+      });
+      fake.setScript((sessionId, taskId) => {
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "started",
+          taskId,
+          operation: "turn",
+          actor: { subjectId: "owner", deviceId: "d" },
+        });
+        fake.turn(sessionId, { type: "text.delta", text: "On it" });
+        fake.turn(sessionId, { type: "turn.completed", result: { text: "" } });
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "finished",
+          taskId,
+          status: "completed",
+        });
+      });
+      await call("/api/ask-agent/send", { text: "fix the footer here" });
+      const origin = [...fake.sessions.keys()][0]!;
+      const messages = async () =>
+        snapshotOf((await call("/api/ask-agent/session")).body).session
+          .foreground.projectedMessages;
+
+      await bridge.attachWork(detached, origin, {
+        projectId: "task-t1",
+        workspaceSessionId: "tws",
+        title: "Fix the footer",
+      });
+      fake.publishTo("task-t1", "tws", {
+        type: "text.delta",
+        text: "Editing footer.html",
+      });
+      bridge.noteWork(origin, "Checks passed (1 of 1).");
+      fake.publishTo("task-t1", "tws", {
+        type: "text.delta",
+        text: "Review fixes",
+      });
+      await vi.waitFor(async () => {
+        const texts = (await messages()).map(textOf);
+        expect(texts).toContain("**Working here:** Fix the footer");
+        expect(texts.indexOf("Editing footer.html")).toBeGreaterThan(-1);
+        // The notice sits between the two stretches of work.
+        expect(texts.indexOf("Checks passed (1 of 1).")).toBeGreaterThan(
+          texts.indexOf("Editing footer.html"),
+        );
+        expect(texts.indexOf("Review fixes")).toBeGreaterThan(
+          texts.indexOf("Checks passed (1 of 1)."),
+        );
+      });
+
+      // The owner writes in the same chat: it goes to the task.
+      await call("/api/ask-agent/send", { text: "use the blue logo" });
+      expect(fake.operations.interject).toHaveBeenCalledWith(
+        expect.anything(),
+        "task-t1",
+        "tws",
+        expect.objectContaining({ text: "use the blue logo" }),
+      );
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+      // Taken in by the task: shown once here.
+      const [taken] = fake.interjections.splice(0);
+      fake.publishTo("task-t1", "tws", {
+        type: "user.interjected",
+        interjectionId: taken!.id,
+        text: taken!.text,
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (await messages()).filter(
+            (message) => textOf(message) === "use the blue logo",
+          ),
+        ).toHaveLength(1),
+      );
+
+      // Its approvals show here and are answered in its own session.
+      fake.publishTo("task-t1", "tws", {
+        type: "interaction.required",
+        interaction: {
+          interactionId: "int-9",
+          toolName: "write_file",
+          summary: "Write .env",
+          displayInput: { path: ".env" },
+        },
+        interactionRevision: "rev-9",
+      });
+      const approval = await vi.waitFor(async () => {
+        const shown = snapshotOf((await call("/api/ask-agent/session")).body).ui
+          .approval;
+        expect(shown).not.toBeNull();
+        return shown!;
+      });
+      await call("/api/ask-agent/approval", {
+        id: approval.id,
+        decision: "accept",
+      });
+      expect(fake.operations.answerInteraction).toHaveBeenCalledWith(
+        expect.anything(),
+        "task-t1",
+        "tws",
+        expect.objectContaining({ interactionId: "int-9", decision: "allow" }),
+      );
+
+      // Stop stops the task.
+      await call("/api/ask-agent/stop", {});
+      expect(stopRun).toHaveBeenCalledWith("tws");
+
+      // Handed back: the chat's own session answers again.
+      bridge.detachWork(origin);
+      await call("/api/ask-agent/send", { text: "thanks" });
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
+      expect(fake.operations.startTurn.mock.calls[1]?.[2]).toBe(origin);
+      expect(linkedMessage).not.toHaveBeenCalled();
+    });
   });
 
   describe("Auto Continue", () => {

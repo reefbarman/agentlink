@@ -71,6 +71,15 @@ export interface TaskToolsOptions {
   readonly runner: Pick<TaskRunner, "create" | "continueTask">;
   readonly models: readonly AssistantServerModelChoice[];
   readonly now?: () => number;
+  /**
+   * Whether a chat runs without asking (Auto-run). In such a chat, work on
+   * a repository the owner already approved a task on starts without a
+   * card, unless the card would save new setup.
+   */
+  readonly autonomous?: (chat: {
+    readonly projectId: string;
+    readonly sessionId: string;
+  }) => boolean;
 }
 
 /** What approving the card also saves for the repository. */
@@ -95,6 +104,13 @@ export interface TaskTools {
 const PREPARED_KEY = "preparedTask";
 const SETUP_KEY = "preparedSetup";
 const FOLLOW_UP_KEY = "preparedFollowUp";
+const HERE_KEY = "preparedHere";
+
+const HERE_PROPERTY = {
+  type: "boolean",
+  description:
+    "true to work here: this chat shows the work as it happens, takes the owner's messages for it, and shows the checks, review and outcome. Omit (or false) to run it as a separate work session in its own chat.",
+} as const;
 
 export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const { store, runner } = options;
@@ -142,6 +158,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       case "references_invalid":
       case "reference_invalid":
         return "references must be GitHub repositories, as owner/name or https://github.com/owner/name";
+      case "here_invalid":
+        return "here must be true (work in this chat) or false (a separate work session)";
       case "references_too_many":
         return `references can name at most ${MAX_TASK_REFERENCES} repositories`;
       case "reference_duplicate":
@@ -191,8 +209,14 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     };
   };
 
+  /** The owner approved a task on this repository before. */
+  const approvedBefore = (repository: string) =>
+    store.list().some((task) => task.repository === repository);
+
   const prepare = async (
     input: Readonly<Record<string, unknown>>,
+    /** The asking chat runs without asking (Auto-run). */
+    autoRun: boolean,
   ): Promise<WorkspaceHostToolApproval> => {
     try {
       if (
@@ -201,7 +225,10 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       ) {
         throw new HttpError(400, "objective_too_long");
       }
-      const { validation: proposedInput, references, ...rest } = input;
+      if (input.here !== undefined && typeof input.here !== "boolean") {
+        throw new HttpError(400, "here_invalid");
+      }
+      const { validation: proposedInput, references, here, ...rest } = input;
       const request = parseTaskRequest({
         ...rest,
         // owner/name is accepted here too, like read_repository.
@@ -264,13 +291,20 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         ].join("\n"),
       };
       const setsUp = saveValidation || publish.grant;
+      // Repeat work, Approve for Me style: nothing new to save, on a
+      // repository the owner approved before, in an auto-run chat.
+      const repeat = !setsUp && approvedBefore(request.repository) && autoRun;
       return {
-        decision: "require_user",
+        decision: repeat ? "allow" : "require_user",
         summary: setsUp
           ? `Start a coding task in ${request.repository}, and save its setup?`
           : `Start a coding task in ${request.repository}?`,
         displayContent: display,
-        preparedInput: { [PREPARED_KEY]: request, [SETUP_KEY]: setup },
+        preparedInput: {
+          [PREPARED_KEY]: request,
+          [SETUP_KEY]: setup,
+          [HERE_KEY]: here === true,
+        },
       };
     } catch (error) {
       if (error instanceof HttpError) {
@@ -410,7 +444,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
     defineTool({
       name: "start_task",
       description:
-        "Start a coding task: the server makes a fresh clone of a repository (public, or private when one of the owner's GitHub connections can reach it; find its URL with list_repositories rather than asking) on a new agentlink/ branch and runs a separate chat there that implements the objective and commits it. The owner always approves the exact task first, so propose it directly rather than asking. Write the objective as a complete, self-contained instruction: that chat does not see this conversation. Use list_tasks to follow its progress.",
+        "Start a coding task: the server makes a fresh clone of a repository (public, or private when one of the owner's GitHub connections can reach it; find its URL with list_repositories rather than asking) on a new agentlink/ branch and runs a chat there that implements the objective and commits it, then checks, reviews and (when allowed) publishes it. With here: true this chat shows that work live and the owner steers it from here; otherwise it is a separate work session. The first task on a repository is approved by the owner on a card; later ones in an auto-run chat start without one. Propose it directly rather than asking. Write the objective as a complete, self-contained instruction: the working chat does not see this conversation.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -448,6 +482,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
             type: "string",
             description: '"providerId/modelId"; omit for the server\'s default',
           },
+          here: HERE_PROPERTY,
         },
         required: ["repository", "objective"],
       },
@@ -473,18 +508,22 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
           }
           throw error;
         }
+        const here = projectId !== undefined && input[HERE_KEY] === true;
         const task = projectId
           ? await runner.create(request, {
               origin: { projectId, sessionId: context.sessionId },
+              ...(here ? { here: true } : {}),
             })
           : await runner.create(request);
         return {
           modelContent: [
             `Started coding task ${task.id} on branch ${task.branch}.`,
             ...notes,
-            projectId
-              ? "It runs in its own chat. Its outcome (ready, a draft pull request, or a problem) will be delivered to this chat by itself: tell the owner it has started and do not poll list_tasks for it."
-              : "It runs in its own chat; call list_tasks to see its state. The owner sees it under Tasks.",
+            here
+              ? "It works here: this chat shows the work as it happens, the checks and review, and then its outcome. Tell the owner in one sentence that you are starting, then end your turn; do not poll list_tasks for it."
+              : projectId
+                ? "It runs in its own chat. Its outcome (ready, a draft pull request, or a problem) will be delivered to this chat by itself: tell the owner it has started and do not poll list_tasks for it."
+                : "It runs in its own chat; call list_tasks to see its state. The owner sees it under Tasks.",
           ].join("\n"),
           displayContent: { taskId: task.id, branch: task.branch },
         };
@@ -511,7 +550,11 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
 
   const prepareFollowUp = (
     input: Readonly<Record<string, unknown>>,
+    autoRun: boolean,
   ): WorkspaceHostToolApproval => {
+    if (input.here !== undefined && typeof input.here !== "boolean") {
+      return { decision: "deny", reason: explain("here_invalid") };
+    }
     const taskId = typeof input.taskId === "string" ? input.taskId : "";
     const instructions =
       typeof input.instructions === "string" ? input.instructions.trim() : "";
@@ -555,10 +598,14 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       ].join("\n"),
     };
     return {
-      decision: "require_user",
+      // The task itself was approved: an auto-run chat continues it.
+      decision: autoRun ? "allow" : "require_user",
       summary: `Continue the coding task in ${task.repository}?`,
       displayContent: display,
-      preparedInput: { [FOLLOW_UP_KEY]: { taskId, instructions } },
+      preparedInput: {
+        [FOLLOW_UP_KEY]: { taskId, instructions },
+        [HERE_KEY]: input.here === true,
+      },
     };
   };
 
@@ -580,6 +627,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
             description:
               "What to change, as a complete instruction: the task's chat does not see this conversation",
           },
+          here: HERE_PROPERTY,
         },
         required: ["taskId", "instructions"],
       },
@@ -593,13 +641,17 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         if (typeof followUp === "string") {
           return { modelContent: `Not continued: ${followUp}`, isError: true };
         }
+        const here = projectId !== undefined && input[HERE_KEY] === true;
         let task: TaskRun;
         try {
           task = projectId
             ? await runner.continueTask(
                 followUp.taskId,
                 followUp.instructions,
-                { origin: { projectId, sessionId: context.sessionId } },
+                {
+                  origin: { projectId, sessionId: context.sessionId },
+                  ...(here ? { here: true } : {}),
+                },
               )
             : await runner.continueTask(followUp.taskId, followUp.instructions);
         } catch (error) {
@@ -614,9 +666,11 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         return {
           modelContent: [
             `Coding task ${task.id} is working on the follow-up, on branch ${task.branch}.`,
-            projectId
-              ? "Its outcome will be delivered to this chat by itself: do not poll list_tasks for it."
-              : "Call list_tasks to see its state.",
+            here
+              ? "It works here: this chat shows the work as it happens, then its outcome. Do not poll list_tasks for it."
+              : projectId
+                ? "Its outcome will be delivered to this chat by itself: do not poll list_tasks for it."
+                : "Call list_tasks to see its state.",
           ].join("\n"),
           displayContent: { taskId: task.id, branch: task.branch },
         };
@@ -627,6 +681,9 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const approvalToolsFor = (
     projectId: string | undefined,
   ): WorkspaceApprovalHostTools => {
+    const autoRun = (sessionId: string) =>
+      projectId !== undefined &&
+      options.autonomous?.({ projectId, sessionId }) === true;
     const tools: HostTool[] = [
       makeStartTask(projectId),
       makeContinueTask(projectId),
@@ -636,8 +693,8 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
       resolveTools: () => tools,
       prepare: (request) =>
         request.toolName === "continue_task"
-          ? prepareFollowUp(request.input)
-          : prepare(request.input),
+          ? prepareFollowUp(request.input, autoRun(request.sessionId))
+          : prepare(request.input, autoRun(request.sessionId)),
       validatePending: ({ toolName, input }) => {
         if (toolName === "continue_task") {
           const followUp = approvedFollowUp(input);

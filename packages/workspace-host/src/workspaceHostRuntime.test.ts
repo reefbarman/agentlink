@@ -736,7 +736,11 @@ describe("createWorkspaceHost", () => {
         request.input.when === "never"
           ? { decision: "deny" as const, reason: "never is not a time" }
           : {
-              decision: "require_user" as const,
+              // Repeat work the owner approved before runs without a card.
+              decision:
+                request.input.when === "again"
+                  ? ("allow" as const)
+                  : ("require_user" as const),
               summary: `Remind at ${String(request.input.when)}?`,
               displayContent: { kind: "reminder" },
               preparedInput: { prepared: `${String(request.input.when)}!` },
@@ -827,6 +831,14 @@ describe("createWorkspaceHost", () => {
       expect(results.at(-1)).toContain("never is not a time");
       expect(handler).toHaveBeenCalledTimes(1);
 
+      // Allowed by the host: runs at once with the prepared value.
+      call = { when: "again" };
+      await expect(host.runTurn(sessionId, "repeat")).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls[1]![0]).toEqual({ prepared: "again!" });
+
       // Changed before the owner answered: allowing does not run it.
       call = { when: "8am" };
       await expect(host.runTurn(sessionId, "later")).resolves.toMatchObject({
@@ -839,7 +851,7 @@ describe("createWorkspaceHost", () => {
       await expect(
         host.resumeInteraction(sessionId, "allow"),
       ).rejects.toThrow();
-      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledTimes(2);
     } finally {
       await host.close();
       await fs.rm(parent, { recursive: true, force: true });
