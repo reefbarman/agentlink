@@ -1,0 +1,37 @@
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 569-617
+CHANGELOG.md
+  h_e08a86bb3a33a2 19
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 599-601,610-619,1170-1191
+  s_103c85b0f6eb66::t_510c643e2acef3 597-598,602,1192-1193
+apps/server/README.md
+  h_e08a86bb3a33a2 118
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 25-27,32-36
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 257-259
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ea1171f7e3376dcbc84569b05486d51e35e0316",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_103c85b0f6eb66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "09080dcf-14e2-4ebb-aeef-8462dcc396a2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
