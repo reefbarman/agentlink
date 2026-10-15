@@ -4,6 +4,16 @@
       "bump": "minor",
       "breakingUnits": [],
       "reason": "Consolidates agent-facing tools (get_context into read_file's context view, codebase_search into search_files query mode). These are tools the agent calls, not user commands or settings; get_context remains a valid permission name, so skills and modes keep working."
+    },
+    "39a786755f9fd16bc59368d5d8c8001da8016d72": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "reason": "Dropping Intel Mac support is a platform change, but AgentLink has no known external users yet, so the maintainer chose to ship it in 1.x rather than a 2.0 major."
+    },
+    "5f5e17d3854f62cb4f1834594835d84149e8074e": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "reason": "Raising the minimum VS Code version to 1.140 is an install-compatibility change, but AgentLink has no known external users yet, so the maintainer chose to ship it in 1.x rather than a 2.0 major."
     }
   }
 }
