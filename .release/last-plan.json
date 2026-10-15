@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c828cbc504f1fd9e644aedd517074534d5e71791",
-  "createdAt": "2026-10-10T12:47:03.815Z",
+  "sourceSha": "ffff73794cbf107182575bd176cc0f44816f9552",
+  "createdAt": "2026-10-15T00:01:42.153Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.30.0",
       "baselineRef": "v1.30.0",
-      "reserved": "1.30.14",
+      "reserved": "1.30.25",
       "commits": [
         "39a786755f9fd16bc59368d5d8c8001da8016d72",
         "5f5e17d3854f62cb4f1834594835d84149e8074e",
@@ -36,7 +36,16 @@
         "8b7e1087512f1ab4288534970d936c91794ab055",
         "ec193cd75140f32079325fcb88df539ffc0949d9",
         "525d9afac9f8c922a5c3bf875ce1722a71335600",
-        "c828cbc504f1fd9e644aedd517074534d5e71791"
+        "c828cbc504f1fd9e644aedd517074534d5e71791",
+        "24e35e0caad915b053057d25581dbf6488d74a1e",
+        "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
+        "861db4e485252ce68d5def6c52a0f5a127d09f81",
+        "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
+        "fad7841d7b9a0a828b4426e90be03f6b33902b95",
+        "01b905b29eab99ba10d279e7fcc54bea783bb605",
+        "936854e9c6398662cc22166f6ab40193dff7935b",
+        "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+        "ffff73794cbf107182575bd176cc0f44816f9552"
       ],
       "unknownPaths": [],
       "breakingCommits": [
@@ -184,45 +193,141 @@
           "subject": "docs(skills): let documentation skill defer to a user-named source checkout",
           "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
           "breaking": false
+        },
+        {
+          "sha": "24e35e0caad915b053057d25581dbf6488d74a1e",
+          "subject": "fix(browser-gateway): restore attached image previews over the relay data plane",
+          "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
+          "breaking": false
+        },
+        {
+          "sha": "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
+          "subject": "feat(condense): align GPT-6.1 Sol auto-condense with Codex 500k default window",
+          "summary": "GPT-6.1 Sol now auto-condenses at about 450k input tokens, matching Codex's 500k default window, instead of the generic 256k-based default.",
+          "breaking": false
+        },
+        {
+          "sha": "861db4e485252ce68d5def6c52a0f5a127d09f81",
+          "subject": "feat(condense): cost-aware per-model condense targets and pre-condense notice",
+          "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
+          "breaking": false
+        },
+        {
+          "sha": "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
+          "subject": "fix(repo-map): rank SwiftPM .build output after project code",
+          "summary": "get_repo_map now lists SwiftPM .build output after project code, so generated artifacts no longer crowd authored modules out of a bounded map.",
+          "breaking": false
+        },
+        {
+          "sha": "fad7841d7b9a0a828b4426e90be03f6b33902b95",
+          "subject": "feat(execute_command): guide recovery from SwiftPM nested sandbox denial",
+          "summary": "Sandboxed swift build/test failures from SwiftPM's nested sandbox now return guidance to retry with --disable-sandbox inside AgentLink's sandbox, never automatically and never via native escalation.",
+          "breaking": false
+        },
+        {
+          "sha": "01b905b29eab99ba10d279e7fcc54bea783bb605",
+          "subject": "feat(background): preflight outside-workspace ownedPaths at spawn",
+          "summary": "Writable background spawns are now checked up front: an ownedPaths entry outside the workspace that inherited approvals cannot reach is rejected immediately, and partial coverage returns writeScopeWarnings.",
+          "breaking": false
+        },
+        {
+          "sha": "936854e9c6398662cc22166f6ab40193dff7935b",
+          "subject": "feat(mcp): redact device sign-in callback secrets from tool results",
+          "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
+          "breaking": false
+        },
+        {
+          "sha": "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+          "subject": "fix(openai-compatible): report structural context for malformed tool arguments",
+          "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
+          "breaking": false
+        },
+        {
+          "sha": "ffff73794cbf107182575bd176cc0f44816f9552",
+          "subject": "feat(images): render Markdown images and add web image retrieval",
+          "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.16.1",
-      "baselineRef": "desktop-v0.16.1",
-      "reserved": "0.16.1",
+      "published": "0.17.0",
+      "baselineRef": "desktop-v0.17.0",
+      "reserved": "0.17.0",
       "commits": [
-        "ec193cd75140f32079325fcb88df539ffc0949d9",
-        "525d9afac9f8c922a5c3bf875ce1722a71335600",
-        "c828cbc504f1fd9e644aedd517074534d5e71791"
+        "24e35e0caad915b053057d25581dbf6488d74a1e",
+        "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
+        "861db4e485252ce68d5def6c52a0f5a127d09f81",
+        "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
+        "fad7841d7b9a0a828b4426e90be03f6b33902b95",
+        "01b905b29eab99ba10d279e7fcc54bea783bb605",
+        "936854e9c6398662cc22166f6ab40193dff7935b",
+        "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+        "ffff73794cbf107182575bd176cc0f44816f9552"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.17.0",
+      "version": "0.18.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.17.0",
+      "tag": "desktop-v0.18.0",
       "notes": [
         {
-          "sha": "ec193cd75140f32079325fcb88df539ffc0949d9",
-          "subject": "fix(tools): report sandbox preparation failure reason on native fallback",
-          "summary": "When sandbox preparation fails and a command falls back to native execution, results now include a bounded failure reason and diagnostic category.",
+          "sha": "24e35e0caad915b053057d25581dbf6488d74a1e",
+          "subject": "fix(browser-gateway): restore attached image previews over the relay data plane",
+          "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
           "breaking": false
         },
         {
-          "sha": "525d9afac9f8c922a5c3bf875ce1722a71335600",
-          "subject": "feat(tools): allow ssh -t with a remote command in execute_command",
-          "summary": "execute_command now accepts ssh with -t/-tt when a remote command is given, so remote prompts like sudo can be answered in the visible terminal.",
+          "sha": "88ca1b0da869f0a4e14a961db8b5e24b8804e3de",
+          "subject": "feat(condense): align GPT-6.1 Sol auto-condense with Codex 500k default window",
+          "summary": "GPT-6.1 Sol now auto-condenses at about 450k input tokens, matching Codex's 500k default window, instead of the generic 256k-based default.",
           "breaking": false
         },
         {
-          "sha": "c828cbc504f1fd9e644aedd517074534d5e71791",
-          "subject": "docs(skills): let documentation skill defer to a user-named source checkout",
-          "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
+          "sha": "861db4e485252ce68d5def6c52a0f5a127d09f81",
+          "subject": "feat(condense): cost-aware per-model condense targets and pre-condense notice",
+          "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
+          "breaking": false
+        },
+        {
+          "sha": "447a9aa246d1ef9a121ee06f517c60fd65ded09f",
+          "subject": "fix(repo-map): rank SwiftPM .build output after project code",
+          "summary": "get_repo_map now lists SwiftPM .build output after project code, so generated artifacts no longer crowd authored modules out of a bounded map.",
+          "breaking": false
+        },
+        {
+          "sha": "fad7841d7b9a0a828b4426e90be03f6b33902b95",
+          "subject": "feat(execute_command): guide recovery from SwiftPM nested sandbox denial",
+          "summary": "Sandboxed swift build/test failures from SwiftPM's nested sandbox now return guidance to retry with --disable-sandbox inside AgentLink's sandbox, never automatically and never via native escalation.",
+          "breaking": false
+        },
+        {
+          "sha": "01b905b29eab99ba10d279e7fcc54bea783bb605",
+          "subject": "feat(background): preflight outside-workspace ownedPaths at spawn",
+          "summary": "Writable background spawns are now checked up front: an ownedPaths entry outside the workspace that inherited approvals cannot reach is rejected immediately, and partial coverage returns writeScopeWarnings.",
+          "breaking": false
+        },
+        {
+          "sha": "936854e9c6398662cc22166f6ab40193dff7935b",
+          "subject": "feat(mcp): redact device sign-in callback secrets from tool results",
+          "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
+          "breaking": false
+        },
+        {
+          "sha": "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+          "subject": "fix(openai-compatible): report structural context for malformed tool arguments",
+          "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
+          "breaking": false
+        },
+        {
+          "sha": "ffff73794cbf107182575bd176cc0f44816f9552",
+          "subject": "feat(images): render Markdown images and add web image retrieval",
+          "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
           "breaking": false
         }
       ]
@@ -231,25 +336,109 @@
       "published": "0.17.0",
       "baselineRef": "cli-v0.17.0",
       "reserved": "0.17.0",
-      "commits": [],
+      "commits": [
+        "24e35e0caad915b053057d25581dbf6488d74a1e",
+        "861db4e485252ce68d5def6c52a0f5a127d09f81",
+        "936854e9c6398662cc22166f6ab40193dff7935b",
+        "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+        "ffff73794cbf107182575bd176cc0f44816f9552"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.18.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.18.0",
+      "notes": [
+        {
+          "sha": "24e35e0caad915b053057d25581dbf6488d74a1e",
+          "subject": "fix(browser-gateway): restore attached image previews over the relay data plane",
+          "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
+          "breaking": false
+        },
+        {
+          "sha": "861db4e485252ce68d5def6c52a0f5a127d09f81",
+          "subject": "feat(condense): cost-aware per-model condense targets and pre-condense notice",
+          "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
+          "breaking": false
+        },
+        {
+          "sha": "936854e9c6398662cc22166f6ab40193dff7935b",
+          "subject": "feat(mcp): redact device sign-in callback secrets from tool results",
+          "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
+          "breaking": false
+        },
+        {
+          "sha": "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+          "subject": "fix(openai-compatible): report structural context for malformed tool arguments",
+          "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
+          "breaking": false
+        },
+        {
+          "sha": "ffff73794cbf107182575bd176cc0f44816f9552",
+          "subject": "feat(images): render Markdown images and add web image retrieval",
+          "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.12.0",
       "baselineRef": "sdk-v0.12.0",
       "reserved": "0.12.0",
-      "commits": [],
+      "commits": [
+        "24e35e0caad915b053057d25581dbf6488d74a1e",
+        "861db4e485252ce68d5def6c52a0f5a127d09f81",
+        "936854e9c6398662cc22166f6ab40193dff7935b",
+        "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+        "ffff73794cbf107182575bd176cc0f44816f9552"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.13.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.13.0",
+      "notes": [
+        {
+          "sha": "24e35e0caad915b053057d25581dbf6488d74a1e",
+          "subject": "fix(browser-gateway): restore attached image previews over the relay data plane",
+          "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
+          "breaking": false
+        },
+        {
+          "sha": "861db4e485252ce68d5def6c52a0f5a127d09f81",
+          "subject": "feat(condense): cost-aware per-model condense targets and pre-condense notice",
+          "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
+          "breaking": false
+        },
+        {
+          "sha": "936854e9c6398662cc22166f6ab40193dff7935b",
+          "subject": "feat(mcp): redact device sign-in callback secrets from tool results",
+          "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
+          "breaking": false
+        },
+        {
+          "sha": "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69",
+          "subject": "fix(openai-compatible): report structural context for malformed tool arguments",
+          "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
+          "breaking": false
+        },
+        {
+          "sha": "ffff73794cbf107182575bd176cc0f44816f9552",
+          "subject": "feat(images): render Markdown images and add web image retrieval",
+          "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -434,6 +623,78 @@
       "breakingUnits": [],
       "summary": "The built-in documentation skill can now inspect a user-named AgentLink source checkout for implementation or audit work instead of refusing to look outside its bundled references.",
       "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "24e35e0caad915b053057d25581dbf6488d74a1e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Attached image previews and promoted generated images now stay visible over the relay in Desktop, Browser Ask Agent and relay browser sessions after the committed message replaces the optimistic one.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "88ca1b0da869f0a4e14a961db8b5e24b8804e3de": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "GPT-6.1 Sol now auto-condenses at about 450k input tokens, matching Codex's 500k default window, instead of the generic 256k-based default.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "861db4e485252ce68d5def6c52a0f5a127d09f81": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Auto-condense defaults are now tuned per model by cost, and the agent gets a one-time notice shortly before an automatic condense so it can finish the step and update its TODO list.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "447a9aa246d1ef9a121ee06f517c60fd65ded09f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "get_repo_map now lists SwiftPM .build output after project code, so generated artifacts no longer crowd authored modules out of a bounded map.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fad7841d7b9a0a828b4426e90be03f6b33902b95": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Sandboxed swift build/test failures from SwiftPM's nested sandbox now return guidance to retry with --disable-sandbox inside AgentLink's sandbox, never automatically and never via native escalation.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "01b905b29eab99ba10d279e7fcc54bea783bb605": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Writable background spawns are now checked up front: an ownedPaths entry outside the workspace that inherited approvals cannot reach is rejected immediately, and partial coverage returns writeScopeWarnings.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "936854e9c6398662cc22166f6ab40193dff7935b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "MCP tool results now have the code and state values of the OpenAI device sign-in callback URL replaced with REDACTED before reaching the model; other URLs are untouched.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f4ff28c3dce18c477f63db32f8cbd2e3f7459a69": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Malformed tool-argument errors from OpenAI-compatible providers now report the tool name, argument size and finish reason, helping tell truncation from mixed-up parallel calls.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ffff73794cbf107182575bd176cc0f44816f9552": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Agents can show images with Markdown, and new inspect_page_images and extended present_images tools retrieve public web images, controlled by a new agentlink.webAccess.imageRetrieval setting, with matching SDK web-image tools and portable core entries.",
+      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }
