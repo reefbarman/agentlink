@@ -1,0 +1,82 @@
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 40-42
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 79-94,284-303,490-491,540,1015-1016,1549-1556,1568-1570,1572,1580-1582,1604-1609,1768,1775,1783-1788,1822-1838,1895,2029-2036,2479-2591,2624
+  s_11034d9cde9a06::t_aca01a46a78492 1014,1571,1573-1578,2592
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 156,172,1154-1155,1174
+  s_0c79e6ed875749::t_851334f1032c1a 1153,1156
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 259,291,422-546
+  h_e08a86bb3a33a2 547-548
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 221-224,254-258,906-907,913-926
+apps/server/src/taskTools.ts
+  h_e08a86bb3a33a2 74-82,107,109-113,161-162,212-214,218-219,228-231,294-296,298,305-306,447,485,511,515,522-524,553,555-557,601-602,606-607,630,644,652-653,669-671,684-686,696-697
+  h_e08a86bb3a33a2 108,215,303-304,307,525-526,605,608,651,654,672-673
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 119-120,812-814,1316-1367,1500-1501,1514-1519
+  h_e08a86bb3a33a2 117-118,121
+apps/server/src/taskResultDelivery.test.ts
+  h_e08a86bb3a33a2 15,156-227
+  h_e08a86bb3a33a2 228-230
+apps/server/src/taskStore.ts
+  h_e08a86bb3a33a2 239-244
+apps/server/src/taskTools.test.ts
+  h_e08a86bb3a33a2 51-52
+  h_e08a86bb3a33a2 88-89,113-117,122-126,293-347,378-391
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 423-424,427-430,450
+apps/server/src/taskResultDelivery.ts
+  h_e08a86bb3a33a2 8,27-64
+  s_5ee2fc9f02b194::t_e4790b0df7e2b3 65
+apps/server/README.md
+  h_e08a86bb3a33a2 32,416-417,428
+CHANGELOG.md
+  h_e08a86bb3a33a2 23
+apps/server/src/repositoryTools.test.ts
+  h_e08a86bb3a33a2 394-398
+  h_e08a86bb3a33a2 399-404
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 739,741-743,834-841,854
+  h_e08a86bb3a33a2 740
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0c79e6ed875749": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78762027-d454-4c42-9709-e768d779f466",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_11034d9cde9a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b78133c-203c-48fd-8a5a-0d1e4e9d54d6",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_5ee2fc9f02b194": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f7c4489-5a6c-49db-86b2-e92c2fe694f9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
