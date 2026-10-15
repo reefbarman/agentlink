@@ -566,6 +566,55 @@ describe("task runner", () => {
     expect(test.reviewTurns).toHaveLength(0);
   });
 
+  it("stops without a fix round when a check's program is not installed", async () => {
+    const test = await setup({
+      validation: ["pnpm install --frozen-lockfile"],
+    });
+    const created = await test.runner.create(REQUEST);
+    test.validations.push({
+      passed: false,
+      commands: [
+        {
+          command: "pnpm install --frozen-lockfile",
+          exitCode: 127,
+          timedOut: false,
+          durationMs: 6,
+          outputTail: "/bin/bash: line 1: pnpm: command not found",
+        },
+      ],
+    });
+    test.inspections.push({
+      branch: created.branch,
+      head: "c1",
+      clean: true,
+      status: "",
+      commits: ["c1"],
+    });
+    await test.waitForTurns(1);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "failed");
+    expect(test.store.get(created.id)).toMatchObject({
+      error: "validation_command_missing",
+      errorDetail: expect.stringContaining("pnpm isn't installed"),
+      fixRounds: 0,
+    });
+    expect(test.turns).toHaveLength(1);
+    expect(test.reviewTurns).toHaveLength(0);
+
+    // Once it is installed, resuming checks the same commit again.
+    test.inspections.push({
+      branch: created.branch,
+      head: "c1",
+      clean: true,
+      status: "",
+      commits: ["c1"],
+    });
+    await test.runner.resume(created.id);
+    await test.waitFor(created.id, "ready");
+    expect(test.workspaces.validate).toHaveBeenCalledTimes(2);
+    expect(test.turns).toHaveLength(1);
+  });
+
   it("sends blocking findings back and reviews the new commit again", async () => {
     const test = await setup();
     const created = await test.runner.create(REQUEST);

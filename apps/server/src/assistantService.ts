@@ -254,6 +254,9 @@ export const COMMAND_WORKER_ENVIRONMENT: Readonly<Record<string, string>> = {
   HOME: "/tmp",
   LANG: "C.UTF-8",
   TERM: "dumb",
+  // pnpm and yarn come through Corepack, which fetches the version a
+  // repository asks for on first use: never stop to ask, nobody can answer.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
 };
 
 /**

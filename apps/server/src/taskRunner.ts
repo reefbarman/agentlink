@@ -594,7 +594,12 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         options.repositories?.get(entry.task.repository)?.validation ?? [];
       if (commands.length > 0) {
         let validation = evidenceFor(entry.task, head).validation;
-        if (!validation || !sameCommands(validation, commands)) {
+        if (
+          !validation ||
+          !sameCommands(validation, commands) ||
+          // About the setup, not the commit: it may be installed by now.
+          missingCommand(validation)
+        ) {
           await save(entry, { state: "validating" });
           const run = await workspaces.validate(entry.task, commands);
           assertNotStopping(entry);
@@ -602,6 +607,16 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
           await addEvidence(entry, validation);
         }
         if (!validation.passed) {
+          // The check itself cannot run here: no change to the code fixes
+          // that, so it is not worth a fix round.
+          const missing = missingCommand(validation);
+          if (missing) {
+            return {
+              state: "failed",
+              error: "validation_command_missing",
+              errorDetail: missingCommandDetail(missing).slice(0, 2_000),
+            };
+          }
           if (fixRounds >= maxFixRounds) {
             return {
               state: "failed",
@@ -1150,6 +1165,30 @@ function sameCommands(
     ? ran.length === commands.length &&
         ran.every((command, index) => command === commands[index])
     : ran.every((command, index) => command === commands[index]);
+}
+
+/** Shell exit status for a command that is not installed. */
+const COMMAND_NOT_FOUND_EXIT = 127;
+
+/** The failing check whose program is not installed where checks run. */
+export function missingCommand(
+  validation: Pick<ValidationEvidence, "commands">,
+): string | undefined {
+  const failed = validation.commands.find(
+    (result) => !result.timedOut && result.exitCode !== 0,
+  );
+  return failed?.exitCode === COMMAND_NOT_FOUND_EXIT
+    ? failed.command
+    : undefined;
+}
+
+function missingCommandDetail(command: string): string {
+  const program = command.trim().split(/\s+/)[0] ?? command;
+  return [
+    `The check "${command}" can't run here: ${program} isn't installed where the server runs checks.`,
+    "This is a problem with the setup, not with the change, so no fix rounds were used.",
+    `Install ${program} in the command worker, or change this repository's checks to a command that is available, then resume the task.`,
+  ].join(" ");
 }
 
 export function describeValidation(validation: ValidationEvidence): string {

@@ -115,7 +115,7 @@ The model picker shows every model the providers declare, each with its own thin
 
 ### Container (Docker)
 
-The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds two images from one bundle: the assistant on a distroless Node 22 base (no shell, no package manager, no git), and the [command worker](#command-worker) (Debian slim with bash, git, ripgrep, curl, wget, jq, and python3). [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs both as non-root users with read-only root filesystems, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible. The same images run on Linux and on macOS with Docker Desktop.
+The supported deployment. [`deploy/container/Dockerfile`](deploy/container/Dockerfile) builds two images from one bundle: the assistant on a distroless Node 22 base (no shell, no package manager, no git), and the [command worker](#command-worker) (Debian slim with bash, git, ripgrep, curl, wget, jq, python3, npm, and pnpm and yarn through Corepack). [`deploy/container/compose.yaml`](deploy/container/compose.yaml) runs both as non-root users with read-only root filesystems, no capabilities, `no-new-privileges`, an init process, and bounded logs. The host keeps no firewall or service-account changes; only the directories you mount are visible. The same images run on Linux and on macOS with Docker Desktop.
 
 ```sh
 # Build (from the repository root)
