@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.36.0
+
 - Adds an experimental, opt-in TypeSafe Jev first pass for command approval (`agentlink.guardian.typeSafeShadow.firstPass.enabled`, off by default; requires shadow mode). When Jev is confident a command is fine (eligible answer, allow probability at or above `firstPass.threshold`, default 0.9, low or medium risk, and no step the command classifier rates dangerous, such as a force-push or `curl`, nor any destructive, secret, privileged or hidden-execution step), the command runs without waiting for the main Guardian. Jev never denies on its own: anything else is still decided by the Guardian, which now starts at the same time so there is no extra wait. The Guardian also reviews every first-pass approval in the background, and `npm run telemetry:sessions` reports how many it would have denied. In a replay of 118 commands (including 18 deliberately risky ones), the default rule approved 14% of commands early and let none of the should-block commands through.
 - Older answers left out of review evidence in long sessions no longer make a Jev allow ineligible for git's own local steps (staging, committing, switching branches), in addition to read-only and build or test steps. File writes, moves and redirections still need complete evidence because they can overwrite untracked files. Pushes, fetches, pulls and `gh pr create` now count as remote steps, so that gap still makes them ineligible.
 
