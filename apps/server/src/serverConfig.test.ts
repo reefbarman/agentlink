@@ -151,6 +151,43 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("parses browser research, which needs runners", () => {
+    const runners = {
+      manager: {
+        host: "runner-manager",
+        port: 7700,
+        token: { file: "/run/secrets/runner-manager-token" },
+      },
+    };
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.runners = runners;
+        value.browser = {};
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.browser).toEqual({ idleMinutes: 10 });
+    expect(() =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          value.browser = {};
+        }),
+        "/etc/agentlink",
+      ),
+    ).toThrow(/browser needs runners/u);
+    for (const browser of [{ idleMinutes: 0 }, { image: "anything" }]) {
+      expect(() =>
+        parseAssistantServerConfig(
+          withChange((value) => {
+            value.runners = runners;
+            value.browser = browser;
+          }),
+          "/etc/agentlink",
+        ),
+      ).toThrow(/browser/u);
+    }
+  });
+
   it("parses the backup sidecar, on a private network only", () => {
     const config = parseAssistantServerConfig(
       withChange((value) => {

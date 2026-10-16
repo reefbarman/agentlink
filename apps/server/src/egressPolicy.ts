@@ -211,6 +211,9 @@ export function proxyAuthorizationHeader(
  * The gateway's tunnel check: the signed policy in the credentials, or for
  * a request without credentials the gateway's own list (as
  * `dependencies`). Bad credentials are refused, never treated as absent.
+ * A request without credentials that the list refuses is challenged (407)
+ * rather than refused outright, so a client that only sends credentials
+ * when asked (Chromium, for browser research) retries with its policy.
  */
 export function egressPolicyAuthorizer(
   key: Buffer,
@@ -236,7 +239,7 @@ export function egressPolicyAuthorizer(
     if (decision.allowed) return decision;
     return {
       allowed: false,
-      status: 403,
+      status: policy ? 403 : 407,
       reason: policy
         ? decision.reason
         : "not on the AgentLink egress allowlist",

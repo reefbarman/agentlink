@@ -213,8 +213,13 @@ describe("egress gateway with per-project policies", () => {
     expect(await connect(gateway.port, "registry.npmjs.org:443")).toBe(
       "HTTP/1.1 200 Connection Established",
     );
+    // Challenged, so a browser that only answers a challenge can retry.
     expect(await connect(gateway.port, "news.example.net:443")).toBe(
-      "HTTP/1.1 403 Blocked news.example.net: not on the AgentLink egress allowlist",
+      "HTTP/1.1 407 Blocked news.example.net: not on the AgentLink egress allowlist",
+    );
+    // Open web never reaches an address literal either.
+    expect(await connect(gateway.port, "192.168.50.221:443", open)).toMatch(
+      /^HTTP\/1\.1 403 Blocked/u,
     );
     expect(
       await connect(

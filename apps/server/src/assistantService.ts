@@ -45,6 +45,12 @@ import {
   type RunnerManagerClient,
 } from "./runnerManager.js";
 import { createTaskEditors, type TaskEditors } from "./taskEditors.js";
+import {
+  createBrowseTools,
+  createBrowserPool,
+  type BrowserPool,
+} from "./browserResearch.js";
+import { connectCdp } from "./cdpClient.js";
 import { startEditorProxy, type EditorProxy } from "./editorProxy.js";
 import {
   editorAgentLinkSettings,
@@ -1218,6 +1224,8 @@ export async function startAssistantService(
     });
     /** Why turns failed, beyond the public error code; owner-only. */
     const turnFailures = createTurnFailureLog();
+    /** Research browsers, once the runner manager is known (below). */
+    let browserPool: BrowserPool | undefined;
     const openHost = async (
       project: {
         readonly id: string;
@@ -1299,6 +1307,14 @@ export async function startAssistantService(
           : {}),
         hostTools: async (request) => [
           ...(await webTools(request)),
+          // A throwaway browser, on Open web owner projects.
+          ...(kind === "project" && browserPool
+            ? await createBrowseTools({
+                pool: browserPool,
+                projectId: project.id,
+                policy: () => projectNetworkPolicy(catalog.get(project.id)),
+              })(request)
+            : []),
           ...(await mcpTools.readTools(request)),
           ...(kind === "project" ? await jobTools.readTools(request) : []),
           ...(kind === "project" ? await repositoryTools(request) : []),
@@ -2050,6 +2066,52 @@ export async function startAssistantService(
         log,
       });
     }
+    // Browser research: one throwaway browser per chat, through the gateway.
+    const browserProxy = config.commandWorker?.egressProxy;
+    if (config.browser && runnerManager && browserProxy) {
+      const manager = runnerManager;
+      const proxyServer = new URL(browserProxy);
+      browserPool = createBrowserPool({
+        start: (id) =>
+          manager.startBrowser({
+            id,
+            proxy: `http://${proxyServer.host}`,
+          }),
+        stop: async (id) => {
+          await manager.stopBrowser(id);
+        },
+        connect: (host, port) => connectCdp(host, port),
+        // The project's signed policy, answered to the gateway's challenge.
+        credentials: (projectId) => {
+          if (!policyKey) return undefined;
+          const signed = new URL(
+            egressProxyUrl(
+              browserProxy,
+              policyKey,
+              projectNetworkPolicy(catalog.get(projectId)),
+            ),
+          );
+          return {
+            username: decodeURIComponent(signed.username),
+            password: decodeURIComponent(signed.password),
+          };
+        },
+        idleMs: config.browser.idleMinutes * 60_000,
+        log,
+      });
+      // Left over from a previous run.
+      await manager.stopAllBrowsers().catch((error: unknown) => {
+        log(`Could not stop leftover browsers: ${message(error)}`);
+      });
+    }
+    // A chat's browser stops when its turn ends.
+    const stopBrowsersOnTurnEnd = routes.events.observe((key, { event }) => {
+      if (!browserPool || event.kind !== "turn") return;
+      const type = event.event.type;
+      if (type !== "turn.completed" && type !== "turn.failed") return;
+      const session = parseSessionKey(key);
+      if (session) void browserPool.end(session.sessionId);
+    });
     const tasks = config.projectsRoot
       ? await (async () => {
           await fs.mkdir(config.projectsRoot!, { recursive: true });
@@ -2453,6 +2515,10 @@ export async function startAssistantService(
         await taskEditors?.close();
         await taskEditors?.stopAll().catch((error: unknown) => {
           log(`Could not stop the task editors: ${message(error)}`);
+        });
+        stopBrowsersOnTurnEnd();
+        await browserPool?.endAll().catch((error: unknown) => {
+          log(`Could not stop the research browsers: ${message(error)}`);
         });
         await taskDeliveries.flush();
         await taskStore.flush();

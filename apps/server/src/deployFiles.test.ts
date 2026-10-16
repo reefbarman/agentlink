@@ -513,6 +513,36 @@ describe("deployment files", () => {
     }
   });
 
+  it("ships a browser overlay on its own internal network, with a pinned Chromium", async () => {
+    const overlay = await fs.readFile(
+      path.join(deploy, "container", "compose.browser.yaml"),
+      "utf8",
+    );
+    expect(overlay).toContain("name: agentlink-browsers");
+    expect(overlay).toContain("internal: true");
+    expect(overlay).toContain("gateway_mode_ipv4: isolated");
+    expect(overlay).toContain(
+      "AGENTLINK_BROWSER_IMAGE: agentlink-browser:local",
+    );
+    expect(overlay).toContain("AGENTLINK_BROWSER_NETWORK: agentlink-browsers");
+    // Browsers get no Docker socket, secrets, data or published ports.
+    expect(overlay).not.toMatch(/docker\.sock|secrets:|\.\/data|ports:/u);
+    const dockerfile = await fs.readFile(
+      path.join(deploy, "container", "Dockerfile"),
+      "utf8",
+    );
+    // A pinned Playwright Chromium, never a floating version.
+    expect(dockerfile).toMatch(
+      /npx -y playwright@\d+\.\d+\.\d+ install --with-deps --only-shell chromium/u,
+    );
+    expect(dockerfile).toContain(
+      'ENTRYPOINT ["/usr/local/bin/agentlink-browser"]',
+    );
+    const upgrade = await fs.readFile(path.join(deploy, "upgrade.sh"), "utf8");
+    expect(upgrade).toContain('OPTIONAL_TARGETS="editor browser"');
+    expect(upgrade).toContain("compose\\.browser\\.yaml");
+  });
+
   it("ships an editor overlay on its own internal network and port", async () => {
     const overlay = await fs.readFile(
       path.join(deploy, "container", "compose.editor.yaml"),

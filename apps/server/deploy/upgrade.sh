@@ -44,7 +44,7 @@ set -euo pipefail
 TARGETS="assistant command-worker publisher backup"
 # Built only when the deploy uses them; a rollback keeps their current
 # image when there is no earlier one (the first upgrade that adds them).
-OPTIONAL_TARGETS="editor"
+OPTIONAL_TARGETS="editor browser"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(cd "$script_dir/../../.." && pwd -P)"
 deploy_dir="${AGENTLINK_DEPLOY:-$HOME/agentlink-assistant}"
@@ -108,6 +108,10 @@ image_exists() { docker image inspect "$1" > /dev/null 2>&1; }
 # compose.editor.yaml in COMPOSE_FILE adds the editor image.
 if grep -Eq '^COMPOSE_FILE=.*compose\.editor\.yaml' "$deploy_dir/.env" 2> /dev/null; then
   TARGETS="$TARGETS editor"
+fi
+# compose.browser.yaml adds the research browser image.
+if grep -Eq '^COMPOSE_FILE=.*compose\.browser\.yaml' "$deploy_dir/.env" 2> /dev/null; then
+  TARGETS="$TARGETS browser"
 fi
 is_optional() { case " $OPTIONAL_TARGETS " in *" $1 "*) return 0 ;; esac; return 1; }
 

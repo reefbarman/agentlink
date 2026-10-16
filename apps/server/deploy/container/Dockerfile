@@ -11,6 +11,8 @@
 #     -f apps/server/deploy/container/Dockerfile apps/server
 #   docker build --target editor -t agentlink-editor:local \
 #     -f apps/server/deploy/container/Dockerfile apps/server
+#   docker build --target browser -t agentlink-browser:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
 #
 # The context is apps/server; its .dockerignore admits only the bundle.
 # Run them with compose.yaml next to this file (see apps/server/README.md).
@@ -121,6 +123,32 @@ RUN printf '%s\n' '#!/bin/sh' 'set -eu' \
 USER 1000
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/agentlink-editor"]
+
+# Browser: headless Chromium for research (the browse_* tools, with
+# compose.browser.yaml). The runner manager starts one per chat with no
+# mounts, no credentials, a fresh profile in /tmp, a read-only root
+# filesystem and the browsers' internal network, so everything it fetches
+# goes through the egress gateway. Playwright's Chromium headless shell,
+# pinned: bump the version deliberately.
+FROM node:22-bookworm-slim AS browser
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx -y playwright@1.64.1 install --with-deps --only-shell chromium \
+    && shell="$(find /ms-playwright -type f \( -name headless_shell -o -name chrome-headless-shell \) | head -n 1)" \
+    && test -n "$shell" \
+    && ln -s "$shell" /usr/local/bin/headless-shell \
+    && rm -rf /root/.npm /root/.cache /var/lib/apt/lists/* /tmp/*
+# Fixed flags: DevTools on the browsers' network for the assistant, no
+# sandbox inside the container (it is the sandbox), nothing that phones
+# home, and the proxy (from the runner manager) for every request,
+# loopback included.
+RUN printf '%s\n' '#!/bin/sh' 'set -eu' \
+    'mkdir -p /tmp/home /tmp/profile' \
+    'exec /usr/local/bin/headless-shell --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-sync --disable-extensions --disable-breakpad --mute-audio --hide-scrollbars --user-data-dir=/tmp/profile --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 "--proxy-bypass-list=<-loopback>" "$@" about:blank' \
+    > /usr/local/bin/agentlink-browser \
+    && chmod 0755 /usr/local/bin/agentlink-browser
+USER 1000
+EXPOSE 9222
+ENTRYPOINT ["/usr/local/bin/agentlink-browser"]
 
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git

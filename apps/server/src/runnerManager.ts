@@ -48,6 +48,14 @@ const HOST_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/u;
 export const EDITOR_ENTRYPOINT = "/usr/local/bin/agentlink-editor";
 /** AgentLink's own state folder in the editor's workspace (the task folder). */
 const EDITOR_STATE_FOLDER = ".agentlink";
+const BROWSER_LABEL = "dev.agentlink.browser";
+/** The DevTools port headless Chromium listens on inside a browser. */
+export const BROWSER_PORT = 9222;
+/** The browser image's start script: headless Chromium with fixed flags. */
+export const BROWSER_ENTRYPOINT = "/usr/local/bin/agentlink-browser";
+/** `http://host:port` with no credentials: Chromium cannot take them. */
+const BROWSER_PROXY_PATTERN =
+  /^http:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?:\d{1,5}$/u;
 const MAX_READ_ONLY_ENTRIES = 64;
 const READ_ONLY_SCRATCH_BYTES = 256 * 1024 * 1024;
 
@@ -122,6 +130,11 @@ export interface RunnerManagerOptions {
    * network. Without it the manager refuses to start editors.
    */
   readonly editor?: { readonly image: string; readonly network: string };
+  /**
+   * Throwaway headless browsers for research, on their own internal
+   * network. Without it the manager refuses to start browsers.
+   */
+  readonly browser?: { readonly image: string; readonly network: string };
   readonly log: (line: string) => void;
   /** Tests: answer Docker API requests instead of the socket. */
   readonly dockerApi?: DockerApi;
@@ -263,6 +276,10 @@ export function runnerContainerName(id: string): string {
 
 export function editorContainerName(id: string): string {
   return `agentlink-editor-${id}`;
+}
+
+export function browserContainerName(id: string): string {
+  return `agentlink-browser-${id}`;
 }
 
 export async function startRunnerManager(
@@ -546,12 +563,112 @@ export async function startRunnerManager(
     return { stopped };
   };
 
+  const removeBrowser = async (id: string) => {
+    const result = await docker(
+      "DELETE",
+      `/containers/${browserContainerName(id)}?force=true`,
+    );
+    if (result.status !== 204 && result.status !== 404) {
+      throw dockerError("remove a browser", result);
+    }
+  };
+
+  /**
+   * A throwaway browser: headless Chromium with a fresh profile in /tmp, no
+   * mounts at all, no credentials or environment from the caller, a
+   * read-only root filesystem, the runners' limits, and only the browsers'
+   * internal network. Everything it fetches goes through `proxy` (the
+   * egress gateway); the caller answers the gateway's challenge over the
+   * DevTools protocol, so no credentials are in the container.
+   */
+  const startBrowser = async (body: Record<string, unknown>) => {
+    const browser = options.browser;
+    if (!browser) throw new HttpError(409, "browsers_not_configured");
+    const id = body.id;
+    if (typeof id !== "string" || !RUNNER_ID_PATTERN.test(id)) {
+      throw new HttpError(400, "browser_id_invalid");
+    }
+    const proxy = body.proxy;
+    if (typeof proxy !== "string" || !BROWSER_PROXY_PATTERN.test(proxy)) {
+      throw new HttpError(400, "browser_proxy_invalid");
+    }
+    const name = browserContainerName(id);
+    await removeBrowser(id);
+    const created = await docker(
+      "POST",
+      `/containers/create?name=${encodeURIComponent(name)}`,
+      {
+        Image: browser.image,
+        Entrypoint: [BROWSER_ENTRYPOINT],
+        Cmd: [`--proxy-server=${proxy}`],
+        User: options.user,
+        Env: ["HOME=/tmp/home"],
+        Labels: { [BROWSER_LABEL]: id },
+        ExposedPorts: { [`${BROWSER_PORT}/tcp`]: {} },
+        HostConfig: {
+          NetworkMode: browser.network,
+          ReadonlyRootfs: true,
+          Tmpfs: { "/tmp": "size=1g,mode=1777" },
+          CapDrop: ["ALL"],
+          SecurityOpt: ["no-new-privileges:true"],
+          Init: true,
+          Memory: options.limits.memory,
+          NanoCpus: Math.round(options.limits.cpus * 1e9),
+          PidsLimit: options.limits.pids,
+          LogConfig: {
+            Type: "json-file",
+            Config: { "max-size": "10m", "max-file": "2" },
+          },
+        },
+      },
+    );
+    if (created.status !== 201) throw dockerError("create a browser", created);
+    const started = await docker("POST", `/containers/${name}/start`);
+    if (started.status !== 204 && started.status !== 304) {
+      throw dockerError("start a browser", started);
+    }
+    options.log(`Started browser ${name}`);
+    return { host: name, port: BROWSER_PORT };
+  };
+
+  const stopAllBrowsers = async () => {
+    const filters = encodeURIComponent(
+      JSON.stringify({ label: [BROWSER_LABEL] }),
+    );
+    const listed = await docker(
+      "GET",
+      `/containers/json?all=true&filters=${filters}`,
+    );
+    if (listed.status !== 200) throw dockerError("list browsers", listed);
+    let stopped = 0;
+    for (const container of (listed.body ?? []) as Array<{
+      Labels?: Record<string, string>;
+    }>) {
+      const id = container.Labels?.[BROWSER_LABEL];
+      if (id && RUNNER_ID_PATTERN.test(id)) {
+        await removeBrowser(id);
+        stopped += 1;
+      }
+    }
+    return { stopped };
+  };
+
   const server: RunnerHttpServer = await startRunnerHttpServer({
     host: options.host,
     port: options.port,
     authorize: (presented) =>
       sameToken(options.token, presented) ? true : undefined,
     routes: () => ({
+      "/browsers/start": async (body) => await startBrowser(body),
+      "/browsers/stop": async (body) => {
+        if (typeof body.id !== "string" || !RUNNER_ID_PATTERN.test(body.id)) {
+          throw new HttpError(400, "browser_id_invalid");
+        }
+        await removeBrowser(body.id);
+        return { stopped: true };
+      },
+      "/browsers/stop-all": async () =>
+        options.browser ? await stopAllBrowsers() : { stopped: 0 },
       "/editors/start": async (body) => await startEditor(body),
       "/editors/stop": async (body) => {
         if (typeof body.id !== "string" || !RUNNER_ID_PATTERN.test(body.id)) {
@@ -626,6 +743,18 @@ export function createRunnerManagerClient(options: {
     stopAllEditors: () =>
       withToken(() =>
         client.call<{ stopped: number }>("/editors/stop-all", {}),
+      ),
+    startBrowser: (request: { readonly id: string; readonly proxy: string }) =>
+      withToken(() =>
+        client.call<{ host: string; port: number }>("/browsers/start", {
+          ...request,
+        }),
+      ),
+    stopBrowser: (id: string) =>
+      withToken(() => client.call("/browsers/stop", { id })),
+    stopAllBrowsers: () =>
+      withToken(() =>
+        client.call<{ stopped: number }>("/browsers/stop-all", {}),
       ),
   };
 }

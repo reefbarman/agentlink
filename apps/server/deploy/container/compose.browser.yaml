@@ -1,0 +1,39 @@
+# Browser research: chats on Open web projects can open pages that need
+# JavaScript or clicking through, in a throwaway, signed-out headless
+# Chromium (the browse_* tools). Needs compose.runners.yaml: the runner
+# manager starts one browser container per chat, with no mounts, no
+# credentials, a fresh profile, a read-only root filesystem and the
+# runners' limits, on an internal network that only the assistant (which
+# drives it over DevTools) and the egress gateway share. Every request goes
+# through the gateway under the project's policy, so private and LAN
+# addresses stay unreachable. A browser stops when its chat's turn ends or
+# after 10 idle minutes.
+#
+# Once, in the deploy directory:
+# .env: COMPOSE_FILE=...:compose.runners.yaml:compose.browser.yaml
+# server.json: "browser": {}   (optional "idleMinutes": 10)
+# upgrade.sh then builds agentlink-browser:local with the other images; or
+#   docker build --target browser -t agentlink-browser:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
+
+services:
+  assistant:
+    networks:
+      - browsers
+
+  egress-gateway:
+    networks:
+      - browsers
+
+  runner-manager:
+    environment:
+      AGENTLINK_BROWSER_IMAGE: agentlink-browser:local
+      AGENTLINK_BROWSER_NETWORK: agentlink-browsers
+
+networks:
+  # Browsers, the assistant (which drives them) and the egress gateway.
+  browsers:
+    name: agentlink-browsers
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated

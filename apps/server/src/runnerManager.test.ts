@@ -72,8 +72,15 @@ function fakeDocker(mounts: { projects: string; data: string }) {
 }
 
 async function setup(
-  extra: { editor?: { image: string; network: string } } = {
+  extra: {
+    editor?: { image: string; network: string };
+    browser?: { image: string; network: string };
+  } = {
     editor: { image: "agentlink-editor:local", network: "agentlink-editors" },
+    browser: {
+      image: "agentlink-browser:local",
+      network: "agentlink-browsers",
+    },
   },
 ) {
   const root = await fs.realpath(
@@ -101,6 +108,7 @@ async function setup(
     user: "1000:1000",
     limits: { memory: 2 * 1024 ** 3, cpus: 2, pids: 512 },
     ...(extra.editor ? { editor: extra.editor } : {}),
+    ...(extra.browser ? { browser: extra.browser } : {}),
     log: () => undefined,
   });
   cleanup.push(() => manager.close());
@@ -112,6 +120,87 @@ async function setup(
     });
   return { root, projects, folder, dataFolder, docker, client };
 }
+
+describe("runner manager browsers", () => {
+  it("starts headless Chromium with no mounts, no credentials and only the browsers' network", async () => {
+    const test = await setup();
+    const started = await test.client().startBrowser({
+      id: "b-0123456789abcdef0123",
+      proxy: "http://egress-gateway:3128",
+    });
+    expect(started).toEqual({
+      host: "agentlink-browser-b-0123456789abcdef0123",
+      port: 9222,
+    });
+    const create = test.docker.calls.find((call) =>
+      call.path.endsWith("/create"),
+    )!;
+    const body = create.body as {
+      Image: string;
+      Env: string[];
+      User: string;
+      Cmd: string[];
+      Entrypoint: string[];
+      HostConfig: Record<string, unknown>;
+    };
+    expect(body.Image).toBe("agentlink-browser:local");
+    expect(body.Entrypoint).toEqual(["/usr/local/bin/agentlink-browser"]);
+    expect(body.Cmd).toEqual(["--proxy-server=http://egress-gateway:3128"]);
+    expect(body.User).toBe("1000:1000");
+    // Nothing from the caller but the proxy's address: no credentials.
+    expect(body.Env).toEqual(["HOME=/tmp/home"]);
+    expect(JSON.stringify(body)).not.toMatch(/token|password|secret|@/iu);
+    expect(body.HostConfig.Binds).toBeUndefined();
+    expect(body.HostConfig.Mounts).toBeUndefined();
+    expect(body.HostConfig.Privileged).toBeUndefined();
+    expect(body.HostConfig).toMatchObject({
+      NetworkMode: "agentlink-browsers",
+      ReadonlyRootfs: true,
+      CapDrop: ["ALL"],
+      SecurityOpt: ["no-new-privileges:true"],
+      Memory: 2 * 1024 ** 3,
+      PidsLimit: 512,
+    });
+
+    await test.client().stopBrowser("b-0123456789abcdef0123");
+    expect(test.docker.containers.size).toBe(0);
+  });
+
+  it("refuses a proxy with credentials, a bad id, and browsers when not configured", async () => {
+    const test = await setup();
+    for (const request of [
+      { id: "b-1", proxy: "http://user:pass@egress-gateway:3128" },
+      { id: "b-1", proxy: "https://egress-gateway:3128" },
+      { id: "b-1", proxy: "http://egress-gateway" },
+      { id: "../x", proxy: "http://egress-gateway:3128" },
+    ]) {
+      await expect(
+        test.client().startBrowser(request),
+        JSON.stringify(request),
+      ).rejects.toMatchObject({ status: 400 });
+    }
+    const without = await setup({});
+    await expect(
+      without
+        .client()
+        .startBrowser({ id: "b-1", proxy: "http://egress-gateway:3128" }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("stops every browser it started", async () => {
+    const test = await setup();
+    await test
+      .client()
+      .startBrowser({ id: "b-1", proxy: "http://egress-gateway:3128" });
+    await test
+      .client()
+      .startBrowser({ id: "b-2", proxy: "http://egress-gateway:3128" });
+    await expect(test.client().stopAllBrowsers()).resolves.toEqual({
+      stopped: 2,
+    });
+    expect(test.docker.containers.size).toBe(0);
+  });
+});
 
 describe("runner manager editors", () => {
   it("starts code-server on the task folder only, read-only or not, with nothing but the proxy", async () => {

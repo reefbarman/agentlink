@@ -80,11 +80,23 @@ export interface AssistantServerConfig {
    */
   readonly editor?: AssistantServerEditorConfig;
   /**
+   * Browser research: throwaway headless Chromium containers (started by
+   * the runner manager) that chats on Open web projects drive with the
+   * `browse_*` tools. Needs `runners`, a runner manager with a browser
+   * image, and the egress gateway (`commandWorker.egressProxy`).
+   */
+  readonly browser?: AssistantServerBrowserConfig;
+  /**
    * The backup sidecar (`agentlink-server backup-agent`), which backs the
    * deploy directory up to an append-only store. The server shows its
    * status, asks for a backup now, and tells the owner when one fails.
    */
   readonly backup?: AssistantServerPublisherConfig;
+}
+
+export interface AssistantServerBrowserConfig {
+  /** Minutes a browser may sit unused before it is stopped. */
+  readonly idleMinutes: number;
 }
 
 export interface AssistantServerEditorConfig {
@@ -420,6 +432,7 @@ export function parseAssistantServerConfig(
     "publisher",
     "runners",
     "editor",
+    "browser",
     "backup",
   ]);
   const resolvePath = (input: unknown, label: string) =>
@@ -585,6 +598,9 @@ export function parseAssistantServerConfig(
     ...(config.editor === undefined
       ? {}
       : { editor: parseEditor(config.editor, config.runners, port) }),
+    ...(config.browser === undefined
+      ? {}
+      : { browser: parseBrowser(config.browser, config.runners) }),
     ...(config.backup === undefined
       ? {}
       : { backup: parsePublisher(config.backup, baseDirectory, "backup") }),
@@ -633,6 +649,30 @@ function parseEditor(
     );
   }
   return { port: Number(port), idleMinutes, modelsPort: Number(modelsPort) };
+}
+
+function parseBrowser(
+  value: unknown,
+  runners: unknown,
+): AssistantServerBrowserConfig {
+  const label = "browser";
+  const item = record(value, label);
+  allowKeys(item, label, ["idleMinutes"]);
+  if (runners === undefined) {
+    throw new Error(
+      "browser needs runners (browsers are started by the runner manager)",
+    );
+  }
+  const idleMinutes = item.idleMinutes ?? 10;
+  if (
+    typeof idleMinutes !== "number" ||
+    !Number.isFinite(idleMinutes) ||
+    idleMinutes < 1 ||
+    idleMinutes > 24 * 60
+  ) {
+    throw new Error(`${label}.idleMinutes must be from 1 to 1440`);
+  }
+  return { idleMinutes };
 }
 
 function parseRunners(

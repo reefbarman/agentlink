@@ -128,6 +128,8 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
                                        [--data-host-root <dir>]
                                        [--editor-image <name>]
                                        [--editor-network <name>]
+                                       [--browser-image <name>]
+                                       [--browser-network <name>]
        agentlink-server session-runner [--data <dir>] [--listen <host:port>]
 
 Runs the AgentLink assistant server over HTTPS.
@@ -1297,6 +1299,9 @@ async function runRunnerManager(
     // From the environment, so a compose overlay can turn editors on.
     "--editor-image": io.env.AGENTLINK_EDITOR_IMAGE || undefined,
     "--editor-network": io.env.AGENTLINK_EDITOR_NETWORK || undefined,
+    // And browser research.
+    "--browser-image": io.env.AGENTLINK_BROWSER_IMAGE || undefined,
+    "--browser-network": io.env.AGENTLINK_BROWSER_NETWORK || undefined,
   };
   const parsed = parseFlags(
     argv,
@@ -1307,6 +1312,8 @@ async function runRunnerManager(
       "--network",
       "--editor-image",
       "--editor-network",
+      "--browser-image",
+      "--browser-network",
       "--projects-root",
       "--data-root",
       "--docker-socket",
@@ -1355,6 +1362,11 @@ async function runRunnerManager(
   if ((editorImage === undefined) !== (editorNetwork === undefined)) {
     return usageError(io, "--editor-image and --editor-network go together");
   }
+  const browserImage = values["--browser-image"];
+  const browserNetwork = values["--browser-network"];
+  if ((browserImage === undefined) !== (browserNetwork === undefined)) {
+    return usageError(io, "--browser-image and --browser-network go together");
+  }
   const projectsHost = values["--projects-host-root"];
   const dataHost = values["--data-host-root"];
   if ((projectsHost === undefined) !== (dataHost === undefined)) {
@@ -1386,6 +1398,9 @@ async function runRunnerManager(
     limits: { memory, cpus, pids },
     ...(editorImage && editorNetwork
       ? { editor: { image: editorImage, network: editorNetwork } }
+      : {}),
+    ...(browserImage && browserNetwork
+      ? { browser: { image: browserImage, network: browserNetwork } }
       : {}),
     log: io.log,
   });
