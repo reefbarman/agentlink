@@ -9,6 +9,11 @@ import {
 } from "./assistantService.js";
 import { readAuditHashes, verifyTaskAudit } from "./taskAudit.js";
 import {
+  formatUsageReport,
+  readUsageSources,
+  summarizeUsage,
+} from "./usageReport.js";
+import {
   checkpointKeyFile,
   loadCheckpointKey,
   verifyCheckpoints,
@@ -98,6 +103,7 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server codex-logout --config <file>
        agentlink-server audit-check --config <file> [--checkpoints]
                                     [--directory <dir>]
+       agentlink-server usage-report --config <file> [--days <n>]
        agentlink-server backup --config <file>
        agentlink-server backups --config <file>
        agentlink-server drain --config <file> [--wait <minutes>] [--reason <text>]
@@ -173,6 +179,11 @@ Commands:
                    backup store, which catches a log rewritten consistently
                    with its head. --directory checks a copy of the log
                    instead of data/audit. Exits 1 on any problem.
+  usage-report     Per day in the owner's time zone: Inbox entries, push
+                   notifications, and scheduled jobs' runs, model requests
+                   and tokens. --days (default 1, today) goes back further.
+                   Read-only, safe while the server runs. History is
+                   bounded, so keep a daily copy for long comparisons.
   smoke-check      Check the running deployment: the server answers, the
                    data format is current, and every service is reachable
                    and runs this same version. Exits 1 on any problem
@@ -248,6 +259,7 @@ const COMMANDS = new Set([
   "codex-login",
   "codex-logout",
   "audit-check",
+  "usage-report",
   "backup",
   "backups",
   "drain",
@@ -288,6 +300,7 @@ export async function runAssistantServerCli(
   let drainReason: string | undefined;
   let auditCheckpoints = false;
   let auditDirectory: string | undefined;
+  let usageDays = 1;
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (argument === "--help" || argument === "-h") {
@@ -309,6 +322,12 @@ export async function runAssistantServerCli(
       auditDirectory = argv[index + 1];
       index += 1;
       if (!auditDirectory) return usageError(io, "--directory needs a folder");
+    } else if (argument === "--days" && command === "usage-report") {
+      usageDays = Number(argv[index + 1]);
+      index += 1;
+      if (!Number.isInteger(usageDays) || usageDays < 1 || usageDays > 60) {
+        return usageError(io, "--days needs a whole number, from 1 to 60");
+      }
     } else if (argument === "--reason" && command === "drain") {
       drainReason = argv[index + 1];
       index += 1;
@@ -334,6 +353,16 @@ export async function runAssistantServerCli(
       checkpoints: auditCheckpoints,
       ...(auditDirectory ? { directory: auditDirectory } : {}),
     });
+  }
+  if (command === "usage-report") {
+    const sources = await readUsageSources(config.dataRoot);
+    io.stdout(
+      formatUsageReport(
+        summarizeUsage(sources, { days: usageDays, now: Date.now() }),
+        sources.timeZone,
+      ),
+    );
+    return 0;
   }
   if (command === "drain") {
     return await runDrain(config, io, {

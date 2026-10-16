@@ -100,6 +100,7 @@ import { openAssistantMemory } from "./assistantMemory.js";
 import { createMemoryRoutes } from "./memoryRoutes.js";
 import { createPersonaTools } from "./personaTools.js";
 import { createQuietPush } from "./quietPush.js";
+import { openPushLog } from "./pushLog.js";
 import {
   inboxEntryForBackupProblem,
   inboxEntryForCheckpointProblem,
@@ -1089,15 +1090,22 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // How often the owner was pinged, for usage reports (counts only).
+  const pushLog = await openPushLog({
+    directory: serverPushDirectory(config),
+  });
   // Pushes wait out the owner's quiet hours; Inbox entries never do.
   const quietPush = createQuietPush({
     settings: () => persona.get(),
     isUnread: (entryId) =>
       inbox.list().some((entry) => entry.id === entryId && !entry.read),
     send: (notification) => {
-      push.notifyAll(notification).catch((error: unknown) => {
-        log(`Push: could not send a notification: ${message(error)}`);
-      });
+      push
+        .notifyAll(notification)
+        .then((deliveries) => pushLog.record(deliveries))
+        .catch((error: unknown) => {
+          log(`Push: could not send a notification: ${message(error)}`);
+        });
     },
   });
   const recovery = createSessionRecovery(log);
@@ -2538,6 +2546,7 @@ export async function startAssistantService(
         await inbox.flush();
         quietPush.close();
         await push.close();
+        await pushLog.flush();
         await chat.close();
         await routes.close();
       },

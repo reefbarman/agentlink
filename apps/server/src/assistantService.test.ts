@@ -19,6 +19,7 @@ import {
   httpsRequest,
   sessionCookieFrom,
 } from "./testSupport.js";
+import { readUsageSources } from "./usageReport.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -486,6 +487,14 @@ describe("assistant service notifications", () => {
     expect(runs[0]!.errorDetail).toContain("fixture model is switched off");
     expect((entry as { body?: string }).body).toContain(
       "fixture model is switched off",
+    );
+    // The delivered push is counted for the usage report (counts only).
+    await vi.waitFor(
+      async () =>
+        expect((await readUsageSources(config.dataRoot)).pushes).toEqual([
+          expect.objectContaining({ sent: 1, failed: 0, gone: 0 }),
+        ]),
+      { timeout: 5_000, interval: 50 },
     );
     expect(JSON.stringify(phone.read(pushed[0]!.body))).not.toContain(
       "switched off",
