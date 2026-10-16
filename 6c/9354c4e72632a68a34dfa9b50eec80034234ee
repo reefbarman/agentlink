@@ -1,0 +1,82 @@
+src/approvals/typeSafeNetworkFirstPass.ts
+  h_e08a86bb3a33a2 1-130
+src/extension.ts
+  h_e08a86bb3a33a2 37-38,3202-3229,3232,3236
+src/approvals/typeSafeMcpFirstPass.test.ts
+  h_e08a86bb3a33a2 1-270
+package.json
+  h_e08a86bb3a33a2 5,608,614,622,636
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 44-45
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 6486-6496,6498-6503,6505-6522,6547-6549,6557-6594,6596-6606,6611,6616-6621,6635-6675,6677-6679,6681,6686-6694,6709-6731,6734-6742,6752,6756
+  h_e08a86bb3a33a2 6497,6523-6546,6552-6556,6608-6610,6612-6615,6622-6624,6626-6634,6682-6684,6695-6708,6732-6733,6743-6751,6753,6755,6757
+src/approvals/typeSafeMcpFirstPass.ts
+  h_e08a86bb3a33a2 1-117
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 241
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 110,113
+src/approvals/networkApprovalReview.ts
+  h_e08a86bb3a33a2 31,74-76,144-161
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 122-123,207
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1512
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 97-99
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 68-72,254,3590-3702,3711-3718,3742-3744,3822-3823,3839-3840,3975-4005
+  h_e08a86bb3a33a2 67,3703-3704,4006-4008
+src/approvals/typeSafeNetworkFirstPass.test.ts
+  h_e08a86bb3a33a2 1-234
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1310
+src/approvals/actionApprovalReview.test.ts
+  h_e08a86bb3a33a2 22,97-222
+  s_0507f4bd7c7b08::t_2aeb07184506ce 223
+src/approvals/actionApprovalReview.ts
+  h_e08a86bb3a33a2 37,39-40,44,49,215-225,229,267-269,419-436,536-538,545-554,590-611
+  h_e08a86bb3a33a2 228,437-438,535,539-541,544
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 1,1931-1950,1952-1953,1956-1960,1962-1964,1969-1970,1972,1977-1992,1994,1996-2000,2002,2004,2018-2027,2030
+  h_e08a86bb3a33a2 1965-1968,2001,2003
+src/approvals/typeSafeActionFirstPass.ts
+  h_e08a86bb3a33a2 1-246
+src/approvals/networkApprovalReview.test.ts
+  h_e08a86bb3a33a2 118-172
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 36-37,39-41,1821,8479-8741
+  h_e08a86bb3a33a2 38,8742-8744
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12,78-140
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c9354c4e72632a68a34dfa9b50eec80034234ee",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0507f4bd7c7b08": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f44774f-d951-42b1-8d3d-1fd975c601b5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
