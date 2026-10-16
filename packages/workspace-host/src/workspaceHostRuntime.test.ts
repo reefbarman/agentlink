@@ -161,6 +161,7 @@ describe("createWorkspaceHost", () => {
       projectRoot,
       dataRoot: path.join(parent, "data"),
       ownerId: "instructions-owner",
+      promptIdentity: { role: "a personal assistant on a home server" },
       instructions: () => voice,
     });
     try {
@@ -168,6 +169,12 @@ describe("createWorkspaceHost", () => {
       await host.runTurn(sessionId, "First");
       voice = "Speak like a librarian.";
       await host.runTurn(sessionId, "Second");
+      // The Meridian identity prefix stays first; the instructions follow it.
+      for (const prompt of prompts) {
+        expect(prompt).toMatch(
+          /^You are AgentLink, a personal assistant on a home server\.\n/u,
+        );
+      }
       expect(prompts[0]).toContain("Speak like a sailor.");
       expect(prompts[1]).toContain("Speak like a librarian.");
       expect(prompts[1]).not.toContain("sailor");
