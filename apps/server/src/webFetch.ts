@@ -342,6 +342,11 @@ async function requestOnce(
       hostname,
       path: `${url.pathname}${url.search}`,
       method: "GET",
+      // Without an agent Node does not know the default port is 443 and
+      // sends `Host: name:80`, which some sites (GitHub) answer with a
+      // redirect to the same URL, forever.
+      port: 443,
+      defaultPort: 443,
       // No `agent`: with `agent: false` Node ignores `createConnection` and
       // resolves and connects by itself, bypassing the checked connection.
       signal,

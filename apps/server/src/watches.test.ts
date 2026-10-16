@@ -641,6 +641,30 @@ describe("watch fetches", () => {
     });
     expect(again).toMatchObject({ status: 304, notModified: true, text: "" });
   });
+
+  it("sends the bare host name, not name:80, so sites do not redirect forever", async () => {
+    // GitHub answers `Host: github.com:80` with a redirect to the same URL.
+    const hosts: (string | undefined)[] = [];
+    const site = await startSite((request, response) => {
+      hosts.push(request.headers.host);
+      if (request.headers.host !== "watch.example") {
+        response.writeHead(301, { location: "https://watch.example/feed" });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/atom+xml" });
+      response.end("<feed></feed>");
+    });
+    const page = await fetchWebPage({
+      url: "https://watch.example/feed",
+      policy: { preset: "open", allow: [] },
+      connector: site.connector,
+      secureSocket: site.plain,
+      keepRaw: true,
+    });
+    expect(page.status).toBe(200);
+    expect(hosts).toEqual(["watch.example"]);
+  });
 });
 
 describe("usage guard", () => {

@@ -579,6 +579,9 @@ export function connectorPushTransport(
         hostname,
         path: `${url.pathname}${url.search}`,
         method: "POST",
+        // Without an agent Node would send `Host: name:80`.
+        port: 443,
+        defaultPort: 443,
         // No `agent`: with `agent: false` Node ignores `createConnection`
         // and connects by itself, bypassing the checked connection.
         signal,
