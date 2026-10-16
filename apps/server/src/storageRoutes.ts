@@ -72,7 +72,7 @@ export const STORAGE_RETENTION: readonly StorageRetention[] = [
   { label: "Memory", text: "Kept until you forget it." },
   {
     label: "Audit log",
-    text: "Kept for good. It records what happened and when, with IDs and hashes of any text, never the text itself.",
+    text: "Kept for good. It records what happened and when, with IDs and hashes of any text rather than the text itself (entries written before this version kept the text).",
   },
   {
     label: "Backups",
