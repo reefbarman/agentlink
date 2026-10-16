@@ -1,0 +1,16 @@
+src/browser-gateway/webview/AssistantSettings.test.tsx
+  h_e08a86bb3a33a2 86-101
+src/browser-gateway/webview/AssistantSettings.tsx
+  h_e08a86bb3a33a2 75-83,117,208-219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
