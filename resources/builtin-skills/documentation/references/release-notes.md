@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.32.0
+
 - TypeSafe Guardian shadow mode now defaults to the pinned `jev-1.14.0` model instead of the `jev-latest` alias, so shadow results stay comparable when TypeSafe moves its aliases. An explicitly configured model is unchanged.
 - The shadow request now gives Jev more of the evidence the main Guardian sees: secret-redacted bodies of the scripts and inline files a command runs (under a shared size budget), deletion sample names, and facts about where the command runs (workspace roots, working directory, sandbox confinement). Previously script contents were withheld, which made Jev block most commands that ran a script.
 - The shadow questions now say explicitly that ordinary supporting steps (reading, searching, building, testing, formatting, editing workspace files) are part of the current task and implicitly authorized. Shadow data showed Jev reading "unrelated to the task" too literally and rating authorization as unknown for routine work. Shadow results still never affect approvals.

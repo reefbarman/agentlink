@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
-  "createdAt": "2026-10-15T11:52:04.005Z",
+  "sourceSha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
+  "createdAt": "2026-10-16T00:37:43.304Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.31.1",
-      "baselineRef": "v1.31.1",
-      "reserved": "1.31.1",
-      "commits": ["ddcc086e12f0e116168d13964f92684cd6c0bb60"],
+      "published": "1.31.2",
+      "baselineRef": "v1.31.2",
+      "reserved": "1.31.2",
+      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.31.2",
-      "effectiveBump": "patch",
+      "version": "1.32.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.31.2",
+      "tag": "v1.32.0",
       "notes": [
         {
-          "sha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
-          "subject": "fix(web_fetch): name unserved line range when Codex pagination stops short",
-          "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
+          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
+          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
+          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.18.1",
-      "baselineRef": "desktop-v0.18.1",
-      "reserved": "0.18.1",
-      "commits": ["ddcc086e12f0e116168d13964f92684cd6c0bb60"],
+      "published": "0.18.2",
+      "baselineRef": "desktop-v0.18.2",
+      "reserved": "0.18.2",
+      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.18.2",
-      "effectiveBump": "patch",
+      "version": "0.19.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.18.2",
+      "tag": "desktop-v0.19.0",
       "notes": [
         {
-          "sha": "ddcc086e12f0e116168d13964f92684cd6c0bb60",
-          "subject": "fix(web_fetch): name unserved line range when Codex pagination stops short",
-          "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
+          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
+          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
+          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
           "breaking": false
         }
       ]
@@ -61,13 +61,25 @@
       "published": "0.18.0",
       "baselineRef": "cli-v0.18.0",
       "reserved": "0.18.0",
-      "commits": [],
+      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.19.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.19.0",
+      "notes": [
+        {
+          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
+          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
+          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.13.0",
@@ -95,6 +107,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "When Codex web_fetch pagination stalls before serving all lines, the warning now states the page is incomplete, names the missing line range, and suggests another web transport.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "626c75fb4b3c87cef97840c3a12a8f82383bca23": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
