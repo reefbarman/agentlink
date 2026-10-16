@@ -69,6 +69,7 @@ import type {
   SequencedSessionEvent,
   SessionEventHub,
 } from "./SessionEventHub.js";
+import type { RememberedCard } from "./assistantMemory.js";
 import {
   AUTO_CONTINUE_PROMPT,
   TurnProgress,
@@ -209,6 +210,13 @@ export interface AskAgentBridgeOptions {
    * first, shown as live cards above the composer.
    */
   readonly chatTasks?: (workspaceSessionId: string) => readonly ChatTaskCard[];
+  /**
+   * What the Assistant remembered in this chat recently, newest first,
+   * shown above the composer with Undo.
+   */
+  readonly chatMemories?: (
+    workspaceSessionId: string,
+  ) => readonly RememberedCard[];
   /**
    * A message the owner wrote in a linked chat (a coding task's). The task
    * runner takes it (steering a working task, continuing a finished one),
@@ -559,6 +567,7 @@ export async function createAskAgentBridge(
         background: agentWatch.records.map(toAgentCard),
         approvalMode: activeApprovalMode(),
         tasks: activeChatTasks(),
+        memories: activeChatMemories(),
         ...(options.assistantStatus
           ? { assistant: { ...options.assistantStatus() } }
           : {}),
@@ -569,6 +578,11 @@ export async function createAskAgentBridge(
     const workspaceSessionId = workspaceSessionFor(store.getActiveSessionId());
     if (!workspaceSessionId || !options.chatTasks) return [];
     return options.chatTasks(workspaceSessionId);
+  };
+  const activeChatMemories = (): readonly RememberedCard[] => {
+    const workspaceSessionId = workspaceSessionFor(store.getActiveSessionId());
+    if (!workspaceSessionId || !options.chatMemories) return [];
+    return options.chatMemories(workspaceSessionId);
   };
   const activeApprovalMode = (): ApprovalMode => {
     const storeSessionId = store.getActiveSessionId();

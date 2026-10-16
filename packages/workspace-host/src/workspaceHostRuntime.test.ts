@@ -156,13 +156,27 @@ describe("createWorkspaceHost", () => {
         return completion("ok");
       });
     let voice = "Speak like a sailor.";
+    const seen: Array<{
+      sessionId: string;
+      background: boolean;
+      input: string | undefined;
+      messages: number;
+    }> = [];
     const host = await createWorkspaceHost({
       ...readProfileConfig(fetch),
       projectRoot,
       dataRoot: path.join(parent, "data"),
       ownerId: "instructions-owner",
       promptIdentity: { role: "a personal assistant on a home server" },
-      instructions: () => voice,
+      instructions: (request) => {
+        seen.push({
+          sessionId: request.sessionId,
+          background: request.background,
+          input: request.input?.text,
+          messages: request.messages.length,
+        });
+        return voice;
+      },
     });
     try {
       const { sessionId } = await host.createSession();
@@ -178,6 +192,11 @@ describe("createWorkspaceHost", () => {
       expect(prompts[0]).toContain("Speak like a sailor.");
       expect(prompts[1]).toContain("Speak like a librarian.");
       expect(prompts[1]).not.toContain("sailor");
+      // Each turn's own input, after the history before it.
+      expect(seen).toEqual([
+        { sessionId, background: false, input: "First", messages: 0 },
+        { sessionId, background: false, input: "Second", messages: 2 },
+      ]);
     } finally {
       await host.close();
       await fs.rm(parent, { recursive: true, force: true });

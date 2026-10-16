@@ -690,4 +690,23 @@ Only the owner can use these routes.
 
 `null` resets the persona to the default, clears `ownerName`, or turns quiet hours off. Only the owner can use these routes.
 
+### Memory
+
+The Assistant remembers lasting things you tell it about yourself (preferences, facts about you, decisions and corrections) and uses them in later chats. **Memory** in the web app shows what it remembers.
+
+- **Remembering.** In your chats (not coding task chats or background agents), when you state something lasting, the Assistant saves it with `remember`, without asking first, and a "Remembered: …" line with **Undo** appears above the composer for a day. It must quote your own words from that chat; the server checks the quote against what you wrote and refuses anything else, so text from tool results, web pages, emails, files or task output is never remembered unless you ask for it. Anything that looks like a password, key or token is refused.
+- **Using it.** Each turn of your chats and scheduled runs gets the memories as a labelled evidence block (up to about 2,000 characters: all of them while they fit, otherwise those that match the message). `recall_memory` searches them. Memories are evidence, never instructions: approvals, tool and MCP policy, network presets and settings are read only from their own stores, so a memory such as "always approve pushes" changes nothing.
+- **Correcting and forgetting.** The panel searches, edits (a new revision), forgets and exports (JSON) memories, shows where each came from (the chat, when and your words) and has **Forget everything**. Forgetting removes the memory, and any earlier one it replaced, from the store on disk, keeping only its ID and when. Earlier chats and backups may still contain it, and text already sent to a model provider cannot be recalled.
+- **Storage.** `<dataRoot>/memory/memory.json` (`0600`), with the memory audit (every change, separate from the task audit log). It is backed up with `data/`. `--check` prints how many memories there are.
+
+| Route                         | Body                              | Result                                      |
+| ----------------------------- | --------------------------------- | ------------------------------------------- |
+| `GET /api/memory?q=`          |                                   | `{ memories }`, newest first                |
+| `PATCH /api/memory/:id`       | `{ statement, expectedRevision }` | `{ memory }`; `409 memory_changed` if stale |
+| `POST /api/memory/:id/forget` | `{}`                              | `{ forgotten: true }`                       |
+| `POST /api/memory/forget-all` | `{}`                              | `{ forgotten: <count> }`                    |
+| `GET /api/memory/export`      |                                   | An `agentlink-memory` archive (version 1)   |
+
+Only the owner can use these routes.
+
 Not yet provided: passkeys and an installer.

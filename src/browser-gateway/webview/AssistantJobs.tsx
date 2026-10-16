@@ -2,6 +2,7 @@ import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { BackupSettings } from "./AssistantBackups";
 import { GitHubPanel } from "./AssistantGitHub";
 import { McpPanel, signInReturnNotice } from "./AssistantMcp";
+import { MemoryPanel } from "./AssistantMemory";
 import { SettingsPanel } from "./AssistantSettings";
 import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
@@ -444,7 +445,7 @@ export function AssistantHub({
   const notice = maintenanceNotice(maintenance);
   // Back from an MCP server's sign-in page: show how it went.
   const [view, setView] = useState<
-    "jobs" | "inbox" | "github" | "tasks" | "mcp" | "settings" | null
+    "jobs" | "inbox" | "github" | "tasks" | "mcp" | "memory" | "settings" | null
   >(() => (signInReturnNotice(window.location.search) ? "mcp" : null));
   const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const openChat = async (projectId: string, sessionId: string) => {
@@ -550,6 +551,16 @@ export function AssistantHub({
           type="button"
           class="assistant-hub-button"
           aria-haspopup="dialog"
+          title="What the Assistant remembers about you"
+          onClick={() => setView("memory")}
+        >
+          <i class="codicon codicon-lightbulb" aria-hidden="true" />
+          <span>Memory</span>
+        </button>
+        <button
+          type="button"
+          class="assistant-hub-button"
+          aria-haspopup="dialog"
           title="Settings (name, persona, time zone and quiet hours)"
           onClick={() => setView("settings")}
         >
@@ -591,6 +602,9 @@ export function AssistantHub({
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
       {view === "settings" && <SettingsPanel onClose={() => setView(null)} />}
+      {view === "memory" && (
+        <MemoryPanel onClose={() => setView(null)} openChat={openChat} />
+      )}
       {view === "mcp" && (
         <McpPanel
           onClose={() => {

@@ -56,6 +56,7 @@ import { DesktopSidebar } from "./DesktopSidebar";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { AssistantHub } from "./AssistantJobs";
 import { ChatTaskStrip, type ChatTaskCard } from "./AssistantTasks";
+import { RememberedStrip, type RememberedCard } from "./AssistantMemory";
 import { DesktopRemotePane } from "./DesktopRemotePane";
 import { AssistantLauncher } from "./AssistantLauncher";
 import type {
@@ -617,6 +618,8 @@ export type GatewaySnapshot = {
   };
   /** The Assistant's coding tasks from the open chat; absent elsewhere. */
   tasks?: ChatTaskCard[];
+  /** What the Assistant just remembered in the open chat; absent elsewhere. */
+  memories?: RememberedCard[];
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -10558,6 +10561,9 @@ export function BrowserGatewayApp({
                 ) : null}
                 {assistantFleet && !mobileReviewOpen && (
                   <ChatTaskStrip tasks={snapshot?.tasks} />
+                )}
+                {assistantFleet && !mobileReviewOpen && (
+                  <RememberedStrip memories={snapshot?.memories} />
                 )}
                 {assistantFleet && !mobileReviewOpen && (
                   <BackgroundSessionStrip

@@ -88,6 +88,8 @@ import {
   personaInstructions,
 } from "./persona.js";
 import { createPersonaRoutes } from "./personaRoutes.js";
+import { openAssistantMemory } from "./assistantMemory.js";
+import { createMemoryRoutes } from "./memoryRoutes.js";
 import { createPersonaTools } from "./personaTools.js";
 import { createQuietPush } from "./quietPush.js";
 import {
@@ -237,6 +239,10 @@ export function serverPersonaFile(config: AssistantServerConfig): string {
 }
 
 /** Per-session approval modes (which sessions ask for everything). */
+export function serverMemoryDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "memory");
+}
+
 export function serverApprovalModesFile(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "settings", "approval-modes.json");
 }
@@ -324,6 +330,8 @@ export type AssistantServicePreflight = (
   readonly backup?: string;
   /** The persona settings, read-only. */
   readonly persona?: string;
+  /** How many memories there are. */
+  readonly memory?: string;
 };
 
 /**
@@ -608,6 +616,14 @@ export async function preflightAssistantService(
     ...result,
     persona: `Persona: ${persona.name}${persona.updatedAt === 0 ? " (defaults)" : ""}; time zone ${persona.timeZone}; quiet hours ${describeQuietHours(persona.quietHours)}`,
   };
+  // Read-only too: an unreadable memory store stops the server.
+  const remembered = (
+    await openAssistantMemory({ directory: serverMemoryDirectory(config) })
+  ).count();
+  result = {
+    ...result,
+    memory: `Memory: ${remembered} ${remembered === 1 ? "memory" : "memories"} about you`,
+  };
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
     // signed in afterwards without a restart.
@@ -849,6 +865,16 @@ export async function startAssistantService(
   /** The persona block for a chat, read each turn. */
   const personaBlock = (kind: "owner" | "task") =>
     personaInstructions(persona.get(), kind, Date.now());
+  // What the Assistant remembers about the owner, from their own words.
+  const memory = await openAssistantMemory({
+    directory: serverMemoryDirectory(config),
+    // Chats' Remembered lines and the Memory panel follow it.
+    onChanged: () => assistantChanged(),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
   // Started once backups are known (checkpoints go to the backup store).
   let checkpointer: AuditCheckpointer | undefined;
   // Opened before the tasks, so every change to them is on record.
@@ -1202,9 +1228,9 @@ export async function startAssistantService(
         // messages are how a chat reaches the owner).
         sessionInteractions: {},
         // Read each turn, so a persona change applies without a restart.
-        instructions: () =>
+        instructions: async (request) =>
           kind === "project"
-            ? `${personaBlock("owner")}\n\n${routingInstructions}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`
+            ? `${personaBlock("owner")}\n\n${await memory.instructionsFor(request)}\n\n${routingInstructions}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`
             : `${personaBlock("task")}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`,
         ...commandOptions,
         ...(commandOptions.commands && project.commandRoot
@@ -1220,6 +1246,12 @@ export async function startAssistantService(
           ...(await mcpTools.readTools(request)),
           ...(kind === "project" ? await jobTools.readTools(request) : []),
           ...(kind === "project" ? await repositoryTools(request) : []),
+          ...(kind === "project"
+            ? memory.tools({
+                projectId: project.id,
+                sessionId: request.sessionId,
+              })
+            : []),
           ...(kind === "project" && taskTools
             ? await taskTools.readTools(request)
             : []),
@@ -1409,6 +1441,8 @@ export async function startAssistantService(
         },
         chatTasks: (workspaceSessionId) =>
           chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
+        chatMemories: (workspaceSessionId) =>
+          memory.rememberedIn(projectId, workspaceSessionId),
         // Written in a task's own chat: its runner reads it in its next
         // step, or continues the task with it once it has stopped.
         linkedMessage: async (workspaceSessionId, text) => {
@@ -2104,6 +2138,12 @@ export async function startAssistantService(
         assistantChanged();
       },
     });
+    const memoryRoutes = createMemoryRoutes({
+      memory,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
     const inboxRoutes = createInboxRoutes({
       store: inbox,
       isOwner: (auth) =>
@@ -2179,6 +2219,7 @@ export async function startAssistantService(
         (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await personaRoutes.handleRequest(request, response, auth)) ||
+        (await memoryRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||
         (await backupRoutes.handleRequest(request, response, auth)) ||

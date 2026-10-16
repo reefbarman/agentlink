@@ -25,6 +25,7 @@ import type {
   AgentTurnRequest,
   AgentTurnResult,
   AgentTurnRunOptions,
+  AgentTurnInput,
   AgentTurnStream,
   PreparedAgentTurnRequest,
 } from "./turnContracts.js";
@@ -61,6 +62,11 @@ export interface ResolveAgentInstructionsRequest<
   readonly session: AgentSessionRecord<TPrincipal>;
   readonly turnId: string;
   readonly model: AgentModelReference | undefined;
+  /**
+   * The input that starts this turn; `session.messages` holds the history
+   * before it. Hosts may use it to add turn-relevant context.
+   */
+  readonly input?: AgentTurnInput;
 }
 
 export type ResolveAgentInstructions<
@@ -484,6 +490,7 @@ export function createAgentEngine<
                 principal: request.principal,
                 session: current.record,
                 turnId,
+                input: request.input,
                 model:
                   request.model ??
                   current.record.selectedModel ??

@@ -5,9 +5,11 @@ import {
   type AgentPrincipal,
   type AgentTurnAttachment,
   type AgentTurnEvent,
+  type AgentTurnInput,
   type AgentTurnInterjection,
   type AgentTurnResult,
   type AuthorizeToolCallRequest,
+  type CoreModelMessage,
   type CoreReasoningEffort,
   type HostTool,
   type HostToolResolver,
@@ -95,6 +97,17 @@ import {
 } from "./promptProfile.js";
 import type { WorkspaceExecutionBackend } from "./workspaceExecutionBackend.js";
 
+/** What a host's `instructions` function knows about the turn. */
+export interface WorkspaceHostInstructionsRequest {
+  readonly sessionId: string;
+  /** A background child's turn (its input was written by its parent). */
+  readonly background: boolean;
+  /** The session's messages before this turn. */
+  readonly messages: readonly CoreModelMessage[];
+  /** The input that starts this turn, when the engine reports it. */
+  readonly input: AgentTurnInput | undefined;
+}
+
 export interface CreateWorkspaceHostOptions {
   readonly projectRoot: string;
   readonly dataRoot: string;
@@ -121,9 +134,14 @@ export interface CreateWorkspaceHostOptions {
   readonly turnLimits?: TurnExecutionLimits;
   /**
    * Host instructions appended to every prompt. A function is read for
-   * each turn, so a host's settings apply without reopening the project.
+   * each turn, so a host's settings apply without reopening the project,
+   * and can add context for that turn (its input and earlier messages).
    */
-  readonly instructions?: string | (() => string | undefined);
+  readonly instructions?:
+    | string
+    | ((
+        request: WorkspaceHostInstructionsRequest,
+      ) => string | undefined | Promise<string | undefined>);
   /**
    * Optional assistant identity. When set, prompts lead with
    * `You are AgentLink, <role>.` for foreground and background sessions.
@@ -1076,7 +1094,15 @@ export async function createWorkspaceHost(
           : "Background writers are not enabled.",
         artifactInstructions,
         typeof options.instructions === "function"
-          ? options.instructions()
+          ? await options.instructions({
+              sessionId: request.session.sessionId,
+              background:
+                backgroundSupervisor?.getRecordForSession(
+                  request.session.sessionId,
+                ) !== undefined,
+              messages: request.session.messages,
+              input: request.input,
+            })
           : options.instructions,
       ]
         .filter(Boolean)

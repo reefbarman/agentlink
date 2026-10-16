@@ -7,6 +7,7 @@ export * from "./hostAdapterContracts.js";
 export * from "./hostApprovalTestKit.js";
 export * from "./hostTools.js";
 export * from "./mcpCredentials.js";
+export * from "./memory.js";
 export * from "./multiFileTransactions.js";
 export * from "./modelAuthProvider.js";
 export * from "./modelRequestScheduler.js";

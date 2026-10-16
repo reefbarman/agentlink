@@ -376,6 +376,7 @@ export async function runAssistantServerCli(
     if (preflight.runners) io.stdout(`${preflight.runners}\n`);
     if (preflight.backup) io.stdout(`${preflight.backup}\n`);
     if (preflight.persona) io.stdout(`${preflight.persona}\n`);
+    if (preflight.memory) io.stdout(`${preflight.memory}\n`);
     if (config.backup) io.stdout(`${await describeCheckpoints(config)}\n`);
     io.stdout(`${await describeVersions(config, io.env)}\n`);
     const maintenance = await readMaintenanceStatus(config.dataRoot);

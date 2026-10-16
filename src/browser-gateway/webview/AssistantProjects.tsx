@@ -149,6 +149,14 @@ const ERROR_TEXT: Record<string, string> = {
   settings_changed:
     "These settings changed somewhere else. Close and open Settings again.",
   settings_forbidden: "Only the Assistant's owner can change its settings.",
+  // Memory.
+  memory_forbidden: "Only the Assistant's owner can see its memory.",
+  memory_not_found: "That memory no longer exists.",
+  memory_changed:
+    "That memory changed somewhere else. Close and open Memory again.",
+  memory_statement_invalid: "A memory can be up to 300 characters.",
+  memory_sensitive:
+    "That looks like a password, key or other secret, which is never remembered.",
 };
 
 export type AssistantNetworkPreset = "open" | "dependencies" | "off";
