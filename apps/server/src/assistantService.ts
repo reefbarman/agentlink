@@ -1479,6 +1479,7 @@ export async function startAssistantService(
         listen: { host: "0.0.0.0", port: runnersConfig.port },
         controlUrl: `http://${runnersConfig.controlHost}:${runnersConfig.port}`,
         dataRoot: path.join(config.dataRoot, "runners"),
+        cacheRoot: path.join(config.dataRoot, "runner-sessions"),
         approvalMode: (projectId, sessionId) =>
           approvalModes.get(projectId, sessionId),
         onAgentApproval: (request) =>

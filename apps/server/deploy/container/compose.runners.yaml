@@ -56,7 +56,7 @@ services:
       - DAC_READ_SEARCH
     security_opt:
       - no-new-privileges:true
-    mem_limit: 128m
+    mem_limit: 256m
     pids_limit: 64
     entrypoint: ["agentlink-server", "runner-manager"]
     command:

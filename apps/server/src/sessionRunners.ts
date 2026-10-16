@@ -10,8 +10,10 @@ import path from "node:path";
 
 import { hostToolProxyRoutes } from "./remoteHostTools.js";
 import { modelProxyRoutes } from "./remoteModels.js";
+import { writeFileAtomic } from "./atomicFile.js";
 import {
   createRemoteWorkspaceHost,
+  type RemoteSessionCache,
   type RemoteWorkspaceHost,
 } from "./remoteWorkspaceHost.js";
 import type { RunnerManagerClient } from "./runnerManager.js";
@@ -44,6 +46,13 @@ export interface SessionRunnerPoolOptions {
   readonly controlUrl: string;
   /** Runners' data folders: `<dataRoot>/<projectId>`. */
   readonly dataRoot: string;
+  /**
+   * The control plane's copies of runners' session lists and transcripts
+   * (`<cacheRoot>/<projectId>`), so finished tasks' chats can be shown
+   * without starting their runners. Outside the runners' data folders, so
+   * no runner can write them.
+   */
+  readonly cacheRoot?: string;
   readonly approvalMode: (
     projectId: string,
     sessionId: string,
@@ -184,6 +193,9 @@ export async function startSessionRunnerPool(
         onTurnFailure: (sessionId, detail) =>
           options.onTurnFailure?.(projectId, sessionId, detail),
         ...(options.idleMs !== undefined ? { idleMs: options.idleMs } : {}),
+        ...(options.cacheRoot
+          ? { cache: fileSessionCache(path.join(options.cacheRoot, projectId)) }
+          : {}),
         log: options.log,
       });
       const closeHost = host.close;
@@ -206,6 +218,29 @@ export async function startSessionRunnerPool(
       }
       tokens.clear();
       await server.close();
+    },
+  };
+}
+
+const CACHE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,160}$/u;
+
+/** One JSON file per key, written atomically. */
+export function fileSessionCache(directory: string): RemoteSessionCache {
+  const file = (key: string) => {
+    if (!CACHE_KEY_PATTERN.test(key)) throw new Error("cache_key_invalid");
+    return path.join(directory, `${key}.json`);
+  };
+  return {
+    async read(key) {
+      try {
+        return JSON.parse(await fs.readFile(file(key), "utf8")) as unknown;
+      } catch {
+        return undefined;
+      }
+    },
+    async write(key, value) {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFileAtomic(file(key), JSON.stringify(value));
     },
   };
 }

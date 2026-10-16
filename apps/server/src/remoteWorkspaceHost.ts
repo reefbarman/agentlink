@@ -53,7 +53,28 @@ export interface RemoteWorkspaceHostOptions {
   readonly idleMs?: number;
   readonly interjectionPollMs?: number;
   readonly log?: (line: string) => void;
+  /**
+   * The last session list and transcripts read from the runner, kept by
+   * the control plane, so showing a finished task's chat does not start
+   * its runner. Anything that changes a session still starts it.
+   */
+  readonly cache?: RemoteSessionCache;
 }
+
+export interface RemoteSessionCache {
+  read(key: string): Promise<unknown>;
+  write(key: string, value: unknown): Promise<void>;
+}
+
+const SESSIONS_KEY = "sessions";
+const sessionKey = (sessionId: string) => `session-${sessionId}`;
+/** A session read mid-turn: only its runner can say how that ended. */
+const isMidTurn = (hydration: unknown) => {
+  const phase = (
+    hydration as { record?: { runState?: { phase?: unknown } } } | undefined
+  )?.record?.runState?.phase;
+  return phase === "running" || phase === "resuming";
+};
 
 const DEFAULT_IDLE_MS = 10 * 60 * 1_000;
 const DEFAULT_INTERJECTION_POLL_MS = 250;
@@ -188,6 +209,34 @@ export function createRemoteWorkspaceHost(
     }
   };
 
+  const remember = (key: string, value: unknown) => {
+    void options.cache?.write(key, value).catch((error: unknown) => {
+      log(`Could not keep a copy of ${key}: ${describe(error)}`);
+    });
+  };
+  /** From the copy while the runner is stopped, otherwise from the runner. */
+  const cached = async <T>(
+    key: string,
+    load: () => Promise<T>,
+    usable: (value: unknown) => boolean = () => true,
+  ): Promise<T> => {
+    if (!running && options.cache) {
+      const copy = await options.cache.read(key).catch(() => undefined);
+      if (copy !== undefined && usable(copy)) return copy as T;
+    }
+    const value = await load();
+    remember(key, value);
+    return value;
+  };
+  /** After a turn: keep the session's new state for later reads. */
+  const refreshCopy = (sessionId: string) => {
+    if (!options.cache) return;
+    void client
+      .call("/call", { method: "readSession", args: [sessionId] })
+      .then((value) => remember(sessionKey(sessionId), value))
+      .catch(() => undefined);
+  };
+
   const call = <T>(method: string, args: readonly unknown[]): Promise<T> =>
     use(async () => {
       await ready();
@@ -269,6 +318,7 @@ export function createRemoteWorkspaceHost(
       } finally {
         if (poll) clearInterval(poll);
         signal?.removeEventListener("abort", onAbort);
+        refreshCopy(sessionId);
       }
       if (!result) {
         // The runner stopped mid-turn; its next start records the session
@@ -281,22 +331,40 @@ export function createRemoteWorkspaceHost(
 
   return {
     isBackgroundSession: (sessionId) => background.has(sessionId),
-    createSession: async (createOptions) =>
-      await call("createSession", [createOptions ?? {}]),
+    createSession: async (createOptions) => {
+      const created = await call<{ sessionId: string }>("createSession", [
+        createOptions ?? {},
+      ]);
+      // The list kept for a stopped runner must include it.
+      if (options.cache) {
+        void client
+          .call("/call", { method: "listSessions", args: [] })
+          .then((value) => remember(SESSIONS_KEY, value))
+          .catch(() => undefined);
+      }
+      return created;
+    },
     listSessions: async () => {
-      const sessions = await call<
-        Array<
-          Awaited<ReturnType<WorkspaceHost["listSessions"]>>[number] & {
-            background?: boolean;
-          }
-        >
-      >("listSessions", []);
+      const sessions = await cached(SESSIONS_KEY, () =>
+        call<
+          Array<
+            Awaited<ReturnType<WorkspaceHost["listSessions"]>>[number] & {
+              background?: boolean;
+            }
+          >
+        >("listSessions", []),
+      );
       return sessions.map(({ background: isBackground, ...session }) => {
         if (isBackground) background.add(session.sessionId);
         return session;
       });
     },
-    readSession: async (sessionId) => await call("readSession", [sessionId]),
+    readSession: async (sessionId) =>
+      await cached(
+        sessionKey(sessionId),
+        () => call("readSession", [sessionId]),
+        (copy) => !isMidTurn(copy),
+      ),
     setSessionModel: async (sessionId, model) =>
       await call("setSessionModel", [sessionId, model]),
     setSessionReasoningEffort: async (sessionId, effort) =>

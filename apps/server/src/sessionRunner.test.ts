@@ -201,6 +201,7 @@ async function setup(script: Script) {
       return controlUrl;
     },
     dataRoot: path.join(root, "data", "runners"),
+    cacheRoot: path.join(root, "data", "runner-sessions"),
     approvalMode: () => "autonomous",
     log: () => undefined,
   });
@@ -209,18 +210,18 @@ async function setup(script: Script) {
     await pool.close();
     for (const runner of runners.values()) await runner.close();
   });
-  const host = pool.open(
-    {
-      projectId: "task-t1",
-      projectRoot: folder,
-      commandRoot: clone,
-      shell: "/bin/sh",
-      defaultModel: MODEL,
-      instructions: "Work on the task.",
-      commandEnvironment: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
-    },
-    folder,
-  );
+  const spec = {
+    projectId: "task-t1",
+    projectRoot: folder,
+    commandRoot: clone,
+    shell: "/bin/sh",
+    defaultModel: MODEL,
+    instructions: "Work on the task.",
+    commandEnvironment: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+  };
+  const host = pool.open(spec, folder);
+  /** The same task's host as a restarted control plane would open it. */
+  const reopen = () => pool.open(spec, folder);
   const routes = createAssistantWorkspaceRoutes({
     projects: [{ projectId: "task-t1", host, hidden: true }],
     authorizeProject: () => true,
@@ -244,6 +245,7 @@ async function setup(script: Script) {
     routes,
     run,
     lookups,
+    reopen,
   };
 }
 
@@ -314,6 +316,66 @@ describe("session runners", () => {
     expect(harness.manager.starts).toBe(2);
     await harness.run(sessionId, "Again");
     expect(harness.backend.requests.at(-1)!.messages.length).toBeGreaterThan(2);
+  });
+
+  it("shows a finished session without starting its stopped runner", async () => {
+    const harness = await setup(async function* () {
+      yield* final("Finished work.");
+    });
+    const { sessionId } = await harness.routes.operations.createSession(
+      auth(),
+      "task-t1",
+    );
+    await harness.run(sessionId, "Finish");
+    // Copies are written in the background after the turn.
+    await vi.waitFor(async () =>
+      expect(
+        JSON.stringify(
+          JSON.parse(
+            await fs.readFile(
+              path.join(
+                harness.root,
+                "data",
+                "runner-sessions",
+                "task-t1",
+                `session-${sessionId}.json`,
+              ),
+              "utf8",
+            ),
+          ),
+        ),
+      ).toContain("Finished work."),
+    );
+    await vi.waitFor(async () =>
+      expect(
+        await fs
+          .readFile(
+            path.join(
+              harness.root,
+              "data",
+              "runner-sessions",
+              "task-t1",
+              "sessions.json",
+            ),
+            "utf8",
+          )
+          .catch(() => ""),
+      ).toContain(sessionId),
+    );
+    // The control plane restarted and the runner is gone: reading the
+    // finished chat needs no runner.
+    await harness.runners.get("task-t1")!.close();
+    harness.runners.delete("task-t1");
+    const host = harness.reopen();
+    await expect(host.listSessions()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sessionId })]),
+    );
+    const read = await host.readSession(sessionId);
+    expect(JSON.stringify(read.record.messages)).toContain("Finished work.");
+    expect(harness.manager.starts).toBe(1);
+    // Writing to it starts the runner again.
+    await host.runTurn(sessionId, "One more thing");
+    expect(harness.manager.starts).toBe(2);
   });
 
   it("stops a running turn when the owner presses Stop", async () => {
