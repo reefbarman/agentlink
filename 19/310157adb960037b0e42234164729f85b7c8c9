@@ -1,0 +1,56 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 61-78
+  h_e08a86bb3a33a2 79
+package.json
+  h_e08a86bb3a33a2 5,608,610-622,1244,1250,1315-1316
+  h_e08a86bb3a33a2 609
+.release/last-plan.json
+  h_e08a86bb3a33a2 3-4,13-16,21,26,29-31,37-40,45,50,53-55,61-64,69,74,77-79,121-152
+apps/cli/package.json
+  h_e08a86bb3a33a2 3
+apps/desktop/package.json
+  h_e08a86bb3a33a2 3
+package-lock.json
+  h_e08a86bb3a33a2 3,9,63-64,95,136
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 114-115
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12,78-140
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 61-79
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 42-44
+scripts/jev-replay.mjs
+  h_e08a86bb3a33a2 1-1107
+scripts/jev-replay.test.mjs
+  h_e08a86bb3a33a2 1-245
+scripts/report-session-outcomes.mjs
+  h_e08a86bb3a33a2 1010-1017,1020-1023,1036-1075,1208-1211,1225,1781-1804,1819-1822
+scripts/report-session-outcomes.test.mjs
+  h_e08a86bb3a33a2 524-579
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_e08a86bb3a33a2 55-56
+src/approvals/gitEnvironmentFacts.test.ts
+  h_e08a86bb3a33a2 1-124
+src/approvals/gitEnvironmentFacts.ts
+  h_e08a86bb3a33a2 1-148
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 10,396-491,830,835-987,1516-1681
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 12-15,41-53,66-78,111,113,177-186,199,216-221,226-227,232-327,410-415,423,433,443-444,463,564,595-598,639-645,666-671,673-745,756-758,769-779,859-862,871,959,1127,1137-1145,1156,1161,1190-1220,1232,1234-1237,1253-1254,1257-1267,1269-1270,1272,1276,1292-1293,1297-1390,1406-1414,1416,1430-1436,1459,1521-1522,1570
+src/extension.ts
+  h_e08a86bb3a33a2 41,43,3177-3193
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_e08a86bb3a33a2 303-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19310157adb960037b0e42234164729f85b7c8c9",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
