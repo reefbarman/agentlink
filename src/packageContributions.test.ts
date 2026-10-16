@@ -3,6 +3,8 @@ import * as path from "path";
 
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_TYPESAFE_GUARDIAN_MODEL } from "./approvals/typeSafeGuardianShadow.js";
+
 interface ExtensionPackage {
   description?: string;
   capabilities?: {
@@ -200,7 +202,7 @@ describe("extension package contributions", () => {
       settings?.["agentlink.guardian.typeSafeShadow.enabled"]?.default,
     ).toBe(false);
     expect(settings?.["agentlink.guardian.typeSafeShadow.model"]?.default).toBe(
-      "jev-latest",
+      DEFAULT_TYPESAFE_GUARDIAN_MODEL,
     );
     expect(
       settings?.["agentlink.guardian.typeSafeShadow.timeoutMs"]?.default,

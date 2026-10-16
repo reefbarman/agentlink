@@ -38,6 +38,7 @@ import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCo
 import {
   createShadowingCommandApprovalReviewer,
   createTypeSafeGuardianShadowReviewer,
+  DEFAULT_TYPESAFE_GUARDIAN_MODEL,
   toGuardianShadowComparisonEvent,
   TYPESAFE_GUARDIAN_API_KEY_SECRET,
 } from "./approvals/typeSafeGuardianShadow.js";
@@ -3156,7 +3157,7 @@ export async function activate(
         enabled: config.get<boolean>("guardian.typeSafeShadow.enabled", false),
         model: config.get<string>(
           "guardian.typeSafeShadow.model",
-          "jev-latest",
+          DEFAULT_TYPESAFE_GUARDIAN_MODEL,
         ),
         timeoutMs: config.get<number>(
           "guardian.typeSafeShadow.timeoutMs",

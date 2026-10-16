@@ -605,13 +605,13 @@
           "scope": "machine",
           "type": "boolean",
           "default": false,
-          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results never affect approval decisions. Bounded command-review evidence is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results never affect approval decisions. Bounded command-review evidence, including secret-redacted bodies of scripts and inline files the command runs, is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
         },
         "agentlink.guardian.typeSafeShadow.model": {
           "scope": "machine",
           "type": "string",
-          "default": "jev-latest",
-          "description": "TypeSafe model used for optional Guardian shadow evaluations."
+          "default": "jev-1.14.0",
+          "description": "TypeSafe model used for optional Guardian shadow evaluations. Prefer a pinned version ID over an alias such as jev-latest so results stay comparable across releases."
         },
         "agentlink.guardian.typeSafeShadow.timeoutMs": {
           "scope": "machine",
