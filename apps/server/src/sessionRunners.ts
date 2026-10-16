@@ -3,12 +3,20 @@ import type {
   CoreModelBackend,
   HostToolResolver,
 } from "@agentlink/core";
-import type { WorkspaceBackgroundChange } from "@agentlink/workspace-host";
+import type {
+  WorkspaceApprovalHostTools,
+  WorkspaceBackgroundChange,
+} from "@agentlink/workspace-host";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { hostToolProxyRoutes } from "./remoteHostTools.js";
+import {
+  approvalToolProxyRoutes,
+  createRunnerApprovalGrants,
+  hostToolProxyRoutes,
+  type RunnerApprovalGrants,
+} from "./remoteHostTools.js";
 import { modelProxyRoutes } from "./remoteModels.js";
 import { writeFileAtomic } from "./atomicFile.js";
 import {
@@ -41,6 +49,13 @@ export interface SessionRunnerPoolOptions {
   readonly backends: readonly CoreModelBackend[];
   /** Read-only host tools for a runner's project (web tools). */
   readonly hostTools: (projectId: string) => HostToolResolver;
+  /**
+   * Host tools that need approval (MCP calls), run on the control plane
+   * only after the owner's decision passes through it.
+   */
+  readonly approvalHostTools?: (
+    projectId: string,
+  ) => WorkspaceApprovalHostTools | undefined;
   /** Where the proxy listens, and the URL runners reach it at. */
   readonly listen: { readonly host: string; readonly port: number };
   readonly controlUrl: string;
@@ -92,6 +107,15 @@ export async function startSessionRunnerPool(
   /** Current token → the runner's project. */
   const tokens = new Map<string, string>();
   const routesByProject = new Map<string, Record<string, RunnerRouteHandler>>();
+  const grantsByProject = new Map<string, RunnerApprovalGrants>();
+  const grantsFor = (projectId: string) => {
+    let grants = grantsByProject.get(projectId);
+    if (!grants) {
+      grants = createRunnerApprovalGrants();
+      grantsByProject.set(projectId, grants);
+    }
+    return grants;
+  };
   const routesFor = (projectId: string) => {
     let routes = routesByProject.get(projectId);
     if (!routes) {
@@ -99,12 +123,20 @@ export async function startSessionRunnerPool(
         tenantId: "local",
         subjectId: `runner:${projectId}`,
       };
+      const approvalTools = options.approvalHostTools?.(projectId);
       routes = {
         ...modelProxyRoutes({ backends: options.backends, principal }),
         ...hostToolProxyRoutes({
           resolve: options.hostTools(projectId),
           principal,
         }),
+        ...(approvalTools
+          ? approvalToolProxyRoutes({
+              tools: approvalTools,
+              principal,
+              grants: grantsFor(projectId),
+            })
+          : { "/approval-tools/names": async () => [] }),
       };
       routesByProject.set(projectId, routes);
     }
@@ -199,8 +231,23 @@ export async function startSessionRunnerPool(
         log: options.log,
       });
       const closeHost = host.close;
+      const grants = grantsFor(projectId);
       const tracked: RemoteWorkspaceHost = {
         ...host,
+        // The owner's decisions pass through here, so a runner can run an
+        // approval tool only after the owner allowed it.
+        resumeInteraction: async (sessionId, decision, resumeOptions) => {
+          grants.decide(sessionId, decision);
+          return await host.resumeInteraction(
+            sessionId,
+            decision,
+            resumeOptions,
+          );
+        },
+        respondToBackgroundApproval: async (request) => {
+          grants.decide(request.childSessionId, request.decision);
+          return await host.respondToBackgroundApproval(request);
+        },
         async close() {
           hosts.delete(tracked);
           await closeHost();

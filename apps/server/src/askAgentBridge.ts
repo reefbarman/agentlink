@@ -4,6 +4,7 @@ import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-g
 
 import { isJobChangeDisplay } from "./jobChangeDisplay.js";
 import { isTaskStartDisplay } from "./taskStartDisplay.js";
+import { isMcpCallDisplay } from "./assistantMcpTools.js";
 import type {
   ChatSessionActivity,
   ChatSessionKind,
@@ -1160,7 +1161,8 @@ export async function createAskAgentBridge(
     // where, and with which instructions.
     if (
       isJobChangeDisplay(interaction.displayContent) ||
-      isTaskStartDisplay(interaction.displayContent)
+      isTaskStartDisplay(interaction.displayContent) ||
+      isMcpCallDisplay(interaction.displayContent)
     ) {
       return {
         kind: "write",

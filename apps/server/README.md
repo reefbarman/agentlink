@@ -69,6 +69,16 @@ Chats get two read-only tools that run without asking:
 - **`web_fetch`** reads one public HTTPS page as text (HTML converted, links kept as `text (url)`), in parts of up to 60,000 characters for long pages. `http://` is upgraded; redirects are followed and checked again. With an egress gateway it goes through it with the project's signed policy, exactly as a command would; otherwise the server makes the same checks itself. Only `GET`, at most 3 MB per page, text formats only.
 - **`web_search`** (Open web only) uses Codex's hosted search for Codex models (needs the ChatGPT sign-in), and [SearXNG](#searxng) for every other model when `web.searxngUrl` is set. Without either, it is not offered.
 
+### MCP servers
+
+The **MCP** panel connects remote MCP servers (streamable HTTP, such as a service's official `https://…/mcp` endpoint) so chats and coding tasks can use them:
+
+- **Adding one:** a name, the HTTPS address (a public host: no loopback, LAN or container names), and how it signs in: none, **Sign in with the service** (OAuth; **Sign in** opens the service's page and you come back to the app), or an API key header. Header values and OAuth tokens are encrypted in `data/credentials/mcp/` and never sent back to the app.
+- **Ask, Run, Off:** every tool starts on **Ask**: each call shows an approval card with the tool and its arguments, even in an autonomous chat. **Run** lets calls through without a card; **Off** hides the tool. A tool that is new, or whose description, schema or annotations change when the server is tested, goes back to Ask (an Off tool stays off), an Inbox entry says so, and a call waiting on a card for it is refused. Servers are tested when added, from **Test**, and after signing in.
+- **In chats:** `find_mcp_tools` lists the enabled tools with their schemas; `call_mcp_tool { server, tool, arguments }` calls one. A chat can suggest a new server with `propose_mcp_server`, which is added (every tool on Ask) only if you allow its card; signing in stays yours.
+- **Containment:** only the assistant process calls MCP servers. It reaches only the server's saved host (OAuth discovery and token requests may also go to other public HTTPS hosts), with redirects refused. Session runners list and call these tools through the assistant, which runs a call only once you allowed exactly that call (or the tool is on Run), so no token enters a runner.
+- **Audit:** each call is appended to the [task audit log](#task-audit-log) (`mcp_call`, with the task's ID for a task's chat) with the server, tool, schema hash, policy, whether it was standing (Run) or approved on a card, the session, the outcome and a hash of the arguments: never the arguments or the result. With backups set up, a call is checkpointed straight away like a push.
+
 ### Signing in
 
 There are no passwords. Every device signs in with a single-use 6-digit pairing code:

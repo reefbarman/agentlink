@@ -50,7 +50,12 @@ export type TaskAuditKind =
   /** The task's implementation chat, and where it runs. */
   | "session"
   /** Not a task's: the log was found damaged and continued (taskId ""). */
-  | "log_damaged";
+  | "log_damaged"
+  /**
+   * A call to one of the owner's MCP servers, from a task's chat or (with
+   * taskId "") any other chat: never its arguments or result.
+   */
+  | "mcp_call";
 
 /** Who asked. */
 export type TaskAuditActor =
@@ -124,6 +129,12 @@ export interface TaskAudit {
     by: TaskAuditActor,
     at: number,
     detail?: Readonly<Record<string, unknown>>,
+  ): Promise<void>;
+  /** An MCP call (taskId "" outside a task's chats). */
+  mcpCall(
+    taskId: string,
+    data: Readonly<Record<string, unknown>>,
+    at: number,
   ): Promise<void>;
   /** A task's entries, oldest first (deleted tasks' too). */
   entries(taskId: string): readonly TaskAuditEntry[];
@@ -578,6 +589,9 @@ export async function openTaskAudit(options: {
         [{ kind: "request", data: { action, by, ...recorded } }],
         at,
       );
+    },
+    mcpCall(taskId, data, at) {
+      return append(taskId, [{ kind: "mcp_call", data: { ...data } }], at);
     },
     entries: (taskId) => [...(byTask.get(taskId) ?? [])],
     async verify() {

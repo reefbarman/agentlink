@@ -38,6 +38,7 @@ import {
   type IssuedServerSession,
   type ServerAccessSession,
 } from "./ServerAccessStore.js";
+import { MCP_OAUTH_RETURN_PATH, renderMcpReturnPage } from "./mcpRoutes.js";
 import { serveWebAsset, type WebAssets } from "./webAssets.js";
 
 const SERVER_TENANT_ID = "agentlink-server";
@@ -355,6 +356,15 @@ export async function createAssistantServer(
           renderPairPage({ errorMessage: failure.message }),
         );
       }
+      return;
+    }
+    // An MCP server's OAuth sign-in returns here from another site, without
+    // the session cookie; the page forwards to the signed-in callback.
+    if (
+      pathname === MCP_OAUTH_RETURN_PATH &&
+      (method === "GET" || method === "HEAD")
+    ) {
+      sendPage(response, 200, renderMcpReturnPage(url.searchParams));
       return;
     }
     if (method === "POST" && pathname === "/api/auth/pairings/redeem") {

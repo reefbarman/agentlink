@@ -1,6 +1,7 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { BackupSettings } from "./AssistantBackups";
 import { GitHubPanel } from "./AssistantGitHub";
+import { McpPanel, signInReturnNotice } from "./AssistantMcp";
 import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
   NotificationSettings,
@@ -104,7 +105,8 @@ export interface InboxEntry {
     | "backup_failed"
     | "restored"
     | "chat_interrupted"
-    | "audit_checkpoint";
+    | "audit_checkpoint"
+    | "mcp_changed";
   createdAt: number;
   title: string;
   body?: string;
@@ -164,6 +166,7 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   restored: "history",
   chat_interrupted: "debug-pause",
   audit_checkpoint: "shield",
+  mcp_changed: "plug",
 };
 
 /** Runaway-guard notices: the chat keeps working until the owner stops it. */
@@ -438,9 +441,10 @@ export function AssistantHub({
   reloadPage: () => void;
 }) {
   const notice = maintenanceNotice(maintenance);
+  // Back from an MCP server's sign-in page: show how it went.
   const [view, setView] = useState<
-    "jobs" | "inbox" | "github" | "tasks" | null
-  >(null);
+    "jobs" | "inbox" | "github" | "tasks" | "mcp" | null
+  >(() => (signInReturnNotice(window.location.search) ? "mcp" : null));
   const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const openChat = async (projectId: string, sessionId: string) => {
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
@@ -531,6 +535,16 @@ export function AssistantHub({
           <i class="codicon codicon-github" aria-hidden="true" />
           <span>GitHub</span>
         </button>
+        <button
+          type="button"
+          class="assistant-hub-button"
+          aria-haspopup="dialog"
+          title="MCP servers (other services the assistant can use)"
+          onClick={() => setView("mcp")}
+        >
+          <i class="codicon codicon-plug" aria-hidden="true" />
+          <span>MCP</span>
+        </button>
       </nav>
       {notice && (
         <p class="assistant-maintenance" role="status">
@@ -565,6 +579,17 @@ export function AssistantHub({
         />
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
+      {view === "mcp" && (
+        <McpPanel
+          onClose={() => {
+            // Drop the sign-in result so a reload does not show it again.
+            if (signInReturnNotice(window.location.search)) {
+              window.history.replaceState(null, "", window.location.pathname);
+            }
+            setView(null);
+          }}
+        />
+      )}
     </>
   );
 }

@@ -2479,6 +2479,32 @@ html.quick-ask-document body {
   gap: 6px;
 }
 
+/* Two by two, so an odd last entry takes the whole row. */
+.browser-shell.browser-shell-desktop
+  .assistant-hub
+  > .assistant-hub-button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* An MCP server's tools, each with Ask, Run or Off. */
+.browser-shell.browser-shell-desktop .assistant-mcp-tools {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-tools > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--ag-border);
+}
+
 .browser-shell.browser-shell-desktop .assistant-hub-button > span:not([class]) {
   min-width: 0;
   overflow: hidden;
@@ -2536,13 +2562,25 @@ html.quick-ask-document body {
 
 @container desktop-sidebar (min-width: 400px) {
   .browser-shell.browser-shell-desktop .assistant-hub {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .browser-shell.browser-shell-desktop
+    .assistant-hub
+    > .assistant-hub-button:last-child:nth-child(odd) {
+    grid-column: auto;
   }
 }
 
 @container desktop-sidebar (max-width: 219px) {
   .browser-shell.browser-shell-desktop .assistant-hub {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .browser-shell.browser-shell-desktop
+    .assistant-hub
+    > .assistant-hub-button:last-child:nth-child(odd) {
+    grid-column: auto;
   }
 
   .browser-shell.browser-shell-desktop .assistant-hub-button {

@@ -12,7 +12,7 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { HttpError } from "./httpJson.js";
-import { remoteHostTools } from "./remoteHostTools.js";
+import { remoteApprovalHostTools, remoteHostTools } from "./remoteHostTools.js";
 import { openRemoteModelBackends } from "./remoteModels.js";
 import {
   createRunnerHttpClient,
@@ -364,6 +364,8 @@ export async function startSessionRunner(options: {
     token: options.token,
   });
   const backends = await openRemoteModelBackends(control);
+  // The control plane's approval tools (MCP calls), if it offers any.
+  const approvalHostTools = await remoteApprovalHostTools(control);
   const state = createRunnerSessionState();
   const host = await (options.createHost ?? createWorkspaceHost)({
     projectRoot: spec.projectRoot,
@@ -391,6 +393,7 @@ export async function startSessionRunner(options: {
       hasSessionGrant: (_proposal, request) => state.autonomous(request),
     },
     hostTools: remoteHostTools(control),
+    ...(approvalHostTools ? { approvalHostTools } : {}),
     onTurnError: ({ sessionId, error }) => state.onTurnError(sessionId, error),
     files: {
       enabled: true,

@@ -165,6 +165,7 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
   restored: "Restored from a backup. Scheduled jobs are paused.",
   chat_interrupted: "Stopped for an upgrade. Open the chat to carry on.",
   audit_checkpoint: "The audit log needs attention. Open the Inbox to see why.",
+  mcp_changed: "MCP tools changed and ask again. Open the Inbox to see which.",
 };
 
 /**

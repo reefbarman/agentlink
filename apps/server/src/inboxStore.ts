@@ -42,7 +42,9 @@ export type InboxEntryKind =
   /** A chat's turn was stopped (for an upgrade); asking again continues. */
   | "chat_interrupted"
   /** Audit checkpoints are not reaching the witness, or the log no longer matches them. */
-  | "audit_checkpoint";
+  | "audit_checkpoint"
+  /** An MCP server's tools changed, so they ask again. */
+  | "mcp_changed";
 
 export interface InboxEntry {
   readonly id: string;
@@ -587,6 +589,23 @@ export function inboxEntryForCheckpointProblem(
     title: "The audit log does not match its checkpoints",
     body: truncate(
       `The task audit log was changed after it was checkpointed: ${problem.problems.join("; ")}. Run \`agentlink-server audit-check --checkpoints\` on the server for details.`,
+      MAX_BODY_LENGTH,
+    ),
+  };
+}
+
+/** The inbox entry for MCP tools that changed and ask again. */
+export function inboxEntryForMcpChange(
+  server: { readonly label: string },
+  changed: readonly string[],
+  projectId: string,
+): NewInboxEntry {
+  return {
+    projectId,
+    kind: "mcp_changed",
+    title: `Tools on "${truncate(server.label, 60)}" changed`,
+    body: truncate(
+      `${changed.join(", ")} changed on the server, so ${changed.length === 1 ? "it asks" : "they ask"} you before each call again, and any call waiting for approval was cancelled. Set ${changed.length === 1 ? "it" : "them"} back to Run in the MCP panel if the change looks right.`,
       MAX_BODY_LENGTH,
     ),
   };

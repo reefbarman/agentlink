@@ -76,6 +76,7 @@ import {
   inboxEntryForBackupProblem,
   inboxEntryForCheckpointProblem,
   inboxEntryForInterruptedChat,
+  inboxEntryForMcpChange,
   inboxEntryForRestore,
   inboxEntryForRun,
   inboxEntryForSessionAlert,
@@ -126,6 +127,9 @@ import { takeRestoredMarker } from "./backup.js";
 import type { BackupStatus } from "./backupAgent.js";
 import { backupProblem, createBackupClient } from "./backupClient.js";
 import { createBackupRoutes } from "./backupRoutes.js";
+import { createAssistantMcpTools } from "./assistantMcpTools.js";
+import { openMcpRegistry } from "./mcpRegistry.js";
+import { MCP_OAUTH_RETURN_PATH, createMcpRoutes } from "./mcpRoutes.js";
 import {
   TASK_PROJECT_PREFIX,
   createTaskRunner,
@@ -803,9 +807,11 @@ export async function startAssistantService(
   const taskAudit = await openTaskAudit({
     directory: serverAuditDirectory(config),
     log,
-    // A push or pull request is checkpointed straight away.
+    // A push, pull request or MCP call is checkpointed straight away.
     onWritten: (kinds) => {
-      if (kinds.includes("effect")) checkpointer?.effectRecorded();
+      if (kinds.includes("effect") || kinds.includes("mcp_call")) {
+        checkpointer?.effectRecorded();
+      }
     },
   }).catch(async (error: unknown) => {
     await eventLog.close();
@@ -861,6 +867,55 @@ export async function startAssistantService(
         token: await prepareSecret(config.backup.token, "backup.token", env),
       })
     : undefined;
+  // The owner's remote MCP servers; only this process ever calls them.
+  const mcpRegistry = await openMcpRegistry({
+    dataRoot: config.dataRoot,
+    redirectUrl: new URL(MCP_OAUTH_RETURN_PATH, config.publicOrigins[0]!).href,
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  // Bound to the inbox once it is ready (before any server is refreshed).
+  let mcpInbox: (entry: NewInboxEntry) => Promise<unknown> = async () =>
+    undefined;
+  /** Test a server, and tell the owner when tools changed (they ask again). */
+  const refreshMcpServer = async (serverId: string) => {
+    const result = await mcpRegistry.refresh(serverId);
+    if (result.changed.length > 0) {
+      await mcpInbox(
+        inboxEntryForMcpChange(
+          result.server,
+          result.changed,
+          config.projects[0]?.id ?? "home",
+        ),
+      );
+    }
+    assistantChanged();
+    return result;
+  };
+  const mcpToolsFor = (projectId: string) =>
+    createAssistantMcpTools({
+      registry: mcpRegistry,
+      projectId,
+      audit: async (record) => {
+        const { projectId: _projectId, ...data } = record;
+        await taskAudit
+          .mcpCall(
+            projectId.startsWith(TASK_PROJECT_PREFIX)
+              ? projectId.slice(TASK_PROJECT_PREFIX.length)
+              : "",
+            { ...data, projectId },
+            Date.now(),
+          )
+          .catch(() => undefined);
+      },
+      onProposed: (serverId) => {
+        void refreshMcpServer(serverId).catch((error: unknown) => {
+          log(`Could not test MCP server "${serverId}": ${message(error)}`);
+        });
+      },
+    });
   let server: AssistantServer | undefined;
   /** Devices still signed in, once the access store is open. */
   const activeDeviceIds = () =>
@@ -1062,6 +1117,7 @@ export async function startAssistantService(
         defaultTimeZone: serverTimeZone(),
         onChanged: () => assistantChanged(),
       });
+      const mcpTools = mcpToolsFor(project.id);
       const host = await createWorkspaceHost({
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
@@ -1090,23 +1146,22 @@ export async function startAssistantService(
           : {}),
         hostTools: async (request) => [
           ...(await webTools(request)),
+          ...(await mcpTools.readTools(request)),
           ...(kind === "project" ? await jobTools.readTools(request) : []),
           ...(kind === "project" ? await repositoryTools(request) : []),
           ...(kind === "project" && taskTools
             ? await taskTools.readTools(request)
             : []),
         ],
-        ...(kind === "project"
-          ? {
-              approvalHostTools: taskTools
-                ? combineApprovalHostTools([
-                    jobTools.approvalTools,
-                    // Tasks remember this project's chat that started them.
-                    taskTools.approvalToolsFor(project.id),
-                  ])
-                : jobTools.approvalTools,
-            }
-          : {}),
+        approvalHostTools:
+          kind === "project"
+            ? combineApprovalHostTools([
+                jobTools.approvalTools,
+                // Tasks remember this project's chat that started them.
+                ...(taskTools ? [taskTools.approvalToolsFor(project.id)] : []),
+                mcpTools.approvalTools,
+              ])
+            : mcpTools.approvalTools,
         onTurnError: ({ sessionId, error, publicError }) => {
           const detail = describeTurnFailure(error);
           if (!detail) return;
@@ -1355,6 +1410,7 @@ export async function startAssistantService(
           });
       }
     };
+    mcpInbox = (entry) => addToInbox(entry);
     // The runaway guard: tells the owner when a chat or task has worked a
     // long time or looks stuck. Notices only; it never stops anything.
     const sessionWatch = createSessionWatch({
@@ -1700,6 +1756,8 @@ export async function startAssistantService(
             key: policyKey,
             ...(codex ? { codex: codex.provider } : {}),
           }),
+        // MCP calls run here; a runner never sees a token.
+        approvalHostTools: (projectId) => mcpToolsFor(projectId).approvalTools,
         listen: { host: "0.0.0.0", port: runnersConfig.port },
         controlUrl: `http://${runnersConfig.controlHost}:${runnersConfig.port}`,
         dataRoot: path.join(config.dataRoot, "runners"),
@@ -1949,6 +2007,14 @@ export async function startAssistantService(
       onFinished: () => void checkBackups(),
       log,
     });
+    const mcpRoutes = createMcpRoutes({
+      registry: mcpRegistry,
+      refresh: refreshMcpServer,
+      onChanged: () => assistantChanged(),
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
     const githubRoutes = createGitHubRoutes({
       connections: githubConnections,
       publisher,
@@ -1972,6 +2038,7 @@ export async function startAssistantService(
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||
         (await backupRoutes.handleRequest(request, response, auth)) ||
+        (await mcpRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       deviceNotifications: {
         isOn: (deviceId) => push.isSubscribed(deviceId),
