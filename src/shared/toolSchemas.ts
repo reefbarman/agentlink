@@ -852,14 +852,47 @@ export const presentImagesSchema = {
     .array(z.string())
     .optional()
     .describe(
-      "Exact IDs of prior session images to show in the main chat transcript. IDs follow image_N session order. Use use_recent_images for the common case where the requested image was just returned by another tool.",
+      "Exact IDs of prior session images, such as image_3. IDs follow image_N session order.",
     ),
   use_recent_images: z
     .union([z.boolean(), z.coerce.number()])
     .optional()
     .describe(
-      "Show recent session images in the main chat transcript. Pass true for the most recent image, false to disable recent selection, or a positive number for that many recent images. When both selectors are omitted, the most recent image is shown.",
+      "Present recent session images. Pass true for the most recent image or a positive number for that many. When no source is given, the most recent image is presented.",
     ),
+  urls: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Direct public http(s) image URLs (PNG, JPEG or WebP, up to 4 MiB). Private and local addresses are always blocked.",
+    ),
+  candidate_ids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "candidate_id values from inspect_page_images. These keep the source page as the image's caption.",
+    ),
+  paths: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Workspace-relative or absolute paths to local PNG, JPEG, GIF or WebP files inside the workspace or the temporary folder.",
+    ),
+};
+
+export const inspectPageImagesSchema = {
+  url: z
+    .string()
+    .describe(
+      "Absolute public http(s) URL of a product, album, artwork or article page found through web search or supplied by the user.",
+    ),
+  max_results: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(12)
+    .optional()
+    .describe("Maximum image candidates to return. Default 8, maximum 12."),
 };
 
 export const saveSessionImageSchema = {
@@ -1081,7 +1114,7 @@ export const findAndReplaceSchema = {
     .boolean()
     .optional()
     .describe(
-      "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other dollar tokens stay literal.",
+      "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar, \\n \\t \\\\ escapes. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other $ and \\ tokens stay literal.",
     ),
   max_replacements: z.coerce
     .number()

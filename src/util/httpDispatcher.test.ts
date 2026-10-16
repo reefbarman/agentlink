@@ -88,6 +88,43 @@ describe("installAgentLinkHttpDispatcher", () => {
     });
   });
 
+  it("uses a modern AEAD cipher list for transcription uploads", async () => {
+    const {
+      getAgentLinkTranscriptionHttpDispatcher,
+      agentLinkTranscriptionFetch,
+    } = await import("./httpDispatcher.js");
+
+    const direct = getAgentLinkTranscriptionHttpDispatcher({});
+    expect(getAgentLinkTranscriptionHttpDispatcher({})).toBe(direct);
+    const options = mocks.Agent.mock.calls[0]![0] as {
+      allowH2: boolean;
+      connect: { ciphers: string };
+    };
+    expect(options.allowH2).toBe(true);
+    const ciphers = options.connect.ciphers.split(":");
+    expect(ciphers).toContain("ECDHE-RSA-AES128-GCM-SHA256");
+    expect(ciphers.every((c) => c.startsWith("ECDHE-"))).toBe(true);
+    expect(ciphers.every((c) => /GCM|CHACHA20/u.test(c))).toBe(true);
+
+    getAgentLinkTranscriptionHttpDispatcher({
+      HTTPS_PROXY: "http://proxy.local:8080",
+    });
+    expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connect: options.connect,
+        requestTls: options.connect,
+      }),
+    );
+
+    await agentLinkTranscriptionFetch("https://chatgpt.com/backend-api/x", {
+      method: "POST",
+    });
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/x",
+      expect.objectContaining({ method: "POST", dispatcher: direct }),
+    );
+  });
+
   it("uses EnvHttpProxyAgent when proxy variables are configured", async () => {
     const { installAgentLinkHttpDispatcher } =
       await import("./httpDispatcher.js");

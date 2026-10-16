@@ -5325,6 +5325,41 @@ describe("handleExecuteCommand", () => {
         env: { NODE_OPTIONS: "--max-old-space-size=6144" },
       },
     },
+    ...[
+      {
+        command:
+          "swift test --package-path ios/NativeServices --scratch-path /tmp/personaldresser-native-documents-tests --filter WardrobeStoreTests",
+        retry:
+          "swift test --disable-sandbox --package-path ios/NativeServices --scratch-path /tmp/personaldresser-native-documents-tests --filter WardrobeStoreTests",
+      },
+      {
+        command:
+          "swift test --scratch-path /tmp/personaldresser-native-image-tests --filter ImageTransportTests",
+        retry:
+          "swift test --disable-sandbox --scratch-path /tmp/personaldresser-native-image-tests --filter ImageTransportTests",
+      },
+      {
+        command: "swift build --package-path 'ios/Native Services' -c debug",
+        retry:
+          "swift build --disable-sandbox --package-path 'ios/Native Services' -c debug",
+      },
+      { command: "swift test", retry: "swift test --disable-sandbox" },
+    ].map(({ command, retry }) => ({
+      name: `SwiftPM nested sandbox denial: ${command}`,
+      command,
+      output:
+        "error: 'nativeservices': Invalid manifest\nsandbox-exec: sandbox_apply: Operation not permitted",
+      action: "retry_with_swiftpm_sandbox_disabled",
+      code: "sandbox_swiftpm_nested_sandbox",
+      sameCommand: false,
+      missing: undefined,
+      nativeOption: undefined,
+      option: {
+        command: retry,
+        sandbox_permissions: "require_managed_network",
+        reason_required: true,
+      },
+    })),
     {
       name: "host process inspection denial",
       command: "ps aux",
@@ -5554,6 +5589,164 @@ describe("handleExecuteCommand", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "ordinary Swift compiler error",
+      command: "swift test",
+      output: "error: cannot find 'Foo' in scope",
+    },
+    {
+      name: "already disabled SwiftPM sandbox",
+      command: "swift test --disable-sandbox",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+    },
+    {
+      name: "compound SwiftPM command",
+      command: "swift package resolve && swift test",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+    },
+    {
+      name: "env-prefixed SwiftPM command",
+      command: "FOO=1 swift test",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+    },
+    {
+      name: "SwiftPM command with substitution",
+      command: "swift test --filter $(cat filter.txt)",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+    },
+    {
+      name: "unsupported SwiftPM subcommand",
+      command: "swift run Tool",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+    },
+    {
+      name: "native route",
+      command: "swift test",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+      route: "native" as const,
+    },
+    {
+      name: "timed-out run",
+      command: "swift test",
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+      timedOut: true,
+    },
+  ])(
+    "does not attach SwiftPM nested sandbox guidance for $name",
+    async ({ command, output, route = "sandbox", timedOut = false }) => {
+      const execute = vi.fn(async () => ({
+        exit_code: 1,
+        output,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        ...(timedOut ? { timed_out: true } : {}),
+        terminal_id: "swiftpm-negative",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "sandbox_pty" as const,
+      }));
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-swiftpm-negative",
+          route,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose: vi.fn(),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-swiftpm-negative",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+
+      const payload = textPayload(result) as {
+        retry_guidance?: { code?: string };
+      };
+      expect(payload.retry_guidance?.code).not.toBe(
+        "sandbox_swiftpm_nested_sandbox",
+      );
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves temporary_home and never re-executes for SwiftPM nested sandbox guidance", async () => {
+    const execute = vi.fn(async () => ({
+      exit_code: 1,
+      output: "sandbox-exec: sandbox_apply: Operation not permitted",
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "swiftpm-temp-home",
+      command_sent: true,
+      process_launched: true,
+      execution_mode: "sandbox_pty" as const,
+    }));
+    const prepareExecution = vi.fn(async (_options, routeContext) => ({
+      security: {
+        auditId: "audit-swiftpm-temp-home",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute,
+      dispose: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "swift test --filter ImageTransportTests",
+        temporary_home: true,
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-swiftpm-temp-home",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 1,
+      retry_guidance: {
+        code: "sandbox_swiftpm_nested_sandbox",
+        automatic_retry: false,
+        options: [
+          {
+            command:
+              "swift test --disable-sandbox --filter ImageTransportTests",
+            sandbox_permissions: "require_managed_network",
+            temporary_home: true,
+          },
+        ],
+      },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     {
@@ -10625,7 +10818,8 @@ describe("handleExecuteCommand", () => {
       if (routeContext.requiredAuthority === "sandbox") {
         throw new SandboxAvailabilityError(
           "runtime-unavailable",
-          "Sandbox runtime unavailable",
+          "Sandbox runtime unavailable at /private/secret-host-path",
+          { diagnostic: { category: "runtime_unavailable" } },
         );
       }
       return {
@@ -10693,10 +10887,16 @@ describe("handleExecuteCommand", () => {
           command_sent: false,
           process_launched: false,
           retry_safe: false,
+          failure_stage: "preparation",
+          failure_reason: "runtime-unavailable",
+          sandbox_diagnostic: { category: "runtime_unavailable" },
         },
         { route: "native", process_launched: true },
       ],
     });
+    expect(JSON.stringify(textPayload(result))).not.toContain(
+      "secret-host-path",
+    );
   });
 
   it("does not invite replay when native recovery launch fails with unknown state", async () => {

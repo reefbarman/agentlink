@@ -530,6 +530,81 @@ describe("parseOpenAiCompatibleStreamEvents", () => {
     },
   );
 
+  it("reports structural context for malformed arguments without their contents", async () => {
+    // The shape a bridge produces when it attributes one call's fragments to
+    // another: two complete objects concatenated onto a single call.
+    const secretPath = "secret-fixture-path.txt";
+    const iterator = parseOpenAiCompatibleStreamEvents(
+      chunks([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 1,
+                    id: "call_merged",
+                    function: {
+                      name: "read_file",
+                      arguments: `{"path":"a.txt"}{"path":"${secretPath}"}`,
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      { providerId: "openai-compatible:test", estimatedInputTokens: 1 },
+    );
+
+    let message = "";
+    try {
+      for await (const _event of iterator) {
+        // drain
+      }
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toBe(
+      "OpenAI-compatible tool call call_merged returned malformed JSON arguments (tool read_file, choice 0, index 1, 50 bytes, finish_reason tool_calls)",
+    );
+    expect(message).not.toContain(secretPath);
+  });
+
+  it("reports a missing finish reason for arguments cut off mid-stream", async () => {
+    const iterator = parseOpenAiCompatibleStreamEvents(
+      chunks([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_cut",
+                    function: { name: "write_file", arguments: '{"path":' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ]),
+      { providerId: "openai-compatible:test", estimatedInputTokens: 1 },
+    );
+
+    await expect(async () => {
+      for await (const _event of iterator) {
+        // drain
+      }
+    }).rejects.toThrow(
+      /\(tool write_file, choice 0, index 0, 8 bytes, finish_reason missing\)$/,
+    );
+  });
+
   it("estimates only missing provider usage counters", async () => {
     const events = await collect(
       [

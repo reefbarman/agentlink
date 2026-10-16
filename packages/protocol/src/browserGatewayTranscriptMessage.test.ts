@@ -3,6 +3,7 @@ import { expectTypeOf, it } from "vitest";
 import type { BrowserGatewayTranscriptBlock } from "./browserGatewayTranscriptBlock.js";
 import type { BrowserGatewayTranscriptMessage } from "./browserGatewayTranscriptMessage.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
+import type { ImageAttribution } from "./toolResult.js";
 
 it("pins the complete browser gateway transcript-message contract", () => {
   expectTypeOf<BrowserGatewayTranscriptMessage>().toEqualTypeOf<{
@@ -17,6 +18,15 @@ it("pins the complete browser gateway transcript-message contract", () => {
     slashCommandLabel?: string;
     origin?: "vscode" | "browser";
     checkpointId?: string;
+    displayMedia?: {
+      contentRevision: number;
+      images: Array<{
+        name: string;
+        mimeType: string;
+        attribution?: ImageAttribution;
+      }>;
+      documents: Array<{ name: string; mimeType: string }>;
+    };
     finalMarker?: {
       status: "completed" | "waiting_for_user" | "blocked" | "cancelled";
       summary?: string;

@@ -7,6 +7,7 @@ import {
   imageDownloadName,
   type OpenImageInEditor,
 } from "./ImagePreview";
+import { ImageSourceCaption } from "./ImageSourceCaption";
 import {
   ToolCallGroup,
   getToolGroupLabel,
@@ -33,6 +34,7 @@ import { Fragment } from "preact";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
+import { useRemoteDisplayImage } from "./RemoteToolDetail";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -93,7 +95,9 @@ function placeAssistantDisplayMedia(
       );
       if (matchingImage) {
         matchingImage.used = true;
-        return matchingImage.image;
+        return matchingImage.image.attribution || !image.attribution
+          ? matchingImage.image
+          : { ...matchingImage.image, attribution: image.attribution };
       }
 
       fallbackImageIndex += 1;
@@ -101,6 +105,7 @@ function placeAssistantDisplayMedia(
         name: `${toolName === "present_images" ? "presented-image" : "generated-image"}-${fallbackImageIndex}.${imageExtensionForMimeType(image.mimeType)}`,
         mimeType: image.mimeType,
         src,
+        ...(image.attribution ? { attribution: image.attribution } : {}),
       };
     });
     promotedByToolCallId.set(block.id, { images, documents: [] });
@@ -1022,6 +1027,66 @@ function parseAttachments(content: string): {
   return { files, mediaLabel, cleanText: text.trim() };
 }
 
+type DisplayImage = NonNullable<ChatMessage["displayMedia"]>["images"][number];
+
+/** One attached/generated image preview; relay-backed images load lazily. */
+function UserImagePreviewCard({
+  image: projectedImage,
+  label,
+  alt,
+  onOpenImageInEditor,
+}: {
+  image: DisplayImage;
+  label: string;
+  alt: string;
+  onOpenImageInEditor?: OpenImageInEditor;
+}) {
+  const { image, loading, error } = useRemoteDisplayImage(projectedImage);
+  const attribution = projectedImage.attribution;
+  if (!image.src) {
+    return (
+      <div
+        class="user-image-preview-card user-image-preview-pending"
+        title={error ?? label}
+      >
+        <span class="user-attachment-chip user-attachment-media">
+          <i
+            class={`codicon ${loading ? "codicon-loading codicon-modifier-spin" : "codicon-file-media"}`}
+          />
+          <span class="user-attachment-chip-name">
+            {loading ? `Loading ${label}…` : (error ?? label)}
+          </span>
+        </span>
+        <ImageSourceCaption attribution={attribution} />
+      </div>
+    );
+  }
+  return (
+    <div class="user-image-preview-card">
+      <ImagePreview
+        image={image}
+        alt={alt}
+        className="user-image-preview"
+        buttonClassName="user-image-preview-button"
+        onOpenInEditor={onOpenImageInEditor}
+        showDownload
+      />
+      <a
+        class="icon-button user-image-download"
+        href={image.src}
+        download={imageDownloadName(image)}
+        rel="noopener"
+        title={`Download ${label}`}
+        aria-label={`Download ${label}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <i class="codicon codicon-save" />
+      </a>
+      <ImageSourceCaption attribution={attribution} />
+    </div>
+  );
+}
+
 /** Renders attachment chips above user message text */
 function UserAttachments({
   files,
@@ -1063,36 +1128,15 @@ function UserAttachments({
     <>
       {displayMedia?.images && displayMedia.images.length > 0 && (
         <div class="user-image-previews">
-          {displayMedia.images.map((image, index) => {
-            const label = image.name || `${imageLabel} ${index + 1}`;
-            const alt = image.name || `${imageAlt} ${index + 1}`;
-            return (
-              <div
-                key={`${image.name}-${index}`}
-                class="user-image-preview-card"
-              >
-                <ImagePreview
-                  image={image}
-                  alt={alt}
-                  className="user-image-preview"
-                  buttonClassName="user-image-preview-button"
-                  onOpenInEditor={onOpenImageInEditor}
-                  showDownload
-                />
-                <a
-                  class="icon-button user-image-download"
-                  href={image.src}
-                  download={imageDownloadName(image)}
-                  rel="noopener"
-                  title={`Download ${label}`}
-                  aria-label={`Download ${label}`}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <i class="codicon codicon-save" />
-                </a>
-              </div>
-            );
-          })}
+          {displayMedia.images.map((image, index) => (
+            <UserImagePreviewCard
+              key={`${image.name}-${index}`}
+              image={image}
+              label={image.name || `${imageLabel} ${index + 1}`}
+              alt={image.name || `${imageAlt} ${index + 1}`}
+              onOpenImageInEditor={onOpenImageInEditor}
+            />
+          ))}
         </div>
       )}
       {showChipRow && (

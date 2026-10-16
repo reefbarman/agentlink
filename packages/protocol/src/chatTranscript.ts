@@ -1,9 +1,13 @@
+import type {
+  ImageAttribution,
+  McpApprovalPromotionMeta,
+} from "./toolResult.js";
+
 import type { BackgroundResultState } from "./backgroundResult.js";
 import type { ChatReasoningEffort } from "./chatCatalog.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ComposeTrace } from "./compose.js";
 import type { FinalMessageMarker } from "./finalStatus.js";
-import type { McpApprovalPromotionMeta } from "./toolResult.js";
 import type { RequestContextBreakdown } from "./contextDiagnostics.js";
 
 export interface RemoteTranscriptBlockDetail {
@@ -16,6 +20,13 @@ export interface RemoteTranscriptBlockDetail {
   warning?: string;
 }
 
+/** Relay reference for one lazily loaded message display image. */
+export interface RemoteDisplayImageDetail {
+  messageId: string;
+  contentRevision: number;
+  index: number;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -26,7 +37,11 @@ export type ContentBlock =
       name: string;
       inputJson: string;
       result: string;
-      resultImages?: Array<{ mimeType: string; data: string }>;
+      resultImages?: Array<{
+        mimeType: string;
+        data: string;
+        attribution?: ImageAttribution;
+      }>;
       resultDocuments?: Array<{
         name: string;
         mimeType: string;
@@ -176,7 +191,16 @@ export interface ChatMessage {
   };
   /** Display-only previews for pasted or dropped media attached to a user turn. */
   displayMedia?: {
-    images: Array<{ name: string; mimeType: string; src: string }>;
+    images: Array<{
+      name: string;
+      mimeType: string;
+      /** Data URL; empty when the bytes must be loaded through `remoteDetail`. */
+      src: string;
+      /** Relay reference used by remote surfaces to fetch the image lazily. */
+      remoteDetail?: RemoteDisplayImageDetail;
+      /** Host-observed web provenance for images retrieved from the web. */
+      attribution?: ImageAttribution;
+    }>;
     documents: Array<{ name: string; mimeType: string }>;
   };
   /** Raw user-provided media retained server-side for model input; stripped from browser snapshots. */

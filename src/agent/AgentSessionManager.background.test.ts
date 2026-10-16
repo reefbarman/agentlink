@@ -397,6 +397,123 @@ describe("AgentSessionManager background agents", () => {
     },
   );
 
+  describe("outside-workspace ownedPaths preflight", () => {
+    const sibling = "/agentlink-preflight-sibling/packages/core";
+    const approvalManager = (rules: {
+      pathRules?: Array<{ pattern: string; mode: "glob" | "prefix" | "exact" }>;
+      writeRules?: Array<{
+        pattern: string;
+        mode: "glob" | "prefix" | "exact";
+      }>;
+    }) => ({
+      bindSessionProject: vi.fn(),
+      isPathTrusted: vi.fn(() => false),
+      getFileWriteAuthorization: vi.fn(() => ({
+        allowed: false,
+        basis: "none",
+      })),
+      getPathRules: vi.fn(() => ({
+        session: rules.pathRules ?? [],
+        project: [],
+        global: [],
+      })),
+      getWriteRules: vi.fn(() => ({
+        session: rules.writeRules ?? [],
+        project: [],
+        global: [],
+        settings: [],
+      })),
+    });
+    const makeManager = async (manager: ReturnType<typeof approvalManager>) => {
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+      );
+      const parent = await mgr.createSession("code");
+      mgr.setToolContext({ ...toolCtx, approvalManager: manager as any });
+      return { mgr, parent };
+    };
+
+    it("rejects an unreachable sibling scope before creating the child", async () => {
+      const manager = approvalManager({});
+      const { mgr, parent } = await makeManager(manager);
+
+      await expect(
+        mgr.spawnBackground(
+          {
+            task: "edit sibling",
+            message: "implement",
+            mode: "code",
+            ownedPaths: [sibling],
+          },
+          parent.id,
+        ),
+      ).rejects.toThrow(
+        /ownedPaths outside the workspace roots[\s\S]*missing path trust and write approval/,
+      );
+      expect(manager.getPathRules).toHaveBeenCalledWith(parent.id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mocks.runArgs).not.toHaveBeenCalled();
+    });
+
+    it("spawns with a warning when only narrower grants exist beneath the scope", async () => {
+      const { mgr, parent } = await makeManager(
+        approvalManager({
+          pathRules: [{ pattern: `${sibling}/src/**`, mode: "glob" }],
+          writeRules: [{ pattern: `${sibling}/src/index.ts`, mode: "exact" }],
+        }),
+      );
+
+      const spawned = await mgr.spawnBackground(
+        {
+          task: "edit sibling",
+          message: "implement",
+          mode: "code",
+          ownedPaths: [sibling],
+        },
+        parent.id,
+      );
+
+      expect(spawned.writeScopeWarnings).toEqual([
+        expect.stringContaining(sibling),
+      ]);
+    });
+
+    it("does not preflight read-only delegations or in-workspace scopes", async () => {
+      const manager = approvalManager({});
+      const { mgr, parent } = await makeManager(manager);
+
+      const readOnly = await mgr.spawnBackground(
+        {
+          task: "research sibling",
+          message: "inspect",
+          mode: "code",
+          permissionProfile: "review-only",
+          ownedPaths: [sibling],
+        },
+        parent.id,
+      );
+      const inside = await mgr.spawnBackground(
+        {
+          task: "edit local",
+          message: "implement",
+          mode: "code",
+          ownedPaths: ["src/owned.ts"],
+        },
+        parent.id,
+      );
+
+      expect(readOnly.writeScopeWarnings).toBeUndefined();
+      expect(inside.writeScopeWarnings).toBeUndefined();
+      expect(manager.isPathTrusted).not.toHaveBeenCalled();
+    });
+  });
+
   it("includes a live pending tool turn in background transcript snapshots", () => {
     const mgr = new AgentSessionManager(
       config,

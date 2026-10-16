@@ -117,6 +117,10 @@ export interface TerminalExecutionAttemptSummary {
   terminal_id?: string;
   execution_mode?: TerminalCommandResult["execution_mode"];
   failure_stage?: TerminalExecutionFailureStage;
+  /** Bounded failure category for an attempt that never launched. */
+  failure_reason?: string;
+  /** Bounded sandbox diagnostic category; never raw error text or paths. */
+  sandbox_diagnostic?: { category: string };
   capability_denial?: SandboxViolation;
 }
 

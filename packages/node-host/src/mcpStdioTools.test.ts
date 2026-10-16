@@ -210,6 +210,33 @@ describe("node host stdio MCP tools", () => {
     expect(authorizeLaunch).toHaveBeenCalledTimes(1);
   });
 
+  it("redacts sign-in callback secrets from the model result", async () => {
+    mocks.callTool.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "1: https://auth.openai.com/deviceauth/callback?code=stdio-sentinel&state=stdio-state",
+        },
+      ],
+      structuredContent: {
+        url: "https://auth.openai.com/deviceauth/callback?code=stdio-sentinel",
+      },
+    } as never);
+    const resolver = createNodeHostMcpStdioTools({
+      resolveServers: () => [server],
+      authorizeLaunch: () => true,
+    });
+    const stdio = await tool(resolver, "records__search");
+    const result = await stdio.execute({ query: "pages" }, context());
+    expect(JSON.stringify(result)).not.toContain("stdio-sentinel");
+    expect(JSON.stringify(result)).not.toContain("stdio-state");
+    expect(result).toMatchObject({
+      modelContent: expect.stringContaining(
+        "deviceauth/callback?code=REDACTED&state=REDACTED",
+      ),
+    });
+  });
+
   it("bounds the exposed catalog and model result", async () => {
     mocks.listTools.mockResolvedValueOnce({
       tools: [

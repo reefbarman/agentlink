@@ -1590,6 +1590,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
       dataPlaneFeatures: [
         "typed-background-results-v1",
         "transcript-block-detail-v1",
+        "transcript-display-media-v1",
+        "transcript-image-attribution-v1",
       ],
     });
 
@@ -1661,6 +1663,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
       dataPlaneFeatures: [
         "typed-background-results-v1",
         "transcript-block-detail-v1",
+        "transcript-display-media-v1",
+        "transcript-image-attribution-v1",
       ],
       ownerRegistration: {
         owner: {
@@ -5275,6 +5279,103 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("edits, removes, and steers helper-owned Ask Agent queued messages", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ signal }) => {
+      calls += 1;
+      if (calls > 1) return { text: "Steered reply", toolCalls: [] };
+      resolveStarted();
+      return await new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("browser_gateway_ask_agent_model_aborted")),
+          { once: true },
+        );
+      });
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const firstSend = post("/api/ask-agent/send", { text: "Long running" });
+    await started;
+    for (const [id, text] of [
+      ["queued-a", "Queued A"],
+      ["queued-b", "Queued B"],
+      ["queued-c", "Queued C"],
+    ]) {
+      const queued = await post("/api/ask-agent/send", { id, text });
+      await expect(queued.json()).resolves.toMatchObject({ queued: true });
+    }
+
+    const edit = await post("/api/ask-agent/queue", {
+      action: "update",
+      id: "queued-c",
+      text: "Edited C",
+    });
+    expect(edit.ok).toBe(true);
+    const remove = await post("/api/ask-agent/queue", {
+      action: "remove",
+      id: "queued-a",
+    });
+    const removeBody = (await remove.json()) as {
+      snapshot: {
+        session: { foreground: { messageQueue: Array<{ id: string }> } };
+      };
+    };
+    expect(
+      removeBody.snapshot.session.foreground.messageQueue.map((q) => q.id),
+    ).toEqual(["queued-b", "queued-c"]);
+    const missing = await post("/api/ask-agent/queue", {
+      action: "remove",
+      id: "queued-a",
+    });
+    expect(missing.status).toBe(404);
+
+    const steer = await post("/api/ask-agent/queue", {
+      action: "steer",
+      id: "queued-c",
+    });
+    expect(steer.ok).toBe(true);
+    await firstSend;
+
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      const body = (await session.json()) as {
+        snapshot: {
+          session: {
+            foreground: {
+              messageQueue: Array<{ id: string }>;
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      const userTexts = body.snapshot.session.foreground.projectedMessages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content);
+      // The steered message runs right after the stopped turn, before B.
+      expect(userTexts.slice(0, 2)).toEqual(["Long running", "Edited C"]);
+      expect(userTexts).not.toContain("Queued A");
+    });
+  });
+
   it("awaits an in-flight cancellation publication before helper shutdown", async () => {
     let resolveStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -8176,6 +8277,133 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
   });
 
+  it("lends a Codex OAuth credential to native web for a provider without hosted web", async () => {
+    const customProviderId = "openai-compatible:openrouter-main";
+    const customModelId = "openrouter-moonshotai-kimi-k3";
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const executeNativeWebTool = vi.fn(async () => ({
+      backend: "provider" as const,
+      provider: "codex",
+      operation: "search" as const,
+      input: { query: "AgentLink" },
+      activities: [],
+      content: "Lent search result.",
+      citations: [],
+    }));
+    const modelClient = {
+      ...makeAskAgentToolLoopClient(async (params) => {
+        completionParams.push(params);
+        if (params.toolMessages?.length) {
+          expect(JSON.stringify(params.toolMessages)).toContain(
+            "Lent search result.",
+          );
+          return { text: "Done.", toolCalls: [] };
+        }
+        expect(params.tools?.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining(["web_search", "web_fetch"]),
+        );
+        return {
+          text: "Searching.",
+          toolCalls: [
+            {
+              id: "lent-search-1",
+              name: "web_search",
+              input: { query: "AgentLink" },
+            },
+          ],
+        };
+      }),
+      executeNativeWebTool,
+    };
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+      providerId: customProviderId,
+      model: {
+        id: customModelId,
+        displayName: "Kimi K3",
+        providerId: customProviderId,
+        providerDisplayName: "OpenRouter",
+        supportsToolUse: true,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+        authenticated: true,
+      },
+      openAiCompatibleRuntimeProfiles: {
+        [customProviderId]: {
+          providerId: customProviderId,
+          baseUrl: "https://openrouter.ai/api/v1",
+          profile: "openrouter",
+          headers: {},
+          timeoutMs: 30_000,
+          authRequired: true,
+          models: {
+            [customModelId]: {
+              id: customModelId,
+              model: "moonshotai/kimi-k3",
+              capabilities: {
+                supportsThinking: false,
+                supportsCaching: false,
+                supportsImages: false,
+                supportsToolUse: true,
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+              },
+            },
+          },
+        },
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    const codexGrant = await fetch(
+      `${harness.helperBase}/internal/model-auth/credentials`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${discovery.clientSharedSecret}`,
+        },
+        body: JSON.stringify({
+          providerId: "openai-codex",
+          method: "oauth",
+          bearerToken: "lent-codex-token",
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+          modelScopes: ["chat"],
+          helperGenerationId: discovery.helperGenerationId,
+          ttlMs: 60_000,
+        }),
+      },
+    );
+    expect(codexGrant.ok).toBe(true);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search the web" }),
+    });
+
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(2);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    expect(executeNativeWebTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-sol",
+        kind: "search",
+        credential: expect.objectContaining({
+          providerId: "openai-codex",
+          method: "oauth",
+          bearerToken: "lent-codex-token",
+        }),
+      }),
+    );
+  });
+
   it("executes native web search as an ordinary tool call while keeping provider replay private", async () => {
     const primaryRequests: string[] = [];
     const fallbackRequests: string[] = [];
@@ -10343,6 +10571,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       "recall_memory",
       "generate_image",
       "present_images",
+      "inspect_page_images",
     ]);
     expect(JSON.stringify(discovered)).not.toContain("execute_command");
     expect(JSON.stringify(discovered)).not.toContain("get_hover");

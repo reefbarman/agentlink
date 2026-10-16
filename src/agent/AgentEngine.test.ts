@@ -952,6 +952,61 @@ describe("AgentEngine", () => {
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
 
+    it("persists a one-shot pre-condense notice with tool results near the threshold", async () => {
+      const session = await makeSession();
+      session.addUserMessage("keep working");
+      const provider = makeMockProvider();
+      const requests: StreamRequest[] = [];
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        requests.push(request);
+        if (requests.length <= 2) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: `todo-${requests.length}`,
+                name: "todo_write",
+                input: { todos: [] },
+              },
+            ],
+          };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        // ~81% of 191,808 usable input: past 85% of the 90% soft threshold,
+        // below the threshold itself.
+        yield { type: "usage", inputTokens: 155_000, outputTokens: 10 };
+        yield { type: "done" };
+      };
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+        sessionId: session.id,
+      });
+      const condenseSpy = vi.spyOn(engine, "condenseSession");
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+      expect(condenseSpy).not.toHaveBeenCalled();
+      expect(requests.length).toBeGreaterThanOrEqual(3);
+      const countNotices = (request: StreamRequest) =>
+        JSON.stringify(request.messages).split("[AgentLink context notice]")
+          .length - 1;
+      expect(countNotices(requests[0]!)).toBe(0);
+      // Persisted once and not repeated on later tool batches.
+      for (const request of requests.slice(1)) {
+        expect(countNotices(request)).toBe(1);
+      }
+    });
+
     it("does not auto-condense below the usable input threshold", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");

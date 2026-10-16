@@ -418,6 +418,7 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_capability_unresolved"
     | "sandbox_host_integration"
     | "sandbox_node_oom"
+    | "sandbox_swiftpm_nested_sandbox"
     | "sandbox_preparation_changed"
     | "sandbox_preparation_failed"
     | "sandbox_capability_launch_failed"
@@ -556,6 +557,15 @@ const PROTECTED_GIT_DENIAL_PATTERNS = [
 ];
 
 const NODE_RUNNER_COMMANDS = new Set(["node", "npm", "npx", "pnpm", "yarn"]);
+
+/**
+ * SwiftPM wraps manifest compilation (and plugins) in its own `sandbox-exec`
+ * profile, which macOS refuses to nest inside AgentLink's Seatbelt sandbox.
+ */
+const SWIFTPM_NESTED_SANDBOX_PATTERN =
+  /sandbox-exec:\s*sandbox_apply:\s*Operation not permitted/i;
+const SWIFTPM_SANDBOXED_SUBCOMMANDS = new Set(["build", "test"]);
+const SWIFTPM_COMMAND_PREFIX = /^\s*swift\s+(?:build|test)(?=\s|$)/;
 
 function sandboxHelperFailureEvidence(error: SandboxHelperFailure) {
   const retained = error.retainedOutput;
@@ -1518,6 +1528,74 @@ function attachSandboxNodeOomRetryGuidance(input: {
           same_command: true,
           env: { NODE_OPTIONS: "--max-old-space-size=6144" },
         },
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
+  });
+}
+
+/**
+ * Recognise SwiftPM's nested manifest sandbox failing under AgentLink's
+ * sandbox and suggest disabling only SwiftPM's inner sandbox. The suggested
+ * retry stays inside AgentLink confinement (explicit sandbox intent rather
+ * than a default route that command rules could resolve to native) and is
+ * never run automatically.
+ */
+function attachSandboxSwiftPmNestedSandboxRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+  replayable: boolean;
+  temporaryHome: boolean;
+}): void {
+  const { result, command, output, replayable, temporaryHome } = input;
+  const tokens = singleCommandTokens(command);
+  const prefix = SWIFTPM_COMMAND_PREFIX.exec(command);
+  if (
+    hasRetryGuidance(result) ||
+    !replayable ||
+    !tokens ||
+    !prefix ||
+    tokens[0] !== "swift" ||
+    !SWIFTPM_SANDBOXED_SUBCOMMANDS.has(tokens[1] ?? "") ||
+    tokens.includes("--disable-sandbox") ||
+    result.security?.route !== "sandbox" ||
+    result.security.confinement !== "verified-baseline" ||
+    result.security.permissionIntent !== "default" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false ||
+    !SWIFTPM_NESTED_SANDBOX_PATTERN.test(output)
+  ) {
+    return;
+  }
+
+  const prefixEnd = prefix.index + prefix[0].length;
+  const retryCommand = `${command.slice(0, prefixEnd)} --disable-sandbox${command.slice(prefixEnd)}`;
+  Object.assign(result, {
+    retry_guidance: {
+      code: "sandbox_swiftpm_nested_sandbox",
+      message:
+        "SwiftPM could not start its own nested manifest sandbox inside AgentLink's sandbox (sandbox-exec: sandbox_apply). This is not a source or test failure. Retry with SwiftPM's inner sandbox disabled while AgentLink's sandbox stays in place. Keep Approve for Me enabled for this retry; if command policy has changed, stop and reassess instead of running it natively. The first attempt launched and may have produced build artifacts. AgentLink will not retry automatically.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "retry_with_swiftpm_sandbox_disabled",
+          same_command: false,
+          command: retryCommand,
+          sandbox_permissions: "require_managed_network",
+          reason_required: true,
+          suggested_reason:
+            "SwiftPM's nested manifest sandbox cannot run inside AgentLink's sandbox; disable only SwiftPM's inner sandbox.",
+          ...(temporaryHome ? { temporary_home: true } : {}),
+          preserve_request_options: ["cwd", "env", "timeout"],
+        },
+      ],
+      prohibited_workarounds: [
+        "Do not switch to require_escalated or native execution solely to avoid SwiftPM's nested sandbox.",
       ],
     } satisfies ExecuteCommandRetryGuidance,
   });
@@ -2670,6 +2748,13 @@ export async function handleExecuteCommand(
         ) {
           throw error;
         }
+        // Bounded categories only: the error message may carry host paths.
+        const sandboxFailureDetail = {
+          failure_reason: error.reason,
+          ...(error.diagnostic
+            ? { sandbox_diagnostic: { category: error.diagnostic.category } }
+            : {}),
+        };
 
         const nativeRoute = routeContextFor(
           approvalModeFor(providers, sessionId),
@@ -2763,6 +2848,7 @@ export async function handleExecuteCommand(
                     reason:
                       approval.reason ??
                       "Native recovery was not approved for this exact command.",
+                    sandbox_failure: sandboxFailureDetail,
                     command_sent: false,
                     process_launched: false,
                     retry_safe: false,
@@ -2814,6 +2900,7 @@ export async function handleExecuteCommand(
                         retry_safe: false,
                         may_have_side_effects: false,
                         failure_stage: "preparation",
+                        ...sandboxFailureDetail,
                       },
                       {
                         attempt: 2,
@@ -2854,6 +2941,7 @@ export async function handleExecuteCommand(
               retry_safe: false,
               may_have_side_effects: false,
               failure_stage: "preparation",
+              ...sandboxFailureDetail,
             },
             nativeAttempt,
           ];
@@ -3335,6 +3423,13 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+        });
+        attachSandboxSwiftPmNestedSandboxRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
+          temporaryHome,
         });
         attachSandboxHostIntegrationRetryGuidance({
           result,
@@ -3831,6 +3926,13 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+        });
+        attachSandboxSwiftPmNestedSandboxRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
+          temporaryHome,
         });
         attachSandboxHostIntegrationRetryGuidance({
           result,

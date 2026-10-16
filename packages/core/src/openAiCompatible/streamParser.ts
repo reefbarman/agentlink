@@ -301,7 +301,10 @@ export async function* parseOpenAiCompatibleStreamEvents(
         `OpenAI-compatible tool call ${call.choiceIndex}:${call.toolIndex} is missing a final ID or function name`,
       );
     }
-    const input = parseToolArguments(call.arguments, call.id);
+    const input = parseToolArguments(
+      call,
+      choices.get(call.choiceIndex)?.finishReason,
+    );
     publicBlocks.push({
       type: "tool_use",
       id: call.id,
@@ -722,24 +725,43 @@ function parseTextToolParameter(value: string): unknown {
 }
 
 function parseToolArguments(
-  rawArguments: string,
-  toolCallId: string,
+  call: ToolCallBuffer,
+  finishReason: string | undefined,
 ): Record<string, unknown> {
+  const rawArguments = call.arguments;
   if (!rawArguments.trim()) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawArguments);
   } catch {
+    // The parser's own message can echo argument text, so report structure only.
     throw new OpenAiCompatibleStreamError(
-      `OpenAI-compatible tool call ${toolCallId} returned malformed JSON arguments`,
+      `OpenAI-compatible tool call ${call.id} returned malformed JSON arguments ${describeToolArguments(call, finishReason)}`,
     );
   }
   if (!isRecord(parsed)) {
     throw new OpenAiCompatibleStreamError(
-      `OpenAI-compatible tool call ${toolCallId} arguments must be a JSON object`,
+      `OpenAI-compatible tool call ${call.id} arguments must be a JSON object ${describeToolArguments(call, finishReason)}`,
     );
   }
   return parsed;
+}
+
+/**
+ * Structural context for an argument failure, without argument contents:
+ * distinguishes truncation (finish reason length or missing) from a bridge
+ * that misrouted fragments between parallel calls.
+ */
+function describeToolArguments(
+  call: ToolCallBuffer,
+  finishReason: string | undefined,
+): string {
+  const name = call.name.length > 80 ? `${call.name.slice(0, 80)}…` : call.name;
+  const bytes = Buffer.byteLength(call.arguments, "utf8");
+  const reason = finishReason
+    ? finishReason.slice(0, 40).replace(/[^\w.-]/g, "_")
+    : "missing";
+  return `(tool ${name}, choice ${call.choiceIndex}, index ${call.toolIndex}, ${bytes} bytes, finish_reason ${reason})`;
 }
 
 function normalizeStopReason(

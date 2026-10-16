@@ -4,6 +4,7 @@ import type {
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import { boundedImageAttribution } from "./imageAttribution.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
@@ -52,6 +53,8 @@ import type {
 import {
   encodeTranscriptBlockDetail,
   transcriptBlockDetailSummary,
+  displayMediaContentRevision,
+  encodeDisplayImageDetail,
   type TranscriptBlockDetailRequest,
 } from "./transcriptBlockDetail.js";
 
@@ -96,6 +99,9 @@ interface ProjectionContext {
   ) => BrowserGatewayInteractionSummary | null;
   readonly typedBackgroundResults: boolean;
   readonly blockDetails: boolean;
+  readonly displayMedia: boolean;
+  /** Receiver accepts web image attribution on display-media descriptors. */
+  readonly imageAttribution?: boolean;
 }
 
 interface ProjectedReadSet {
@@ -140,6 +146,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly commandCapabilities: readonly BrowserGatewayOwnerCommandKind[];
   private readonly typedBackgroundResults: boolean;
   private readonly blockDetails: boolean;
+  private readonly displayMedia: boolean;
+  private readonly imageAttribution: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -173,6 +181,14 @@ export class BrowserGatewayOwnerProjectionAdapter {
     this.blockDetails =
       options.dataPlaneFeatures?.includes("transcript-block-detail-v1") ??
       false;
+    this.displayMedia =
+      this.blockDetails &&
+      (options.dataPlaneFeatures?.includes("transcript-display-media-v1") ??
+        false);
+    this.imageAttribution =
+      this.displayMedia &&
+      (options.dataPlaneFeatures?.includes("transcript-image-attribution-v1") ??
+        false);
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
     });
@@ -247,6 +263,12 @@ export class BrowserGatewayOwnerProjectionAdapter {
         ? (foreground.messages.find((item) => item.id === request.messageId) ??
           this.historyMessages.get(request.messageId))
         : undefined;
+    if (request.resource?.kind === "display-image") {
+      return encodeDisplayImageDetail(
+        request,
+        this.displayMedia ? message : undefined,
+      );
+    }
     const block = message?.blocks.find(
       (item) =>
         (item.type === "tool_call" || item.type === "skill_load") &&
@@ -290,6 +312,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
         interaction: () => null,
         typedBackgroundResults: this.typedBackgroundResults,
         blockDetails: this.blockDetails,
+        displayMedia: this.displayMedia,
+        imageAttribution: this.imageAttribution,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -607,6 +631,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
         this.projectInteraction(source, details).interaction,
       typedBackgroundResults: this.typedBackgroundResults,
       blockDetails: this.blockDetails,
+      displayMedia: this.displayMedia,
+      imageAttribution: this.imageAttribution,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
     const referencedDetails = [...details.values()];
@@ -629,6 +655,8 @@ export class BrowserGatewayOwnerProjectionAdapter {
       interaction: () => null,
       typedBackgroundResults: this.typedBackgroundResults,
       blockDetails: this.blockDetails,
+      displayMedia: this.displayMedia,
+      imageAttribution: this.imageAttribution,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1184,6 +1212,41 @@ function projectTranscript(
   };
 }
 
+const MAX_DISPLAY_MEDIA_ITEMS = 64;
+
+function projectDisplayMedia(
+  displayMedia: NonNullable<ChatMessage["displayMedia"]>,
+  includeAttribution: boolean,
+): NonNullable<BrowserGatewayTranscriptMessage["displayMedia"]> {
+  const describe = ({
+    name,
+    mimeType,
+  }: {
+    name: string;
+    mimeType: string;
+  }) => ({
+    name: bounded(name, 1_000),
+    mimeType: bounded(mimeType, 256) || "application/octet-stream",
+  });
+  return {
+    contentRevision: displayMediaContentRevision(displayMedia),
+    images: displayMedia.images
+      .slice(0, MAX_DISPLAY_MEDIA_ITEMS)
+      .map((image) => {
+        const attribution = includeAttribution
+          ? boundedImageAttribution(image.attribution)
+          : undefined;
+        return {
+          ...describe(image),
+          ...(attribution ? { attribution } : {}),
+        };
+      }),
+    documents: displayMedia.documents
+      .slice(0, MAX_DISPLAY_MEDIA_ITEMS)
+      .map(describe),
+  };
+}
+
 function projectMessage(
   message: ChatMessage,
   context: ProjectionContext,
@@ -1210,6 +1273,14 @@ function projectMessage(
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.checkpointId
       ? { checkpointId: bounded(message.checkpointId, 256) }
+      : {}),
+    ...(context.displayMedia && message.displayMedia
+      ? {
+          displayMedia: projectDisplayMedia(
+            message.displayMedia,
+            context.imageAttribution === true,
+          ),
+        }
       : {}),
     ...(message.finalMarker
       ? {

@@ -6,6 +6,19 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import {
+  createLocalMarkdownImageReader,
+  resolveMarkdownImage,
+} from "../tools/markdownImageResolver";
+import {
+  getVscodeWebImageRuntime,
+  readVscodeWebImagePolicy,
+} from "../tools/webImages/vscodeWebImageTools";
+import type {
+  MarkdownImageResolution,
+  MarkdownImageResolveRequest,
+} from "../shared/markdownImageSource";
+import { collectStoredSessionImages } from "./sessionImages";
 import { isReviewPublicationCommand } from "../approvals/reviewPublicationPolicy.js";
 import {
   isCoreReasoningEffort,
@@ -227,6 +240,11 @@ import {
   extractPolishedPrompt,
 } from "./promptPolish.js";
 import { getApprovalResultAnnotation } from "./approvalResultAnnotation.js";
+import type {
+  VoiceInputAvailability,
+  VoiceInputService,
+} from "./voice/VoiceInputService.js";
+import type { VoiceInputLiveEvent } from "../shared/voiceInputProtocol.js";
 import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
@@ -590,6 +608,11 @@ export type ExtensionToWebview =
       error?: "not_found" | "open_failed";
     }
   | {
+      type: "agentMarkdownImageResolved";
+      requestId: string;
+      result: MarkdownImageResolution;
+    }
+  | {
       type: "agentDetectQuestionResult";
       requestId: string;
       messageId: string;
@@ -684,6 +707,14 @@ export type ExtensionToWebview =
       polished?: string;
       error?: string;
     }
+  | { type: "voiceInputAvailability"; availability: VoiceInputAvailability }
+  | {
+      type: "voiceInputResult";
+      requestId: string;
+      text?: string;
+      error?: string;
+    }
+  | { type: "voiceInputEvent"; ownerId: string; event: VoiceInputLiveEvent }
   | {
       type: "agentQuestionRequest";
       sessionId?: string;
@@ -1196,6 +1227,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Compatibility-only fallback for tests/pre-initialization; production requests lease project hubs. */
   private mcpHub: McpClientHub;
   private askAgentMcpHub: McpClientHub;
+  /**
+   * Latest Ask Agent MCP (re)connection. Undefined until the browser Ask Agent
+   * first needs this window's hub, so a window does not launch a second copy of
+   * every global stdio server alongside its project hub at activation.
+   */
+  private askAgentMcpConnection: Promise<void> | undefined;
   private fileWatchers: vscode.Disposable[] = [];
   private readonly watchedCustomizationProjectIds = new Set<string>();
   private readonly pendingRetrySessionIds = new Set<string>();
@@ -1377,6 +1414,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private agentPluginCatalogProvider: AgentPluginCatalogProvider | undefined;
   private mcpPolicyMutationProvider: McpPolicyMutationProvider | undefined;
   private detectRequestInputs = new Map<string, { detectKey: string }>();
+  private voiceInput?: VoiceInputService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -1508,6 +1546,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.voiceInput?.dispose();
     if (this.editorImageTempDirectory) {
       void fs.promises.rm(this.editorImageTempDirectory, {
         recursive: true,
@@ -2552,7 +2591,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.ensureStartupMcpConnection(scope),
       ),
     );
-    await this.refreshAskAgentMcpConnections();
+    // The Ask Agent hub connects lazily on its first browser request.
 
     // File watchers for hot reload
     for (const scope of projectScopes.values()) {
@@ -2913,9 +2952,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     })?.name;
   }
 
-  private async refreshAskAgentMcpConnections(
+  /** Connects the Ask Agent hub on first use; later calls reuse that connection. */
+  private ensureAskAgentMcpConnected(): Promise<void> {
+    return this.askAgentMcpConnection ?? this.refreshAskAgentMcpConnections();
+  }
+
+  private refreshAskAgentMcpConnections(
     options: McpConnectOptions = { trigger: "ask-agent-refresh" },
   ): Promise<void> {
+    const connection = this.connectAskAgentMcp(options);
+    this.askAgentMcpConnection = connection;
+    return connection;
+  }
+
+  private async connectAskAgentMcp(options: McpConnectOptions): Promise<void> {
     if (!this.askAgentMcpHub) return;
     try {
       const configs = await loadAskAgentMcpConfigs();
@@ -3587,6 +3637,85 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       throw new Error("Model returned no usable text");
     }
     return polished;
+  }
+
+  /** Installs host microphone capture and Codex transcription. */
+  public setVoiceInputService(service: VoiceInputService): void {
+    this.voiceInput?.dispose();
+    this.voiceInput = service;
+    this.refreshVoiceInputAvailability();
+  }
+
+  public async getVoiceInputAvailability(options?: {
+    requireRecorder?: boolean;
+  }): Promise<VoiceInputAvailability> {
+    if (!this.voiceInput) {
+      return {
+        available: false,
+        hidden: true,
+        reason: "Voice input is not available.",
+      };
+    }
+    return await this.voiceInput.getAvailability(options);
+  }
+
+  /** Transcribes audio recorded by a remote client, such as the browser. */
+  public async transcribeVoiceAudio(audio: {
+    data: Uint8Array;
+    mimeType: string;
+  }): Promise<string> {
+    if (!this.voiceInput) throw new Error("Voice input is not available.");
+    return await this.voiceInput.transcribeAudio(audio);
+  }
+
+  /** Re-sends voice availability, e.g. after Codex sign-in/sign-out. */
+  public refreshVoiceInputAvailability(): void {
+    void this.getVoiceInputAvailability().then(
+      (availability) =>
+        this.postMessage({ type: "voiceInputAvailability", availability }),
+      (error: unknown) =>
+        this.log(`[voice-input] availability check failed: ${String(error)}`),
+    );
+  }
+
+  private async handleVoiceInputMessage(args: {
+    command: "voiceInputStart" | "voiceInputFinish" | "voiceInputCancel";
+    requestId: string;
+    ownerId: string;
+    connection?: ChatPaneConnection;
+  }): Promise<void> {
+    const reply = (message: ExtensionToWebview) =>
+      args.connection
+        ? args.connection.postMessage(message)
+        : this.postMessage(message);
+    const service = this.voiceInput;
+    try {
+      if (!service) throw new Error("Voice input is not available.");
+      let text: string | undefined;
+      if (args.command === "voiceInputStart") {
+        const ownerId = args.ownerId;
+        const push = (event: VoiceInputLiveEvent) =>
+          reply({ type: "voiceInputEvent", ownerId, event });
+        await service.start(ownerId, {
+          onPartial: (partial) => push({ kind: "partial", text: partial }),
+          onLevel: (level) => push({ kind: "level", level }),
+          onAutoStop: () => push({ kind: "autoStop" }),
+        });
+      } else if (args.command === "voiceInputFinish") {
+        text = await service.finish(args.ownerId);
+      } else {
+        service.cancel(args.ownerId);
+      }
+      reply({ type: "voiceInputResult", requestId: args.requestId, text });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`[voice-input] ${args.command} failed: ${message}`);
+      reply({
+        type: "voiceInputResult",
+        requestId: args.requestId,
+        error: message,
+      });
+    }
   }
 
   private async handlePolishPrompt(args: {
@@ -5429,6 +5558,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!toolName) return { ok: false, error: "invalid_request" };
     const sessionId =
       input.sessionId?.trim() || "browser-gateway:ask-agent:mcp";
+    await this.ensureAskAgentMcpConnected();
     const mcpToolDefs = this.askAgentMcpHub.getToolDefs();
     const codeMode = BUILT_IN_MODES[0];
     const tools = getAgentTools(codeMode, mcpToolDefs).filter(
@@ -5463,6 +5593,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     infos: McpServerInfo[];
     configSnapshot: McpConfigSnapshot;
   }> {
+    await this.ensureAskAgentMcpConnected();
     const infos = this.askAgentMcpHub.getServerInfos();
     return {
       ok: true,
@@ -5507,6 +5638,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       searchBackend: config.get("webAccess.searchBackend"),
       fetchBackend: config.get("webAccess.fetchBackend"),
       nativeSearchMode: config.get("webAccess.nativeSearchMode"),
+      imageRetrieval: config.get("webAccess.imageRetrieval"),
       allowedDomains: config.get("webAccess.allowedDomains"),
       blockedDomains: config.get("webAccess.blockedDomains"),
       maxSearchUsesPerTurn: config.get("webAccess.maxSearchUsesPerTurn"),
@@ -5522,12 +5654,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public submitBrowserAskAgentMcpTools(): {
+  public async submitBrowserAskAgentMcpTools(): Promise<{
     ok: boolean;
     tools: ReturnType<typeof getAgentTools>;
     parallelSafeToolNames: string[];
     parallelSafeServerNames: string[];
-  } {
+  }> {
+    await this.ensureAskAgentMcpConnected();
     const parallelSafeServerNames =
       this.askAgentMcpHub.getParallelToolCallServerNames();
     const parallelSafeServers = new Set(parallelSafeServerNames);
@@ -6022,6 +6155,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       this.log(`[error] Failed to open browser path: ${err}`);
       return { ok: false, error: "path_unavailable" };
+    }
+  }
+
+  /** Browser remote view: resolves a Markdown image for a VS Code session. */
+  public async resolveBrowserMarkdownImage(
+    request: MarkdownImageResolveRequest,
+  ): Promise<MarkdownImageResolution> {
+    return this.resolveMarkdownImageForSession(request.sessionId, request);
+  }
+
+  private async resolveMarkdownImageForSession(
+    sessionId: string | undefined,
+    request: { src: string; userConfirmed?: boolean },
+  ): Promise<MarkdownImageResolution> {
+    const session = sessionId
+      ? this.sessionManager?.getSession?.(sessionId)
+      : undefined;
+    const messages =
+      session && typeof session.getAllMessages === "function"
+        ? session.getAllMessages()
+        : [];
+    const roots = (vscode.workspace.workspaceFolders ?? []).map(
+      (folder) => folder.uri.fsPath,
+    );
+    try {
+      return await resolveMarkdownImage(request, {
+        sessionId: session?.id ?? sessionId ?? "",
+        getSessionImages: () => collectStoredSessionImages(messages),
+        getMessages: () => messages,
+        web: {
+          runtime: getVscodeWebImageRuntime(),
+          policy: readVscodeWebImagePolicy(),
+        },
+        readLocalImage: createLocalMarkdownImageReader(() => roots),
+      });
+    } catch (err) {
+      this.log(`[markdown-image] Failed to resolve image: ${err}`);
+      return { status: "unavailable", message: "Image unavailable." };
     }
   }
 
@@ -6952,6 +7123,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ),
         );
         const reloadAskAgentMcp = () => {
+          // Before first use there is nothing to reload; the first request
+          // reads the current config.
+          if (!this.askAgentMcpConnection) return;
           void this.refreshAskAgentMcpConnections({
             interactiveForNewServers: true,
             trigger: "config-watcher",
@@ -9394,6 +9568,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "voiceInputAvailabilityRequest": {
+        const availability = await this.getVoiceInputAvailability();
+        const message: ExtensionToWebview = {
+          type: "voiceInputAvailability",
+          availability,
+        };
+        if (context?.connection) context.connection.postMessage(message);
+        else this.postMessage(message);
+        break;
+      }
+
+      case "voiceInputStart":
+      case "voiceInputFinish":
+      case "voiceInputCancel": {
+        const requestId = String(msg.requestId ?? "");
+        const ownerId = String(msg.ownerId ?? "");
+        if (!requestId || !ownerId) break;
+        void this.handleVoiceInputMessage({
+          command: msg.command,
+          requestId,
+          ownerId,
+          connection: context?.connection,
+        });
+        break;
+      }
+
       case "agentPolishPrompt": {
         const requestId = String(msg.requestId ?? "");
         const draft = String(msg.draft ?? "");
@@ -9757,6 +9957,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (question && answer) {
           await this.promoteBtwAnswer(question, answer, sourceSessionId);
         }
+        break;
+      }
+
+      case "agentResolveMarkdownImage": {
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : "";
+        if (!requestId) break;
+        const result = await this.resolveMarkdownImageForSession(
+          typeof msg.sessionId === "string" ? msg.sessionId : sourceSessionId,
+          {
+            src: typeof msg.src === "string" ? msg.src : "",
+            userConfirmed: msg.userConfirmed === true,
+          },
+        );
+        const message: ExtensionToWebview = {
+          type: "agentMarkdownImageResolved",
+          requestId,
+          result,
+        };
+        if (context?.connection) context.connection.postMessage(message);
+        else this.postMessage(message);
         break;
       }
 
@@ -11146,7 +11367,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               { type: "image" }
             > => content.type === "image",
           )
-          .map((image) => ({ mimeType: image.mimeType, data: image.data }));
+          .map((image) => ({
+            mimeType: image.mimeType,
+            data: image.data,
+            ...(image.attribution ? { attribution: image.attribution } : {}),
+          }));
         const resultDocuments = event.result
           .filter(
             (

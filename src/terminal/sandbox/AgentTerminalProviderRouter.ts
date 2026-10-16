@@ -881,9 +881,30 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       };
     }
 
-    const availability = await this.getSandboxAvailability();
+    let availability = await this.getSandboxAvailability();
     if (generation !== this.generation)
       return { route: "unavailable", reason: "attestation-failed" };
+    if (availability.status === "runtime-unavailable") {
+      // The host may invalidate a stale cached runtime (for example after a
+      // package manager removed a version-specific Node install), so one
+      // fresh availability check can re-resolve and re-attest a replacement.
+      const retry = await this.getSandboxAvailability();
+      if (generation !== this.generation)
+        return { route: "unavailable", reason: "attestation-failed" };
+      if (retry.status === "verified") {
+        if (this.sandboxProvider) {
+          this.logSink?.(
+            "[sandbox-terminal] Sandbox Node runtime was re-resolved; retiring the previous sandbox provider",
+          );
+          this.revokePendingExecutions();
+          this.retireSandbox();
+          this.currentSandboxAttestationId = undefined;
+        }
+        availability = retry;
+      } else if (retry.status === "failed") {
+        availability = retry;
+      }
+    }
     if (availability.status === "runtime-unavailable") {
       if (this.sandboxProvider) {
         this.sandboxFailure = new Error(

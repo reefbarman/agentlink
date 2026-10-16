@@ -27,12 +27,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   web_search: {
     label: "Native web search",
     description:
-      "Search the public web using the selected model provider's native web transport. Codex OAuth uses a low-latency structured search path with automatic hosted-tool fallback; other supported providers use their hosted web capability. Available only when agentlink.webAccess.searchBackend is native. Returns search actions, bounded result text, citations, and usage when available as an ordinary tool result.",
+      "Search the public web using the selected model provider's native web transport. Codex OAuth uses a low-latency structured search path with automatic hosted-tool fallback; other supported providers use their hosted web capability. Available only when agentlink.webAccess.searchBackend is native. Returns search actions, bounded result text, citations, and usage when available as an ordinary tool result. To show the user an image found on the web, put its image URL in your reply as Markdown: ![description](https://…/image.jpg). Use inspect_page_images (find_native_tools if deferred) to get image URLs from a page.",
   },
   web_fetch: {
     label: "Native web fetch",
     description:
-      "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns a bounded preview and, when the VS Code host receives more Codex page content, an output_file readable with read_file; use start_line/next_start_line for any provider remainder.",
+      "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns a bounded preview and, when the VS Code host receives more Codex page content, an output_file readable with read_file; use start_line/next_start_line for any provider remainder. To show the user an image from a page, put its image URL in your reply as Markdown: ![description](https://…/image.jpg). Use inspect_page_images (find_native_tools if deferred) to list a page's image URLs.",
   },
 
   // --- Native tool discovery ---
@@ -121,9 +121,14 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Generate or edit images with GPT-Image-2.5 Flare or Sunburst and show them inline. Flare remains the fast default; use Sunburst when editing precision or final polish matters. With an OpenAI API key, supports structured dimensions, quality through max, transparent backgrounds, PNG/JPEG/WebP output, compression, explicit edit targets, and masks. These advanced controls fail before generation on ChatGPT/Codex OAuth until that backend is verified; legacy OAuth generation and reference-led refinement remain supported. Every advanced call requires approval. VS Code can save output files and use workspace images; Browser Ask Agent is display-only and uses session image IDs.",
   },
   present_images: {
-    label: "Present session images",
+    label: "Present images",
     description:
-      "Show one or more images already available in the current session directly in the main chat transcript. Use when the user explicitly asks to see an image, screenshot, or visual output; do not use for routine agent-only image inspection because image-returning tool calls already retain their results. Select exact image_N IDs or recent images; with no selector, presents the most recent image. This is display-only, writes no files, and requires no approval. To write a session image to disk, use save_session_image.",
+      "Look at images yourself and show them in the chat in one step. Sources: session image IDs (image_N or recent images), public image URLs, inspect_page_images candidate_ids, or local image files. You do not need this tool just to show an image: Markdown ![description](source) in your reply shows web URLs, image_N IDs and file paths natively. Use present_images when you also need to see the image, for example to check it matches the request before describing it; then do not repeat it in Markdown. Web retrieval is public-only (PNG, JPEG or WebP up to 4 MiB) and follows agentlink.webAccess.imageRetrieval. Writes no files; use save_session_image for that. Never substitute a generated image for an existing one.",
+  },
+  inspect_page_images: {
+    label: "Inspect page images",
+    description:
+      "List image candidates on one public web page (product, album, artwork or article) found via web search or supplied by the user. Reads static HTML metadata (JSON-LD, Open Graph, Twitter cards) and ordinary img/picture elements without running scripts or following links. Returns image_url values to show with Markdown ![description](image_url), with the page credited as the source, plus candidate_id values for present_images, title, alt text, declared dimensions and publisher-supplied creator/licence (unverified). Does not search the web itself. JavaScript-only, login-protected or anti-bot pages may return no candidates; try another source page. Retrieval follows agentlink.webAccess.imageRetrieval and may ask the user for approval.",
   },
   save_session_image: {
     label: "Save session image",

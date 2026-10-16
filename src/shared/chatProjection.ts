@@ -24,6 +24,13 @@ import type {
   SkillSelectionFailure,
 } from "@agentlink/protocol/chat-catalog";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
+import type { ImageAttribution } from "@agentlink/protocol/tool-result";
+
+type ProjectedResultImage = {
+  mimeType: string;
+  data: string;
+  attribution?: ImageAttribution;
+};
 
 import type {
   ComposeChildStatus,
@@ -207,7 +214,7 @@ function imageExtensionForMimeType(mimeType: string): string {
 }
 
 function resultImagesToDisplayMedia(
-  images: Array<{ mimeType: string; data: string }> | undefined,
+  images: ProjectedResultImage[] | undefined,
   startIndex = 0,
   namePrefix = "generated-image",
 ): DisplayMedia | undefined {
@@ -217,6 +224,7 @@ function resultImagesToDisplayMedia(
       name: `${namePrefix}-${startIndex + index + 1}.${imageExtensionForMimeType(image.mimeType)}`,
       mimeType: image.mimeType,
       src: `data:${image.mimeType};base64,${image.data}`,
+      ...(image.attribution ? { attribution: image.attribution } : {}),
     })),
     documents: [],
   };
@@ -1001,7 +1009,7 @@ export type AppAction =
       toolCallId: string;
       toolName: string;
       result: string;
-      resultImages?: Array<{ mimeType: string; data: string }>;
+      resultImages?: ProjectedResultImage[];
       resultDocuments?: Array<{
         name: string;
         mimeType: string;
@@ -1237,10 +1245,7 @@ export function agentMessagesToChatMessages(
 
   // First pass: collect tool results keyed by tool_use_id
   const toolResults = new Map<string, string>();
-  const toolResultImages = new Map<
-    string,
-    Array<{ mimeType: string; data: string }>
-  >();
+  const toolResultImages = new Map<string, ProjectedResultImage[]>();
   const toolResultDocuments = new Map<
     string,
     Array<{ name: string; mimeType: string; data: string }>
@@ -1281,12 +1286,22 @@ export function agentMessagesToChatMessages(
               name?: string;
               title?: string;
               source?: { data?: string; media_type?: string };
+              attribution?: ImageAttribution;
             }>;
-            const images = media.flatMap((item) => {
+            const images = media.flatMap((item): ProjectedResultImage[] => {
               if (item.type !== "image") return [];
               const data = item.data ?? item.source?.data;
               const mimeType = item.mimeType ?? item.source?.media_type;
-              return data && mimeType ? [{ data, mimeType }] : [];
+              if (!data || !mimeType) return [];
+              return [
+                {
+                  data,
+                  mimeType,
+                  ...(item.attribution && typeof item.attribution === "object"
+                    ? { attribution: item.attribution }
+                    : {}),
+                },
+              ];
             });
             if (images.length > 0) {
               toolResultImages.set(block.tool_use_id, images);
@@ -1442,10 +1457,8 @@ export function agentMessagesToChatMessages(
         toolResults,
       );
       const finalMarkerToolId = finalMarker?.toolCall?.id;
-      const messageGeneratedImages: Array<{ mimeType: string; data: string }> =
-        [];
-      const messagePresentedImages: Array<{ mimeType: string; data: string }> =
-        [];
+      const messageGeneratedImages: ProjectedResultImage[] = [];
+      const messagePresentedImages: ProjectedResultImage[] = [];
       const messageDirectImages: Array<{ mimeType: string; data: string }> = [];
       for (const block of contentArr as Array<{
         type: string;

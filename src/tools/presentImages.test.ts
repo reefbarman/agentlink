@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
-
-import type { SessionImageReference } from "../core/tools/types.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   handlePresentImages,
+  presentImages,
   selectSessionImagesForPresentation,
 } from "./presentImages.js";
+
+import type { SessionImageReference } from "../core/tools/types.js";
 
 const images: SessionImageReference[] = [
   {
@@ -41,11 +42,99 @@ describe("present_images", () => {
                 mimeType: "image/png",
               },
             ],
+            note: "These images are now shown in the chat; do not also embed them with Markdown.",
           }),
         },
         { type: "image", data: "second", mimeType: "image/png" },
       ],
     });
+  });
+
+  it("carries web image attribution into the presented image and summary", () => {
+    const attribution = {
+      origin: "web_page" as const,
+      sourceUrl: "https://example.com/album",
+      imageUrl: "https://cdn.example.com/cover.jpg",
+      title: "Album cover",
+    };
+    const result = handlePresentImages({ image_ids: ["image_1"] }, () => [
+      { ...images[0]!, attribution },
+    ]);
+    const summary = JSON.parse(
+      (result.content[0] as { text: string }).text,
+    ) as { images: Array<{ source?: string }>; note?: string };
+    expect(summary.images[0]?.source).toBe("https://example.com/album");
+    expect(summary.note).toContain("Source links");
+    expect(result.content[1]).toEqual({
+      type: "image",
+      data: "first",
+      mimeType: "image/jpeg",
+      attribution,
+    });
+  });
+
+  it("retrieves web URLs and candidates with attribution and keeps going past failures", async () => {
+    const attribution = {
+      origin: "web_url" as const,
+      imageUrl: "https://coverartarchive.org/release/1/front-500",
+    };
+    const fetchWebImage = vi.fn(
+      async (input: { url?: string; candidate_id?: string }) =>
+        input.candidate_id
+          ? {
+              content: [{ type: "text" as const, text: "candidate expired" }],
+              isError: true,
+            }
+          : {
+              content: [
+                { type: "text" as const, text: "{}" },
+                {
+                  type: "image" as const,
+                  data: "cover",
+                  mimeType: "image/jpeg",
+                  attribution,
+                },
+              ],
+            },
+    );
+    const result = await presentImages(
+      {
+        urls: ["https://coverartarchive.org/release/1/front-500"],
+        candidate_ids: ["img_old"],
+      },
+      { getSessionImages: () => images, fetchWebImage },
+    );
+    expect(fetchWebImage).toHaveBeenCalledTimes(2);
+    expect(result.isError).toBeUndefined();
+    const summary = JSON.parse(
+      (result.content[0] as { text: string }).text,
+    ) as {
+      count: number;
+      errors: string[];
+    };
+    expect(summary.count).toBe(1);
+    expect(summary.errors[0]).toContain("img_old: candidate expired");
+    expect(result.content[1]).toEqual({
+      type: "image",
+      data: "cover",
+      mimeType: "image/jpeg",
+      attribution,
+    });
+  });
+
+  it("reads local paths through the host reader and reports every failure", async () => {
+    const result = await presentImages(
+      { paths: ["missing.png"] },
+      {
+        readLocalImage: async () => {
+          throw new Error("Image file not found: missing.png");
+        },
+      },
+    );
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain(
+      "missing.png: Image file not found",
+    );
   });
 
   it("combines exact and recent selections without duplicates", () => {

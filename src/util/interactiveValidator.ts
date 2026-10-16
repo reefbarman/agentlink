@@ -644,17 +644,20 @@ function isSshRemoteCommand(args: string[]): boolean {
       argument === "-N" ||
       argument === "-f" ||
       argument === "-s" ||
-      argument === "-t" ||
       argument === "-W" ||
       argument.startsWith("-W") ||
       (/^-[46AaCfgKkMNnqstTVvXxYy]+$/.test(argument) &&
-        ["N", "f", "s", "t"].some((option) => argument.includes(option)))
+        ["N", "f", "s"].some((option) => argument.includes(option)))
     ) {
       return false;
     }
+    // -t/-tt only force a TTY so remote prompts (for example sudo) can reach
+    // the visible terminal; with a remote command, ssh still exits when the
+    // command finishes. Without a command it remains an interactive login,
+    // which the host/command check below rejects.
     if (
       booleanOptions.has(argument) ||
-      /^-[46AaCgKkMnqTVvXxYy]+$/.test(argument)
+      /^-[46AaCgKkMnqtTVvXxYy]+$/.test(argument)
     ) {
       continue;
     }

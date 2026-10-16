@@ -7,9 +7,19 @@ import { randomUUID } from "node:crypto";
 export const AGENTLINK_SHARED_KEYCHAIN_SERVICE =
   "com.agentlink.shared-credentials.v1";
 
+/** Linux credential stores supported by `@napi-rs/keyring`. */
+export type KeychainLinuxStore = "secret-service" | "keyutils";
+
 export interface KeychainSecretStorageOptions {
   service?: string;
   account: string;
+  /**
+   * Require a specific Linux credential store. When omitted, the native
+   * library's default applies: Secret Service, silently falling back to the
+   * kernel keyring, which does not survive a reboot. When set, an unavailable
+   * store fails instead of falling back. Ignored on other platforms.
+   */
+  linuxStore?: KeychainLinuxStore;
   lockRoot?: string;
   lockTimeoutMs?: number;
   staleLockMs?: number;
@@ -29,7 +39,11 @@ export async function createKeychainSecretStorage(
   const service = options.service ?? AGENTLINK_SHARED_KEYCHAIN_SERVICE;
   const account = requireSegment(options.account, "account");
   const { AsyncEntry } = await import("@napi-rs/keyring");
-  const entry = new AsyncEntry(service, account);
+  const entry = options.linuxStore
+    ? new AsyncEntry(service, account, {
+        linux: { store: options.linuxStore },
+      })
+    : new AsyncEntry(service, account);
   const lockRoot =
     options.lockRoot ??
     path.join(os.homedir(), ".agentlink", "credential-locks");

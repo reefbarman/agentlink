@@ -357,6 +357,38 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("keeps web source attribution on presented images", () => {
+    const toolCallId = "tool-present-web-image";
+    const attribution = {
+      origin: "web_page" as const,
+      sourceUrl: "https://example.com/painting",
+      title: "Painting",
+    };
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "show me the painting",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "present_images",
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "present_images",
+      result: JSON.stringify({ status: "presented", count: 1 }),
+      resultImages: [{ mimeType: "image/jpeg", data: "YWJjZA==", attribution }],
+      durationMs: 1,
+      input: { image_ids: ["image_1"] },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.displayMedia?.images).toEqual([
+      expect.objectContaining({ mimeType: "image/jpeg", attribution }),
+    ]);
+  });
+
   it("keeps non-generate_image result images scoped to the tool call", () => {
     const toolCallId = "tool-read-image";
     let state = reducer(initialState, {

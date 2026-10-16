@@ -52,6 +52,7 @@ const sharedCoreModuleNames = new Set([
   "turnInteractions",
   "turnKernel",
   "turnLeases",
+  "voice",
   "webAccess",
 ]);
 const sharedCoreModulesPlugin = {
@@ -92,6 +93,7 @@ const cjs = await context({
     "src/turnInteractions.ts",
     "src/turnKernel.ts",
     "src/turnLeases.ts",
+    "src/voice.ts",
     "src/webAccess.ts",
   ],
   bundle: true,

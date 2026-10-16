@@ -426,6 +426,71 @@ describe("buildRepoMapPayload", () => {
     expect(directories.omitted).toBe(459 - directories.items.length);
   });
 
+  it("ranks SwiftPM .build output after authored TypeScript and Swift modules", () => {
+    const files: StructuralGraphCache["files"] = {};
+    const authored = [
+      "ios/NativeServices/Package.swift",
+      "ios/NativeServices/Sources/NativeServices/WardrobeStore.swift",
+      "src/app/App.tsx",
+      "src/data/wardrobe.ts",
+      "src/features/closet/ClosetView.tsx",
+    ];
+    for (const relPath of authored) {
+      files[relPath] = makeEntry(relPath, `export_${relPath.length}`);
+    }
+    for (let i = 0; i < 120; i++) {
+      const prefix =
+        i % 2 === 0
+          ? "ios/NativeServices/.build/arm64-apple-macosx/debug"
+          : "ios/NativeServices/.build/index-build/arm64-apple-macosx/debug";
+      const relPath = `${prefix}/Module${String(i).padStart(3, "0")}.build/output-file-map.json`;
+      files[relPath] = makeEntry(relPath, `generated${i}`);
+    }
+    const payload = buildRepoMapPayload({
+      graph: { ...makeGraph(), files },
+      maxChars: 11_000,
+      maxFiles: 40,
+      includeExternal: false,
+    });
+
+    expect(JSON.stringify(payload, null, 2).length).toBeLessThanOrEqual(11_000);
+    const fileItems = payload.files as {
+      items: Array<{ path: string }>;
+      total: number;
+      omitted: number;
+    };
+    const paths = fileItems.items.map((item) => item.path);
+    expect(paths.slice(0, authored.length)).toEqual(
+      [...authored].sort((a, b) => a.localeCompare(b)),
+    );
+    expect(
+      paths.slice(authored.length).every((item) => item.includes("/.build/")),
+    ).toBe(true);
+    expect(fileItems.total).toBe(125);
+    expect(fileItems.omitted).toBe(125 - paths.length);
+
+    const directoryPaths = (
+      payload.directories as { items: Array<{ path: string }> }
+    ).items.map((item) => item.path);
+    // Authored directories (0) all precede .build directories (1).
+    const buildRank = directoryPaths.map((item) =>
+      item.includes(".build") ? 1 : 0,
+    );
+    expect(buildRank[0]).toBe(0);
+    expect(buildRank).toEqual([...buildRank].sort((a, b) => a - b));
+
+    const scoped = buildRepoMapPayload({
+      graph: { ...makeGraph(), files },
+      scopeRelPath: "ios/NativeServices/.build",
+      maxChars: 6_000,
+    });
+    const scopedPaths = (
+      scoped.files as { items: Array<{ path: string }> }
+    ).items.map((item) => item.path);
+    expect(scopedPaths.length).toBeGreaterThan(0);
+    expect(scoped).toMatchObject({ scope: { matched_files: 120 } });
+  });
+
   it("reserves file space when project directories alone exceed the budget", () => {
     const files: StructuralGraphCache["files"] = {};
     for (let i = 0; i < 300; i++) {

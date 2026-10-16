@@ -440,7 +440,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(questions).not.toMatch(/only latestUserInstruction grants/i);
     const evidencePolicy = body.state.policy.projectionGuidance.join(" ");
     expect(evidencePolicy).toContain("not proof of danger");
-    expect(evidencePolicy).toContain("Script bodies");
+    expect(evidencePolicy).toContain("bodies are included");
     expect(evidencePolicy).toContain("withheld");
   });
 
@@ -573,7 +573,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("sends script and inline-file metadata without their contents", async () => {
+  it("sends secret-redacted script and inline-file bodies", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValue(typeSafeResponse());
@@ -593,7 +593,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
           kind: "file",
           bytes: 31,
           sha256: "a".repeat(64),
-          content: "DATABASE_PASSWORD=must-not-leak",
+          content: "npm run build\nDATABASE_PASSWORD=must-not-leak\n",
           contentTruncated: false,
           contentUnavailableReason: null,
         },
@@ -609,14 +609,13 @@ describe("TypeSafe Guardian shadow reviewer", () => {
         sha256: "b".repeat(64),
         truncated: false,
         executable: true,
-        preview: "GITHUB_TOKEN=must-not-leak",
+        preview: "echo hi\nGITHUB_TOKEN=must-not-leak",
       },
     ];
 
-    await expect(reviewer.review(input)).resolves.toMatchObject({
-      status: "completed",
-      evidenceWithheld: true,
-    });
+    const result = await reviewer.review(input);
+    expect(result).toMatchObject({ status: "completed", inputRedacted: true });
+    expect(result.evidenceWithheld).toBeUndefined();
     const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
       string,
       any
@@ -626,14 +625,136 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(body.state.action.metadataTruncated).toBe(false);
     expect(body.state.action.scripts[0]).toMatchObject({
       path: `${root}/deploy.sh`,
-      contentWithheld: true,
+      contentTruncated: false,
     });
+    expect(body.state.action.scripts[0].content).toContain("npm run build");
+    expect(body.state.action.scripts[0].content).toContain("[REDACTED]");
     expect(body.state.action.inlineFiles[0]).toMatchObject({
       ext: null,
       bytes: 29,
       executable: true,
+      contentTruncated: false,
     });
+    expect(body.state.action.inlineFiles[0].content).toContain("echo hi");
     expect(body.state.action.inlineFiles[0]).not.toHaveProperty("name");
+    // A redacted body is not exactly what runs, so coverage is partial.
+    expect(result.observation?.projection.coverage.inline_files).toMatchObject({
+      state: "partial",
+      reasons: expect.arrayContaining(["privacy_redaction"]),
+    });
+  });
+
+  it("bounds script bodies with a shared budget and marks evidence withheld", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput(
+      "bash a.sh && bash b.sh && bash c.sh && bash d.sh",
+    );
+    input.evidence = {
+      referencedScripts: ["a", "b", "c", "d"].map((name) => ({
+        reference: `${name}.sh`,
+        resolvedPath: `${root}/${name}.sh`,
+        insideWorkspace: true,
+        exists: true,
+        kind: "file" as const,
+        bytes: 16_000,
+        sha256: "a".repeat(64),
+        content: "echo line\n".repeat(1_600),
+        contentTruncated: false,
+        contentUnavailableReason: null,
+      })),
+      deletionTargets: [],
+      deletionTargetsOmitted: 0,
+    };
+
+    const result = await reviewer.review(input);
+    expect(result.evidenceWithheld).toBe(true);
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    const scripts = body.state.action.scripts as Array<{
+      content: string;
+      contentTruncated: boolean;
+    }>;
+    const total = scripts.reduce(
+      (sum, script) => sum + script.content.length,
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(48_000);
+    expect(scripts[0]!.contentTruncated).toBe(false);
+    expect(scripts[3]!.contentTruncated).toBe(true);
+    expect(result.observation?.projection.coverage.scripts.reasons).toContain(
+      "projection_budget",
+    );
+  });
+
+  it("sends host-verified environment facts for rule questions", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput("npm test");
+    input.security = {
+      auditId: "audit-1",
+      route: "sandbox",
+      executionSurface: "verified-sandbox",
+      confinement: "verified-baseline",
+      routeReason: "verified-local-macos",
+      approvalPolicySnapshot: "on-request",
+      approvalReviewerSnapshot: "auto-review",
+      executionPresetSnapshot: "workspace-write",
+      requiredAuthority: "sandbox",
+      permissionIntent: "default",
+      approvalRequirement: "policy",
+      authorityReason: "approval-policy",
+      commandApprovalPolicySnapshot: "safe",
+      executionPolicy: "native-legacy-v1",
+      preparedAt: 1,
+    } as NonNullable<CommandApprovalReviewInput["security"]>;
+    await reviewer.review(input);
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    expect(body.state.environment).toEqual([
+      `Workspace roots: ${root}`,
+      `Working directory: ${root}`,
+      expect.stringContaining("verified sandbox"),
+    ]);
+  });
+
+  it("treats supporting development steps as part of the task", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    await reviewer.review(reviewInput("npm test"));
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    const supporting = "are part of the task even when the human did not name";
+    expect(body.questions.objective_match.instructions).toContain(supporting);
+    expect(body.questions.authorization.criteria.medium).toContain(supporting);
+    expect(body.questions.outcome.criteria.allow).toContain(supporting);
+    expect(body.questions.outcome.criteria.deny).not.toContain(
+      "unrelated to the task",
+    );
   });
 
   it.each([
@@ -809,21 +930,20 @@ describe("TypeSafe Guardian shadow reviewer", () => {
           kind: "directory",
           bytes: 100,
           entryCount: 2,
-          sampleEntries: ["private-name"],
+          sampleEntries: ["notes.txt", "ghp_zyxwvutsrqponmlkjihgfedcba654321"],
         },
       ],
       deletionTargetsOmitted: 0,
     };
 
-    await expect(reviewer.review(input)).resolves.toMatchObject({
-      status: "completed",
-      inputRedacted: true,
-      evidenceWithheld: true,
-    });
+    const result = await reviewer.review(input);
+    expect(result).toMatchObject({ status: "completed", inputRedacted: true });
+    expect(result.evidenceWithheld).toBeUndefined();
     const bodyText = String(fetch.mock.calls[0]?.[1]?.body);
     expect(bodyText).not.toContain("secret-path-value");
     expect(bodyText).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
-    expect(bodyText).not.toContain("private-name");
+    expect(bodyText).not.toContain("ghp_zyxwvutsrqponmlkjihgfedcba654321");
+    expect(bodyText).toContain("notes.txt");
     expect(bodyText).toContain("[REDACTED]");
   });
 

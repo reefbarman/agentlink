@@ -90,7 +90,10 @@ import {
   type BrowserGatewayPairingStatusResponse,
 } from "../protocol.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
-import type { ToolResult } from "@agentlink/protocol/tool-result";
+import type {
+  ImageAttribution,
+  ToolResult,
+} from "@agentlink/protocol/tool-result";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
@@ -208,10 +211,25 @@ import {
   type PromptProfileResolution,
 } from "@agentlink/protocol/prompt-profile";
 import { resolvePromptProfile } from "@agentlink/core/prompt-profile";
-import { getCodexModelCapabilities } from "@agentlink/core/codex";
+import {
+  CODEX_DEFAULT_MODEL,
+  CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID,
+  getCodexModelCapabilities,
+  transcribeCodexAudio,
+  type CodexCredentialProvider,
+  type CodexResolvedAuth,
+} from "@agentlink/core/codex";
+import { decodeVoiceTranscribeBody } from "../voiceInputHttp.js";
+import { agentLinkTranscriptionFetch } from "../../util/httpDispatcher.js";
+import {
+  DEFAULT_VOICE_INPUT_PREFERENCES,
+  type VoiceInputAvailabilityResponse,
+  type VoiceTranscribeResponse,
+} from "../../shared/voiceInputProtocol.js";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 
 import {
+  effectiveCoreWebImageRetrievalMode,
   normalizeCoreWebAccessSettings,
   resolveCoreWebAccessPolicy,
   type CoreResolvedWebAccessPolicy,
@@ -238,7 +256,16 @@ import type {
   FinalMessageStatus,
 } from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
-import { handlePresentImages } from "../../tools/presentImages.js";
+import { presentImages } from "../../tools/presentImages.js";
+import { resolveMarkdownImage } from "../../tools/markdownImageResolver.js";
+import type { MarkdownImageResolution } from "../../shared/markdownImageSource.js";
+import {
+  isWebImageToolName,
+  WebImageToolRuntime,
+  type WebImageApprovalRequest,
+  type WebImageApprovalResponse,
+  type WebImageToolName,
+} from "@agentlink/node-host";
 import {
   handleManageMemory,
   handleRecallMemory,
@@ -354,6 +381,7 @@ import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomou
 import { BrowserGatewayDerivedSessionRuntime } from "./BrowserGatewayDerivedSessionRuntime.js";
 import {
   createSharedCodexOAuthRuntime,
+  type SharedCodexOAuthContext,
   type SharedCodexOAuthRuntime,
 } from "./sharedCodexOAuth.js";
 import {
@@ -369,6 +397,11 @@ export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
   standaloneMcpTurn?: StandaloneAskAgentMcpTurn;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
+  /**
+   * Codex OAuth credential lent to native web tools when the session's own
+   * provider has no hosted web. Lent routes never delegate to hosted tools.
+   */
+  lentWebCredential?: BrowserGatewayModelCredentialRecord;
   tools: readonly CoreModelToolDefinition[];
   parallelSafeMcpToolNames: readonly string[];
   parallelSafeMcpServerNames: readonly string[];
@@ -895,7 +928,11 @@ type AskAgentToolLoopResult = {
 type AskAgentToolExecutionResult = {
   content: string;
   modelContent?: string | CoreModelContentBlock[];
-  resultImages?: Array<{ mimeType: string; data: string }>;
+  resultImages?: Array<{
+    mimeType: string;
+    data: string;
+    attribution?: ImageAttribution;
+  }>;
   stop: boolean;
   outcome?: AskAgentToolLoopOutcome;
   toolMessage?: CoreModelMessage;
@@ -920,7 +957,11 @@ type ResolvedAskAgentToolCall = {
 function askAgentMediaFromToolResult(result: ToolResult | undefined): {
   content: string;
   modelContent: string | CoreModelContentBlock[];
-  resultImages: Array<{ mimeType: string; data: string }>;
+  resultImages: Array<{
+    mimeType: string;
+    data: string;
+    attribution?: ImageAttribution;
+  }>;
 } {
   if (!result) {
     return { content: "", modelContent: "", resultImages: [] };
@@ -937,16 +978,24 @@ function askAgentMediaFromToolResult(result: ToolResult | undefined): {
   const modelBlocks: CoreModelContentBlock[] = text
     ? [{ type: "text", text }]
     : [];
-  const resultImages: Array<{ mimeType: string; data: string }> = [];
+  const resultImages: Array<{
+    mimeType: string;
+    data: string;
+    attribution?: ImageAttribution;
+  }> = [];
   for (const item of result.content) {
     if (item.type !== "image") continue;
     const mediaType = toCoreModelImageMediaType(item.mimeType);
     if (!mediaType) continue;
+    const attribution = item.attribution
+      ? { attribution: item.attribution }
+      : {};
     modelBlocks.push({
       type: "image",
       source: { type: "base64", media_type: mediaType, data: item.data },
+      ...attribution,
     });
-    resultImages.push({ mimeType: mediaType, data: item.data });
+    resultImages.push({ mimeType: mediaType, data: item.data, ...attribution });
   }
   return {
     content: text,
@@ -998,6 +1047,8 @@ export class BrowserGatewayHelper {
   private askAgentModelOwnerId: string | undefined;
   private latestModelCatalogOwnerId: string | undefined;
   private readonly askAgentController: AskAgentController;
+  /** Helper-owned web image retrieval; never delegated to a VS Code window. */
+  private readonly askAgentWebImageRuntime = new WebImageToolRuntime();
   private readonly standaloneMcpFormElicitation: McpFormElicitationCoordinator;
   private readonly askAgentOwnerAdapter: AskAgentOwnerAdapter;
   private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
@@ -1805,12 +1856,20 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentProjectHandoffApproveRequest(req, res);
       case "thinking":
         return this.handleAskAgentThinkingRequest(req, res);
+      case "voiceInput":
+        return this.handleAskAgentVoiceInputRequest(res);
+      case "transcribe":
+        return this.handleAskAgentTranscribeRequest(req, res);
       case "send":
         return this.handleAskAgentSendRequest(req, res);
       case "retry":
         return this.handleAskAgentRetryRequest(req, res);
+      case "markdownImage":
+        return this.handleAskAgentMarkdownImageRequest(req, res);
       case "stop":
         return this.handleAskAgentStopRequest(res);
+      case "queue":
+        return this.handleAskAgentQueueRequest(req, res);
     }
   }
 
@@ -2294,6 +2353,55 @@ export class BrowserGatewayHelper {
 
   private handleAskAgentSessionsRequest(res: http.ServerResponse): void {
     writeJson(res, 200, { sessions: this.askAgentSessionStore.listSessions() });
+  }
+
+  /**
+   * Resolves a Markdown image in the active Ask Agent transcript. Runs in the
+   * helper with its own web image runtime; never delegated to VS Code.
+   */
+  private async handleAskAgentMarkdownImageRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const body = (await readJsonBody(req).catch(() => null)) as {
+      src?: unknown;
+      sessionId?: unknown;
+      userConfirmed?: unknown;
+    } | null;
+    if (typeof body?.src !== "string" || body.src.length > 8192) {
+      writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const sessionId = this.askAgentSessionStore.getActiveSessionId();
+    if (typeof body.sessionId === "string" && body.sessionId !== sessionId) {
+      writeJson(res, 200, {
+        status: "unavailable",
+        message: "This chat is no longer active.",
+      } satisfies MarkdownImageResolution);
+      return;
+    }
+    const preferences = await this.askAgentPreferencesStore.read();
+    const settings = normalizeCoreWebAccessSettings(
+      preferences.webPolicy?.settings,
+    );
+    const result = await resolveMarkdownImage(
+      { src: body.src, userConfirmed: body.userConfirmed === true },
+      {
+        sessionId,
+        getSessionImages: () => this.askAgentSessionStore.getSessionImages(),
+        getMessages: () =>
+          this.askAgentSessionStore.getModelTranscriptMessages(),
+        web: {
+          runtime: this.askAgentWebImageRuntime,
+          policy: {
+            mode: effectiveCoreWebImageRetrievalMode(settings),
+            allowedDomains: settings.allowedDomains,
+            blockedDomains: settings.blockedDomains,
+          },
+        },
+      },
+    );
+    writeJson(res, 200, result);
   }
 
   private async handleAskAgentNewSessionRequest(
@@ -5780,6 +5888,123 @@ export class BrowserGatewayHelper {
     }
   }
 
+  /**
+   * Codex OAuth for Ask Agent dictation: the shared Keychain pool when present,
+   * otherwise the Codex OAuth credential leased by the model-catalog owner.
+   */
+  private async resolveAskAgentTranscriptionAuth(): Promise<{
+    provider: CodexCredentialProvider<SharedCodexOAuthContext>;
+    context: SharedCodexOAuthContext;
+  } | null> {
+    const context = {
+      sessionId: this.askAgentSessionStore.getActiveSessionId(),
+    };
+    if (this.sharedCodexOAuth) {
+      const provider = this.sharedCodexOAuth.provider;
+      try {
+        const auth = await provider.resolveAuth({
+          context,
+          modelId: CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID,
+          purpose: "transcription",
+        });
+        if (auth?.method === "oauth") return { provider, context };
+      } catch (error) {
+        logHelper(
+          `[voice-input] Shared Codex credential lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const snapshot = this.getModelCatalogSnapshot(this.askAgentModelOwnerId);
+    if (!snapshot) return null;
+    const credential = this.modelCredentialCache.getCredential({
+      grantedByOwnerId: snapshot.publishedByOwnerId,
+      grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+      providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+      modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+      now: Date.now(),
+    });
+    if (credential?.method !== "oauth") return null;
+    const leased: CodexResolvedAuth = {
+      method: "oauth",
+      bearerToken: credential.bearerToken,
+      accountId: credential.accountId,
+      canRefresh: false,
+    };
+    return { provider: { resolveAuth: async () => leased }, context };
+  }
+
+  private async handleAskAgentVoiceInputRequest(
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const auth = await this.resolveAskAgentTranscriptionAuth();
+    writeJson(
+      res,
+      200,
+      (auth
+        ? // The helper has no VS Code settings, so Ask Agent uses defaults.
+          { available: true, preferences: DEFAULT_VOICE_INPUT_PREFERENCES }
+        : {
+            available: false,
+            hidden: true,
+            reason:
+              "Sign in with a ChatGPT/Codex subscription to use voice input.",
+          }) satisfies VoiceInputAvailabilityResponse,
+    );
+  }
+
+  private async handleAskAgentTranscribeRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    let decoded: ReturnType<typeof decodeVoiceTranscribeBody>;
+    try {
+      decoded = decodeVoiceTranscribeBody(await readJsonBody(req));
+    } catch {
+      writeJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    if (!decoded.ok) {
+      writeJson(res, decoded.status, { error: decoded.error });
+      return;
+    }
+    const auth = await this.resolveAskAgentTranscriptionAuth();
+    if (!auth) {
+      writeJson(res, 200, {
+        ok: false,
+        error: "Sign in with a ChatGPT/Codex subscription to use voice input.",
+      } satisfies VoiceTranscribeResponse);
+      return;
+    }
+    const started = Date.now();
+    try {
+      const result = await transcribeCodexAudio({
+        credentialProvider: auth.provider,
+        context: auth.context,
+        audio: decoded.audio,
+        fetch: agentLinkTranscriptionFetch,
+      });
+      this.logAskAgentEvent("ask-agent.transcribe", {
+        ok: true,
+        bytes: decoded.audio.data.byteLength,
+        durationMs: Date.now() - started,
+      });
+      writeJson(res, 200, {
+        ok: true,
+        text: result.text,
+      } satisfies VoiceTranscribeResponse);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logAskAgentEvent("ask-agent.transcribe", {
+        ok: false,
+        error: (err as { code?: string } | null)?.code ?? "internal_error",
+      });
+      writeJson(res, 200, {
+        ok: false,
+        error: message,
+      } satisfies VoiceTranscribeResponse);
+    }
+  }
+
   private async handleAskAgentThinkingRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -6420,28 +6645,39 @@ export class BrowserGatewayHelper {
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
       modelContext.providerId,
     );
+    const ownsHostedWeb =
+      providerId === "openai-codex" && modelContext.credential !== undefined;
+    const lentWebCredential = ownsHostedWeb
+      ? undefined
+      : await this.resolveAskAgentLentCodexWebCredential(
+          modelContext.modelOwnerId,
+        );
     const providerCapabilities =
-      providerId === "openai-codex" && modelContext.credential
+      ownsHostedWeb && modelContext.credential
         ? getCodexModelCapabilities(
             modelContext.model,
             modelContext.credential.method,
           ).hostedWeb
-        : undefined;
+        : lentWebCredential
+          ? getCodexModelCapabilities(CODEX_DEFAULT_MODEL, "oauth").hostedWeb
+          : undefined;
     const policy = resolveCoreWebAccessPolicy({
       settings,
       providerCapabilities,
     });
 
-    const nativeTools = modelContext.credential
-      ? policy.enabledKinds.map(
-          (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
-        )
-      : [];
+    const nativeTools =
+      modelContext.credential || lentWebCredential
+        ? policy.enabledKinds.map(
+            (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
+          )
+        : [];
     const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
       codexUseWebSocket,
       ...(standaloneMcpTurn ? { standaloneMcpTurn } : {}),
+      ...(lentWebCredential ? { lentWebCredential } : {}),
       policy: freezeAskAgentValue(policy),
       tools: freezeAskAgentValue(tools),
       parallelSafeMcpToolNames: freezeAskAgentValue(
@@ -7194,16 +7430,43 @@ export class BrowserGatewayHelper {
     })[0];
   }
 
-  private executeAskAgentPresentImagesTool(
+  /**
+   * present_images runs in the helper. Web sources use the helper's own web
+   * image runtime; nothing is delegated to a VS Code instance.
+   */
+  private async executeAskAgentPresentImagesTool(
     toolCall: BrowserGatewayAskAgentToolCall,
-  ): AskAgentToolExecutionResult {
+    settings: CoreWebAccessSettings,
+    signal: AbortSignal,
+    turnId: string | undefined,
+  ): Promise<AskAgentToolExecutionResult> {
     try {
-      const result = handlePresentImages(toolCall.input, () =>
-        this.askAgentSessionStore.getSessionImages(),
-      );
+      const policy = {
+        mode: effectiveCoreWebImageRetrievalMode(settings),
+        allowedDomains: settings.allowedDomains,
+        blockedDomains: settings.blockedDomains,
+      };
+      const result = await presentImages(toolCall.input, {
+        getSessionImages: () => this.askAgentSessionStore.getSessionImages(),
+        fetchWebImage:
+          policy.mode === "disabled"
+            ? undefined
+            : (input) =>
+                this.askAgentWebImageRuntime.fetchForModel(input, {
+                  sessionId: this.askAgentSessionStore.getActiveSessionId(),
+                  turnId,
+                  policy,
+                  signal,
+                  requestApproval: (request, approvalSignal) =>
+                    this.requestAskAgentWebImageApproval(
+                      request,
+                      approvalSignal ?? signal,
+                    ),
+                }),
+      });
       const media = askAgentMediaFromToolResult(result);
       this.logAskAgentEvent("ask-agent.tool.present_images", {
-        ok: true,
+        ok: result.isError !== true,
         imageCount: media.resultImages.length,
       });
       return {
@@ -7214,7 +7477,7 @@ export class BrowserGatewayHelper {
         toolMessage: this.buildAskAgentToolResultMessage(
           toolCall,
           media.content,
-          false,
+          result.isError === true,
           media.modelContent,
         ),
       };
@@ -7236,6 +7499,88 @@ export class BrowserGatewayHelper {
         ),
       };
     }
+  }
+
+  /**
+   * inspect_page_images runs here in the helper with the shared runtime.
+   * Approvals surface in this Ask Agent tab; nothing is delegated to a VS
+   * Code instance.
+   */
+  private async executeAskAgentWebImageTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    toolName: WebImageToolName,
+    settings: CoreWebAccessSettings,
+    signal: AbortSignal,
+    turnId: string | undefined,
+  ): Promise<AskAgentToolExecutionResult> {
+    const result = await this.askAgentWebImageRuntime.execute(
+      toolName,
+      toolCall.input,
+      {
+        sessionId: this.askAgentSessionStore.getActiveSessionId(),
+        turnId,
+        policy: {
+          mode: effectiveCoreWebImageRetrievalMode(settings),
+          allowedDomains: settings.allowedDomains,
+          blockedDomains: settings.blockedDomains,
+        },
+        signal,
+        requestApproval: (request, approvalSignal) =>
+          this.requestAskAgentWebImageApproval(
+            request,
+            approvalSignal ?? signal,
+          ),
+      },
+    );
+    const media = askAgentMediaFromToolResult(result);
+    this.logAskAgentEvent(`ask-agent.tool.${toolName}`, {
+      ok: result.isError !== true,
+      imageCount: media.resultImages.length,
+    });
+    return {
+      content: media.content,
+      modelContent: media.modelContent,
+      resultImages: media.resultImages,
+      stop: false,
+      toolMessage: this.buildAskAgentToolResultMessage(
+        toolCall,
+        media.content,
+        result.isError === true,
+        media.modelContent,
+      ),
+    };
+  }
+
+  private async requestAskAgentWebImageApproval(
+    request: WebImageApprovalRequest,
+    signal: AbortSignal,
+  ): Promise<WebImageApprovalResponse> {
+    if (
+      this.askAgentMemoryProposalBridge.getPendingApproval() ||
+      this.askAgentController.getPendingApproval()
+    ) {
+      throw new Error("Another Ask Agent approval is already pending");
+    }
+    const approval: ApprovalRequest = {
+      kind: "write",
+      id: `ask-agent-web-image-${randomUUID()}`,
+      filePath: request.title,
+      writeOperation: "modify",
+      detail: request.detail,
+      writeChoices: request.choices,
+    };
+    const decisionPromise = this.askAgentController.requestApproval(
+      approval,
+      signal,
+    );
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    const decision = await decisionPromise;
+    return {
+      decision: decision.decision,
+      followUp: decision.followUp,
+      rejectionReason: decision.rejectionReason,
+    };
   }
 
   private async requestAskAgentGenerateImageApproval(params: {
@@ -7548,12 +7893,60 @@ export class BrowserGatewayHelper {
     }
   }
 
+  /**
+   * Codex OAuth credential that native web tools may borrow when the Ask Agent
+   * model's provider has no hosted web: the owner-leased Codex credential, or
+   * the shared Keychain pool when no owner has leased one.
+   */
+  private async resolveAskAgentLentCodexWebCredential(
+    modelOwnerId: string,
+  ): Promise<BrowserGatewayModelCredentialRecord | undefined> {
+    const snapshot = this.getModelCatalogSnapshot(modelOwnerId);
+    const leased = snapshot
+      ? this.modelCredentialCache.getCredential({
+          grantedByOwnerId: snapshot.publishedByOwnerId,
+          grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+          providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+          modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+          now: Date.now(),
+        })
+      : null;
+    if (leased?.method === "oauth") return leased;
+    if (!this.sharedCodexOAuth) return undefined;
+    try {
+      const auth = await this.sharedCodexOAuth.provider.resolveAuth({
+        context: { sessionId: this.askAgentSessionStore.getActiveSessionId() },
+        modelId: CODEX_DEFAULT_MODEL,
+        purpose: "nativeWeb",
+      });
+      if (auth?.method !== "oauth") return undefined;
+      return {
+        providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+        method: "oauth",
+        bearerToken: auth.bearerToken,
+        grantedByOwnerId: modelOwnerId,
+        grantedByOwnerGenerationId: "shared-codex-oauth",
+        modelScopes: [BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE],
+        grantedAt: Date.now(),
+        accountId: auth.accountId,
+        accountLabel: auth.oauthAccountLabel ?? auth.oauthAccountEmail,
+        canRefresh: auth.canRefresh === true,
+      };
+    } catch (error) {
+      logHelper(
+        `[web] Shared Codex credential lookup for native web unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
   private async executeAskAgentNativeWebTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     policy: Readonly<CoreResolvedWebAccessPolicy>,
     credential: BrowserGatewayModelCredentialRecord,
     model: string,
     signal: AbortSignal,
+    lent = false,
   ): Promise<AskAgentToolExecutionResult> {
     const kind = toolCall.name === "web_search" ? "search" : "fetch";
     const route = policy.routes[kind];
@@ -7604,11 +7997,14 @@ export class BrowserGatewayHelper {
         }
       } catch (error) {
         if (signal.aborted) throw error;
+        // A lent credential cannot delegate: hosted tools need the lender's model.
         const canDelegateHosted =
-          this.askAgentModelClient.supportsHostedTools?.({
+          !lent &&
+          (this.askAgentModelClient.supportsHostedTools?.({
             credential,
             model,
-          }) ?? true;
+          }) ??
+            true);
         this.logAskAgentEvent(`ask-agent.tool.web_${kind}.standalone`, {
           ok: false,
           fallback: canDelegateHosted ? "delegated" : "unavailable",
@@ -7770,6 +8166,17 @@ export class BrowserGatewayHelper {
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
     if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
+      const lentCredential = preparedWebAccess.lentWebCredential;
+      if (lentCredential) {
+        return await this.executeAskAgentNativeWebTool(
+          toolCall,
+          preparedWebAccess.policy,
+          lentCredential,
+          CODEX_DEFAULT_MODEL,
+          signal,
+          true,
+        );
+      }
       if (!credential) {
         throw new Error(
           "browser_gateway_native_web_unavailable:credential_missing",
@@ -7838,7 +8245,22 @@ export class BrowserGatewayHelper {
     }
 
     if (toolCall.name === "present_images") {
-      return this.executeAskAgentPresentImagesTool(toolCall);
+      return await this.executeAskAgentPresentImagesTool(
+        toolCall,
+        preparedWebAccess.policy.settings,
+        signal,
+        mcpInvocation?.turnId,
+      );
+    }
+
+    if (isWebImageToolName(toolCall.name)) {
+      return await this.executeAskAgentWebImageTool(
+        toolCall,
+        toolCall.name,
+        preparedWebAccess.policy.settings,
+        signal,
+        mcpInvocation?.turnId,
+      );
     }
 
     if (toolCall.name === "todo_write") {
@@ -9154,6 +9576,88 @@ export class BrowserGatewayHelper {
       } finally {
         this.drainingAskAgentMessageIds.delete(queued.id);
       }
+    }
+  }
+
+  /**
+   * Queue controls matching the VS Code chat queue: remove, edit, or steer
+   * (stop the running turn and send this message next).
+   */
+  private async handleAskAgentQueueRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as {
+        action?: unknown;
+        id?: unknown;
+        sessionId?: unknown;
+        text?: unknown;
+      } | null;
+      const action = typeof body?.action === "string" ? body.action : "";
+      const id = typeof body?.id === "string" ? body.id.trim() : "";
+      const sessionId =
+        typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+      if (
+        !id ||
+        (action !== "remove" && action !== "update" && action !== "steer")
+      ) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      if (
+        sessionId &&
+        sessionId !== this.askAgentSessionStore.getActiveSessionId()
+      ) {
+        writeJson(res, 409, { error: "ask_agent_session_not_active" });
+        return;
+      }
+      let applied = false;
+      if (action === "remove") {
+        applied = this.askAgentSessionStore.removeQueuedMessage(id);
+      } else if (action === "update") {
+        const text = typeof body?.text === "string" ? body.text : "";
+        if (!text.trim()) {
+          writeJson(res, 400, { error: "invalid_request" });
+          return;
+        }
+        applied = this.askAgentSessionStore.updateQueuedMessageText(id, text);
+      } else {
+        applied = this.askAgentSessionStore.promoteQueuedMessage(id);
+      }
+      this.logAskAgentEvent("ask-agent.queue.action", {
+        action,
+        queueId: id,
+        ok: applied,
+        ...(applied ? {} : { error: "queue_item_not_found" }),
+      });
+      if (!applied) {
+        writeJson(res, 404, { error: "queue_item_not_found" });
+        return;
+      }
+      await this.persistAskAgentHistory();
+      if (action === "steer") {
+        // Stopping the running turn lets its completion drain the promoted
+        // message next. With no running turn, drain immediately.
+        if (this.hasAskAgentWork()) await this.cancelActiveTurn();
+        void this.drainAskAgentMessageQueue();
+      }
+      const response = this.buildAskAgentSnapshotResponse(
+        Date.now(),
+        await this.resolveInitialTheme(null),
+      );
+      await this.publishAskAgentSnapshot(response.snapshot);
+      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.queue.action", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
+      writeJson(res, invalidJson ? 400 : 500, {
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
     }
   }
 

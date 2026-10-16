@@ -35,6 +35,7 @@ function describeSessionImages(
     mimeType: string;
     base64: string;
     source: string;
+    attribution?: SessionImageReference["attribution"];
   }) => {
     const id = `image_${images.length + 1}`;
     images.push({
@@ -47,6 +48,7 @@ function describeSessionImages(
       messageIndex: params.messageIndex,
       imageIndex: params.imageIndex,
       source: params.source,
+      ...(params.attribution ? { attribution: params.attribution } : {}),
     });
   };
 
@@ -68,6 +70,7 @@ function describeSessionImages(
           mimeType: block.source.media_type,
           base64: block.source.data,
           source,
+          attribution: block.attribution,
         });
         continue;
       }
@@ -108,6 +111,13 @@ function describeSessionImages(
   });
 
   return images;
+}
+
+function describeAttribution(
+  attribution: SessionImageReference["attribution"],
+): string {
+  const source = attribution?.sourceUrl ?? attribution?.imageUrl;
+  return source ? `, from ${source}` : "";
 }
 
 /**
@@ -158,7 +168,7 @@ export function buildCondensedSessionImageIndex(
   const lines = [
     "## Session images",
     "",
-    "Images from earlier in this conversation are not shown here but remain available by ID to present_images, save_session_image, generate_image references, and background-agent image handoff.",
+    "Images from earlier in this conversation are not shown here but remain available by ID to present_images, save_session_image, generate_image references, and background-agent image handoff. Show one to the user with Markdown: ![description](image_N).",
     "",
     ...(omitted > 0
       ? [
@@ -167,7 +177,7 @@ export function buildCondensedSessionImageIndex(
       : []),
     ...listed.map(
       (image) =>
-        `- ${image.id}: ${image.name} (${image.mimeType}), ${image.source}`,
+        `- ${image.id}: ${image.name} (${image.mimeType}), ${image.source}${describeAttribution(image.attribution)}`,
     ),
     "",
     `The next new image in this conversation will be image_${images.length + 1}.`,

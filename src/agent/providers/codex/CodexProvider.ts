@@ -38,6 +38,7 @@ import {
 } from "./OpenAiCodexAuthManager.js";
 import {
   CODEX_CONDENSE_MODEL,
+  CODEX_DEFAULT_MODEL,
   CodexCredentialSession,
   CodexResponsesAuthError,
   CodexResponsesStreamAbortedError,
@@ -85,7 +86,10 @@ import {
   canUseCodexStandaloneWeb,
   executeCodexStandaloneWeb,
 } from "../../../core/model/providers/codex/standaloneWeb.js";
-import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
+import type {
+  CoreHostedWebCapabilities,
+  CoreWebAccessSettings,
+} from "@agentlink/protocol/web-access-policy";
 import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 
 interface CodexProviderCredentialContext {
@@ -263,11 +267,15 @@ export class CodexProvider implements ModelProvider {
   }): Promise<unknown | null> {
     const auth = await this.getModelAuthOrThrow();
     if (!canUseCodexStandaloneWeb(auth)) return null;
-    const model = this.resolveEffectiveModel(
-      request.model,
-      auth,
-      `standalone web ${request.kind}`,
-    );
+    // Sessions on other providers borrow this transport with their own model
+    // id; use the Codex default quietly instead of logging a remap.
+    const model = this.isCodexModelId(request.model)
+      ? this.resolveEffectiveModel(
+          request.model,
+          auth,
+          `standalone web ${request.kind}`,
+        )
+      : CODEX_DEFAULT_MODEL;
     return await executeCodexStandaloneWeb({
       auth,
       sessionId: this.sessionId,
@@ -278,6 +286,26 @@ export class CodexProvider implements ModelProvider {
       signal: request.signal,
       retainOutput: saveOutputTempFile,
     });
+  }
+
+  async getLendableWebCapabilities(): Promise<
+    CoreHostedWebCapabilities | undefined
+  > {
+    const authMethod = await this.authManager.getPreferredAuthMethod();
+    if (authMethod) this.lastResolvedAuthMethod = authMethod;
+    // Only the ChatGPT/Codex OAuth backend has the standalone web endpoint.
+    if (!authMethod || !canUseCodexStandaloneWeb({ method: authMethod })) {
+      return undefined;
+    }
+    return getCodexModelCapabilities(CODEX_DEFAULT_MODEL, authMethod).hostedWeb;
+  }
+
+  private isCodexModelId(model: string): boolean {
+    return (
+      isCodexModelServedOnChatgptBackend(model) ||
+      getCodexModelMigration(model) !== undefined ||
+      listCodexModels(this.id, "apiKey").some((info) => info.id === model)
+    );
   }
 
   private getClient(auth: OpenAiCodexResolvedAuth): OpenAI {

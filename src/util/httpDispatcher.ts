@@ -231,6 +231,61 @@ export const agentLinkLongPollingFetch: typeof globalThis.fetch = async (
   return response as unknown as globalThis.Response;
 };
 
+/**
+ * Modern ECDHE/AEAD TLS 1.2 suites (TLS 1.3 suites are unaffected). Electron's
+ * BoringSSL-based Node advertises a default ClientHello that chatgpt.com's
+ * Cloudflare edge answers with a managed challenge on `/backend-api/transcribe`;
+ * this narrower, still-secure list is accepted from both Electron and Node.
+ */
+const TRANSCRIPTION_TLS_CIPHERS = [
+  "ECDHE-ECDSA-AES128-GCM-SHA256",
+  "ECDHE-RSA-AES128-GCM-SHA256",
+  "ECDHE-ECDSA-AES256-GCM-SHA384",
+  "ECDHE-RSA-AES256-GCM-SHA384",
+  "ECDHE-ECDSA-CHACHA20-POLY1305",
+  "ECDHE-RSA-CHACHA20-POLY1305",
+].join(":");
+
+const transcriptionDispatchers = new Map<boolean, Dispatcher>();
+
+export function getAgentLinkTranscriptionHttpDispatcher(
+  env: NodeJS.ProcessEnv = process.env,
+): Dispatcher {
+  const useProxy = hasProxyEnv(env);
+  const cached = transcriptionDispatchers.get(useProxy);
+  if (cached) return cached;
+  const tlsOptions = { ciphers: TRANSCRIPTION_TLS_CIPHERS };
+  const options = {
+    keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
+    headersTimeout: HEADERS_TIMEOUT_MS,
+    bodyTimeout: BODY_TIMEOUT_MS,
+    allowH2: true,
+    connect: tlsOptions,
+  };
+  const dispatcher = useProxy
+    ? // `requestTls` configures the tunnelled TLS session to the origin.
+      new EnvHttpProxyAgent({
+        ...options,
+        requestTls: tlsOptions,
+      } as ConstructorParameters<typeof EnvHttpProxyAgent>[0])
+    : new Agent(options).compose(interceptors.dns());
+  transcriptionDispatchers.set(useProxy, dispatcher);
+  return dispatcher;
+}
+
+/** Fetch for ChatGPT/Codex audio transcription uploads. */
+export const agentLinkTranscriptionFetch: typeof globalThis.fetch = async (
+  input,
+  init,
+) =>
+  (await undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    {
+      ...init,
+      dispatcher: getAgentLinkTranscriptionHttpDispatcher(),
+    } as Parameters<typeof undiciFetch>[1],
+  )) as unknown as globalThis.Response;
+
 export const agentLinkFetch: typeof globalThis.fetch = async (input, init) => {
   const listener = activityContext.getStore();
   diagnostics.totalRequests++;

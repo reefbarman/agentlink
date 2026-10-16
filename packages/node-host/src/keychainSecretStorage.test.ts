@@ -2,23 +2,28 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { createKeychainSecretStorage } from "./keychainSecretStorage.js";
 import {
   CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
   DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
 } from "./keychainMcpCredentialRepository.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createCodexOAuthRuntime } from "./codexOAuthRuntime.js";
+import { createKeychainSecretStorage } from "./keychainSecretStorage.js";
 
 const values = new Map<string, string>();
 let getPasswordCalls = 0;
+const constructorCalls: unknown[][] = [];
 
 vi.mock("@napi-rs/keyring", () => ({
   AsyncEntry: class {
     constructor(
       private readonly service: string,
       private readonly account: string,
-    ) {}
+      ...rest: unknown[]
+    ) {
+      constructorCalls.push([service, account, ...rest]);
+    }
 
     async getPassword(): Promise<string | undefined> {
       getPasswordCalls += 1;
@@ -40,6 +45,7 @@ const temporaryRoots: string[] = [];
 afterEach(async () => {
   values.clear();
   getPasswordCalls = 0;
+  constructorCalls.length = 0;
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -68,6 +74,50 @@ describe("createKeychainSecretStorage", () => {
         "agentlink-mcp-oauth-v1",
       ]).size,
     ).toBe(3);
+  });
+
+  it("keeps the native default store selection when no Linux store is requested", async () => {
+    await createStorage();
+    expect(constructorCalls).toEqual([["test-service", "test-account"]]);
+  });
+
+  it("requires the requested Linux store instead of allowing fallback", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-linux-"),
+    );
+    temporaryRoots.push(lockRoot);
+    await createKeychainSecretStorage({
+      service: "test-service",
+      account: "test-account",
+      lockRoot,
+      linuxStore: "secret-service",
+    });
+    expect(constructorCalls).toEqual([
+      ["test-service", "test-account", { linux: { store: "secret-service" } }],
+    ]);
+  });
+
+  it("forwards the Linux store from the Codex OAuth runtime composition", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-runtime-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const runtime = createCodexOAuthRuntime({
+      log: () => undefined,
+      keychain: {
+        service: "decky-codex-test",
+        lockRoot,
+        linuxStore: "secret-service",
+      },
+    });
+    await runtime.ready();
+    expect(constructorCalls).toEqual([
+      [
+        "decky-codex-test",
+        "codex-oauth-credentials",
+        { linux: { store: "secret-service" } },
+      ],
+    ]);
   });
 
   it("round-trips and deletes one Keychain entry", async () => {

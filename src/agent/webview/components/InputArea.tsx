@@ -59,6 +59,23 @@ import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";
 import { useFileMentionPopup } from "./useFileMentionPopup";
+import {
+  formatVoiceElapsed,
+  insertTranscript,
+  useComposerVoiceInput,
+  type ComposerVoiceInput,
+} from "./composerVoiceInput";
+
+/** Alt+M: hold for push-to-talk, tap to toggle dictation. */
+function isVoiceShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.code === "KeyM" &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
+}
 
 export interface ComposerMedia {
   name: string;
@@ -195,6 +212,8 @@ interface InputAreaProps {
   onInterject?: ComposerSubmitHandler;
   onStop: () => void;
   onPolishPrompt?: (draft: string) => Promise<string>;
+  /** Shows a mic button beside send when the surface supports dictation. */
+  voiceInput?: ComposerVoiceInput;
   streaming: boolean;
   reasoningEffort: ReasoningEffort;
   onSetReasoningEffort: (effort: ReasoningEffort) => void;
@@ -258,6 +277,7 @@ export function InputArea({
   onInterject,
   onStop,
   onPolishPrompt,
+  voiceInput,
   streaming,
   reasoningEffort,
   onSetReasoningEffort,
@@ -430,6 +450,48 @@ export function InputArea({
       setPolishing(false);
     }
   }, [onPolishPrompt, polishing, text, onComposerEvent]);
+
+  const handleVoiceTranscript = useCallback((transcript: string) => {
+    const el = textareaRef.current;
+    const value = el?.value ?? "";
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const next = insertTranscript(value, start, end, transcript);
+    setText(next.value);
+    requestAnimationFrame(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.selectionStart = current.selectionEnd = next.caret;
+      autosizeTextarea(current);
+    });
+  }, []);
+  const [voiceAutoSendPending, setVoiceAutoSendPending] = useState(false);
+  const requestVoiceAutoSend = useCallback(
+    () => setVoiceAutoSendPending(true),
+    [],
+  );
+  const {
+    status: voiceStatus,
+    error: voiceError,
+    level: voiceLevel,
+    elapsedMs: voiceElapsedMs,
+    toggle: toggleVoice,
+    pressStart: pressVoiceStart,
+    pressEnd: pressVoiceEnd,
+    cancel: cancelVoice,
+  } = useComposerVoiceInput({
+    voiceInput,
+    onTranscript: handleVoiceTranscript,
+    onAutoSend: requestVoiceAutoSend,
+    onEvent: onComposerEvent,
+  });
+  const handleVoiceShortcutKeyUp = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.code === "KeyM" || event.key === "Alt") pressVoiceEnd();
+    },
+    [pressVoiceEnd],
+  );
 
   const handleUndoPolish = useCallback(() => {
     if (!lastPolish) return;
@@ -785,6 +847,13 @@ export function InputArea({
     ],
   );
 
+  // Hands-free dictation: submit once the final transcript is in the draft.
+  useEffect(() => {
+    if (!voiceAutoSendPending) return;
+    setVoiceAutoSendPending(false);
+    if (text.trim()) handleSubmit();
+  }, [voiceAutoSendPending, text, handleSubmit]);
+
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
     "new",
@@ -1036,6 +1105,20 @@ export function InputArea({
         return;
       }
       if (
+        e.key === "Escape" &&
+        (voiceStatus === "recording" || voiceStatus === "starting")
+      ) {
+        e.preventDefault();
+        cancelVoice();
+        return;
+      }
+      if (voiceInput && isVoiceShortcut(e)) {
+        // Option+M would otherwise type "µ" on macOS.
+        e.preventDefault();
+        if (!e.repeat && !voiceInput?.disabledReason) pressVoiceStart();
+        return;
+      }
+      if (
         contextMode?.actions?.hidePrimaryAction &&
         e.key === "Enter" &&
         (e.metaKey || e.ctrlKey)
@@ -1088,6 +1171,10 @@ export function InputArea({
       selectNextEmoji,
       selectPreviousEmoji,
       onComposerEvent,
+      voiceStatus,
+      cancelVoice,
+      voiceInput,
+      pressVoiceStart,
     ],
   );
 
@@ -1924,6 +2011,12 @@ export function InputArea({
               <span>Polish failed: {polishError}</span>
             </div>
           )}
+          {voiceError && (
+            <div class="composer-disabled-notice" role="status">
+              <i class="codicon codicon-warning" />
+              <span>Voice input failed: {voiceError}</span>
+            </div>
+          )}
           <ComposerBox
             ref={inputWrapperRef}
             className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${shouldShowSlashPopup ? "slash-popup-open" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
@@ -2034,6 +2127,7 @@ export function InputArea({
               disabled={disabled}
               onInput={handleInput}
               onKeyDown={handleKeyDown}
+              onKeyUp={handleVoiceShortcutKeyUp}
               onPaste={handlePaste}
               rows={1}
               onDragOver={handleDragOver}
@@ -2041,6 +2135,71 @@ export function InputArea({
               onDrop={handleDrop}
             />
             <div class="composer-action-buttons">
+              {voiceInput && voiceStatus === "recording" && (
+                <span class="voice-input-timer" aria-live="off">
+                  {formatVoiceElapsed(voiceElapsedMs)}
+                </span>
+              )}
+              {voiceInput && (
+                <button
+                  class={`send-button voice-input-button voice-input-${voiceStatus}`}
+                  style={{ "--voice-level": String(voiceLevel) }}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    // Keep focus (and the caret) in the draft.
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
+                    pressVoiceStart();
+                  }}
+                  onPointerUp={pressVoiceEnd}
+                  onPointerCancel={pressVoiceEnd}
+                  onClick={(event) => {
+                    // Pointer presses are handled above; this is Enter/Space.
+                    if (event.detail === 0) void toggleVoice();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelVoice();
+                    } else if (isVoiceShortcut(event)) {
+                      event.preventDefault();
+                      if (!event.repeat) pressVoiceStart();
+                    }
+                  }}
+                  onKeyUp={handleVoiceShortcutKeyUp}
+                  disabled={
+                    Boolean(voiceInput.disabledReason) ||
+                    (disabled && voiceStatus === "idle") ||
+                    voiceStatus === "transcribing"
+                  }
+                  aria-pressed={voiceStatus === "recording"}
+                  aria-busy={
+                    voiceStatus === "starting" || voiceStatus === "transcribing"
+                  }
+                  title={
+                    voiceInput.disabledReason ??
+                    (voiceStatus === "recording"
+                      ? "Click to stop, or pause to finish automatically (Esc cancels)"
+                      : voiceStatus === "transcribing"
+                        ? "Transcribing…"
+                        : voiceStatus === "starting"
+                          ? "Starting microphone…"
+                          : "Dictate with voice: click, or hold to talk (Alt+M). Uses your ChatGPT/Codex subscription")
+                  }
+                  type="button"
+                >
+                  <i
+                    class={`codicon ${
+                      voiceStatus === "transcribing" ||
+                      voiceStatus === "starting"
+                        ? "codicon-loading codicon-modifier-spin"
+                        : voiceStatus === "recording"
+                          ? "codicon-primitive-square"
+                          : "codicon-mic"
+                    }`}
+                  />
+                </button>
+              )}
               {(!contextMode || contextMode.actions) && streaming && (
                 <button
                   class="send-button stop-button"

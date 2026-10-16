@@ -13,6 +13,23 @@ import {
 } from "./models.js";
 import { describe, expect, it } from "vitest";
 
+describe("Codex condense target", () => {
+  it("declares the 500K default window for GPT-6.1 Sol only on ChatGPT sign-in", () => {
+    expect(
+      getCodexModelCapabilities("gpt-6.1-sol", "oauth")
+        .condenseTargetInputTokens,
+    ).toBe(500_000);
+    expect(
+      getCodexModelCapabilities("gpt-6.1-sol", "apiKey")
+        .condenseTargetInputTokens,
+    ).toBeUndefined();
+    expect(
+      getCodexModelCapabilities("gpt-5.6-sol", "oauth")
+        .condenseTargetInputTokens,
+    ).toBeUndefined();
+  });
+});
+
 describe("Codex text verbosity", () => {
   it("defaults GPT-5.6 chat models to low and leaves others unset", () => {
     expect(resolveCodexTextVerbosity("gpt-5.6-sol")).toBe("low");

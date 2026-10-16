@@ -5,6 +5,7 @@ import type {
 } from "@agentlink/protocol/tool-result";
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { redactAuthCallbackSecretsDeep } from "./mcpResultRedaction.js";
 
 const STRUCTURED_CONTENT_LABEL = "Structured content:";
 
@@ -98,9 +99,12 @@ function serializeStructuredContent(
 }
 
 export function normalizeMcpToolResult(
-  result: CallToolResult,
+  rawResult: CallToolResult,
   onWarning?: (message: string) => void,
 ): ToolResult {
+  // Every model-visible projection (text, structured data, metadata) derives
+  // from this redacted copy; the transport response itself is not mutated.
+  const result = redactAuthCallbackSecretsDeep(rawResult);
   const content: ToolResult["content"] = [];
 
   for (const item of result.content) {

@@ -1,6 +1,9 @@
+import type {
+  ContentBlock,
+  RemoteDisplayImageDetail,
+} from "@agentlink/protocol/chat-transcript";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 
-import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { createContext } from "preact";
 
 type RemoteToolBlock = Extract<
@@ -13,6 +16,7 @@ interface RemoteToolDetailContextValue {
     block: RemoteToolBlock,
     wanted: () => boolean,
   ) => Promise<RemoteToolBlock>;
+  loadDisplayImage: (reference: RemoteDisplayImageDetail) => Promise<string>;
 }
 
 const RemoteToolDetailContext =
@@ -45,15 +49,21 @@ function detailKey(block: RemoteToolBlock): string {
   return `${block.type}:${block.id}:${detail?.messageId ?? ""}:${detail?.contentRevision ?? 0}`;
 }
 
+function displayImageKey(reference: RemoteDisplayImageDetail): string {
+  return `${reference.messageId}:${reference.contentRevision}:${reference.index}`;
+}
+
 export function RemoteToolDetailProvider(props: {
   scopeKey: string;
   loadDetail: (block: RemoteToolBlock) => Promise<RemoteToolBlock>;
+  loadDisplayImage?: (reference: RemoteDisplayImageDetail) => Promise<string>;
   children: preact.ComponentChildren;
 }) {
   return (
     <RemoteToolDetailScopeProvider
       key={props.scopeKey}
       loadDetail={props.loadDetail}
+      loadDisplayImage={props.loadDisplayImage}
     >
       {props.children}
     </RemoteToolDetailScopeProvider>
@@ -62,9 +72,11 @@ export function RemoteToolDetailProvider(props: {
 
 function RemoteToolDetailScopeProvider({
   loadDetail,
+  loadDisplayImage,
   children,
 }: {
   loadDetail: (block: RemoteToolBlock) => Promise<RemoteToolBlock>;
+  loadDisplayImage?: (reference: RemoteDisplayImageDetail) => Promise<string>;
   children: preact.ComponentChildren;
 }) {
   const cache = useRef(new Map<string, CacheEntry>());
@@ -82,6 +94,49 @@ function RemoteToolDetailScopeProvider({
   const cacheBytes = useRef(0);
   const loader = useRef(loadDetail);
   loader.current = loadDetail;
+  const imageLoader = useRef(loadDisplayImage);
+  imageLoader.current = loadDisplayImage;
+  const imageCache = useRef(new Map<string, string>());
+  const imageCacheBytes = useRef(0);
+  const pendingImages = useRef(new Map<string, Promise<string>>());
+
+  const loadImage = (reference: RemoteDisplayImageDetail): Promise<string> => {
+    const key = displayImageKey(reference);
+    const cached = imageCache.current.get(key);
+    if (cached !== undefined) {
+      imageCache.current.delete(key);
+      imageCache.current.set(key, cached);
+      return Promise.resolve(cached);
+    }
+    const existing = pendingImages.current.get(key);
+    if (existing) return existing;
+    const load = imageLoader.current;
+    if (!load) {
+      return Promise.reject(new Error("Image previews are unavailable."));
+    }
+    const promise = load(reference)
+      .then((src) => {
+        const bytes = src.length;
+        if (bytes <= MAX_CACHE_BYTES) {
+          while (
+            imageCacheBytes.current + bytes > MAX_CACHE_BYTES &&
+            imageCache.current.size > 0
+          ) {
+            const oldestKey = imageCache.current.keys().next().value;
+            if (oldestKey === undefined) break;
+            imageCacheBytes.current -=
+              imageCache.current.get(oldestKey)!.length;
+            imageCache.current.delete(oldestKey);
+          }
+          imageCache.current.set(key, src);
+          imageCacheBytes.current += bytes;
+        }
+        return src;
+      })
+      .finally(() => pendingImages.current.delete(key));
+    pendingImages.current.set(key, promise);
+    return promise;
+  };
 
   const runQueue = () => {
     while (activeLoads.current < MAX_CONCURRENT_LOADS && queue.current.length) {
@@ -166,13 +221,65 @@ function RemoteToolDetailScopeProvider({
   };
 
   const value = useRef<RemoteToolDetailContextValue | null>(null);
-  if (value.current === null) value.current = { load };
+  if (value.current === null)
+    value.current = { load, loadDisplayImage: loadImage };
 
   return (
     <RemoteToolDetailContext.Provider value={value.current}>
       {children}
     </RemoteToolDetailContext.Provider>
   );
+}
+
+/**
+ * Resolves a display image's `src`, loading relay-backed images lazily. Images
+ * that already carry a data URL are returned unchanged.
+ */
+export function useRemoteDisplayImage<
+  T extends { src: string; remoteDetail?: RemoteDisplayImageDetail },
+>(image: T): { image: T; loading: boolean; error: string | null } {
+  const context = useContext(RemoteToolDetailContext);
+  const reference = image.src ? undefined : image.remoteDetail;
+  const key = reference ? displayImageKey(reference) : null;
+  const [state, setState] = useState<{
+    key: string;
+    src?: string;
+    error?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!key || !reference || !context) return;
+    let current = true;
+    context
+      .loadDisplayImage(reference)
+      .then((src) => {
+        if (current) setState({ key, src });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setState({
+            key,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not load image preview",
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [context, key]);
+
+  if (!key) return { image, loading: false, error: null };
+  const matching = state?.key === key ? state : null;
+  if (!context && !matching) {
+    return { image, loading: false, error: "Image preview is unavailable." };
+  }
+  return {
+    image: matching?.src ? { ...image, src: matching.src } : image,
+    loading: !matching,
+    error: matching?.error ?? null,
+  };
 }
 
 export function useRemoteToolDetail<T extends RemoteToolBlock>(

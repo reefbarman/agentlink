@@ -173,6 +173,11 @@ import {
 } from "./background/backgroundBudgetPolicy.js";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
+import {
+  assessDelegatedWriteScopes,
+  formatUnavailableDelegatedWriteScopes,
+  NON_WRITING_DELEGATION_MODES,
+} from "./delegatedWriteScopePreflight.js";
 import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 import {
   partitionMcpToolsForDisclosure,
@@ -2295,13 +2300,89 @@ export class AgentSessionManager {
       this.host.config.getWebAccessSettings?.(),
     ),
   ): Promise<CoreResolvedWebAccessPolicy> {
+    return (await this.resolveWebAccess(session, provider, settings)).policy;
+  }
+
+  /**
+   * Resolve the native web policy and the provider that executes it. When the
+   * session's own provider has no hosted web, another enabled provider may lend
+   * its standalone web transport (for example, a Codex OAuth sign-in), so
+   * web_search/web_fetch stay available on every model.
+   */
+  private async resolveWebAccess(
+    session: AgentSession,
+    provider: ModelProvider | undefined,
+    settings = normalizeCoreWebAccessSettings(
+      this.host.config.getWebAccessSettings?.(),
+    ),
+  ): Promise<{
+    policy: CoreResolvedWebAccessPolicy;
+    webProvider: ModelProvider | undefined;
+  }> {
     const capabilities = provider?.getRequestCapabilities
       ? await provider.getRequestCapabilities(session.model)
       : provider?.getCapabilities(session.model);
-    return resolveCoreWebAccessPolicy({
-      settings,
-      providerCapabilities: capabilities?.hostedWeb,
-    });
+    const ownWeb = capabilities?.hostedWeb;
+    if (ownWeb?.search?.supported || ownWeb?.fetch?.supported) {
+      return {
+        policy: resolveCoreWebAccessPolicy({
+          settings,
+          providerCapabilities: ownWeb,
+        }),
+        webProvider: provider,
+      };
+    }
+    const lenders = this.listNativeWebLenderCandidates(provider);
+    const lender =
+      lenders.length > 0 ? await this.findNativeWebLender(lenders) : undefined;
+    return {
+      policy: resolveCoreWebAccessPolicy({
+        settings,
+        providerCapabilities: lender?.capabilities ?? ownWeb,
+      }),
+      webProvider: lender?.provider ?? provider,
+    };
+  }
+
+  private listNativeWebLenderCandidates(
+    exclude: ModelProvider | undefined,
+  ): ModelProvider[] {
+    const registry = this.host.providers;
+    if (typeof registry.listProviders !== "function") return [];
+    return registry
+      .listProviders()
+      .filter(
+        (candidate) =>
+          candidate !== exclude &&
+          typeof candidate.getLendableWebCapabilities === "function" &&
+          typeof candidate.executeNativeWebTool === "function" &&
+          (typeof registry.isProviderEnabled !== "function" ||
+            registry.isProviderEnabled(candidate.id)),
+      );
+  }
+
+  private async findNativeWebLender(
+    candidates: readonly ModelProvider[],
+  ): Promise<
+    | {
+        provider: ModelProvider;
+        capabilities: NonNullable<ModelCapabilities["hostedWeb"]>;
+      }
+    | undefined
+  > {
+    for (const candidate of candidates) {
+      try {
+        const capabilities = await candidate.getLendableWebCapabilities?.();
+        if (capabilities?.search?.supported || capabilities?.fetch?.supported) {
+          return { provider: candidate, capabilities };
+        }
+      } catch (error) {
+        this.log?.(
+          `[web] ${candidate.id} lendable web capability check failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return undefined;
   }
 
   private async prepareTurnExecution(
@@ -2361,11 +2442,13 @@ export class AgentSessionManager {
         this.notifySessionsChanged();
       }
       const mcpTools = this.cloneMcpToolDefinitions(context);
-      const policy = await this.resolveWebAccessPolicy(
+      const { policy, webProvider } = await this.resolveWebAccess(
         session,
         provider,
         settings,
       );
+      const webProviderIsLent =
+        webProvider !== undefined && webProvider !== provider;
 
       const serverNames = new Set(
         mcpTools
@@ -2394,17 +2477,18 @@ export class AgentSessionManager {
                     );
                   }
                   const hostedTool = route.hostedTool;
+                  const executor = webProvider ?? provider;
                   const priority = session.background
                     ? "background"
                     : "interactive";
                   const schedulerQueued =
                     !this.host.providers.requestScheduler.hasCapacity(
-                      provider.id,
+                      executor.id,
                       priority,
                     );
                   const permitPromise =
                     this.host.providers.requestScheduler.acquire(
-                      provider.id,
+                      executor.id,
                       priority,
                       request.signal,
                     );
@@ -2419,6 +2503,23 @@ export class AgentSessionManager {
                     this.setInteractiveExecutionPhase(session.id, "running");
                   }
                   try {
+                    if (webProviderIsLent) {
+                      // A lent route has no delegated fallback: hosted tools
+                      // would have to run on the lender's model.
+                      const lentResult = await executor.executeNativeWebTool?.({
+                        model: session.model,
+                        kind: request.kind,
+                        input: request.input,
+                        settings: policy.settings,
+                        signal: request.signal,
+                      });
+                      if (lentResult === null || lentResult === undefined) {
+                        throw new Error(
+                          `Native web ${request.kind} is unavailable: ${executor.id} could not serve the request. Use an MCP web tool instead.`,
+                        );
+                      }
+                      return lentResult;
+                    }
                     if (provider.executeNativeWebTool) {
                       try {
                         const directResult =
@@ -11413,6 +11514,14 @@ export class AgentSessionManager {
         enforcedOwnedPaths: request.ownedPaths ?? [],
       },
     );
+    const writeScopeWarnings = this.preflightDelegatedWriteScopes({
+      ownedPaths: request.ownedPaths,
+      parent,
+      executionRoot,
+      childCanWrite:
+        !usesReadOnlyNativeProfile &&
+        !NON_WRITING_DELEGATION_MODES.has(route.resolvedMode),
+    });
 
     this.log?.(
       `[bg-route] task=${task} class=${route.taskClass} requested={mode:${request.mode ?? "-"},model:${request.model ?? "-"},provider:${request.provider ?? "-"}} resolved={mode:${route.resolvedMode},model:${route.resolvedModel},provider:${route.resolvedProvider}} fallback=${backendFallbackUsed} reason="${backendFallbackReason}"`,
@@ -11785,6 +11894,7 @@ export class AgentSessionManager {
       modelGroup: route.modelGroup,
       routingReason: backendFallbackReason,
       fallbackUsed: backendFallbackUsed,
+      ...(writeScopeWarnings ? { writeScopeWarnings } : {}),
     };
   }
 
@@ -13730,6 +13840,77 @@ export class AgentSessionManager {
           ? `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, and this writer cannot be path-scoped, so no concurrent write is possible regardless of file ownership. Use a read-only profile, a native background agent with ownedPaths, or wait for the ancestor's turn to finish.`
           : `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, which blocks writers that do not declare ownedPaths. Declare ownedPaths (an enforced write scope disjoint from other writers) to run concurrently, use a read-only profile, or wait for the ancestor's turn to finish.`,
     });
+  }
+
+  /**
+   * Reject a native writable delegation whose outside-workspace ownedPaths
+   * no inherited rule can reach, before any child work is spent. Delegated
+   * children cannot request path trust or write approval themselves, so
+   * such writes are always denied at dispatch. Partial coverage only warns;
+   * dispatch-time enforcement stays authoritative.
+   */
+  private preflightDelegatedWriteScopes(args: {
+    ownedPaths: readonly string[] | undefined;
+    parent: AgentSession | undefined;
+    executionRoot: string;
+    childCanWrite: boolean;
+  }): string[] | undefined {
+    if (!args.ownedPaths?.length || !args.childCanWrite) return undefined;
+    const approvalManager = this.toolCtx?.approvalManager;
+    if (
+      !approvalManager ||
+      typeof approvalManager.isPathTrusted !== "function" ||
+      typeof approvalManager.getFileWriteAuthorization !== "function" ||
+      typeof approvalManager.getPathRules !== "function" ||
+      typeof approvalManager.getWriteRules !== "function"
+    ) {
+      return undefined;
+    }
+    // The child inherits the parent's approvals; project and global rules
+    // resolve through the parent's project binding.
+    const sessionId = args.parent?.id ?? this.toolCtx!.sessionId;
+    if (args.parent?.projectScope.rootPath) {
+      approvalManager.bindSessionProject(
+        args.parent.id,
+        args.parent.projectScope,
+      );
+    }
+    const assessment = assessDelegatedWriteScopes({
+      ownedPaths: args.ownedPaths,
+      executionRoot: args.executionRoot,
+      workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),
+      authority: {
+        isPathTrusted: (filePath) =>
+          approvalManager.isPathTrusted(sessionId, filePath),
+        isWriteAllowed: (filePath) =>
+          approvalManager.getFileWriteAuthorization(sessionId, filePath)
+            .allowed,
+        pathRules: () => {
+          const rules = approvalManager.getPathRules(sessionId);
+          return [...rules.session, ...rules.project, ...rules.global];
+        },
+        writeRules: (filePath) => {
+          const rules = approvalManager.getWriteRules(sessionId, filePath);
+          return [
+            ...rules.session,
+            ...rules.project,
+            ...rules.global,
+            ...rules.settings.map((pattern) => ({
+              pattern,
+              mode: "glob" as const,
+            })),
+          ];
+        },
+      },
+    });
+    if (assessment.unavailable.length > 0) {
+      throw new FleetAdmissionError({
+        ok: false,
+        code: "write_scope_unavailable",
+        message: formatUnavailableDelegatedWriteScopes(assessment.unavailable),
+      });
+    }
+    return assessment.warnings.length > 0 ? assessment.warnings : undefined;
   }
 
   private ensureSharedWorkspaceScopeAvailable(

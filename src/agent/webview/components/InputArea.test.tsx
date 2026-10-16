@@ -4,6 +4,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { InputArea, type ComposerContextMode } from "./InputArea";
+import {
+  insertTranscript,
+  type ComposerVoiceInput,
+  type ComposerVoiceSessionListener,
+} from "./composerVoiceInput";
 import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 class ImmediateFileReader {
@@ -1092,5 +1097,181 @@ describe("InputArea slash popup", () => {
       undefined,
       undefined,
     );
+  });
+});
+
+describe("composer voice input", () => {
+  function voiceBackend(overrides: Partial<ComposerVoiceInput> = {}) {
+    return {
+      start: vi.fn(async () => undefined),
+      finish: vi.fn(async () => "open the readme"),
+      cancel: vi.fn(),
+      ...overrides,
+    } satisfies ComposerVoiceInput;
+  }
+
+  it("inserts transcripts at the cursor with word-boundary spacing", () => {
+    expect(insertTranscript("fix bug", 3, 3, "the login")).toEqual({
+      value: "fix the login bug",
+      caret: 13,
+    });
+    expect(insertTranscript("", 0, 0, "  hello  ")).toEqual({
+      value: "hello",
+      caret: 5,
+    });
+    expect(insertTranscript("draft", 5, 5, "   ")).toEqual({
+      value: "draft",
+      caret: 5,
+    });
+  });
+
+  it("hides the mic button without a voice backend", () => {
+    const { container } = renderInputArea([]);
+    expect(container.querySelector(".voice-input-button")).toBeNull();
+  });
+
+  it("records, transcribes, and inserts dictated text into the draft", async () => {
+    const voiceInput = voiceBackend();
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "please";
+    input.setSelectionRange(6, 6);
+    fireEvent.input(input);
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(voiceInput.start).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(mic());
+    await waitFor(() => expect(input.value).toBe("please open the readme"));
+    expect(voiceInput.finish).toHaveBeenCalledTimes(1);
+    expect(mic().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows the backend's reason and disables the mic when unavailable", () => {
+    const { container } = renderInputArea([], {
+      voiceInput: voiceBackend({ disabledReason: "Needs HTTPS." }),
+    });
+    const mic = container.querySelector<HTMLButtonElement>(
+      ".voice-input-button",
+    )!;
+    expect(mic.disabled).toBe(true);
+    expect(mic.title).toBe("Needs HTTPS.");
+  });
+
+  it("cancels an active recording with Escape without transcribing", async () => {
+    const voiceInput = voiceBackend();
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(voiceInput.cancel).toHaveBeenCalledTimes(1);
+    expect(voiceInput.finish).not.toHaveBeenCalled();
+    expect(mic().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("surfaces transcription failures inline", async () => {
+    const voiceInput = voiceBackend({
+      finish: vi.fn(async () => {
+        throw new Error("Sign in again");
+      }),
+    });
+    const { container, findByText } = renderInputArea([], { voiceInput });
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.click(mic());
+
+    expect(await findByText("Voice input failed: Sign in again")).toBeTruthy();
+  });
+
+  it("streams utterances into the draft and auto-sends after a pause", async () => {
+    let listener: ComposerVoiceSessionListener | undefined;
+    const onSend = vi.fn();
+    const voiceInput = voiceBackend({
+      autoSend: true,
+      start: vi.fn(async (next: ComposerVoiceSessionListener) => {
+        listener = next;
+      }),
+      finish: vi.fn(async () => "and run the tests"),
+    });
+    const { container } = renderInputArea([], { voiceInput, onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    listener!.onPartial("Open the readme.");
+    await waitFor(() => expect(input.value).toBe("Open the readme."));
+    expect(onSend).not.toHaveBeenCalled();
+
+    listener!.onAutoStop();
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0]![0]).toBe("Open the readme. and run the tests");
+  });
+
+  it("keeps a manually stopped dictation as a draft even with auto-send", async () => {
+    const onSend = vi.fn();
+    const voiceInput = voiceBackend({ autoSend: true });
+    const { container } = renderInputArea([], { voiceInput, onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+
+    fireEvent.click(mic());
+    await waitFor(() =>
+      expect(mic().getAttribute("aria-pressed")).toBe("true"),
+    );
+    fireEvent.click(mic());
+    await waitFor(() => expect(input.value).toBe("open the readme"));
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("records while Alt+M is held and ignores auto-stop until release", async () => {
+    let listener: ComposerVoiceSessionListener | undefined;
+    const voiceInput = voiceBackend({
+      start: vi.fn(async (next: ComposerVoiceSessionListener) => {
+        listener = next;
+      }),
+    });
+    const { container } = renderInputArea([], { voiceInput });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const mic = () =>
+      container.querySelector<HTMLButtonElement>(".voice-input-button")!;
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000);
+      fireEvent.keyDown(input, { key: "µ", code: "KeyM", altKey: true });
+      await waitFor(() =>
+        expect(mic().getAttribute("aria-pressed")).toBe("true"),
+      );
+      listener!.onAutoStop();
+      expect(voiceInput.finish).not.toHaveBeenCalled();
+
+      now.mockReturnValue(3_000);
+      fireEvent.keyUp(input, { key: "Alt", code: "AltLeft" });
+      await waitFor(() => expect(input.value).toBe("open the readme"));
+      expect(voiceInput.finish).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

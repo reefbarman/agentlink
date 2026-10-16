@@ -39,6 +39,7 @@ import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelC
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import type { ImageAttribution } from "@agentlink/protocol/tool-result";
 import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import type { SessionImageReference } from "../core/tools/types.js";
@@ -47,6 +48,12 @@ import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
 import { surfaceMessagesToCoreModelMessages } from "../core/surfaceModelMessages.js";
+
+type AskAgentResultImage = {
+  mimeType: string;
+  data: string;
+  attribution?: ImageAttribution;
+};
 
 export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE = "chat";
@@ -119,7 +126,7 @@ export interface BrowserGatewayAskAgentRetryToolResult {
   toolName: string;
   input: Record<string, unknown>;
   result: string;
-  resultImages?: Array<{ mimeType: string; data: string }>;
+  resultImages?: AskAgentResultImage[];
   resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
 }
 
@@ -321,7 +328,7 @@ function generatedImageExtensionForMimeType(mimeType: string): string {
 }
 
 function generatedResultImagesToDisplayMedia(
-  images: Array<{ mimeType: string; data: string }> | undefined,
+  images: AskAgentResultImage[] | undefined,
   startIndex = 0,
   namePrefix = "generated-image",
 ): BrowserGatewayAskAgentDisplayMedia | undefined {
@@ -331,6 +338,7 @@ function generatedResultImagesToDisplayMedia(
       name: `${namePrefix}-${startIndex + index + 1}.${generatedImageExtensionForMimeType(image.mimeType)}`,
       mimeType: image.mimeType,
       src: `data:${image.mimeType};base64,${image.data}`,
+      ...(image.attribution ? { attribution: image.attribution } : {}),
     })),
     documents: [],
   };
@@ -699,6 +707,7 @@ export class BrowserGatewayAskAgentSessionStore {
       base64: string;
       messageIndex: number;
       imageIndex: number;
+      attribution?: ImageAttribution;
     }) => {
       const id = `image_${images.length + 1}`;
       images.push({
@@ -710,6 +719,7 @@ export class BrowserGatewayAskAgentSessionStore {
         base64: params.base64,
         messageIndex: params.messageIndex,
         imageIndex: params.imageIndex,
+        ...(params.attribution ? { attribution: params.attribution } : {}),
       });
     };
 
@@ -732,6 +742,7 @@ export class BrowserGatewayAskAgentSessionStore {
             base64: image.data,
             messageIndex,
             imageIndex: imageIndex++,
+            attribution: image.attribution,
           });
         }
       }
@@ -835,17 +846,38 @@ export class BrowserGatewayAskAgentSessionStore {
    * Remove one queued message from whichever chat holds it, for example one
    * a running turn took in before its turn to be sent came.
    */
-  removeQueuedMessage(
-    messageId: string,
-  ): BrowserGatewayAskAgentQueuedMessage | null {
+  removeQueuedMessage(messageId: string): boolean {
     for (const session of this.sessions) {
       const queue = session.queuedMessages;
-      const index = queue?.findIndex((message) => message.id === messageId);
-      if (queue && index !== undefined && index >= 0) {
-        return queue.splice(index, 1)[0] ?? null;
+      const index =
+        queue?.findIndex((message) => message.id === messageId) ?? -1;
+      if (queue && index >= 0) {
+        queue.splice(index, 1);
+        return true;
       }
     }
-    return null;
+    return false;
+  }
+
+  updateQueuedMessageText(messageId: string, text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const message = this.getActiveSession().queuedMessages?.find(
+      (queued) => queued.id === messageId,
+    );
+    if (!message) return false;
+    message.text = trimmed;
+    return true;
+  }
+
+  /** Move a queued message to the front so it is the next one drained. */
+  promoteQueuedMessage(messageId: string): boolean {
+    const queue = this.getActiveSession().queuedMessages;
+    const index = queue?.findIndex((message) => message.id === messageId) ?? -1;
+    if (!queue || index < 0) return false;
+    const [message] = queue.splice(index, 1);
+    queue.unshift(message);
+    return true;
   }
 
   getAvailableModels(): WebviewModelInfo[] {
@@ -1301,7 +1333,7 @@ export class BrowserGatewayAskAgentSessionStore {
     toolName: string;
     input: unknown;
     result: string;
-    resultImages?: Array<{ mimeType: string; data: string }>;
+    resultImages?: AskAgentResultImage[];
     resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
     durationMs: number;
   }): void {

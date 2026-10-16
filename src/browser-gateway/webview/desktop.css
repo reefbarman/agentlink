@@ -1342,7 +1342,182 @@
 }
 
 .browser-shell.browser-shell-desktop .browser-chat-composer {
+  position: relative;
+  z-index: 15;
   margin-bottom: 22px;
+}
+
+/*
+ * Chat Activity Shelf: a soft tray that tucks behind the top edge of the
+ * composer instead of a full-width strip stacked on top of it. The tray
+ * surface is a pseudo-element inset from the column so its sides meet the
+ * composer's rounded corners.
+ */
+.browser-shell.browser-shell-desktop .chat-activity-shelf {
+  --desktop-shelf-inset: 16px;
+  --desktop-shelf-tuck: 20px;
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  margin-bottom: calc(var(--desktop-shelf-tuck) * -1);
+  padding: 0 var(--desktop-shelf-inset) var(--desktop-shelf-tuck);
+}
+
+.browser-shell.browser-shell-desktop .chat-activity-shelf::before {
+  content: "";
+  position: absolute;
+  inset: 0 var(--desktop-shelf-inset);
+  z-index: -1;
+  border: 1px solid #ffffff12;
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  background: linear-gradient(180deg, #1c2628f2, #1a2225f2);
+  box-shadow: 0 -6px 24px #00000024;
+  pointer-events: none;
+}
+
+.browser-shell.browser-shell-desktop .chat-activity-shelf-handle {
+  height: 12px;
+  flex-basis: 12px;
+  border-top: 0;
+  background: transparent;
+}
+
+.browser-shell.browser-shell-desktop .chat-activity-shelf-handle::after {
+  top: 5px;
+  width: 32px;
+  height: 3px;
+  background: var(--ag-muted);
+  opacity: 0.25;
+}
+
+.browser-shell.browser-shell-desktop
+  .chat-activity-shelf-handle:is(:hover, :focus-visible)::after,
+.browser-shell.browser-shell-desktop
+  .chat-activity-shelf-active
+  .chat-activity-shelf-handle::after {
+  background: var(--ag-accent);
+  opacity: 0.9;
+}
+
+.browser-shell.browser-shell-desktop .chat-activity-shelf-handle:focus-visible {
+  box-shadow: none;
+}
+
+.browser-shell.browser-shell-desktop .chat-activity-shelf-content {
+  padding: 0 8px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff24 transparent;
+}
+
+/* Queue */
+.browser-shell.browser-shell-desktop .queue-panel {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.browser-shell.browser-shell-desktop .queue-header {
+  gap: 6px;
+  padding: 0 8px 6px;
+  color: var(--ag-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  opacity: 1;
+}
+
+.browser-shell.browser-shell-desktop .queue-header .codicon {
+  color: var(--ag-accent);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .queue-item {
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 4px 4px 10px;
+  border-top: 0;
+  border-radius: 10px;
+  transition: background 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop .queue-item + .queue-item {
+  margin-top: 2px;
+}
+
+.browser-shell.browser-shell-desktop .queue-item:hover,
+.browser-shell.browser-shell-desktop .queue-item:focus-within {
+  background: #ffffff08;
+}
+
+.browser-shell.browser-shell-desktop .queue-item.interjection-ready {
+  margin-left: 0;
+  border-left: 0;
+  background: #4ec9b012;
+  box-shadow: inset 2px 0 0 var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop .queue-item-text {
+  color: var(--ag-text);
+  font-size: 13.5px;
+  line-height: 1.5;
+  opacity: 0.86;
+}
+
+.browser-shell.browser-shell-desktop .queue-item-textarea {
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-accent-2);
+  border-radius: 10px;
+  background: #00000026;
+  color: var(--ag-text);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.browser-shell.browser-shell-desktop .queue-item-textarea:focus {
+  border-color: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop .queue-item-actions {
+  gap: 2px;
+  transition: opacity 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop
+  .queue-item:focus-within
+  .queue-item-actions {
+  opacity: 1;
+}
+
+.browser-shell.browser-shell-desktop .queue-item .icon-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop
+  .queue-item
+  .icon-button:hover:not(:disabled) {
+  background: #ffffff10;
+  color: var(--ag-text);
+}
+
+.browser-shell.browser-shell-desktop
+  .queue-item
+  .queue-item-steer:hover:not(:disabled),
+.browser-shell.browser-shell-desktop .queue-item-interject.active {
+  color: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop
+  .queue-item
+  .queue-item-remove:hover:not(:disabled) {
+  color: #f48771;
 }
 
 .browser-shell.browser-shell-desktop .input-area {

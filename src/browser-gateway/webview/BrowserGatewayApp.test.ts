@@ -3271,6 +3271,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       { id: "ask-queued", text: "Ship it", source: "browser" },
     ];
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const queueRequests: Array<Record<string, unknown>> = [];
+    let queuedId = "";
     fetchMock.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input).split("?")[0];
@@ -3285,13 +3287,19 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             id?: string;
           };
           const responseSnapshot = structuredClone(queuedSnapshot);
-          responseSnapshot.session.foreground.messageQueue[0]!.id =
-            request.id ?? "";
+          queuedId = request.id ?? "";
+          responseSnapshot.session.foreground.messageQueue[0]!.id = queuedId;
           return jsonResponse({
             ok: true,
             queued: true,
             snapshot: responseSnapshot,
           });
+        }
+        if (url === "/api/ask-agent/queue") {
+          queueRequests.push(
+            JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+          );
+          return jsonResponse({ ok: true, snapshot: askSnapshot });
         }
         if (url === "/api/ask-agent/sessions")
           return jsonResponse({ sessions: [] });
@@ -3320,7 +3328,23 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(await screen.findByText("Queued.")).toBeTruthy();
     expect(screen.getByText("Queued (1)")).toBeTruthy();
     expect(screen.getByText("Ship it")).toBeTruthy();
-    expect(screen.queryByTitle("Steer now")).toBeNull();
+    expect(screen.getByTitle("Edit")).toBeTruthy();
+    expect(screen.getByTitle("Remove")).toBeTruthy();
+    // The helper-owned runtime cannot inject mid-turn, so only steer is offered.
+    expect(screen.queryByTitle("Interject at next break")).toBeNull();
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTitle("Steer now") as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTitle("Steer now"));
+    await waitFor(() =>
+      expect(queueRequests).toEqual([
+        expect.objectContaining({ action: "steer", id: queuedId }),
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByText("Queued (1)")).toBeNull());
   });
 
   it("reconciles a queued send when its transcript turn skips the queue snapshot", async () => {

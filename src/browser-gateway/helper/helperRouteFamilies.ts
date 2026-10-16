@@ -10,6 +10,7 @@ interface HelperExactRoute<
 }
 
 export type AskAgentRouteHandler =
+  | "markdownImage"
   | "session"
   | "sessions"
   | "sessionNew"
@@ -56,9 +57,12 @@ export type AskAgentRouteHandler =
   | "projectHandoffCancel"
   | "projectHandoffApprove"
   | "thinking"
+  | "voiceInput"
+  | "transcribe"
   | "send"
   | "retry"
-  | "stop";
+  | "stop"
+  | "queue";
 
 export const ASK_AGENT_ROUTES = [
   {
@@ -241,9 +245,21 @@ export const ASK_AGENT_ROUTES = [
     handler: "projectHandoffApprove",
   },
   { method: "POST", path: "/api/ask-agent/thinking", handler: "thinking" },
+  { method: "GET", path: "/api/ask-agent/voice-input", handler: "voiceInput" },
+  {
+    method: "POST",
+    path: "/api/ask-agent/transcribe",
+    handler: "transcribe",
+  },
   { method: "POST", path: "/api/ask-agent/send", handler: "send" },
   { method: "POST", path: "/api/ask-agent/retry", handler: "retry" },
+  {
+    method: "POST",
+    path: "/api/ask-agent/markdown-image",
+    handler: "markdownImage",
+  },
   { method: "POST", path: "/api/ask-agent/stop", handler: "stop" },
+  { method: "POST", path: "/api/ask-agent/queue", handler: "queue" },
 ] as const satisfies readonly HelperExactRoute<AskAgentRouteHandler>[];
 
 export function matchAskAgentRoute(

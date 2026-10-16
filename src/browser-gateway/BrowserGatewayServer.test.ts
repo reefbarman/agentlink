@@ -199,6 +199,17 @@ function makeChatViewProviderStub() {
   return {
     getReleaseUpdateState: vi.fn(() => null as unknown),
     checkReleaseUpdates: vi.fn(async () => null as unknown),
+    getVoiceInputAvailability: vi.fn<
+      (options?: {
+        requireRecorder?: boolean;
+      }) => Promise<
+        | { available: true }
+        | { available: false; hidden: boolean; reason: string }
+      >
+    >(async () => ({ available: true })),
+    transcribeVoiceAudio: vi.fn(
+      async (_audio: { data: Uint8Array; mimeType: string }) => "hello world",
+    ),
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
@@ -514,6 +525,111 @@ describe("BrowserGatewayServer", () => {
       expect(
         (await fetch(`${base}/check`, { method: "POST", headers })).status,
       ).toBe(404);
+    } finally {
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
+  it("authenticates and validates browser voice input routes", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const provider = makeChatViewProviderStub();
+    const service = new BrowserGatewayService(
+      hub,
+      makeSessionManagerStub() as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      provider as never,
+      "test-token",
+      "voice-host",
+      "Voice",
+      "/workspace/voice",
+      vi.fn(),
+    );
+    try {
+      const port = await server.start(0);
+      const base = `http://127.0.0.1:${port}/api`;
+      const headers = {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      };
+      const audio = Buffer.from("RIFF-test-audio").toString("base64");
+
+      expect((await fetch(`${base}/voice-input`)).status).toBe(401);
+      expect(
+        (
+          await fetch(`${base}/transcribe`, {
+            method: "POST",
+            body: JSON.stringify({ mimeType: "audio/webm", audio }),
+          })
+        ).status,
+      ).toBe(401);
+      expect(provider.transcribeVoiceAudio).not.toHaveBeenCalled();
+
+      const availability = await fetch(`${base}/voice-input`, { headers });
+      expect(availability.status).toBe(200);
+      expect(await availability.json()).toEqual({ available: true });
+      expect(provider.getVoiceInputAvailability).toHaveBeenCalledWith({
+        requireRecorder: false,
+      });
+
+      provider.getVoiceInputAvailability.mockResolvedValueOnce({
+        available: false,
+        hidden: true,
+        reason: "Sign in to ChatGPT/Codex.",
+      });
+      expect(
+        await (await fetch(`${base}/voice-input`, { headers })).json(),
+      ).toEqual({
+        available: false,
+        hidden: true,
+        reason: "Sign in to ChatGPT/Codex.",
+      });
+
+      const invalid = await fetch(`${base}/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ mimeType: "text/plain", audio }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(provider.transcribeVoiceAudio).not.toHaveBeenCalled();
+
+      const ok = await fetch(`${base}/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ mimeType: "audio/webm;codecs=opus", audio }),
+      });
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, text: "hello world" });
+      const [sent] = provider.transcribeVoiceAudio.mock.calls[0]!;
+      expect(sent.mimeType).toBe("audio/webm;codecs=opus");
+      expect(Buffer.from(sent.data).toString()).toBe("RIFF-test-audio");
+
+      provider.transcribeVoiceAudio.mockRejectedValueOnce(
+        new Error("Codex sign-in expired"),
+      );
+      const failed = await fetch(`${base}/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ mimeType: "audio/webm", audio }),
+      });
+      expect(await failed.json()).toEqual({
+        ok: false,
+        error: "Codex sign-in expired",
+      });
     } finally {
       await server.stop();
       service.dispose();

@@ -159,6 +159,33 @@ describe("command reviewer automatic approval eligibility", () => {
     ).toEqual({ eligible: true });
   });
 
+  it.each([
+    "pkill -f 'ComputerUseNative serve$' -P 1",
+    "pkill -f vite",
+    "pkill -9 -f node",
+    "sudo pkill -lf server",
+    "echo stopping && /usr/bin/pkill -f dev-server",
+    "killall -m 'Code.*'",
+    "pkill node -U 501",
+  ])(
+    "requires direct human approval for broad process signals: %s",
+    (command) => {
+      expect(eligibility(command)).toEqual({
+        eligible: false,
+        reason: expect.stringContaining("requires your direct approval"),
+      });
+    },
+  );
+
+  it.each([
+    "pkill -9 node",
+    "pkill -U 501 node",
+    "killall Finder",
+    "pkill -- -weird",
+  ])("keeps narrow process signals on automatic review: %s", (command) => {
+    expect(eligibility(command)).toEqual({ eligible: true });
+  });
+
   it("rejects only input with no parsed command", () => {
     expect(eligibility(" ")).toEqual({
       eligible: false,

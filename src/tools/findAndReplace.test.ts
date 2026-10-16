@@ -393,3 +393,35 @@ describe("handleFindAndReplace", () => {
     );
   });
 });
+
+describe("expandReplacement", () => {
+  async function expand(pattern: string, input: string, replacement: string) {
+    const { expandReplacement } = await import("./findAndReplace.js");
+    const match = new RegExp(pattern).exec(input);
+    if (!match) throw new Error("fixture did not match");
+    return expandReplacement(replacement, match);
+  }
+
+  it("interprets \\t, \\n and \\\\ like VS Code regex replace", async () => {
+    await expect(
+      expand(
+        "\\t\\tif !walk\\(js\\.(\\w+)",
+        "\t\tif !walk(js.If",
+        "\\t\\tif js.$1 != nil",
+      ),
+    ).resolves.toBe("\t\tif js.If != nil");
+    await expect(expand("a", "a", "x\\ny")).resolves.toBe("x\ny");
+    await expect(expand("a", "a", "C:\\\\path")).resolves.toBe("C:\\path");
+  });
+
+  it("keeps other backslash sequences and dollar rules unchanged", async () => {
+    await expect(expand("(a)", "a", "\\d+ $1 $$ $0 $9")).resolves.toBe(
+      "\\d+ a $ $0 $9",
+    );
+    await expect(expand("(a)", "a", "$12")).resolves.toBe("a2");
+  });
+
+  it("does not reinterpret escapes inside captured text", async () => {
+    await expect(expand("(.+)", "\\t", "[$1]")).resolves.toBe("[\\t]");
+  });
+});

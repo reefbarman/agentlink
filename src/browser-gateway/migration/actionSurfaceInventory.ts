@@ -139,6 +139,18 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/polish-prompt",
     "Non-authoritative composer transformation remains HTTP.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
+    "/api/voice-input",
+    "Voice input availability is a non-authoritative composer capability read.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/transcribe",
+    "Non-authoritative composer dictation uploads device audio over HTTP.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",
@@ -296,6 +308,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "POST",
     "/api/open-image-in-editor",
     "Opening a transcript image in the owning VS Code editor remains an authenticated HTTP UI action.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/markdown-image",
+    "Markdown transcript images resolve through the owning VS Code host as authenticated HTTP read payloads.",
   ),
   retainedHttp(
     "vscode_gateway",
@@ -541,11 +559,27 @@ function classifyAskAgentRoute(
     case "projectHandoffApprove":
     case "thinking":
     case "retry":
+    case "queue":
       return retainedHttp(
         "ask_agent",
         method,
         path,
         "Retained during the bounded coexistence period; action inventory blocks Stage 5 until classified as a command or permanent read.",
+      );
+    case "voiceInput":
+    case "transcribe":
+      return retainedHttp(
+        "ask_agent",
+        method,
+        path,
+        "Non-authoritative composer dictation: availability read and device audio upload over HTTP.",
+      );
+    case "markdownImage":
+      return retainedHttp(
+        "ask_agent",
+        method,
+        path,
+        "Markdown transcript images resolve through the helper as authenticated HTTP read payloads.",
       );
     default:
       return assertNever(handler);

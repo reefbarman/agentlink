@@ -67,7 +67,15 @@ import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { RemoteToolDetailProvider } from "../../agent/webview/components/RemoteToolDetail";
-import { loadRemoteTranscriptBlockDetail } from "./toolDetailTransport";
+import { MarkdownImageProvider } from "../../agent/webview/components/MarkdownImage";
+import type {
+  MarkdownImageResolution,
+  MarkdownImageResolveRequest,
+} from "../../shared/markdownImageSource";
+import {
+  loadRemoteDisplayImage,
+  loadRemoteTranscriptBlockDetail,
+} from "./toolDetailTransport";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
@@ -85,6 +93,7 @@ import {
   type ComposerMedia,
 } from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
+import { useBrowserVoiceInput } from "./useBrowserVoiceInput";
 import {
   QuestionCard,
   type QuestionComposerState,
@@ -1712,6 +1721,27 @@ export function BrowserGatewayApp({
         : buildApiPathForInstance(pathname, tabId),
     [buildApiPathForInstance],
   );
+  // Dictation records on this device; the selected owner transcribes it with
+  // its ChatGPT/Codex subscription (Ask Agent via the helper).
+  const voiceEndpoints = useMemo(
+    () =>
+      quickAsk || isAskAgentSelected
+        ? {
+            availabilityPath: "/api/ask-agent/voice-input",
+            transcribePath: "/api/ask-agent/transcribe",
+          }
+        : selectedInstanceId
+          ? {
+              availabilityPath: buildApiPath("/api/voice-input"),
+              transcribePath: buildApiPath("/api/transcribe"),
+            }
+          : null,
+    [quickAsk, isAskAgentSelected, selectedInstanceId, buildApiPath],
+  );
+  const voiceInput = useBrowserVoiceInput({
+    endpoints: voiceEndpoints,
+    authToken,
+  });
   const buildSnapshotApiPath = useCallback(
     (
       instanceId = selectedInstanceId,
@@ -5336,6 +5366,61 @@ export function BrowserGatewayApp({
     })();
   };
 
+  const runAskAgentQueueAction = (
+    action: "steer" | "update" | "remove",
+    queueId: string,
+    text?: string,
+  ): void => {
+    if (!isAskAgentSelected || !foreground?.sessionId) return;
+    const sessionId = foreground.sessionId;
+    const actionOrigin = { ...snapshotOriginRef.current };
+    const label =
+      action === "steer" ? "Steer" : action === "update" ? "Edit" : "Remove";
+    void (async () => {
+      try {
+        const response = await fetch("/api/ask-agent/queue", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            action,
+            id: queueId,
+            sessionId,
+            ...(text !== undefined ? { text } : {}),
+          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (!relayClientEnabled && body.ok && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
+        }
+        setSendStatus(
+          body.ok
+            ? action === "steer"
+              ? "Steering…"
+              : action === "update"
+                ? "Queued message updated."
+                : "Queued message removed."
+            : body.error === "queue_item_not_found"
+              ? "That message has already been sent."
+              : `${label} failed: ${body.error ?? response.status}`,
+        );
+      } catch (err) {
+        setSendStatus(`${label} error: ${String(err)}`);
+      }
+    })();
+  };
+
   const handleInstancePointerDown = (
     e: PointerEvent,
     instanceId: string,
@@ -7709,6 +7794,34 @@ export function BrowserGatewayApp({
           ? "Choose an available model in the AgentLink VS Code window before sending a message."
           : undefined;
 
+  // Markdown images resolve through the session owner: the helper for Ask
+  // Agent, the VS Code window for workspace sessions.
+  const resolveBrowserMarkdownImage = async (
+    request: MarkdownImageResolveRequest,
+  ): Promise<MarkdownImageResolution> => {
+    const response = await fetch(
+      isAskAgentSelected
+        ? "/api/ask-agent/markdown-image"
+        : buildApiPath("/api/markdown-image"),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(request),
+      },
+    );
+    if (!response.ok) {
+      return {
+        status: "unavailable",
+        message: `Image unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return (await response.json()) as MarkdownImageResolution;
+  };
+
   const browserVscodeApi = {
     postMessage: (msg: unknown) => {
       const data =
@@ -8352,6 +8465,7 @@ export function BrowserGatewayApp({
             allowThinkingToggle={true}
             allowExportTranscript={false}
             allowFileMentions={false}
+            voiceInput={voiceInput}
             onComposerEvent={(event, fields) =>
               logAskAgentBrowserEvent(`quick-ask.composer.${event}`, fields)
             }
@@ -9835,46 +9949,19 @@ export function BrowserGatewayApp({
                         requestRelayBlockDetail,
                       )
                     }
+                    loadDisplayImage={(reference) =>
+                      loadRemoteDisplayImage(
+                        reference,
+                        foreground?.sessionId ?? "",
+                        requestRelayBlockDetail,
+                      )
+                    }
                   >
-                    <ChatView
-                      key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
-                      messages={messages}
-                      streaming={Boolean(streaming)}
-                      initialMessageLimit={
-                        mobileLayout || touchInput ? 20 : undefined
-                      }
-                      sessionId={foreground?.sessionId ?? null}
-                      originalPrompt={
-                        isAskAgentSelected
-                          ? undefined
-                          : foreground?.originalPrompt
-                      }
-                      emptyState={
-                        !isAskAgentSelected ? (
-                          <ModelSetupCard
-                            setupState={modelSetupState}
-                            hasWorkspace={
-                              (snapshot?.session.projects?.length ?? 0) > 0
-                            }
-                            surface="browser"
-                          />
-                        ) : (
-                          <AskAgentWelcome
-                            desktop={consumerShell}
-                            copy={productCopy}
-                            onStart={(prompt) => {
-                              void handleSend(prompt, []);
-                            }}
-                          />
-                        )
-                      }
-                      detectedQuestion={foreground?.detectedQuestion ?? null}
-                      onDetectedQuestionAnswer={(payload) => {
-                        void handleSend(payload, []);
-                      }}
-                      onDismissDetectedQuestion={() => undefined}
-                      onOpenFile={openFileHandler}
-                      onOpenImageInEditor={
+                    <MarkdownImageProvider
+                      scopeKey={`${selectedTabId}:${foreground?.sessionId ?? "empty"}`}
+                      sessionId={foreground?.sessionId ?? undefined}
+                      resolve={resolveBrowserMarkdownImage}
+                      onOpenInEditor={
                         isAskAgentSelected
                           ? undefined
                           : (image) =>
@@ -9883,29 +9970,78 @@ export function BrowserGatewayApp({
                                 ...image,
                               })
                       }
-                      onRetry={handleRetry}
-                      onSignIn={() => handleSignIn("codex")}
-                      onSignInAnotherAccount={() =>
-                        setModeStatus(
-                          "Use VS Code account controls to sign in with another account.",
-                        )
-                      }
-                      onCondense={handleCondense}
-                      bgSessions={background}
-                      onStopBackground={handleStopBackground}
-                      onOpenTranscript={handleOpenBgTranscript}
-                      onFinalMarkerContinue={(prompt) => {
-                        setComposerInjection({
-                          type: "context",
-                          context: prompt,
-                        });
-                      }}
-                      onRevertCheckpoint={handleRevertCheckpoint}
-                      onViewCheckpointDiff={handleViewCheckpointDiff}
-                      streamingMetrics={streamingBaselineMetrics}
-                      streamingMetricsSurface="browser-webview"
-                      streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
-                    />
+                    >
+                      <ChatView
+                        key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
+                        messages={messages}
+                        streaming={Boolean(streaming)}
+                        initialMessageLimit={
+                          mobileLayout || touchInput ? 20 : undefined
+                        }
+                        sessionId={foreground?.sessionId ?? null}
+                        originalPrompt={
+                          isAskAgentSelected
+                            ? undefined
+                            : foreground?.originalPrompt
+                        }
+                        emptyState={
+                          !isAskAgentSelected ? (
+                            <ModelSetupCard
+                              setupState={modelSetupState}
+                              hasWorkspace={
+                                (snapshot?.session.projects?.length ?? 0) > 0
+                              }
+                              surface="browser"
+                            />
+                          ) : (
+                            <AskAgentWelcome
+                              desktop={consumerShell}
+                              copy={productCopy}
+                              onStart={(prompt) => {
+                                void handleSend(prompt, []);
+                              }}
+                            />
+                          )
+                        }
+                        detectedQuestion={foreground?.detectedQuestion ?? null}
+                        onDetectedQuestionAnswer={(payload) => {
+                          void handleSend(payload, []);
+                        }}
+                        onDismissDetectedQuestion={() => undefined}
+                        onOpenFile={openFileHandler}
+                        onOpenImageInEditor={
+                          isAskAgentSelected
+                            ? undefined
+                            : (image) =>
+                                browserVscodeApi.postMessage({
+                                  command: "agentOpenImageInEditor",
+                                  ...image,
+                                })
+                        }
+                        onRetry={handleRetry}
+                        onSignIn={() => handleSignIn("codex")}
+                        onSignInAnotherAccount={() =>
+                          setModeStatus(
+                            "Use VS Code account controls to sign in with another account.",
+                          )
+                        }
+                        onCondense={handleCondense}
+                        bgSessions={background}
+                        onStopBackground={handleStopBackground}
+                        onOpenTranscript={handleOpenBgTranscript}
+                        onFinalMarkerContinue={(prompt) => {
+                          setComposerInjection({
+                            type: "context",
+                            context: prompt,
+                          });
+                        }}
+                        onRevertCheckpoint={handleRevertCheckpoint}
+                        onViewCheckpointDiff={handleViewCheckpointDiff}
+                        streamingMetrics={streamingBaselineMetrics}
+                        streamingMetricsSurface="browser-webview"
+                        streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
+                      />
+                    </MarkdownImageProvider>
                   </RemoteToolDetailProvider>
                 )}
               </div>
@@ -9969,8 +10105,19 @@ export function BrowserGatewayApp({
                         : [],
                     )}
                     <MessageQueuePanel
-                      allowSteering={!isAskAgentSelected}
+                      allowInterjection={!isAskAgentSelected}
                       pendingIds={pendingMessageQueueIds}
+                      onEdit={
+                        isAskAgentSelected
+                          ? (item, text) =>
+                              runAskAgentQueueAction("update", item.id, text)
+                          : undefined
+                      }
+                      onRemove={
+                        isAskAgentSelected
+                          ? (item) => runAskAgentQueueAction("remove", item.id)
+                          : undefined
+                      }
                       queue={messageQueue.map((item) => {
                         const override = queueInterjectionOverrides.get(
                           `${foreground.sessionId}:${item.id}`,
@@ -9980,7 +10127,10 @@ export function BrowserGatewayApp({
                           : { ...item, interjectionReady: override };
                       })}
                       onSteer={(item) => {
-                        if (isAskAgentSelected) return;
+                        if (isAskAgentSelected) {
+                          runAskAgentQueueAction("steer", item.id);
+                          return;
+                        }
                         browserVscodeApi.postMessage({
                           command: "agentSteerQueuedMessage",
                           sessionId: foreground.sessionId,
@@ -10446,6 +10596,7 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    voiceInput={voiceInput}
                     placeholder={
                       isAskAgentSelected ? productCopy.placeholder : undefined
                     }

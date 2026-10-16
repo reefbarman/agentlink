@@ -18,6 +18,7 @@ import { resolveBrowserGatewayDevBuild } from "./scripts/browser-gateway-build-e
 import { stageKeychainRuntime } from "./scripts/package-keychain-runtime.mjs";
 import { stageRetrievalRuntime } from "./scripts/package-retrieval-runtime.mjs";
 import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
+import { stageVoiceRuntime } from "./scripts/package-voice-runtime.mjs";
 import { workspacePackageClosurePlugin } from "./scripts/workspace-bundle-closure.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -45,7 +46,13 @@ const extensionOptions = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "dist/extension.js",
-  external: ["vscode", "@lancedb/lancedb", "apache-arrow", "@napi-rs/keyring"],
+  external: [
+    "vscode",
+    "@lancedb/lancedb",
+    "apache-arrow",
+    "@napi-rs/keyring",
+    "@picovoice/pvrecorder-node",
+  ],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -232,6 +239,21 @@ const indexerOptions = {
   },
 };
 
+// Voice input runs pvrecorder's blocking frame reads off the extension host
+// thread. Its native package stays external and ships in dist/node_modules.
+/** @type {esbuild.BuildOptions} */
+const voiceRecorderWorkerOptions = {
+  entryPoints: ["src/agent/voice/voiceRecorderWorker.ts"],
+  bundle: true,
+  outfile: "dist/voice-recorder-worker.js",
+  external: ["@picovoice/pvrecorder-node"],
+  format: "cjs",
+  platform: "node",
+  target: "node22",
+  sourcemap: true,
+  minify: false,
+};
+
 /** @type {esbuild.Plugin} */
 const standaloneHelperBoundaryPlugin = {
   name: "standalone-helper-boundary",
@@ -309,6 +331,7 @@ if (watch) {
     monacoWorkerCtx,
     idxCtx,
     helperCtx,
+    voiceRecorderWorkerCtx,
   ] = await Promise.all([
     esbuild.context(extensionOptions),
     esbuild.context(composeRuntimeOptions),
@@ -324,6 +347,7 @@ if (watch) {
     esbuild.context(monacoWorkerOptions),
     esbuild.context(indexerOptions),
     esbuild.context(browserGatewayHelperOptions),
+    esbuild.context(voiceRecorderWorkerOptions),
   ]);
   await Promise.all([
     extCtx.watch(),
@@ -340,6 +364,7 @@ if (watch) {
     monacoWorkerCtx.watch(),
     idxCtx.watch(),
     helperCtx.watch(),
+    voiceRecorderWorkerCtx.watch(),
   ]);
   console.log("Watching for changes...");
 } else {
@@ -363,6 +388,7 @@ if (watch) {
     esbuild.build(monacoWorkerOptions),
     esbuild.build(indexerOptions),
     esbuild.build(browserGatewayHelperOptions),
+    esbuild.build(voiceRecorderWorkerOptions),
   ]);
   const [
     browserGatewayResult,
@@ -435,6 +461,7 @@ if (watch) {
   // Retrieval owns and recreates dist/node_modules, so stage additional native
   // packages only after it has finished.
   const keychainRuntime = await stageKeychainRuntime();
+  const voiceRuntime = await stageVoiceRuntime();
   console.log(
     `Retrieval runtime: ${retrievalRuntime.target} (${retrievalRuntime.nativePackage}); ${retrievalRuntime.packages.length} packages staged`,
   );
@@ -446,6 +473,11 @@ if (watch) {
       `Keychain runtime: ${keychainRuntime.target} (${keychainRuntime.nativePackage})`,
     );
   }
+  console.log(
+    voiceRuntime.target
+      ? `Voice runtime: ${voiceRuntime.target}; ${voiceRuntime.files.length} files staged`
+      : "Voice runtime: unsupported target; voice input unavailable",
+  );
 
   console.log("Build complete.");
 }

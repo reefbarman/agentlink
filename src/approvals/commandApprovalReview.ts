@@ -19,6 +19,7 @@ import type { MessageParam } from "../agent/providers/types.js";
 import type { ModelProvider } from "../agent/providers/types.js";
 import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 import { createHash } from "crypto";
+import { scanShellLexTokens } from "../util/shellLex.js";
 import {
   GUARDIAN_REVIEW_SYSTEM_PROMPT,
   getGuardianPolicy,
@@ -311,9 +312,53 @@ export function isRoutineApproveForMeCommand(
 export function getCommandAutoApprovalEligibility(
   input: CommandAutoApprovalEligibilityInput,
 ): CommandAutoApprovalEligibility {
-  return input.classified.perSubCommand.length > 0
-    ? { eligible: true }
-    : { eligible: false, reason: "No command to review" };
+  if (input.classified.perSubCommand.length === 0) {
+    return { eligible: false, reason: "No command to review" };
+  }
+  for (const { command } of input.classified.perSubCommand) {
+    const reason = broadProcessSignalReason(command);
+    if (reason) return { eligible: false, reason };
+  }
+  return { eligible: true };
+}
+
+/**
+ * Pattern-based process signalling can match far more processes than intended
+ * (for example, `pkill -f` matches full command lines, and BSD `pkill` treats
+ * options after the first pattern as further patterns). A wrong match can
+ * terminate the user's applications, including VS Code, so these commands
+ * always require direct human approval rather than automatic review.
+ */
+export function broadProcessSignalReason(
+  subCommand: string,
+): string | undefined {
+  const tokens = scanShellLexTokens(subCommand).tokens;
+  const executable = (tokens[0] ?? "").split("/").pop() ?? "";
+  if (executable !== "pkill" && executable !== "killall") return undefined;
+  const args = tokens.slice(1);
+  const firstOperand = args.findIndex(
+    (arg) => arg === "--" || !arg.startsWith("-"),
+  );
+  const options = firstOperand === -1 ? args : args.slice(0, firstOperand);
+  if (
+    firstOperand !== -1 &&
+    args[firstOperand] !== "--" &&
+    args.slice(firstOperand + 1).some((arg) => arg.startsWith("-"))
+  ) {
+    return `${executable} has options after its first pattern. On macOS these are treated as extra patterns and can match almost every process, so this command requires your direct approval.`;
+  }
+  const fullCommandLineFlag =
+    executable === "pkill"
+      ? options.some((arg) => /^-[A-Za-z]*f/.test(arg) && !arg.startsWith("--"))
+      : options.some(
+          (arg) => /^-[A-Za-z]*m/.test(arg) && !arg.startsWith("--"),
+        );
+  if (fullCommandLineFlag) {
+    return executable === "pkill"
+      ? "pkill -f matches against full command lines and can terminate unrelated applications, so this command requires your direct approval."
+      : "killall -m matches process names by regular expression and can terminate unrelated applications, so this command requires your direct approval.";
+  }
+  return undefined;
 }
 
 export function parseCommandApprovalReviewResponse(

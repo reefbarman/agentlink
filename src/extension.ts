@@ -38,6 +38,7 @@ import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCo
 import {
   createShadowingCommandApprovalReviewer,
   createTypeSafeGuardianShadowReviewer,
+  DEFAULT_TYPESAFE_GUARDIAN_MODEL,
   toGuardianShadowComparisonEvent,
   TYPESAFE_GUARDIAN_API_KEY_SECRET,
 } from "./approvals/typeSafeGuardianShadow.js";
@@ -140,6 +141,12 @@ import {
   createCodexUsageAdapter,
 } from "./agent/providers/index.js";
 import { CODEX_OAUTH_CREDENTIALS_STORAGE_KEY } from "./agent/providers/codex/CodexOAuthManager.js";
+import {
+  VoiceInputService,
+  createWorkerVoiceCapture,
+  getBundledRecorderUnavailableReason,
+} from "./agent/voice/VoiceInputService.js";
+import { normalizeVoiceInputPreferences } from "./shared/voiceInputProtocol.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
@@ -178,6 +185,7 @@ import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { createFleetAutomationLifecycle } from "./agent/fleetAutomationLifecycle.js";
 import {
   agentLinkFetch,
+  agentLinkTranscriptionFetch,
   installAgentLinkHttpDispatcher,
 } from "./util/httpDispatcher.js";
 import {
@@ -1070,6 +1078,7 @@ export async function activate(
     getSandboxAvailability:
       async (): Promise<SandboxPreparationAvailability> => {
         let runtime: ResolvedSandboxNodeRuntime;
+        const runtimeWasCached = sandboxNodeRuntimePromise !== undefined;
         try {
           runtime = await ensureSandboxNodeRuntime();
         } catch (error) {
@@ -1145,9 +1154,14 @@ export async function activate(
           const detail = error instanceof Error ? error.message : String(error);
           if (error instanceof SandboxRuntimeFingerprintNodeUnavailableError) {
             log(
-              `[sandbox-terminal] Node runtime became unavailable before sandbox selection: ${detail}`,
+              `[sandbox-terminal] Node runtime became unavailable before sandbox selection: ${detail} (${runtime.executable})`,
             );
-            void showSandboxRuntimeUnavailable(error);
+            // The executable may have disappeared since it was resolved (for
+            // example, a Homebrew upgrade removed its versioned keg). Drop the
+            // cache so the next availability check re-resolves a replacement,
+            // and only warn when a freshly resolved runtime is already gone.
+            resetSandboxNodeRuntime();
+            if (!runtimeWasCached) void showSandboxRuntimeUnavailable(error);
             return {
               status: "runtime-unavailable",
               detail,
@@ -1598,6 +1612,41 @@ export async function activate(
     }
   }
 
+  chatViewProvider.setVoiceInputService(
+    new VoiceInputService({
+      hasCodexSubscription: () => openAiCodexAuthManager.hasOAuth(),
+      credentialProvider: openAiCodexAuthManager.createCredentialProvider(),
+      // chatgpt.com challenges the extension host's default TLS handshake.
+      fetch: agentLinkTranscriptionFetch,
+      recorderUnavailableReason: () =>
+        getBundledRecorderUnavailableReason(context.extensionUri.fsPath),
+      startCapture: createWorkerVoiceCapture(
+        vscode.Uri.joinPath(
+          context.extensionUri,
+          "dist",
+          "voice-recorder-worker.js",
+        ).fsPath,
+      ),
+      getPreferences: () => {
+        const config = vscode.workspace.getConfiguration(
+          "agentlink.voiceInput",
+        );
+        return normalizeVoiceInputPreferences({
+          autoStopAfterSilenceMs: config.get<number>("autoStopAfterSilenceMs"),
+          autoSend: config.get<boolean>("autoSend"),
+        });
+      },
+      log: agentLog,
+    }),
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("agentlink.voiceInput")) {
+        chatViewProvider.refreshVoiceInputAvailability();
+      }
+    }),
+  );
+
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog, {
     getTextVerbositySetting: () =>
       vscode.workspace
@@ -2030,6 +2079,7 @@ export async function activate(
   // Re-send model list to webview when OpenAI/Codex auth state changes.
   openAiCodexAuthManager.onAuthStateChanged = () => {
     chatViewProvider.refreshModels();
+    chatViewProvider.refreshVoiceInputAvailability();
     void publishBrowserGatewayModelCatalog();
     void grantBrowserGatewayModelCredentials();
   };
@@ -3107,7 +3157,7 @@ export async function activate(
         enabled: config.get<boolean>("guardian.typeSafeShadow.enabled", false),
         model: config.get<string>(
           "guardian.typeSafeShadow.model",
-          "jev-latest",
+          DEFAULT_TYPESAFE_GUARDIAN_MODEL,
         ),
         timeoutMs: config.get<number>(
           "guardian.typeSafeShadow.timeoutMs",

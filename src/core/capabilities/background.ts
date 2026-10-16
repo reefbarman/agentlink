@@ -105,6 +105,11 @@ export interface SpawnBackgroundResult {
   modelGroup?: string;
   routingReason: string;
   fallbackUsed: boolean;
+  /**
+   * Spawn-time notes about owned write scopes the child can only partly
+   * write with its inherited authority. Dispatch enforcement is unchanged.
+   */
+  writeScopeWarnings?: string[];
 }
 
 export interface BackgroundAgentStatusResult {

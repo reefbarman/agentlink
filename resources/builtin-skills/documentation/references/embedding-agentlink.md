@@ -7,7 +7,7 @@ description: Build an application-specific assistant, desktop runtime, CLI harne
 
 AgentLink's packages let a Node.js host generate text or typed JSON and build an application-specific assistant while keeping authority in that host. Simple generation is request-scoped and needs no conversation storage. Durable assistants add bounded tool execution, session and approval protocols, recovery, model routing, and a least-disclosure event stream without requiring AgentLink's VS Code UI or coding-agent tools.
 
-This is an **early private SDK surface for advanced, low-level integrations**. Pin exact paired artifacts, expect to implement substantial host infrastructure, and independently review security-sensitive integrations. It is not a browser SDK, public stable API, desktop application, CLI application, cloud service, complete chat UI, or turnkey application host kit.
+This is an **early private SDK surface for advanced, low-level integrations**. Pin exact paired artifacts, expect to implement substantial host infrastructure, and independently review security-sensitive integrations. The full engine/providers are Node-only; the focused browser/edge runtime below is host-injected. These packages are not a public stable API, complete application/UI or turnkey mobile host kit.
 
 ## Choose the right layer
 
@@ -19,6 +19,14 @@ This is an **early private SDK surface for advanced, low-level integrations**. P
 | `@agentlink/workspace-host` | Private standalone local-project composition for durable chat, canonical project identity, providers, request bounds, scoped file tools, reviewed writes and commands, MCP, background writers, optional managed TypeScript/JavaScript intelligence, and CLI writer ownership. | Terminal rendering, sandbox confinement, interactive PTYs, broader platforms, or public distribution. |
 
 Use `@agentlink/core` directly for straight-line text or typed JSON and for a domain assistant such as an app-specific financial, recipe, support, or operations agent. Add `@agentlink/node-host` only when the host deliberately wants its grant-scoped local read/write tools, artifact catalog, MCP helpers, or bounded exact-command tools.
+
+## Browser and native-WebView runtime subset
+
+`@agentlink/core/browser-runtime` exposes the existing `runAgentToolLoop`, finite execution limits, canonical model types, web definitions/helpers and Codex Responses translation/parser without Node runtime imports. Root engine and provider factories remain blocked for browser resolution. Hosts supply authenticated native/server transport, tool validation/authority, cancellation, approvals and exact replay persistence. This is not the full durable engine or an iPhone implementation.
+
+`@agentlink/core/codex-device-auth` exposes protocol helpers for Codex's specific device-code flow, not a generic OAuth grant: fixed URLs, bounded challenge/poll parsing, expiry checks and a token-exchange form. The trusted host owns polling, exchange, refresh and credentials. Native WebViews receive only an opaque operation ID, user-facing code/verification URL and safe auth status; never private authorization codes, PKCE verifiers or tokens. Existing desktop/CLI PKCE sign-in is unchanged.
+
+Consume matching packed artifacts and verify the actual host/platform with fixtures. Browser bundling and synthetic request/stream tests do not prove live-account access, iPhone lifecycle recovery, image quality or a complete mobile application.
 
 ## Generate content and run tools without conversation storage
 
@@ -296,8 +304,56 @@ Run the reusable repository and lease conformance runners from `@agentlink/core/
 | Strict single-file patch                     | `createNodeHostApplyDiffTools(...)`      | Same grant/hash boundary; canonical unique SEARCH/DIVIDER/REPLACE blocks only.                  |
 | Durable multi-file replacement               | `createNodeHostMultiFileWriteTools(...)` | Same grants/hashes plus a host `MultiFileWriteTransactionProvider` for prepare/commit/recovery. |
 | Exact non-PTY command                        | `createNodeHostCommandTools(...)`        | Exact absolute executable/arguments/cwd/environment and a fresh launch decision.                |
+| Find and show web images                     | `createNodeHostWebImageTools(...)`       | Optional per-turn policy (`enabled`, `prompt`, `disabled`, domain lists) and a renderer.        |
 
 Remote MCP tools are bound to the tenant/subject/session/turn that discovered them. Hosts whose principal carries additional authority fields such as live/demo data realm must supply `principalEquals` so those fields are part of the binding. Reusing a resolved tool from another context fails before a new connection or network request. Remote calls use a fixed total request timeout without progress-based extension; injected fetch receives `redirect: "error"`, and any returned redirect response is rejected. The Node-host command resolver uses `shell: false`, bounded stdout/stderr, fixed timeout/cancellation, and child cleanup. It intentionally does not provide shell parsing, model-supplied arguments, PTY input, terminal persistence, a sandbox, workspace inference, or network policy.
+
+## Find and show web images
+
+`createNodeHostWebImageTools(...)` gives an agent the same web image tools as the VS Code chat and Browser Ask Agent, so it can show a user real clothing, album covers, or artwork. As in AgentLink's own chat, the agent shows an image with Markdown `![description](image_url)` in its reply, and your UI renders it through `resolveImageSource(...)`:
+
+- `inspect_page_images` lists a public page's main images from JSON-LD, Open Graph, Twitter cards, and large `<img>` elements, with image URLs and publisher-supplied title, creator, and licence (unverified).
+- `present_images` retrieves image `urls` or `inspect_page_images` `candidate_ids` when the agent needs to see an image itself. The bytes go to the model with source attribution, the images are retained under IDs such as `web_image_1`, and the host is asked to show them.
+
+The tools do not search the web, so pair them with a search tool (for example a web search MCP server). Retrieval happens in your process: only public addresses (re-checked on every redirect), no scripts, cookies, or credentials, static PNG/JPEG/WebP up to 4 MB, pages read up to 4 MB, and per-turn budgets. A configured HTTP(S) proxy makes retrieval fail closed rather than bypassing it.
+
+```ts
+import { createNodeHostWebImageTools } from "@agentlink/node-host";
+
+const webImages = createNodeHostWebImageTools({
+  // Optional. Omit for public retrieval on every turn.
+  resolvePolicy: ({ principal }) => ({ blockedDomains: ["example.com"] }),
+});
+const agent = createNodeHostAgent({
+  /* ... */
+  tools: { resolveTools: webImages.resolveTools },
+});
+```
+
+Render Markdown images in agent output without loading their URLs in your UI: call `webImages.resolveImageSource(sessionId, src)` for each `![alt](src)` after checking that the caller may read that session. It returns `{ status: "ready", mimeType, data, attribution }` (base64 bytes), `{ status: "needs_confirmation", host }`, or `{ status: "unavailable", message }`. A web URL resolves automatically only when it already appeared in the session (user input, `inspect_page_images` results, or `present_images`); for anything else show a load button and call again with `{ userConfirmed: true }`. That keeps a prompt-injected reply from making your users' browsers contact arbitrary servers. `web_image_N` IDs and `data:image/...` sources resolve too, and it applies the session's latest policy and domain lists.
+
+Render the `present_images` tool event: its `displayContent` is `{ kind: "agentlink.presented_images", images: [{ imageId, mimeType, width, height, attribution }] }`. Load the bytes with `webImages.getImage(sessionId, imageId)` after checking that the caller may read that session, or pass `inlineDisplayImages: true` to put base64 `data` in the event. Show the attribution `sourceUrl` (or `imageUrl`) as a link under each image. Call `clearSession(sessionId)` when a session closes and `dispose()` on shutdown. With `mode: "prompt"`, supply `requestApproval` to ask before each new site; without it, prompt-mode retrieval fails closed.
+
+## Add voice input
+
+AgentLink's composer microphone (text appears at each pause, stops after silence, tap to toggle or hold to talk) is built from two core entry points that any host can reuse. The SDK does not record audio; the host supplies the microphone, UI, credentials, and upload route.
+
+| Piece                               | Entry point                                       | Runs in                |
+| ----------------------------------- | ------------------------------------------------- | ---------------------- |
+| Pause segmentation, levels, WAV     | `@agentlink/core/voice`                           | Node, browser, or edge |
+| Transcription with Codex/OpenAI key | `transcribeCodexAudio` in `@agentlink/core/codex` | Node only              |
+
+`@agentlink/core/voice` is the dependency-free browser/edge voice entry. It exports `VoiceActivitySegmenter`, `resampleToPcm16`, and `encodeWavPcm16`, and imports nothing. The separate `browser-runtime` and `codex-device-auth` portable entries are described above; full providers remain Node-only.
+
+1. **Show the button** only when the host has a ChatGPT/Codex sign-in or an OpenAI API key for the user. Disable it with a reason when recording cannot work, for example on a browser page that is not HTTPS or `localhost`. Treat transcription error code `auth_required` as signed out.
+2. **Capture** mono 16-bit PCM at 16 kHz in frames of roughly 20 to 100 ms. In a browser, use `getUserMedia` plus an `AudioContext` processor and convert each buffer with `resampleToPcm16(samples, context.sampleRate, 16000)`. In a Node process on Linux, read raw PCM from `arecord -t raw -f S16_LE -r 16000 -c 1` or `pw-record`.
+3. **Segment** with one `VoiceActivitySegmenter` per dictation. Each `push(frame)` returns a meter `level` in `[0, 1]`, a `segment` when the speaker pauses (`pauseMs`, default 700), and `autoStop` once after `autoStopMs` of silence following speech or `noSpeechTimeoutMs` without speech. Call `flush()` for the tail when dictation ends. `peak === 0` afterwards means the microphone delivered digital silence, usually a permission problem.
+4. **Transcribe** each segment with `encodeWavPcm16(segment, 16000)` and `transcribeCodexAudio(...)` on the server, chained so text arrives in speaking order. A browser UI must upload segments to its own authenticated route rather than calling ChatGPT directly.
+5. **Drive the UI** from a small state machine (`idle`, `starting`, `recording`, `transcribing`): a press shorter than 350 ms toggles, a longer hold records until release and ignores auto-stop, Escape cancels and discards late results, and text is inserted at the current caret. Keep auto-send off by default; when enabled, send only after a hands-free finish, never after the user clicks stop.
+
+Transcription with ChatGPT/Codex OAuth uses ChatGPT's dictation endpoint, which OpenAI does not document as a public API, so it may change; usage counts against the user's plan. To avoid Cloudflare's bot challenge (`challenge_blocked`), which Electron's default TLS handshake triggers, `transcribeCodexAudio` uploads by default with a narrower TLS cipher list and honours proxy environment variables. A custom `fetch` replaces that default, so build it with `createCodexTranscriptionFetch()` or the same cipher list. Text arrives per utterance, about a second after each pause, not word by word.
+
+The core package ships the full recipe as `docs/voice-input.md`: complete browser and Node capture functions, a framework-neutral dictation controller, UI details, error handling, and a smoke-test checklist.
 
 ## Migration playbooks
 

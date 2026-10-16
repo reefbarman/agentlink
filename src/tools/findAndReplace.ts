@@ -39,22 +39,45 @@ export interface FindAndReplaceProviders {
   prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
 }
 
-function expandReplacement(
+const REPLACEMENT_ESCAPES: Record<string, string> = {
+  n: "\n",
+  t: "\t",
+  "\\": "\\",
+};
+
+/**
+ * Expands a regex-mode replacement template in one pass. Like VS Code's regex
+ * replace, `\n`, `\t` and `\\` are interpreted so replacement text can reproduce
+ * the whitespace a pattern matched; other backslash sequences stay literal.
+ */
+export function expandReplacement(
   replacement: string,
   match: RegExpExecArray,
 ): string {
-  return replacement.replace(/\$(\$|\d{1,2})/g, (token, reference: string) => {
-    if (reference === "$") return "$";
-    const index = Number(reference);
-    if (index > 0 && index < match.length) return match[index] ?? "";
-    if (reference.length === 2) {
-      const first = Number(reference[0]);
-      if (first > 0 && first < match.length) {
-        return (match[first] ?? "") + reference[1];
-      }
+  return replacement.replace(
+    /\\([nt\\])|\$(\$|\d{1,2})/g,
+    (token, escape: string | undefined, dollar: string | undefined) =>
+      escape !== undefined
+        ? (REPLACEMENT_ESCAPES[escape] ?? token)
+        : expandDollarReference(token, dollar ?? "", match),
+  );
+}
+
+function expandDollarReference(
+  token: string,
+  reference: string,
+  match: RegExpExecArray,
+): string {
+  if (reference === "$") return "$";
+  const index = Number(reference);
+  if (index > 0 && index < match.length) return match[index] ?? "";
+  if (reference.length === 2) {
+    const first = Number(reference[0]);
+    if (first > 0 && first < match.length) {
+      return (match[first] ?? "") + reference[1];
     }
-    return token;
-  });
+  }
+  return token;
 }
 
 export async function handleFindAndReplace(

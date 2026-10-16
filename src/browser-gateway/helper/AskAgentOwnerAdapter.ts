@@ -190,7 +190,11 @@ export class AskAgentOwnerAdapter {
       },
       {
         commandCapabilities: ASK_AGENT_OWNER_COMMAND_CAPABILITIES,
-        dataPlaneFeatures: ["transcript-block-detail-v1"],
+        dataPlaneFeatures: [
+          "transcript-block-detail-v1",
+          "transcript-display-media-v1",
+          "transcript-image-attribution-v1",
+        ],
       },
     );
     this.projectionSubscription = this.projection.onDidPublish(

@@ -4,6 +4,37 @@ import type {
   TranscriptDisplayBlock,
 } from "../dataPlane/transcriptBlockDetail";
 
+import { BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
+import type { RemoteDisplayImageDetail } from "@agentlink/protocol/chat-transcript";
+
+/** Fetches one message display image over the relay and returns a data URL. */
+export async function loadRemoteDisplayImage(
+  reference: RemoteDisplayImageDetail,
+  sessionId: string,
+  requestDetail: (
+    request: TranscriptBlockDetailRequest,
+  ) => Promise<TranscriptBlockDetailResponse>,
+): Promise<string> {
+  const response = await requestDetail({
+    kind: "transcript.block-detail",
+    sessionId,
+    messageId: reference.messageId,
+    blockId: BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+    contentRevision: reference.contentRevision,
+    resource: { kind: "display-image", index: reference.index },
+  });
+  if (response.state !== "media") {
+    throw new Error(
+      response.state === "stale_revision"
+        ? "This image has changed. Retry to load the current version."
+        : response.state === "ready"
+          ? "Image preview response is unavailable."
+          : detailStateMessage(response.state),
+    );
+  }
+  return `data:${response.mimeType};base64,${response.data}`;
+}
+
 export async function loadRemoteTranscriptBlockDetail(
   block: TranscriptDisplayBlock,
   sessionId: string,

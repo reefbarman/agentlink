@@ -60,6 +60,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
   "webAccess.nativeSearchMode",
+  "webAccess.imageRetrieval",
   "webAccess.allowedDomains",
   "webAccess.blockedDomains",
   "webAccess.maxSearchUsesPerTurn",
@@ -75,6 +76,8 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "showThinking",
   "codex.textVerbosity",
   "codex.useWebSocket",
+  "voiceInput.autoStopAfterSilenceMs",
+  "voiceInput.autoSend",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

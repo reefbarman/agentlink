@@ -24,4 +24,5 @@ export * from "./turnExecution.js";
 export * from "./turnInteractions.js";
 export * from "./turnKernel.js";
 export * from "./turnLeases.js";
+export * from "./voice.js";
 export * from "./webAccess.js";

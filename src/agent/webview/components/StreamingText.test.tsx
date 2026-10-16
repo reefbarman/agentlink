@@ -13,6 +13,7 @@ import {
   showFileOpenFailure,
 } from "./fileLinkFeedback";
 
+import { MarkdownImageProvider } from "./MarkdownImage";
 import { StreamingText } from "./StreamingText";
 
 const rendererMocks = vi.hoisted(() => ({
@@ -111,6 +112,113 @@ describe("StreamingText provider citations", () => {
     );
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent?.trim()).toBe("Supported. [source]");
+  });
+});
+
+describe("StreamingText markdown images", () => {
+  const coverUrl = "https://coverartarchive.org/release/1/front-500";
+
+  it("never loads a remote image directly without a host resolver", () => {
+    const { container } = render(
+      <StreamingText
+        text={`![OK Computer cover](${coverUrl})`}
+        streaming={false}
+      />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    const unavailable = screen.getByTestId("markdown-image-unavailable");
+    expect(unavailable.textContent).toContain("OK Computer cover");
+    expect(unavailable.querySelector("a")?.getAttribute("href")).toBe(coverUrl);
+  });
+
+  it("renders host-resolved images in the shared viewer with a source caption", async () => {
+    const resolve = vi.fn(async () => ({
+      status: "ready" as const,
+      src: "data:image/png;base64,AAAA",
+      mimeType: "image/png",
+      attribution: {
+        origin: "web_url" as const,
+        imageUrl: coverUrl,
+        extraction: "direct_url" as const,
+      },
+    }));
+    render(
+      <MarkdownImageProvider
+        scopeKey="session-1"
+        sessionId="session-1"
+        resolve={resolve}
+      >
+        <StreamingText
+          text={`Here it is:\n\n![OK Computer cover](${coverUrl})`}
+          streaming={false}
+        />
+      </MarkdownImageProvider>,
+    );
+    const image = await screen.findByRole("img", {
+      name: "OK Computer cover",
+    });
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+    expect(resolve).toHaveBeenCalledWith({
+      src: coverUrl,
+      sessionId: "session-1",
+      userConfirmed: false,
+    });
+    expect(screen.getByTestId("image-source-caption").textContent).toContain(
+      "coverartarchive.org",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OK Computer cover.png" }),
+    );
+    expect(
+      screen.getByRole("link", { name: "Download image" }).getAttribute("href"),
+    ).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("asks before loading an image the chat has not seen", async () => {
+    const resolve = vi.fn(
+      async ({ userConfirmed }: { userConfirmed?: boolean }) =>
+        userConfirmed
+          ? {
+              status: "ready" as const,
+              src: "data:image/png;base64,BBBB",
+              mimeType: "image/png",
+            }
+          : { status: "needs_confirmation" as const, host: "example.com" },
+    );
+    render(
+      <MarkdownImageProvider scopeKey="s" resolve={resolve}>
+        <StreamingText
+          text="![chart](https://example.com/chart.png)"
+          streaming={false}
+        />
+      </MarkdownImageProvider>,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Load image from example.com",
+      }),
+    );
+    expect(
+      (await screen.findByRole("img", { name: "chart" })).getAttribute("src"),
+    ).toBe("data:image/png;base64,BBBB");
+    expect(resolve).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userConfirmed: true }),
+    );
+  });
+
+  it("renders inline raster data images and rejects other data types", () => {
+    const { container } = render(
+      <StreamingText
+        text={
+          "![dot](data:image/png;base64,AAAA)\n\n![svg](data:image/svg+xml;base64,AAAA)"
+        }
+        streaming={false}
+      />,
+    );
+    const images = container.querySelectorAll("img");
+    expect(images).toHaveLength(1);
+    expect(images[0]?.getAttribute("alt")).toBe("dot");
+    expect(container.textContent).toContain("svg");
   });
 });
 

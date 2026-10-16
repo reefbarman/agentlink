@@ -615,7 +615,8 @@ await Promise.all([
           .replaceAll(
             '"./browserGatewayTranscriptText.js"',
             '"./browserGatewayTranscriptText.cjs"',
-          ),
+          )
+          .replaceAll('"./toolResult.js"', '"./toolResult.cjs"'),
       ),
   ),
   readFile("dist/browserGatewayTranscriptText.d.ts", "utf8").then((content) =>

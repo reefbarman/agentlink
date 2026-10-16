@@ -551,7 +551,7 @@ function prepareVisibleContent(params: {
       ? params.nextStartLine
       : (params.recoveryStartLine ?? params.nextStartLine);
   const outputWarning = params.stalled
-    ? `Provider pagination did not advance. Stopped without appending the non-advancing page or advertising a continuation line.${outputFile ? " Use read_file(output_file) for retained content." : " No retained output file is available."}`
+    ? `Provider pagination did not advance. Stopped without appending the non-advancing page or advertising a continuation line.${outputFile ? " Use read_file(output_file) for retained content." : " No retained output file is available."}${describeUnservedLines(retained)}`
     : outputFile
       ? params.nextStartLine === undefined
         ? "Content beyond the inline preview was saved to output_file; use read_file(output_file) instead of repeating web_fetch."
@@ -571,6 +571,24 @@ function prepareVisibleContent(params: {
         : {}),
     },
   };
+}
+
+/**
+ * When the provider header reports more lines than it served, say exactly which
+ * lines are missing so the agent does not mistake a partial page for a
+ * complete one.
+ */
+function describeUnservedLines(retained: string): string {
+  const totalMatch = retained.match(/\bTotal lines:\s*(\d+)\b/i);
+  const totalLines = totalMatch ? Number(totalMatch[1]) : undefined;
+  if (totalLines === undefined || !Number.isSafeInteger(totalLines)) return "";
+  let highestLine = -1;
+  for (const match of retained.matchAll(/^L(\d+):/gm)) {
+    const line = Number(match[1]);
+    if (Number.isSafeInteger(line)) highestLine = Math.max(highestLine, line);
+  }
+  if (highestLine < 0 || highestLine + 1 >= totalLines) return "";
+  return ` The page is INCOMPLETE: retrieved lines up to L${highestLine} of ${totalLines} (the last retrieved line may be cut off). Lines L${highestLine + 1}-L${totalLines - 1} are unavailable from this provider; use another approved web transport, such as an MCP page reader, for the remainder.`;
 }
 
 function findPageLineOffset(
@@ -601,8 +619,10 @@ function findPageContentOffset(
 const PROVIDER_INTERNAL_ERROR_LINE = /^(?:L\d+:\s*)?Internal Error\s*\(\)\s*$/i;
 // The provider may pair its error marker with a numbered fetch-failure line,
 // e.g. "L0: Failed to fetch https://example.com/a.yaml: Cache miss".
+// Unreachable hosts instead produce e.g.
+// "L0: URL https://host.invalid/page is not accessible via this tool."
 const PROVIDER_FETCH_FAILURE_LINE =
-  /^(?:L\d+:\s*)?Failed to fetch\s+https?:\/\/\S+?:\s*\S[^\n]*$/i;
+  /^(?:L\d+:\s*)?(?:Failed to fetch\s+https?:\/\/\S+?:\s*\S[^\n]*|URL\s+https?:\/\/\S+\s+is not accessible via this tool\.?)$/i;
 
 function isProviderPageHeaderLine(line: string): boolean {
   return (

@@ -46,13 +46,47 @@ export interface McpToolResultMeta {
   content: McpResultContentMeta[];
 }
 
+/**
+ * Host-observed provenance for an image retrieved from the public web.
+ * URLs are sanitised for publication (no credentials, query or fragment).
+ * Creator and licence values are publisher-supplied and unverified.
+ */
+export interface ImageAttribution {
+  origin: "web_page" | "web_url";
+  /** Sanitised source-page URL where the image was discovered. */
+  sourceUrl?: string;
+  /** Sanitised URL of the retrieved image resource. */
+  imageUrl?: string;
+  /** True when sanitisation removed parts that may identify the exact page. */
+  sanitized?: boolean;
+  title?: string;
+  alt?: string;
+  creator?: string;
+  license?: string;
+  extraction?:
+    | "json_ld"
+    | "open_graph"
+    | "twitter"
+    | "html_image"
+    | "direct_url";
+  width?: number;
+  height?: number;
+  /** ISO-8601 retrieval time. */
+  retrievedAt?: string;
+}
+
 export interface ToolResult {
   /** Host metadata, separate from arbitrary tool/MCP result data. */
   humanQuestionAnswer?: HumanQuestionAnswer;
   data?: unknown;
   content: Array<
     | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
+    | {
+        type: "image";
+        data: string;
+        mimeType: string;
+        attribution?: ImageAttribution;
+      }
     | { type: "document"; data: string; mimeType: string; name: string }
   >;
   isError?: boolean;

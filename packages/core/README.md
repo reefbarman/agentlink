@@ -1,8 +1,8 @@
 # @agentlink/core
 
-`@agentlink/core` is a **private, pre-release Node.js SDK** for embedding AgentLink's bounded conversational engine in a server application. It is not a browser, Edge, React client-component, or VS Code extension API.
+`@agentlink/core` is a **private, pre-release SDK**. Its full engine, provider factories and durable-session infrastructure require Node.js. Three focused entries support browser and edge bundles: `browser-runtime`, `codex-device-auth` and `voice`. They do not supply authentication, native networking, durable storage or a complete mobile host.
 
-Current package version: `0.1.0`.
+Current package version: `0.12.0`. Browser/device-auth additions are unreleased; consume a pinned matched artifact set from the reviewed checkout.
 
 ## Status and compatibility
 
@@ -39,11 +39,11 @@ The automated package-boundary proof is:
 npm run test:core-sdk-consumer
 ```
 
-It packs protocol, core, and Node-host as one exact-version set, installs them outside this repository, type-checks and runtime-loads every exported core entry point under ESM and CommonJS, rejects every core entry point under browser and Edge conditions, and runs one host-authorized remote MCP tool through Node-host and the core turn loop.
+It packs protocol, core, and Node-host as one exact-version set, installs them outside this repository, type-checks and runtime-loads every exported core entry point under ESM and CommonJS, rejects every Node-only core entry point under browser and Edge conditions, bundles the browser-safe `voice` entry point for the browser, and runs one host-authorized remote MCP tool through Node-host and the core turn loop.
 
 ## Reviewed entry points
 
-The private contract currently exposes these Node-only entry points. The packed-consumer gate type-checks and runtime-loads every one under ESM and CommonJS. Prefer the root entry point unless a focused subpath is needed for an adapter or test.
+The private contract currently exposes these entry points. All are Node-only except `voice`, `browser-runtime` and `codex-device-auth`. The packed-consumer gate checks ESM/CommonJS imports, rejects Node-only entries under browser/edge conditions, and bundles the portable entries. Browser hosts must use the focused portable entries, not the root engine or provider factories.
 
 | Entry point                                                                                   | Purpose                                                                                                                 |
 | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -61,8 +61,19 @@ The private contract currently exposes these Node-only entry points. The packed-
 | `embedded-agent-web`                                                                          | Framework-neutral Web `Request`/`Response` handler with bounded JSON, lifecycle dispatch, and NDJSON turn streaming.    |
 | `native-web-tools`, `web-access`                                                              | Portable provider-native web-access contracts; they do not grant a host network authority by themselves.                |
 | `session-transcript-recall`, `surface-model-messages`                                         | Portable transcript and model-message conversion helpers.                                                               |
+| `voice`                                                                                       | Browser-safe dictation helpers: pause-based utterance segmentation, auto-stop, meter levels, resampling, WAV encoding.  |
 
 Do not import unexported files under `dist/` or rely on root `src/` compatibility facades. Any addition, rename, or removal must update the packed-consumer fixture before another consumer relies on it.
+
+## Browser and native-WebView hosts
+
+Import `runAgentToolLoop`, execution limits, model-message types, web contracts, existing Codex Responses request translation and `parseCodexResponseStreamEvents` from `@agentlink/core/browser-runtime`. The same implementation backs Node and browser hosts; there are no Node polyfills, credential resolution or built-in transport in this entry.
+
+The host supplies bounded `callModel` and `runTool` handlers, schemas, authority, exact replay persistence and UI. Limits are opt-in, and in-flight HTTP needs host cancellation. Parse with termination evidence enabled and reject refusal, truncation or missing authoritative completion rather than treating transport EOF as success. Web definitions/helpers are not a network service.
+
+`@agentlink/core/codex-device-auth` provides the verified Codex device-code URLs, request builders, bounded challenge/poll parsing, expiry/cancellation checks and token-exchange form. This is not a generic OAuth device grant or an automatic sign-in manager. Trusted hosts own polling, token exchange, refresh and secure storage. A native app should expose only the user code, verification URL, opaque operation ID and safe status to its WebView, never authorization codes, PKCE verifiers or tokens. Existing desktop/CLI PKCE remains unchanged.
+
+The browser-like unit fixture runs the shared loop/parser without Node globals. Clean packed-consumer checks cover the new subpaths. These are portability proofs, not evidence of a live account, iPhone lifecycle correctness or a complete durable mobile engine.
 
 ## Generate content and run tools without sessions
 
@@ -138,6 +149,44 @@ Public events/results contain only safe tool projections and stable errors. Set 
 The client defaults to a 60-second deadline, zero provider retries, 64 KiB each for serialized input and schema, 1 MiB of accumulated output, and a 1 MiB event queue. It sends `store: false` only when the endpoint is configured with `supportsStoreFalse`. Typed output succeeds only after an observed normal provider finish followed by local schema validation. Refusal, truncation, missing termination evidence, malformed JSON, and schema failure are errors.
 
 Use the durable engine below when the SDK should own conversational history, resumable approvals, recovery, or multi-process session coordination. Moving from the client to the engine is an explicit lifecycle choice, not a durability flag on one API.
+
+## Voice input
+
+Two entry points turn speech into prompt text. The SDK does not record audio; the host supplies the microphone.
+
+- `transcribeCodexAudio(...)` from `@agentlink/core/codex` (Node only) transcribes one recorded clip with the same host-owned `CodexCredentialProvider` used for models. Credentials resolve with purpose `"transcription"` and model ID `CODEX_TRANSCRIPTION_CREDENTIAL_MODEL_ID`.
+- `@agentlink/core/voice` (Node, browser, and edge) turns a live stream of recorded frames into utterances at natural pauses, reports a meter level, and signals auto-stop after silence. It exports `VoiceActivitySegmenter`, `resampleToPcm16`, and `encodeWavPcm16`, and imports nothing.
+
+```ts
+import { transcribeCodexAudio } from "@agentlink/core/codex";
+import { encodeWavPcm16, VoiceActivitySegmenter } from "@agentlink/core/voice";
+
+const segmenter = new VoiceActivitySegmenter({
+  sampleRate: 16_000,
+  autoStopMs: 2_000, // silence after speech that ends the dictation
+  noSpeechTimeoutMs: 10_000, // give up if nobody speaks
+});
+
+// For each 16 kHz mono PCM frame from the microphone:
+const { level, segment, autoStop } = segmenter.push(frame);
+if (segment) {
+  const { text } = await transcribeCodexAudio({
+    credentialProvider,
+    context: principal,
+    audio: {
+      data: encodeWavPcm16(segment, 16_000),
+      mimeType: "audio/wav",
+      filename: "speech.wav",
+    },
+  });
+}
+```
+
+Transcribe segments in order while recording continues, and `flush()` the tail when dictation ends. When the UI runs in a browser, segment there and upload each WAV to your own backend; never call ChatGPT from the page.
+
+**[Add a voice input button](docs/voice-input.md)** is the full recipe for a dictation button like AgentLink's composer microphone: browser and Node capture code, segmenter options, an ordered transcription queue, a framework-neutral controller with tap, hold-to-talk, auto-stop, cancel, and auto-send, UI details, error handling, and a smoke-test checklist.
+
+ChatGPT/Codex OAuth uses ChatGPT's subscription transcription endpoint (`CODEX_TRANSCRIBE_URL`), which Codex dictation uses but OpenAI does not document as a public API. It may change, and it can be blocked by a bot challenge, reported as `CodexTranscriptionError` code `challenge_blocked`. A 401 triggers one credential refresh and retry. Cloudflare also judges the client's TLS handshake: Electron-hosted Node (BoringSSL) is challenged with its default cipher list. To avoid this, `transcribeCodexAudio` uploads by default through undici with a narrower modern ECDHE/AEAD cipher list (`CODEX_TRANSCRIPTION_TLS_CIPHERS`), in every Node runtime, and honours `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`. `createCodexTranscriptionFetch({ ciphers, env })` builds the same fetch for reuse. A custom `fetch` option replaces the default entirely, so give it the same cipher list. The request body is pre-encoded multipart bytes, so any fetch implementation works. OpenAI API-key credentials use the public Audio API with `gpt-4o-mini-transcribe` (override with `apiKeyModel`). Clips over 25 MiB are rejected before upload. Other error codes are `auth_required`, `audio_empty`, `audio_too_large`, `usage_limited`, `request_failed`, and `invalid_response`. Present the transcript for review rather than sending it automatically.
 
 ## Compose a durable engine
 

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.13.0 — 2026-10-15
+
+- `@agentlink/node-host` adds `createNodeHostWebImageTools(...)`: `inspect_page_images` lists a public page's images and `present_images` retrieves image URLs or candidates so the model can see them and the host can show them with source attribution. Agents show images with Markdown; `resolveImageSource(sessionId, src)` resolves `![alt](source)` in agent output to bytes and attribution (automatically for URLs seen in the session, otherwise after user confirmation), so hosts never load remote URLs in their UI. Retrieval is public-address-only with byte, pixel and per-turn limits; `getImage(...)` returns retained bytes. Adds `undici` and `parse5` as node-host dependencies.
+- Adds the browser/edge-safe `browser-runtime` entry for the existing tool loop, execution limits, web contracts and Codex Responses request/stream processing. Full engines and provider factories remain Node-only. Responses byte limits now use the shared platform-neutral UTF-8 helper.
+- Adds `codex-device-auth` protocol helpers for Codex's documented device-code flow, including fixed endpoints, bounded challenge/poll parsing and expiry/cancellation checks. Hosts still own polling, token exchange, refresh and secure storage; existing desktop PKCE is unchanged.
+- Extends packed-consumer browser/edge checks and adds browser-like multi-step/parser and device-auth fixtures.
+
+## 0.12.0 — 2026-10-10
+
+- `transcribeCodexAudio` now uploads by default through undici with a narrower TLS cipher list, so Electron and other Node hosts no longer hit ChatGPT's Cloudflare challenge (`challenge_blocked`) without a custom `fetch`. Proxy environment variables are honoured. `createCodexTranscriptionFetch()` and `CODEX_TRANSCRIPTION_TLS_CIPHERS` are exported from `@agentlink/core/codex`. Adds `undici` as a dependency, loaded only on first transcription.
+
+## 0.11.0 — 2026-10-10
+
+- web_search and web_fetch now work on any model by borrowing the ChatGPT/Codex OAuth standalone web route when signed in, in VS Code and Browser Ask Agent; tool descriptions advise trying native web first, then MCP web tools.
+
+## 0.10.0 — 2026-10-10
+
+- Adds `@agentlink/core/voice`, a browser-safe entry point for live dictation: `VoiceActivitySegmenter` cuts recorded PCM into utterances at natural pauses, reports meter levels, and signals auto-stop after silence, alongside `resampleToPcm16` and `encodeWavPcm16`. Pair it with `transcribeCodexAudio` to show text as the user speaks.
+
+## 0.9.0 — 2026-10-10
+
+- Adds a composer microphone button for Codex voice dictation in VS Code, browser, Ask Agent and Desktop, plus a new transcribeCodexAudio SDK API in @agentlink/core/codex.
+
+## 0.8.0 — 2026-10-09
+
+- Codex sign-in callback now listens only on loopback and ignores requests with the wrong state, and SDK hosts gain listenForCallback() and a linuxStore option to require Secret Service for credential storage.
+
 ## 0.7.1 — 2026-10-09
 
 - Inline images are now counted at a fixed token cost in the OpenAI-compatible usage fallback, preventing repeated automatic condensing after a screenshot.

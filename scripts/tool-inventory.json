@@ -440,6 +440,15 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "inspect_page_images",
+      "parameters": ["max_results", "url"],
+      "cluster": "media",
+      "sideEffect": "external",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "kill_background_agent",
       "parameters": ["reason", "sessionId"],
       "cluster": "background",
@@ -540,9 +549,15 @@
     },
     {
       "name": "present_images",
-      "parameters": ["image_ids", "use_recent_images"],
+      "parameters": [
+        "candidate_ids",
+        "image_ids",
+        "paths",
+        "urls",
+        "use_recent_images"
+      ],
       "cluster": "media",
-      "sideEffect": "control",
+      "sideEffect": "external",
       "devOnly": false,
       "availability": "mode-group",
       "definitionSource": "registry-schema"
@@ -866,5 +881,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "228440039bf425fc8f6fabf1768bd9c1cb09b7ac04f877a661266ee79e04fd91"
+  "revision": "f1baf883588b59c1ffcae78affaf41d44176b3c956b809f9178b4bed56d50411"
 }

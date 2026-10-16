@@ -1,4 +1,5 @@
 import type {
+  CodexCredentialPurpose,
   CodexCredentialProvider,
   CodexResolvedAuth,
 } from "@agentlink/core/codex";
@@ -26,7 +27,7 @@ export function createSharedCodexOAuthRuntime(
   const resolveAccount = async (request: {
     context: SharedCodexOAuthContext;
     modelId: string;
-    purpose: "stream" | "complete" | "catalog" | "authStatus" | "nativeWeb";
+    purpose: CodexCredentialPurpose;
     accountId: string;
   }): Promise<CodexResolvedAuth | null> => {
     const provider = (await ready()).provider;

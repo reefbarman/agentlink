@@ -3601,6 +3601,128 @@ describe("AgentSessionManager host injection", () => {
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 
+  it("borrows another provider's standalone web transport when the session provider has none", async () => {
+    const capabilities = {
+      supportsThinking: false,
+      supportsCaching: false,
+      supportsImages: false,
+      supportsToolUse: true,
+      contextWindow: 200_000,
+      maxOutputTokens: 8_192,
+    };
+    const sessionStream = vi.fn();
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: makeConfig().model,
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      listModels: vi.fn(() => [
+        {
+          id: makeConfig().model,
+          displayName: "Test model",
+          provider: "test",
+          capabilities,
+        },
+      ]),
+      stream: sessionStream,
+      complete: vi.fn(),
+    } as any);
+    const lentResult = { backend: "provider", provider: "lender" };
+    const executeNativeWebTool = vi.fn(async () => lentResult as unknown);
+    const lenderStream = vi.fn();
+    providers.register({
+      id: "lender",
+      displayName: "Lender",
+      condenseModel: "lender-model",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      listModels: vi.fn(() => [
+        {
+          id: "lender-model",
+          displayName: "Lender model",
+          provider: "lender",
+          capabilities,
+        },
+      ]),
+      getLendableWebCapabilities: vi.fn(async () => ({
+        search: { supported: true, supportsPageAccess: true },
+        fetch: { supported: false },
+      })),
+      executeNativeWebTool,
+      stream: lenderStream,
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBackgroundAgentSettings: () => ({}),
+            getWebAccessSettings: () => ({
+              searchBackend: "native",
+              fetchBackend: "native",
+            }),
+          },
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: null,
+            initialize: vi.fn(async () => undefined),
+            createCheckpoint: vi.fn(async () => null),
+            previewRevert: vi.fn(async () => null),
+            revertToCheckpoint: vi.fn(async () => false),
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const prepared = await (mgr as any).prepareTurnExecution(session);
+
+    expect(prepared.policy.enabledKinds).toEqual(["search", "fetch"]);
+    expect(prepared.context.nativeWebToolKinds).toEqual(["search", "fetch"]);
+
+    await expect(
+      prepared.context.nativeWebToolProvider.execute({
+        kind: "search",
+        input: { query: "agentlink" },
+      }),
+    ).resolves.toBe(lentResult);
+    expect(executeNativeWebTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: makeConfig().model,
+        kind: "search",
+        input: { query: "agentlink" },
+      }),
+    );
+
+    // A lent route never falls back to delegated hosted-tool execution.
+    executeNativeWebTool.mockResolvedValueOnce(null);
+    await expect(
+      prepared.context.nativeWebToolProvider.execute({
+        kind: "fetch",
+        input: { url: "https://example.com" },
+      }),
+    ).rejects.toThrow(/Use an MCP web tool instead/);
+    expect(sessionStream).not.toHaveBeenCalled();
+    expect(lenderStream).not.toHaveBeenCalled();
+  });
+
   it("reports an unavailable selected model before native web capability errors", async () => {
     const mgr = new AgentSessionManager(
       { ...makeConfig(), model: "retired-model" },

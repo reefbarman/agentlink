@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/core",
-  "version": "0.7.1",
+  "version": "0.13.0",
   "private": true,
   "description": "Portable AgentLink conversational engine and host contracts",
   "license": "MIT",
@@ -12,9 +12,46 @@
     "dist/**/*.d.ts",
     "dist/**/*.d.cts",
     "CHANGELOG.md",
-    "README.md"
+    "README.md",
+    "docs/**/*.md"
   ],
   "exports": {
+    "./browser-runtime": {
+      "browser": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "edge": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "import": {
+        "types": "./dist/browserRuntime.d.ts",
+        "default": "./dist/browserRuntime.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserRuntime.d.cts",
+        "default": "./dist/cjs/browserRuntime.cjs"
+      }
+    },
+    "./codex-device-auth": {
+      "browser": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "edge": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "import": {
+        "types": "./dist/codexDeviceAuth.d.ts",
+        "default": "./dist/codexDeviceAuth.js"
+      },
+      "require": {
+        "types": "./dist/cjs/codexDeviceAuth.d.cts",
+        "default": "./dist/cjs/codexDeviceAuth.cjs"
+      }
+    },
     ".": {
       "browser": null,
       "edge": null,
@@ -351,6 +388,24 @@
         "default": "./dist/cjs/turnLeases.cjs"
       }
     },
+    "./voice": {
+      "browser": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "edge": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "import": {
+        "types": "./dist/voice.d.ts",
+        "default": "./dist/voice.js"
+      },
+      "require": {
+        "types": "./dist/cjs/voice.d.cts",
+        "default": "./dist/cjs/voice.cjs"
+      }
+    },
     "./web-access": {
       "browser": null,
       "edge": null,
@@ -372,9 +427,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/protocol": "0.7.1",
+    "@agentlink/protocol": "0.13.0",
     "ajv": "8.20.0",
-    "openai": "7.30.1"
+    "openai": "7.30.1",
+    "undici": "8.11.2"
   },
   "peerDependencies": {
     "zod": "^4.0.0"

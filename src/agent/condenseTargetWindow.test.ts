@@ -1,5 +1,6 @@
 import {
   TARGET_USABLE_INPUT_TOKENS,
+  getTargetUsableInputTokens,
   getTargetWindowScale,
   getUsableInputTokens,
 } from "./condenseTargetWindow.js";
@@ -39,5 +40,39 @@ describe("condenseTargetWindow", () => {
         maxOutputTokens: 128_000,
       }),
     ).toBeCloseTo(TARGET_USABLE_INPUT_TOKENS / 872_000, 9);
+  });
+
+  it("prefers a provider-declared target over model defaults", () => {
+    expect(
+      getTargetUsableInputTokens("gpt-6.1-sol", {
+        condenseTargetInputTokens: 500_000,
+      }),
+    ).toBe(500_000);
+    expect(getTargetUsableInputTokens("gpt-6.1-sol")).toBe(
+      TARGET_USABLE_INPUT_TOKENS,
+    );
+    expect(
+      getTargetWindowScale(
+        {
+          contextWindow: 872_000,
+          maxOutputTokens: 128_000,
+          condenseTargetInputTokens: 500_000,
+        },
+        "gpt-6.1-sol",
+      ),
+    ).toBeCloseTo(500_000 / 744_000, 9);
+  });
+
+  it("uses model targets for Claude frontier and Haiku 5.5", () => {
+    expect(getTargetUsableInputTokens("claude-opus-5-5")).toBe(333_333);
+    expect(getTargetUsableInputTokens("claude-sonnet-4-6")).toBe(333_333);
+    expect(getTargetUsableInputTokens("claude-haiku-5-5")).toBe(100_000);
+    expect(getTargetUsableInputTokens("claude-haiku-4-5-20251001")).toBe(
+      TARGET_USABLE_INPUT_TOKENS,
+    );
+    expect(getTargetUsableInputTokens("gpt-6-luna")).toBe(
+      TARGET_USABLE_INPUT_TOKENS,
+    );
+    expect(getTargetUsableInputTokens()).toBe(TARGET_USABLE_INPUT_TOKENS);
   });
 });

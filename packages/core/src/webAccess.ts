@@ -24,6 +24,7 @@ export type {
   CoreWebAccessSettingsInput,
   CoreWebSearchMode,
 } from "@agentlink/protocol/web-access-policy";
+export type { CoreWebImageRetrievalMode } from "@agentlink/protocol/web-access-policy";
 
 import type {
   CoreHostedToolDefinition,
@@ -36,6 +37,7 @@ import type {
   CoreWebAccessSettings,
   CoreWebAccessSettingsInput,
   CoreWebSearchMode,
+  CoreWebImageRetrievalMode as WebImageRetrievalMode,
 } from "@agentlink/protocol/web-access-policy";
 import type {
   CoreJsonValue,
@@ -56,6 +58,7 @@ export const DEFAULT_CORE_WEB_ACCESS_SETTINGS: Readonly<CoreWebAccessSettings> =
     searchBackend: "native",
     fetchBackend: "native",
     nativeSearchMode: "cached",
+    imageRetrieval: "enabled",
     allowedDomains: [],
     blockedDomains: [],
     maxSearchUsesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_SEARCH_USES_PER_TURN,
@@ -78,6 +81,7 @@ export function normalizeCoreWebAccessSettings(
     "fetchBackend",
   );
   const nativeSearchMode = resolveSearchMode(value.nativeSearchMode);
+  const imageRetrieval = resolveImageRetrievalMode(value.imageRetrieval);
 
   const allowedDomains = normalizeDomainList(value.allowedDomains ?? []);
   const blockedDomains = normalizeDomainList(value.blockedDomains ?? []);
@@ -91,6 +95,7 @@ export function normalizeCoreWebAccessSettings(
     searchBackend,
     fetchBackend,
     nativeSearchMode,
+    imageRetrieval,
     allowedDomains,
     blockedDomains,
     maxSearchUsesPerTurn: normalizePositiveInteger(
@@ -123,6 +128,26 @@ function resolveSearchMode(value: unknown): CoreWebSearchMode {
     return value;
   }
   throw new Error(`Invalid web access nativeSearchMode: ${String(value)}`);
+}
+
+function resolveImageRetrievalMode(value: unknown): WebImageRetrievalMode {
+  if (value === undefined) return "enabled";
+  if (value === "prompt" || value === "enabled" || value === "disabled") {
+    return value;
+  }
+  throw new Error(`Invalid web access imageRetrieval: ${String(value)}`);
+}
+
+/**
+ * Effective host-side image retrieval mode. Disabling native fetch also
+ * disables image/page retrieval, so `fetchBackend: "disabled"` stays a
+ * complete off switch for AgentLink-owned page access.
+ */
+export function effectiveCoreWebImageRetrievalMode(
+  settings: Pick<CoreWebAccessSettings, "fetchBackend" | "imageRetrieval">,
+): WebImageRetrievalMode {
+  if (settings.fetchBackend === "disabled") return "disabled";
+  return settings.imageRetrieval ?? "enabled";
 }
 
 export function resolveCoreWebAccessPolicy(

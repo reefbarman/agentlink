@@ -1,0 +1,41 @@
+/* Composer mic button. Bundled into chat.css and browser-gateway.css. */
+
+.send-button.voice-input-button {
+  background: transparent;
+  color: var(--vscode-foreground);
+  /* Pointer presses drive hold-to-talk; avoid text selection/scroll. */
+  touch-action: none;
+  user-select: none;
+}
+
+.send-button.voice-input-button:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.send-button.voice-input-button.voice-input-recording {
+  background: var(--vscode-errorForeground, #f44);
+  color: var(--vscode-button-foreground, #fff);
+  /* The ring grows with the live microphone level (--voice-level, 0..1). */
+  box-shadow: 0 0 0 calc(1px + var(--voice-level, 0) * 6px)
+    color-mix(in srgb, var(--vscode-errorForeground, #f44) 40%, transparent);
+  transition: box-shadow 90ms linear;
+}
+
+.send-button.voice-input-button.voice-input-recording:hover:not(:disabled) {
+  background: var(--vscode-errorForeground, #f44);
+  opacity: 0.9;
+}
+
+.voice-input-timer {
+  align-self: center;
+  margin-right: 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .send-button.voice-input-button.voice-input-recording {
+    transition: none;
+  }
+}

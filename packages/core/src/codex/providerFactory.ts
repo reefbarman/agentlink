@@ -654,7 +654,8 @@ function coreCredentialProvider<TPrincipal extends AgentPrincipal>(
         principal: context.principal,
         providerId,
         modelId,
-        purpose,
+        // Transcription reuses the account's model credential.
+        purpose: purpose === "transcription" ? "complete" : purpose,
       });
       return toCodexAuth(credential, providerId);
     },

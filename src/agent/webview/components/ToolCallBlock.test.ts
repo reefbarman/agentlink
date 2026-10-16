@@ -602,6 +602,10 @@ describe("ToolCallBlock", () => {
     expect(
       dialog.querySelector(".user-image-lightbox-image")?.getAttribute("src"),
     ).toBe("data:image/png;base64,YWJjZA==");
+    expect(screen.getByRole("button", { name: "Print image" })).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Download image" }).getAttribute("href"),
+    ).toBe("data:image/png;base64,YWJjZA==");
     fireEvent.click(
       screen.getByRole("button", { name: "Open image in editor" }),
     );

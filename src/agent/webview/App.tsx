@@ -113,11 +113,18 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
+import { useHostVoiceInput } from "./useHostVoiceInput";
 import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   resolveOpenFileRequest,
   trackOpenFileRequest,
 } from "./components/fileLinkFeedback";
+import {
+  requestMarkdownImage,
+  settleMarkdownImageRequest,
+} from "./markdownImageRequests";
+import { MarkdownImageProvider } from "./components/MarkdownImage";
+import type { MarkdownImageResolveRequest } from "../../shared/markdownImageSource";
 import {
   toVsCodeSelectionMessage,
   type WriteApprovalSelection,
@@ -408,6 +415,8 @@ export function App({
   useEffect(() => {
     vscodeApi.postMessage({ command: "releaseUpdateGet" });
   }, [vscodeApi]);
+  const { voiceInput, handleHostMessage: handleHostVoiceMessage } =
+    useHostVoiceInput(vscodeApi);
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
   const modelSetupState = useMemo(
@@ -1422,6 +1431,9 @@ export function App({
         case "agentOpenFileResult":
           resolveOpenFileRequest(msg.requestId, msg.ok, msg.error);
           break;
+        case "agentMarkdownImageResolved":
+          settleMarkdownImageRequest(msg.requestId, msg.result);
+          break;
         case "agentDebugInfo":
           if (msg.sessionId && msg.sessionId !== stateRef.current.sessionId)
             break;
@@ -1674,6 +1686,12 @@ export function App({
           }
           break;
         }
+
+        case "voiceInputAvailability":
+        case "voiceInputEvent":
+        case "voiceInputResult":
+          handleHostVoiceMessage(msg);
+          break;
 
         case "promptPolishResult": {
           const pending = pendingPromptPolishRef.current.get(msg.requestId);
@@ -3652,6 +3670,15 @@ export function App({
     [vscodeApi],
   );
 
+  const handleResolveMarkdownImage = useCallback(
+    (request: MarkdownImageResolveRequest) =>
+      requestMarkdownImage(
+        (message) => vscodeApi.postMessage(message),
+        request,
+      ),
+    [vscodeApi],
+  );
+
   const handleRevealToolCallTerminal = useCallback(
     (id: string) => {
       vscodeApi.postMessage({ command: "revealToolCallTerminal", id });
@@ -4094,31 +4121,40 @@ export function App({
               </div>
             )}
             {transcriptView?.visible && (
-              <TranscriptView
-                task={transcriptView.task}
+              <MarkdownImageProvider
+                scopeKey={`transcript:${transcriptView.sessionId}`}
                 sessionId={transcriptView.sessionId}
-                messages={transcriptView.messages}
-                streaming={transcriptView.streaming}
-                statusOverride={transcriptView.statusOverride}
-                runtimeStatus={bgSessions.find(
-                  (session) => session.id === transcriptView.sessionId,
-                )}
-                todos={transcriptView.todos}
-                onOpenFile={handleOpenFile}
-                onOpenImageInEditor={handleOpenImageInEditor}
-                onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
-                onRetry={() => handleRetryBackground(transcriptView.sessionId)}
-                onSignIn={handleErrorSignIn}
-                onSignInAnotherAccount={handleErrorSignInAnotherAccount}
-                bgSessions={bgSessions}
-                onStopBackground={handleStopBackground}
-                onOpenTranscript={handleOpenBgTranscript}
-                onClose={() =>
-                  setTranscriptView((current) =>
-                    current ? { ...current, visible: false } : current,
-                  )
-                }
-              />
+                resolve={handleResolveMarkdownImage}
+                onOpenInEditor={handleOpenImageInEditor}
+              >
+                <TranscriptView
+                  task={transcriptView.task}
+                  sessionId={transcriptView.sessionId}
+                  messages={transcriptView.messages}
+                  streaming={transcriptView.streaming}
+                  statusOverride={transcriptView.statusOverride}
+                  runtimeStatus={bgSessions.find(
+                    (session) => session.id === transcriptView.sessionId,
+                  )}
+                  todos={transcriptView.todos}
+                  onOpenFile={handleOpenFile}
+                  onOpenImageInEditor={handleOpenImageInEditor}
+                  onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
+                  onRetry={() =>
+                    handleRetryBackground(transcriptView.sessionId)
+                  }
+                  onSignIn={handleErrorSignIn}
+                  onSignInAnotherAccount={handleErrorSignInAnotherAccount}
+                  bgSessions={bgSessions}
+                  onStopBackground={handleStopBackground}
+                  onOpenTranscript={handleOpenBgTranscript}
+                  onClose={() =>
+                    setTranscriptView((current) =>
+                      current ? { ...current, visible: false } : current,
+                    )
+                  }
+                />
+              </MarkdownImageProvider>
             )}
             {shiftDragOver && (
               <div class="drop-overlay">
@@ -4190,52 +4226,61 @@ export function App({
                 </div>
               </div>
             )}
-            <ChatView
-              key={selectedTabKey}
-              messages={state.messages}
-              streaming={state.streaming}
-              sessionId={state.chatState.sessionId}
-              originalPrompt={state.originalPrompt}
-              earlierUserTurnCount={state.loadedUserTurnOffset}
-              onLoadEarlierMessages={handleLoadEarlierSessionMessages}
-              detectedQuestion={state.detectedQuestion}
-              onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
-              onDismissDetectedQuestion={handleDismissDetectedQuestion}
-              onOpenFile={handleOpenFile}
-              onOpenImageInEditor={handleOpenImageInEditor}
-              onRevealToolCallTerminal={handleRevealToolCallTerminal}
-              onContinueToolCallInBackground={
-                handleContinueToolCallInBackground
-              }
-              onCompleteToolCall={handleCompleteToolCall}
-              onCancelToolCall={handleCancelToolCall}
-              onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
-              onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
-              onRevertCheckpoint={handleRevertCheckpoint}
-              onViewCheckpointDiff={handleViewCheckpointDiff}
-              onRetry={handleRetry}
-              onSignIn={handleErrorSignIn}
-              onSignInAnotherAccount={handleErrorSignInAnotherAccount}
-              onCondense={handleErrorCondense}
-              bgSessions={bgSessions}
-              onStopBackground={handleStopBackground}
-              onOpenTranscript={handleOpenBgTranscript}
-              onFinalMarkerContinue={handleFinalMarkerContinue}
-              streamingMetrics={streamingBaselineMetrics}
-              streamingMetricsSurface="vscode-webview"
-              streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
-              emptyState={
-                <ModelSetupCard
-                  setupState={modelSetupState}
-                  hasWorkspace={(state.chatState.projects?.length ?? 0) > 0}
-                  surface="vscode"
-                  onSetupAction={handleSetupAction}
-                  onOpenFolder={() =>
-                    vscodeApi.postMessage({ command: "agentOpenFolder" })
-                  }
-                />
-              }
-            />
+            <MarkdownImageProvider
+              scopeKey={`chat:${state.chatState.sessionId ?? selectedTabKey}`}
+              sessionId={state.chatState.sessionId ?? undefined}
+              resolve={handleResolveMarkdownImage}
+              onOpenInEditor={handleOpenImageInEditor}
+            >
+              <ChatView
+                key={selectedTabKey}
+                messages={state.messages}
+                streaming={state.streaming}
+                sessionId={state.chatState.sessionId}
+                originalPrompt={state.originalPrompt}
+                earlierUserTurnCount={state.loadedUserTurnOffset}
+                onLoadEarlierMessages={handleLoadEarlierSessionMessages}
+                detectedQuestion={state.detectedQuestion}
+                onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
+                onDismissDetectedQuestion={handleDismissDetectedQuestion}
+                onOpenFile={handleOpenFile}
+                onOpenImageInEditor={handleOpenImageInEditor}
+                onRevealToolCallTerminal={handleRevealToolCallTerminal}
+                onContinueToolCallInBackground={
+                  handleContinueToolCallInBackground
+                }
+                onCompleteToolCall={handleCompleteToolCall}
+                onCancelToolCall={handleCancelToolCall}
+                onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
+                onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
+                onRevertCheckpoint={handleRevertCheckpoint}
+                onViewCheckpointDiff={handleViewCheckpointDiff}
+                onRetry={handleRetry}
+                onSignIn={handleErrorSignIn}
+                onSignInAnotherAccount={handleErrorSignInAnotherAccount}
+                onCondense={handleErrorCondense}
+                bgSessions={bgSessions}
+                onStopBackground={handleStopBackground}
+                onOpenTranscript={handleOpenBgTranscript}
+                onFinalMarkerContinue={handleFinalMarkerContinue}
+                streamingMetrics={streamingBaselineMetrics}
+                streamingMetricsSurface="vscode-webview"
+                streamingMetricsScope={
+                  state.chatState.sessionId ?? "foreground"
+                }
+                emptyState={
+                  <ModelSetupCard
+                    setupState={modelSetupState}
+                    hasWorkspace={(state.chatState.projects?.length ?? 0) > 0}
+                    surface="vscode"
+                    onSetupAction={handleSetupAction}
+                    onOpenFolder={() =>
+                      vscodeApi.postMessage({ command: "agentOpenFolder" })
+                    }
+                  />
+                }
+              />
+            </MarkdownImageProvider>
             <ChatActivityShelf
               revealKey={
                 globalApproval?.id ??
@@ -4982,6 +5027,7 @@ export function App({
               onInterject={handleInterject}
               onStop={handleStop}
               onPolishPrompt={handlePolishPrompt}
+              voiceInput={voiceInput}
               streaming={state.streaming}
               reasoningEffort={
                 state.chatState.reasoningEffort ??

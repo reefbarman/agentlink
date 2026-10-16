@@ -31,6 +31,7 @@ it("pins web access policy contracts", () => {
     searchBackend: CoreWebAccessSelection;
     fetchBackend: CoreWebAccessSelection;
     nativeSearchMode: CoreWebSearchMode;
+    imageRetrieval?: "prompt" | "enabled" | "disabled";
     allowedDomains: string[];
     blockedDomains: string[];
     maxSearchUsesPerTurn: number;

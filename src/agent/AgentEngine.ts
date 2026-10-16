@@ -48,6 +48,12 @@ import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisc
 import { measureComposeRequestOccupancy } from "./composeEfficiency.js";
 import { getTargetWindowScale } from "./condenseTargetWindow.js";
 import {
+  appendPreCondenseNudge,
+  buildPreCondenseNudgeText,
+  hasPreCondenseNudge,
+  shouldIssuePreCondenseNudge,
+} from "./preCondenseNudge.js";
+import {
   buildContextLedger,
   DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO,
   getContextLedgerLayer,
@@ -725,11 +731,11 @@ function getCondenseBudgetSnapshot(
     session.lastInputTokens > 0
       ? session.lastCacheReadTokens / session.lastInputTokens
       : 0;
-  // The warm-cache bonus is relative to the 256k target window, not the real
-  // one, so a 1M model gets the same absolute headroom a 256k model would.
+  // The warm-cache bonus is relative to the model's target window (256k by
+  // default), not the real one, so a 1M model gets the same absolute headroom.
   const effectiveThreshold = Math.min(
     session.autoCondenseThreshold +
-      cacheHitRatio * 0.1 * getTargetWindowScale(caps),
+      cacheHitRatio * 0.1 * getTargetWindowScale(caps, model),
     0.95,
   );
   const softThresholdBudget = Math.floor(maxInputTokens * effectiveThreshold);
@@ -1142,6 +1148,7 @@ export function toolResultToContent(
           media_type: mediaType,
           data: content.data,
         },
+        ...(content.attribution ? { attribution: content.attribution } : {}),
       };
     })
     .filter((b): b is ContentBlock => b !== null);
@@ -3385,6 +3392,44 @@ export class AgentEngine {
             retainedToolResults,
           );
           toolResultContents.push(tr.historyContent);
+        }
+
+        // One-shot pre-condense notice, persisted with these tool results so
+        // it stays in the cached prefix and drops out when history condenses.
+        if (toolResultContents.length > 0 && session.autoCondense) {
+          const budget = getCondenseBudgetSnapshot(
+            session,
+            provider,
+            activeModel,
+          );
+          const projectedTokens =
+            budget.usedTokens +
+            toolResultContents.reduce(
+              (sum, content) =>
+                sum +
+                measureToolResultContentForAttribution(content).estimatedTokens,
+              0,
+            );
+          if (
+            shouldIssuePreCondenseNudge({
+              autoCondense: session.autoCondense,
+              hasPriorUsage: session.lastInputTokens > 0,
+              projectedTokens,
+              softThresholdBudget: budget.softThresholdBudget,
+              alreadyIssued: hasPreCondenseNudge(session.getMessages()),
+            })
+          ) {
+            const lastIndex = toolResultContents.length - 1;
+            const nudged = appendPreCondenseNudge(
+              toolResultContents[lastIndex]!,
+              buildPreCondenseNudgeText(budget.softThresholdBudget),
+            );
+            toolResultContents[lastIndex] = nudged;
+            toolResults[lastIndex]!.historyContent = nudged;
+            this.log?.(
+              `[agent] pre-condense notice issued at ~${projectedTokens} of ${budget.softThresholdBudget} tokens`,
+            );
+          }
         }
 
         // Append assistant turn + tool results atomically — no async gap between

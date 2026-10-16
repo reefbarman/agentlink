@@ -1,3 +1,4 @@
+import { utf8ByteLength } from "../turnExecution.js";
 import {
   CoreModelOutputLimitError,
   type CoreModelContentBlock,
@@ -82,7 +83,7 @@ export async function* parseCodexResponseStreamEvents(
   let responseCompleted = false;
   let outputBytes = 0;
   const addOutputBytes = (value: string) => {
-    outputBytes += Buffer.byteLength(value, "utf8");
+    outputBytes += utf8ByteLength(value);
     if (
       options.maxOutputBytes !== undefined &&
       outputBytes > options.maxOutputBytes
@@ -542,7 +543,7 @@ export async function* parseCodexResponseStreamEvents(
   );
   if (
     options.maxOutputBytes !== undefined &&
-    Buffer.byteLength(JSON.stringify(output), "utf8") > options.maxOutputBytes
+    utf8ByteLength(JSON.stringify(output)) > options.maxOutputBytes
   ) {
     throw new CoreModelOutputLimitError(options.maxOutputBytes);
   }

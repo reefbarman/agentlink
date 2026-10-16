@@ -104,7 +104,14 @@ import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
 import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
 import { handleGenerateImage } from "../tools/generateImage.js";
-import { handlePresentImages } from "../tools/presentImages.js";
+import { presentImages } from "../tools/presentImages.js";
+import { createLocalMarkdownImageReader } from "../tools/markdownImageResolver.js";
+import {
+  fetchVscodeWebImageForModel,
+  handleVscodeWebImageTool,
+  isVscodeWebImageRetrievalAvailable,
+} from "../tools/webImages/vscodeWebImageTools.js";
+import { isWebImageToolName } from "@agentlink/node-host";
 import { handleSaveSessionImage } from "../tools/saveSessionImage.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
@@ -343,6 +350,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
   present_images: schemas.presentImagesSchema,
+  inspect_page_images: schemas.inspectPageImagesSchema,
   save_session_image: schemas.saveSessionImageSchema,
   manage_memory: schemas.manageMemorySchema,
   recall_memory: schemas.recallMemorySchema,
@@ -1205,6 +1213,10 @@ export function getAgentTools(
         (name !== "web_search" || nativeWebToolKinds.includes("search")) &&
         (name !== "web_fetch" || nativeWebToolKinds.includes("fetch")),
     )
+    .filter(
+      ([name]) =>
+        !isWebImageToolName(name) || isVscodeWebImageRetrievalAvailable(),
+    )
     .filter(([name]) => IS_DEV_BUILD || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
@@ -1963,6 +1975,7 @@ export interface SessionImageReference {
   base64: string;
   messageIndex: number;
   imageIndex: number;
+  attribution?: import("@agentlink/protocol/tool-result").ImageAttribution;
 }
 
 export interface ToolDispatchContext {
@@ -4224,8 +4237,34 @@ async function dispatchToolCallWithTrackedApprovals(
         onApprovalRequest,
         ctx.getSessionImages,
       );
-    case "present_images":
-      return handlePresentImages(params, ctx.getSessionImages);
+    case "present_images": {
+      const webImageContext = {
+        sessionId,
+        turnId: ctx.hookTurnId,
+        signal: toolAbortSignal,
+        onApprovalRequest,
+        interactive: ctx.interactionPolicy !== "deny",
+      };
+      return presentImages(params, {
+        getSessionImages: ctx.getSessionImages,
+        fetchWebImage: isVscodeWebImageRetrievalAvailable()
+          ? (input) => fetchVscodeWebImageForModel(input, webImageContext)
+          : undefined,
+        readLocalImage: createLocalMarkdownImageReader(() =>
+          (vscode.workspace.workspaceFolders ?? []).map(
+            (folder) => folder.uri.fsPath,
+          ),
+        ),
+      });
+    }
+    case "inspect_page_images":
+      return handleVscodeWebImageTool(toolName, params, {
+        sessionId,
+        turnId: ctx.hookTurnId,
+        signal: toolAbortSignal,
+        onApprovalRequest,
+        interactive: ctx.interactionPolicy !== "deny",
+      });
     case "save_session_image":
       return handleSaveSessionImage(params, {
         sessionId,

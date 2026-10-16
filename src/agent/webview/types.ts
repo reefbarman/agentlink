@@ -36,6 +36,10 @@ import type {
   StructuredQuestionRequest,
   UserQuestion,
 } from "@agentlink/protocol/structured-question";
+import type {
+  VoiceInputLiveEvent,
+  VoiceInputPreferences,
+} from "../../shared/voiceInputProtocol";
 
 import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
 import type { ChatSessionHistorySummary } from "@agentlink/protocol/chat-session-history";
@@ -61,6 +65,11 @@ export type ProviderUsageCardData =
 /** A question posed by the agent via the ask_user tool. */
 export type Question = UserQuestion;
 export type QuestionRequest = StructuredQuestionRequest;
+
+/** Host voice input state; hidden without a ChatGPT/Codex subscription. */
+export type VoiceInputAvailabilityState =
+  | { available: true; preferences?: VoiceInputPreferences }
+  | { available: false; hidden: boolean; reason: string };
 
 /** Consumption vs. limits for a /btw side question, shown as a visible budget. */
 export interface BtwBudget {
@@ -319,6 +328,11 @@ export type ExtensionMessage =
       error?: "not_found" | "open_failed";
     }
   | {
+      type: "agentMarkdownImageResolved";
+      requestId: string;
+      result: import("../../shared/markdownImageSource").MarkdownImageResolution;
+    }
+  | {
       type: "agentDetectQuestionResult";
       requestId: string;
       messageId: string;
@@ -398,6 +412,17 @@ export type ExtensionMessage =
       type: "promptPolishResult";
       requestId: string;
       polished?: string;
+      error?: string;
+    }
+  | {
+      type: "voiceInputAvailability";
+      availability: VoiceInputAvailabilityState;
+    }
+  | { type: "voiceInputEvent"; ownerId: string; event: VoiceInputLiveEvent }
+  | {
+      type: "voiceInputResult";
+      requestId: string;
+      text?: string;
       error?: string;
     }
   | ({

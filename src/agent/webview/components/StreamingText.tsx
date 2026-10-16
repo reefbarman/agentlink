@@ -6,6 +6,16 @@ import { Marked } from "marked";
 import { matchFilePaths } from "./filePathLinks";
 import { providerCitationExtension } from "./providerCitations";
 import { recordFileLinkClick } from "./fileLinkFeedback";
+import {
+  MARKDOWN_IMAGE_PLACEHOLDER_CLASS,
+  renderMarkdownImagePlaceholder,
+} from "./markdownImagePlaceholder";
+import {
+  MarkdownImage,
+  type MarkdownImageHost,
+  useMarkdownImageHost,
+} from "./MarkdownImage";
+import { render } from "preact";
 import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
 type SpecialBlock =
@@ -83,6 +93,7 @@ function createMarked(citations: readonly CoreWebCitation[]) {
       checkbox({ checked }: { checked: boolean }) {
         return renderMarkdownTaskCheckbox(checked);
       },
+      image: renderMarkdownImagePlaceholder,
     },
   });
 }
@@ -145,6 +156,33 @@ function parseMarkdown(
   });
 
   return { html, specialBlocks };
+}
+
+/** Mounts a MarkdownImage into every image placeholder in the container. */
+export function mountMarkdownImages(
+  container: HTMLElement,
+  host: MarkdownImageHost | null,
+): HTMLElement[] {
+  const slots = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      `.${MARKDOWN_IMAGE_PLACEHOLDER_CLASS}`,
+    ),
+  );
+  for (const slot of slots) {
+    const src = slot.getAttribute("data-markdown-image-src") ?? "";
+    const alt = slot.getAttribute("data-markdown-image-alt") ?? "";
+    const title = slot.getAttribute("data-markdown-image-title") ?? undefined;
+    slot.textContent = "";
+    render(
+      <MarkdownImage src={src} alt={alt} title={title} host={host} />,
+      slot,
+    );
+  }
+  return slots;
+}
+
+export function unmountMarkdownImages(slots: readonly HTMLElement[]): void {
+  for (const slot of slots) render(null, slot);
 }
 
 function addCodeBlockCopyButtons(container: HTMLElement) {
@@ -373,6 +411,9 @@ export function StreamingText({
   onOpenFile,
 }: StreamingTextProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageHost = useMarkdownImageHost();
+  const imageSlotsRef = useRef<HTMLElement[]>([]);
+  useEffect(() => () => unmountMarkdownImages(imageSlotsRef.current), []);
   // Streaming text that predates this component's mount (opening a background
   // transcript mid-stream, remounting a live chat view) was already delivered
   // once; replaying a large backlog as a typewriter reads as live token
@@ -477,6 +518,8 @@ export function StreamingText({
   // Update DOM
   useEffect(() => {
     if (!containerRef.current) return;
+    unmountMarkdownImages(imageSlotsRef.current);
+    imageSlotsRef.current = [];
     containerRef.current.innerHTML = parsed.html;
 
     addCodeBlockCopyButtons(containerRef.current);
@@ -490,6 +533,11 @@ export function StreamingText({
       linkifyFilePathCodeSpans(containerRef.current, onOpenFile);
       linkifyFilePathNodes(containerRef.current, onOpenFile);
     }
+
+    imageSlotsRef.current = mountMarkdownImages(
+      containerRef.current,
+      imageHost,
+    );
 
     // Re-stamp already-rendered diagrams — their SVGs were lost when innerHTML was reset
     // We cache rendered SVGs so we can restore them instantly
@@ -539,7 +587,7 @@ export function StreamingText({
           onOpenSpecialBlockPanel?.(block);
         });
       });
-  }, [parsed.html, onOpenSpecialBlockPanel, onOpenFile]);
+  }, [parsed.html, onOpenSpecialBlockPanel, onOpenFile, imageHost]);
 
   // Cache for rendered output — survives innerHTML resets
   const specialBlockHtmlCache = useRef<Map<number, string>>(new Map());
