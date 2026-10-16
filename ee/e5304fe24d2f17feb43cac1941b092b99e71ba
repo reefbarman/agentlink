@@ -1,0 +1,20 @@
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 541-546
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 135-137,142-146,149-150
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 2106-2112
+apps/server/src/browserResearch.ts
+  h_e08a86bb3a33a2 250-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eee5304fe24d2f17feb43cac1941b092b99e71ba",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
