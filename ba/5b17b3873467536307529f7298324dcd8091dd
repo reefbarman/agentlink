@@ -1,0 +1,27 @@
+apps/server/src/runnerManager.ts
+  h_e08a86bb3a33a2 49-91,455-459,501
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 119-122,149-171,194-195,197-199
+  s_a9c6a4bf46e1a0::t_4778e9c6b33ad8 193,196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ba5b17b3873467536307529f7298324dcd8091dd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_a9c6a4bf46e1a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e817303-c083-439d-901a-16cf78032828",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
