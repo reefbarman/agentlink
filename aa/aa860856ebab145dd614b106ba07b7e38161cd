@@ -1,0 +1,18 @@
+apps/server/src/editorProxy.test.ts
+  h_e08a86bb3a33a2 21,28-30,42-44,55,222-223,228-230
+apps/server/src/editorProxy.ts
+  h_e08a86bb3a33a2 39-44,182-185
+apps/server/README.md
+  h_e08a86bb3a33a2 570-571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aaaa860856ebab145dd614b106ba07b7e38161cd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
