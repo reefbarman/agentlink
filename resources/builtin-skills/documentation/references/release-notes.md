@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.37.0
+
 - Approve for Me now reviews unmatched public sandbox destinations through Guardian, optionally Jev first, instead of requiring a human card for every new site. Bounded task-authorized destinations receive an exact one-socket allow; high/critical risk, unknown or unavailable reviews still ask the user. Explicit network Prompt/Forbidden rules, private-address blocking and separate redirect/socket checks remain unchanged. Automated decisions never save destination rules.
 - Approve for Me now sends unapproved MCP tool calls in VS Code-backed sessions to Guardian instead of immediately asking the user. Existing MCP grants still apply first. With the experimental TypeSafe first pass enabled, Jev can allow an exact call from complete, non-sensitive evidence before full Guardian review; uncertain results fall back to Guardian. Automated allows are one-shot and do not save MCP rules. Guardian denials stop the call; unavailable review or oversized evidence retains the human approval fallback. Skill, read-only, delegation and compose restrictions remain in force.
 

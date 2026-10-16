@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-  "createdAt": "2026-10-16T10:06:04.312Z",
+  "sourceSha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
+  "createdAt": "2026-10-16T12:12:13.506Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,73 +10,73 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.35.0",
-      "baselineRef": "v1.35.0",
-      "reserved": "1.35.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
+      "published": "1.36.0",
+      "baselineRef": "v1.36.0",
+      "reserved": "1.36.0",
+      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.36.0",
+      "version": "1.37.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.36.0",
+      "tag": "v1.37.0",
       "notes": [
         {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
+          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
+          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.22.0",
-      "baselineRef": "desktop-v0.22.0",
-      "reserved": "0.22.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
+      "published": "0.23.0",
+      "baselineRef": "desktop-v0.23.0",
+      "reserved": "0.23.0",
+      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.23.0",
+      "version": "0.24.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.23.0",
+      "tag": "desktop-v0.24.0",
       "notes": [
         {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
+          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
+          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.20.0",
-      "baselineRef": "cli-v0.20.0",
-      "reserved": "0.20.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
+      "published": "0.21.0",
+      "baselineRef": "cli-v0.21.0",
+      "reserved": "0.21.0",
+      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.21.0",
+      "tag": "cli-v0.22.0",
       "notes": [
         {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
+          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
+          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
           "breaking": false
         }
       ]
@@ -147,6 +147,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
