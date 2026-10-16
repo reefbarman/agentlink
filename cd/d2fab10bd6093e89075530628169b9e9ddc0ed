@@ -1,0 +1,59 @@
+src/browser-gateway/webview/AssistantProjects.test.tsx
+  h_e08a86bb3a33a2 3,36-112
+  h_e08a86bb3a33a2 113-114
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/browser-gateway/webview/AssistantTasks.tsx
+  h_e08a86bb3a33a2 452-453,474-491,494-538,555-569,572-573
+  h_e08a86bb3a33a2 570
+src/browser-gateway/webview/AssistantMemory.test.tsx
+  h_e08a86bb3a33a2 77-90
+apps/server/README.md
+  h_e08a86bb3a33a2 39
+src/browser-gateway/webview/AssistantMemory.tsx
+  h_e08a86bb3a33a2 165,172,174,176,233-235,238-239
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 758,814-819,881-896,903,907,909-910,913-915,919
+  h_e08a86bb3a33a2 916
+src/browser-gateway/webview/AssistantSettings.tsx
+  h_e08a86bb3a33a2 121,133,135-138,140-141,143,148,150-152,205-210,212,243-248,255-271,273-277,279,283-284,288,290,294-297,299,303,305,311-316,320-325,327-341,357-368,370-373,376-378,382-383,394,398-399
+  h_e08a86bb3a33a2 120,122-123,139,142,249-254,293,298,300-302,307-310,317-319,342-356,380-381
+src/browser-gateway/webview/AssistantSettings.test.tsx
+  h_e08a86bb3a33a2 94-97,111-121,124-131,133-139,153,164-166
+  h_e08a86bb3a33a2 98
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 374-380
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 28-33
+src/browser-gateway/webview/AssistantProjects.tsx
+  h_e08a86bb3a33a2 470,472-483,486-527,541,543,560
+  h_e08a86bb3a33a2 471
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2212-2213,2223,2226-2239,2273,2665,3313-3484,3486,3488-3626
+  h_e08a86bb3a33a2 3485,3487,3627-3643
+src/browser-gateway/webview/AssistantTasks.test.tsx
+  h_e08a86bb3a33a2 247-292
+resources/builtin-skills/documentation/references/release-notes.md
+  s_66994b3d92e56e::t_a2d9c5c24e2ca1 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_66994b3d92e56e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e90ee4af-4081-4815-a300-f209be1d66b7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
