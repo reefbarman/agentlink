@@ -300,6 +300,8 @@ export interface GuardianShadowComparisonEvent {
   shadowInputTokens?: number;
   shadowOutputTokens?: number;
   shadowHttpStatus?: number;
+  /** Older omitted human answers were not treated as missing evidence. */
+  shadowOlderDecisionsWaived?: boolean;
   comparisonVersion?: 2;
   comparison?: GuardianComparisonMetadata;
 }

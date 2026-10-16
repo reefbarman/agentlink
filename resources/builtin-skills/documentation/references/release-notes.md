@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- TypeSafe Guardian shadow mode now tells Jev about the git repository a command runs in: the current branch, the default branch, the remote the branch tracks, and the configured remotes (with any credentials in remote URLs removed). AgentLink reads these from the repository's own files without running git. Commands that reach outside the machine, such as pushes and `gh` calls, were the largest source of Jev blocks that the main Guardian allowed, and they depend on exactly these facts.
+- In long sessions, the review evidence leaves out older answers to the agent's questions, which made most shadow reviews count as incomplete. For read-only commands and local build or test steps, that gap no longer makes a Jev allow ineligible, as long as every newer answer and your latest instruction are intact. Pushes, network calls, deletions and other changes still require complete evidence, and the gap is still recorded in telemetry.
+
 ## 1.33.0
 
 - TypeSafe Guardian shadow mode no longer drops your answers to the agent's questions. Jev now receives the same recorded answers as the main Guardian (up to 8, previously 6). When the agent's explanation around a question is long, only that explanation is shortened; previously the whole answer was dropped, which marked 70 of 76 recent shadow reviews as having incomplete evidence. Human answers are still never shortened, and a human answer containing a likely secret is still left out rather than redacted.

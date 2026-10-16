@@ -1011,6 +1011,7 @@ function mergeGuardianComparison(report, record) {
     byDecisionBasis: {},
     allowDenyDecisionBasis: {},
     denyAllowDecisionBasis: {},
+    olderDecisionsWaived: 0,
     fastPathSamples: [],
   });
   cohort.count += 1;
@@ -1029,6 +1030,9 @@ function mergeGuardianComparison(report, record) {
     const assessment = comparisonDimension(comparison.shadow?.assessment);
     cohort.byAssessment[assessment] =
       (cohort.byAssessment[assessment] ?? 0) + 1;
+    if (record.shadowOlderDecisionsWaived === true) {
+      cohort.olderDecisionsWaived += 1;
+    }
     incrementBoundedCategory(
       cohort.byDecisionBasis,
       record.shadowDecisionBasis,
@@ -1771,6 +1775,10 @@ function printSummary(report, inputPath, top) {
           [
             "shadow assessment",
             formatCounts(cohort.byAssessment ?? {}) || "n/a",
+          ],
+          [
+            "older omitted answers waived (read-only/toolchain)",
+            cohort.olderDecisionsWaived ?? 0,
           ],
           [
             "shadow decision basis",

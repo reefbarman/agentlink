@@ -826,8 +826,143 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(body.state.environment).toEqual([
       `Workspace roots: ${root}`,
       `Working directory: ${root}`,
+      "Git repository: none detected for the working directory",
       expect.stringContaining("verified sandbox"),
     ]);
+  });
+
+  it("adds git branch, default branch and remotes to the environment facts", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const readGitEnvironment = vi.fn(async () => ({
+      repositoryRoot: root,
+      branch: "feature/jev",
+      defaultBranch: "main",
+      upstreamRemote: "origin",
+      remotes: [
+        { name: "origin", url: "git@github.com:acme/app.git" },
+        {
+          name: "mirror",
+          url: "https://mirror.example/ghp_abcdefghijklmnopqrstuvwxyz123456.git",
+        },
+      ],
+    }));
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+      readGitEnvironment,
+    });
+    await reviewer.review(reviewInput("git push origin feature/jev"));
+    expect(readGitEnvironment).toHaveBeenCalledWith(root);
+    const bodyText = String(fetch.mock.calls[0]?.[1]?.body);
+    const body = JSON.parse(bodyText) as Record<string, any>;
+    expect(body.state.environment).toEqual(
+      expect.arrayContaining([
+        `Git repository: ${root}`,
+        "Current git branch: feature/jev (the default branch is main)",
+        "Current branch tracks remote: origin",
+        expect.stringContaining("origin (git@github.com:acme/app.git)"),
+      ]),
+    );
+    expect(bodyText).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
+  });
+
+  describe("older omitted human answers", () => {
+    const olderMarker = JSON.stringify({
+      evidenceOmitted:
+        "Older verified human input was omitted from review evidence or is no longer available. Earlier restrictions may still apply; do not infer consent from its absence, and clarify when it could matter.",
+    });
+    const recentDecision = JSON.stringify({
+      agentAuthoredSubject: {
+        context: "Next step",
+        question: { id: "go", question: "Continue?" },
+      },
+      humanAnswer: "Yes",
+    });
+    const run = async (command: string, decisions: string[]) => {
+      const reviewer = createTypeSafeGuardianShadowReviewer({
+        getConfig: () => ({ enabled: true }),
+        getApiKey: async () => "typesafe-key",
+        fetch: vi
+          .fn<typeof globalThis.fetch>()
+          .mockResolvedValue(typeSafeResponse()),
+        readGitEnvironment: async () => undefined,
+      });
+      const input = reviewInput(command);
+      input.context = [
+        ...input.context!,
+        ...decisions.map((content) => ({
+          role: "tool" as const,
+          content,
+          humanDecisionEvidence: true,
+        })),
+      ];
+      input.evidenceMetadata = {
+        humanAuthority: {
+          state: "partial",
+          reasons: ["projection_budget"],
+          sourceCount: 9,
+          includedCount: 7,
+          omittedCount: 2,
+        },
+        scripts: {
+          state: "complete",
+          reasons: [],
+          sourceCount: 0,
+          includedCount: 0,
+          omittedCount: 0,
+        },
+      };
+      return reviewer.review(input);
+    };
+
+    it("does not block eligibility for read-only work", async () => {
+      const result = await run("ls src", [olderMarker, recentDecision]);
+      expect(result.humanDecisionEvidence).toBe("omitted");
+      expect(result.olderDecisionsWaived).toBe(true);
+      expect(result.observation?.assessment).toBe("eligible");
+      // Coverage still records the gap honestly.
+      expect(
+        result.observation?.projection.coverage.human_authority.state,
+      ).toBe("partial");
+      expect(
+        toGuardianShadowComparisonEvent({
+          sessionId: "s",
+          reviewKind: "command",
+          primary: {
+            status: "reviewed",
+            outcome: "allow",
+            risk: "low",
+            userAuthorization: "medium",
+            model: "m",
+          } as CommandApprovalReviewResult,
+          primaryDurationMs: 1,
+          shadow: result,
+          shadowDurationMs: 1,
+        }).shadowOlderDecisionsWaived,
+      ).toBe(true);
+    });
+
+    it("still counts as incomplete for external or mutating work", async () => {
+      const result = await run("git push origin main", [
+        olderMarker,
+        recentDecision,
+      ]);
+      expect(result.olderDecisionsWaived).toBeUndefined();
+      expect(result.observation?.assessment).toBe("incomplete_evidence");
+    });
+
+    it("still counts as incomplete when a newer answer was omitted", async () => {
+      const newerOmitted = JSON.stringify({
+        evidenceOmitted:
+          "Literal human decision exceeded the evidence budget. Current consent is unknown; clarify rather than relying on older conflicting evidence.",
+      });
+      const result = await run("ls src", [olderMarker, newerOmitted]);
+      expect(result.olderDecisionsWaived).toBeUndefined();
+      expect(result.observation?.assessment).toBe("incomplete_evidence");
+    });
   });
 
   it("treats supporting development steps as part of the task", async () => {
