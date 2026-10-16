@@ -1,0 +1,93 @@
+apps/server/README.md
+  h_e08a86bb3a33a2 78-80,536-537
+src/browser-gateway/webview/AssistantMcp.test.tsx
+  h_e08a86bb3a33a2 99-193
+apps/server/src/mcpRegistry.ts
+  h_e08a86bb3a33a2 25-31,41-44,69-70,75-76,136-139,144,146-151,209-232,238,258-259,417-434,520,525-540,542-548,552-556,593,595,600,602-603,610-611,616,840-849,852-855,860,863-879,881-883,885,887-889
+  s_004c302cff5503::t_6a6224e005972e 541,601,612,850-851,880
+apps/server/src/assistantMcpTools.ts
+  h_e08a86bb3a33a2 15,18,29-32,139-169,222,228,289,371,436-437,462-465
+  s_004c302cff5503::t_7c42081cc63723 369-370,372
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2516-2537
+apps/server/src/mcpRegistry.test.ts
+  h_e08a86bb3a33a2 39,61,64-66,263-373
+  s_107f108efcc8b7::t_e6c26f8412ddac 62-63,67-68,374
+apps/server/src/personalConnections.ts
+  h_e08a86bb3a33a2 1-134
+apps/server/src/mcpToolGuard.ts
+  h_e08a86bb3a33a2 1-296
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 453-454
+apps/server/src/mcpRoutes.ts
+  h_e08a86bb3a33a2 14,19-21,27-29,49,75,90-93,99-108,117-123,137-148,222-224
+  s_004c302cff5503::t_94af8a2d63badd 94-98,115-116,136,149
+apps/server/src/briefings.test.ts
+  h_e08a86bb3a33a2 158-212
+apps/server/src/assistantMcpTools.test.ts
+  h_e08a86bb3a33a2 40-41,65-80,86,252-366
+  s_107f108efcc8b7::t_8456786ad224e7 39,42,367-368
+apps/server/src/briefings.ts
+  h_e08a86bb3a33a2 7-11,18-22,41-50,80-81,115-116,126-128,138,172-174,208-225,227,242-258,262-271,357-368
+  s_05f044b804b69c::t_b7ee3a7d3c4792 226,259-261,369-371
+CHANGELOG.md
+  h_e08a86bb3a33a2 37
+apps/server/src/mcpRoutes.test.ts
+  h_e08a86bb3a33a2 186-229
+apps/server/src/personalConnections.test.ts
+  h_e08a86bb3a33a2 1-120
+src/browser-gateway/webview/AssistantMcp.tsx
+  h_e08a86bb3a33a2 9-12,22-27,30-50,124-126,130-131,134-136,201-202,207,209,366-403,418,432-466,471-591
+  s_05f044b804b69c::t_788408e4f8ac2c 28-29,132,198-200,203,419-420,592-594
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 113,1899-1903
+apps/server/src/mcpToolGuard.test.ts
+  h_e08a86bb3a33a2 1-163
+resources/builtin-skills/documentation/references/release-notes.md
+  s_3876873059d941::t_42067641cbac1a 37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dfbd5d84bc33f3552299780f8d78d33329b3c253",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_004c302cff5503": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f8154f28-2f14-468d-a5c4-a9bc204f71f9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_05f044b804b69c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64564c9f-8909-45b9-be88-f42248dd1fc1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_107f108efcc8b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63afe003-da8a-4eb4-8aed-de43e3c52764",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_3876873059d941": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff36001-030c-4e29-b62b-5bc1f48af275",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
