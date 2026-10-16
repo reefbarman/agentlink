@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "df2457ce6f5c08620c26039a5756be435961229d",
-  "createdAt": "2026-10-16T05:05:58.961Z",
+  "sourceSha": "d78e5b6eb34c5bf8e82d60b7568957f9dc388252",
+  "createdAt": "2026-10-16T05:20:08.759Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.33.0",
-      "baselineRef": "v1.33.0",
-      "reserved": "1.33.0",
-      "commits": ["df2457ce6f5c08620c26039a5756be435961229d"],
+      "published": "1.34.0",
+      "baselineRef": "v1.34.0",
+      "reserved": "1.34.0",
+      "commits": ["d78e5b6eb34c5bf8e82d60b7568957f9dc388252"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.34.0",
+      "version": "1.35.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.34.0",
+      "tag": "v1.35.0",
       "notes": [
         {
-          "sha": "df2457ce6f5c08620c26039a5756be435961229d",
-          "subject": "feat(guardian): give Jev git facts and waive older answers for local work",
-          "summary": "The optional TypeSafe Guardian shadow reviewer now receives git branch and remote facts and no longer treats omitted older answers as missing evidence for read-only or local toolchain commands, with a new telemetry field recording waivers.",
+          "sha": "d78e5b6eb34c5bf8e82d60b7568957f9dc388252",
+          "subject": "feat(guardian): add local hand-labelled Jev replay tooling",
+          "summary": "Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.20.0",
-      "baselineRef": "desktop-v0.20.0",
-      "reserved": "0.20.0",
-      "commits": ["df2457ce6f5c08620c26039a5756be435961229d"],
+      "published": "0.21.0",
+      "baselineRef": "desktop-v0.21.0",
+      "reserved": "0.21.0",
+      "commits": ["d78e5b6eb34c5bf8e82d60b7568957f9dc388252"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.21.0",
+      "tag": "desktop-v0.22.0",
       "notes": [
         {
-          "sha": "df2457ce6f5c08620c26039a5756be435961229d",
-          "subject": "feat(guardian): give Jev git facts and waive older answers for local work",
-          "summary": "The optional TypeSafe Guardian shadow reviewer now receives git branch and remote facts and no longer treats omitted older answers as missing evidence for read-only or local toolchain commands, with a new telemetry field recording waivers.",
+          "sha": "d78e5b6eb34c5bf8e82d60b7568957f9dc388252",
+          "subject": "feat(guardian): add local hand-labelled Jev replay tooling",
+          "summary": "Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.",
           "breaking": false
         }
       ]
@@ -61,13 +61,25 @@
       "published": "0.19.0",
       "baselineRef": "cli-v0.19.0",
       "reserved": "0.19.0",
-      "commits": [],
+      "commits": ["d78e5b6eb34c5bf8e82d60b7568957f9dc388252"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.20.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.20.0",
+      "notes": [
+        {
+          "sha": "d78e5b6eb34c5bf8e82d60b7568957f9dc388252",
+          "subject": "feat(guardian): add local hand-labelled Jev replay tooling",
+          "summary": "Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.13.0",
@@ -87,6 +99,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "TypeSafe Guardian shadow mode now keeps up to 8 recorded human answers, redacting per field and shortening only long agent-written context, and session telemetry reports per-cohort results.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "df2457ce6f5c08620c26039a5756be435961229d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Guardian shadow reviewer now receives git branch and remote facts and no longer treats omitted older answers as missing evidence for read-only or local toolchain commands, with a new telemetry field recording waivers.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -115,10 +135,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "df2457ce6f5c08620c26039a5756be435961229d": {
+    "d78e5b6eb34c5bf8e82d60b7568957f9dc388252": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The optional TypeSafe Guardian shadow reviewer now receives git branch and remote facts and no longer treats omitted older answers as missing evidence for read-only or local toolchain commands, with a new telemetry field recording waivers.",
+      "summary": "Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

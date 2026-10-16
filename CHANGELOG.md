@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.35.0
+
+- Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.
+
 ## 1.34.0
 
 - TypeSafe Guardian shadow mode now tells Jev about the git repository a command runs in: the current branch, the default branch, the remote the branch tracks, and the configured remotes (with any credentials in remote URLs removed). AgentLink reads these from the repository's own files without running git. Commands that reach outside the machine, such as pushes and `gh` calls, were the largest source of Jev blocks that the main Guardian allowed, and they depend on exactly these facts.
