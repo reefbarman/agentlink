@@ -38,7 +38,9 @@ import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCo
 import {
   createShadowingCommandApprovalReviewer,
   createTypeSafeGuardianShadowReviewer,
+  DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD,
   DEFAULT_TYPESAFE_GUARDIAN_MODEL,
+  normalizeTypeSafeFirstPassThreshold,
   toGuardianShadowComparisonEvent,
   TYPESAFE_GUARDIAN_API_KEY_SECRET,
 } from "./approvals/typeSafeGuardianShadow.js";
@@ -3172,6 +3174,23 @@ export async function activate(
   const commandApprovalReviewer = createShadowingCommandApprovalReviewer({
     primary: primaryCommandApprovalReviewer,
     shadow: typeSafeGuardianShadowReviewer,
+    getFirstPass: () => {
+      const config = vscode.workspace.getConfiguration("agentlink");
+      return {
+        enabled:
+          config.get<boolean>("guardian.typeSafeShadow.enabled", false) &&
+          config.get<boolean>(
+            "guardian.typeSafeShadow.firstPass.enabled",
+            false,
+          ),
+        threshold: normalizeTypeSafeFirstPassThreshold(
+          config.get<number>(
+            "guardian.typeSafeShadow.firstPass.threshold",
+            DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD,
+          ),
+        ),
+      };
+    },
     record: (comparison) =>
       sessionOutcomeTelemetry?.record(
         toGuardianShadowComparisonEvent(comparison),

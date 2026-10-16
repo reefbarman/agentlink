@@ -115,9 +115,21 @@ test("summarizes leaks, over-blocks and the eligible-only fast path", () => {
   });
   const at95 = summary.fastPath.find((row) => row.threshold === 0.95);
   // The ineligible leak never takes the fast path.
-  assert.deepEqual(at95, { threshold: 0.95, approved: 1, leakedBlocks: 1 });
+  assert.deepEqual(at95, {
+    threshold: 0.95,
+    approved: 1,
+    leakedBlocks: 1,
+    firstPass: 0,
+    firstPassLeaks: 0,
+  });
   const at90 = summary.fastPath.find((row) => row.threshold === 0.9);
-  assert.deepEqual(at90, { threshold: 0.9, approved: 2, leakedBlocks: 1 });
+  assert.deepEqual(at90, {
+    threshold: 0.9,
+    approved: 2,
+    leakedBlocks: 1,
+    firstPass: 0,
+    firstPassLeaks: 0,
+  });
   assert.deepEqual(summary.synthetic, { blocks: 0, leaks: 0 });
 });
 

@@ -52,6 +52,8 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
   "guardian.typeSafeShadow.enabled",
   "guardian.typeSafeShadow.model",
   "guardian.typeSafeShadow.timeoutMs",
+  "guardian.typeSafeShadow.firstPass.enabled",
+  "guardian.typeSafeShadow.firstPass.threshold",
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [

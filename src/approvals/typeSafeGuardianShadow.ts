@@ -38,11 +38,18 @@ export const TYPESAFE_GUARDIAN_API_KEY_SECRET =
  * tied to one model version; aliases move without a code change.
  */
 export const DEFAULT_TYPESAFE_GUARDIAN_MODEL = "jev-1.14.0";
-const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v4";
-// Action families where an omitted older human answer cannot plausibly carry a
-// restriction that matters: no external, destructive or opaque effects.
-const OLDER_DECISION_WAIVER_FAMILIES: ReadonlySet<GuardianShadowActionFamily> =
-  new Set(["read_only", "project_toolchain"]);
+const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v5";
+// Subcommand codes where an omitted older human answer cannot plausibly carry
+// a restriction that matters: read-only work, local toolchain steps, and git's
+// own recoverable local operations (staging, committing, switching branches).
+// Generic file writes, moves and redirections can overwrite untracked data, so
+// they are not waived. A command qualifies only when every subcommand does.
+const OLDER_DECISION_WAIVER_CODES: ReadonlySet<string> = new Set([
+  "read_only",
+  "version_check",
+  "project_toolchain",
+  "git_mutation",
+]);
 const OLDER_DECISIONS_OMITTED_PREFIX = "Older verified human input";
 export const DEFAULT_TYPESAFE_GUARDIAN_TIMEOUT_MS = 15_000;
 const TYPESAFE_SYSTEM_ONE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -169,10 +176,14 @@ export interface TypeSafeGuardianShadowResult {
   observation?: GuardianReviewObservation;
   /**
    * The only human-authority gap was older answers left out of the shared
-   * review context, and the action is read-only or local toolchain work, so
-   * the gap was not treated as missing evidence for eligibility.
+   * review context, and every step is read-only, toolchain or local
+   * workspace work, so the gap was not treated as missing evidence.
    */
   olderDecisionsWaived?: boolean;
+  /** No subcommand is destructive, secret, privileged or hidden execution. */
+  firstPassActionEligible?: boolean;
+  /** This result approved the command as the first-pass reviewer. */
+  firstPassApproved?: boolean;
 }
 
 export interface TypeSafeGuardianShadowReviewer {
@@ -202,12 +213,116 @@ export interface GuardianShadowComparison {
   primaryPromptFingerprint?: string;
 }
 
+export interface TypeSafeFirstPassConfig {
+  enabled: boolean;
+  /** Minimum Jev allow probability, 0-1. */
+  threshold?: number;
+}
+
 export interface ShadowingCommandApprovalReviewerOptions {
   primary: CommandApprovalReviewer;
   shadow: TypeSafeGuardianShadowReviewer;
   record(comparison: GuardianShadowComparison): void;
+  /** Opt-in: a confident, eligible Jev allow decides without waiting for the Guardian. */
+  getFirstPass?: () => TypeSafeFirstPassConfig;
   log?: (message: string) => void;
   now?: () => number;
+}
+
+export const DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD = 0.9;
+const MIN_TYPESAFE_FIRST_PASS_THRESHOLD = 0.8;
+// Classifier codes that always wait for the Guardian: destructive, secret or
+// privileged steps, and execution hidden from the literal command text.
+// Executables or operations the static allowlist merely does not recognize
+// stay eligible because Jev judges the literal command.
+const FIRST_PASS_EXCLUDED_CODES: ReadonlySet<string> = new Set([
+  "destructive",
+  "secret_path",
+  "privileged",
+  "opaque_shell",
+  "inline_interpreter",
+  "other_dangerous",
+]);
+
+export function normalizeTypeSafeFirstPassThreshold(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(0.99, Math.max(MIN_TYPESAFE_FIRST_PASS_THRESHOLD, value))
+    : DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD;
+}
+
+/**
+ * Whether a Jev result may approve a command on its own. Only allows are
+ * ever short-circuited; anything else falls through to the Guardian.
+ */
+export function qualifiesForTypeSafeFirstPass(
+  shadow: TypeSafeGuardianShadowResult,
+  threshold: number,
+): boolean {
+  return (
+    shadow.status === "completed" &&
+    shadow.outcome === "allow" &&
+    shadow.decisionBasis === "authorized" &&
+    shadow.observation?.assessment === "eligible" &&
+    typeof shadow.allowProbabilityPermille === "number" &&
+    shadow.allowProbabilityPermille >=
+      Math.round(normalizeTypeSafeFirstPassThreshold(threshold) * 1000) &&
+    (shadow.risk === "low" || shadow.risk === "medium") &&
+    shadow.firstPassActionEligible === true
+  );
+}
+
+function isFirstPassActionEligible(input: CommandApprovalReviewInput): boolean {
+  const subcommands = input.classified.perSubCommand;
+  return (
+    subcommands.length > 0 &&
+    input.classified.tier !== "dangerous" &&
+    subcommands.every(
+      ({ result }) =>
+        result.tier !== "dangerous" &&
+        !FIRST_PASS_EXCLUDED_CODES.has(result.code),
+    )
+  );
+}
+
+/** Routine git workflow that reaches a remote (push, fetch, pull, gh). */
+function isRemoteGitWorkflow(
+  command: string,
+  result: { executable?: string },
+): boolean {
+  return (
+    result.executable === "gh" || /\bgit\b.*\b(push|fetch|pull)\b/.test(command)
+  );
+}
+
+function isOlderDecisionWaivableAction(
+  input: CommandApprovalReviewInput,
+): boolean {
+  const subcommands = input.classified.perSubCommand;
+  return (
+    subcommands.length > 0 &&
+    subcommands.every(
+      ({ command, result }) =>
+        OLDER_DECISION_WAIVER_CODES.has(result.code) ||
+        (result.code === "git_workflow" &&
+          !isRemoteGitWorkflow(command, result)),
+    )
+  );
+}
+
+function firstPassReviewResult(
+  shadow: TypeSafeGuardianShadowResult,
+): CommandApprovalReviewResult {
+  const probability = ((shadow.allowProbabilityPermille ?? 0) / 1000).toFixed(
+    2,
+  );
+  return {
+    outcome: "allow",
+    risk: shadow.risk ?? "medium",
+    userAuthorization: shadow.userAuthorization ?? "unknown",
+    rationale: `TypeSafe Jev first pass allowed this command (allow probability ${probability}, risk ${shadow.risk ?? "unknown"}); the Guardian review continues as an audit.`,
+    model: `typesafe/${shadow.model ?? DEFAULT_TYPESAFE_GUARDIAN_MODEL}`,
+    status: "reviewed",
+  };
 }
 
 const OUTCOME_OPTIONS = ["allow", "deny"] as const;
@@ -295,6 +410,9 @@ export function toGuardianShadowComparisonEvent(
     ...(comparison.shadow.olderDecisionsWaived
       ? { shadowOlderDecisionsWaived: true }
       : {}),
+    ...(comparison.shadow.firstPassApproved
+      ? { shadowFirstPassApproved: true }
+      : {}),
   };
 }
 
@@ -342,6 +460,7 @@ export function createTypeSafeGuardianShadowReviewer(
       };
       const diagnostics = {
         actionFamily,
+        firstPassActionEligible: isFirstPassActionEligible(input),
         authorizationEvidence,
         humanDecisionEvidence,
         humanDecisionCount,
@@ -517,12 +636,18 @@ export function createShadowingCommandApprovalReviewer(
         )
         .digest("hex")
         .slice(0, 16);
+      let firstPass: TypeSafeFirstPassConfig | undefined;
+      try {
+        firstPass = options.getFirstPass?.();
+      } catch {
+        firstPass = undefined;
+      }
+      // Observations are forwarded only for the decision actually returned.
       let primaryObservation: GuardianReviewObservation | undefined;
       const primaryInput = {
         ...snapshot,
         observe: (observation: GuardianReviewObservation) => {
           primaryObservation = observation;
-          reportGuardianObservation(observe, observation);
         },
       };
       const shadowStartedAt = now();
@@ -538,14 +663,86 @@ export function createShadowingCommandApprovalReviewer(
         }));
 
       const primaryStartedAt = now();
-      const primary = await options.primary.review(primaryInput);
-      const primaryDurationMs = Math.max(0, now() - primaryStartedAt);
+      const primaryPromise = options.primary
+        .review(primaryInput)
+        .then((primary) => ({
+          primary,
+          primaryDurationMs: Math.max(0, now() - primaryStartedAt),
+        }));
 
-      void shadowPromise
-        .then(({ shadow, shadowDurationMs }) => {
-          if (shadow.status === "disabled" || shadow.status === "missing_key") {
-            return;
-          }
+      let firstPassApproved = false;
+      if (firstPass?.enabled) {
+        // Whichever settles first: a qualifying Jev allow decides now;
+        // otherwise the Guardian decides as usual.
+        const winner = await Promise.race([
+          primaryPromise.then(
+            () => "primary" as const,
+            () => "primary" as const,
+          ),
+          shadowPromise.then(({ shadow }) =>
+            qualifiesForTypeSafeFirstPass(
+              shadow,
+              firstPass.threshold ?? DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD,
+            )
+              ? ("shadow" as const)
+              : primaryPromise.then(
+                  () => "primary" as const,
+                  () => "primary" as const,
+                ),
+          ),
+        ]);
+        firstPassApproved = winner === "shadow";
+      }
+
+      const recordWhenSettled = (
+        primaryPart: Promise<{
+          primary: CommandApprovalReviewResult;
+          primaryDurationMs: number;
+        }>,
+      ) =>
+        void Promise.all([primaryPart, shadowPromise])
+          .then(
+            ([{ primary, primaryDurationMs }, { shadow, shadowDurationMs }]) =>
+              recordComparison(
+                primary,
+                primaryDurationMs,
+                shadow,
+                shadowDurationMs,
+              ),
+          )
+          .catch((error: unknown) => {
+            options.log?.(
+              `[typesafe-guardian-shadow] comparison recording failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+
+      if (firstPassApproved) {
+        const { shadow } = await shadowPromise;
+        if (shadow.observation) {
+          reportGuardianObservation(observe, shadow.observation);
+        }
+        // The Guardian keeps running as an audit of the first-pass decision.
+        recordWhenSettled(primaryPromise);
+        return firstPassReviewResult(shadow);
+      }
+
+      const { primary, primaryDurationMs } = await primaryPromise;
+      if (primaryObservation) {
+        reportGuardianObservation(observe, primaryObservation);
+      }
+      recordWhenSettled(Promise.resolve({ primary, primaryDurationMs }));
+      return primary;
+
+      function recordComparison(
+        primary: CommandApprovalReviewResult,
+        primaryDurationMs: number,
+        shadow: TypeSafeGuardianShadowResult,
+        shadowDurationMs: number,
+      ): void {
+        if (shadow.status === "disabled" || shadow.status === "missing_key") {
+          return;
+        }
+        {
           options.record({
             sessionId: snapshot.sessionId,
             ...(snapshot.reviewId ? { reviewId: snapshot.reviewId } : {}),
@@ -556,7 +753,9 @@ export function createShadowingCommandApprovalReviewer(
             reviewKind: "command",
             primary,
             primaryDurationMs,
-            shadow,
+            shadow: firstPassApproved
+              ? { ...shadow, firstPassApproved: true }
+              : shadow,
             shadowDurationMs,
             primaryPromptFingerprint,
             comparison: compareGuardianObservations(
@@ -567,14 +766,17 @@ export function createShadowingCommandApprovalReviewer(
               shadow.observation ? false : null,
             ),
           });
-        })
-        .catch((error: unknown) => {
-          options.log?.(
-            `[typesafe-guardian-shadow] comparison recording failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
-
-      return primary;
+          if (
+            firstPassApproved &&
+            primary.status === "reviewed" &&
+            primary.outcome === "deny"
+          ) {
+            options.log?.(
+              `[typesafe-guardian-shadow] first-pass allow was denied by the Guardian audit (review ${snapshot.reviewId ?? "unknown"})`,
+            );
+          }
+        }
+      }
     },
   };
 }
@@ -937,7 +1139,7 @@ function buildTypeSafeGuardianState(
       !humanDecisions.redacted &&
       safeLatestUserInstruction.classification === "complete" &&
       !input.context?.some((entry) => entry.queuedHumanInput) &&
-      OLDER_DECISION_WAIVER_FAMILIES.has(actionFamily) &&
+      isOlderDecisionWaivableAction(input) &&
       !projection.coverage.human_authority.reasons.some(
         (reason) => reason !== "projection_budget",
       ),
@@ -1201,8 +1403,17 @@ function latestDirectUserInstructionQueued(
 function classifyActionFamily(
   input: CommandApprovalReviewInput,
 ): GuardianShadowActionFamily {
+  const families = actionFamilies(input);
+  if (families.size === 0) return "unknown";
+  if (families.size > 1) return "mixed";
+  return [...families][0] ?? "unknown";
+}
+
+function actionFamilies(
+  input: CommandApprovalReviewInput,
+): Set<GuardianShadowActionFamily> {
   const families = new Set<GuardianShadowActionFamily>();
-  for (const { result } of input.classified.perSubCommand) {
+  for (const { command, result } of input.classified.perSubCommand) {
     switch (result.code) {
       case "read_only":
       case "version_check":
@@ -1210,12 +1421,18 @@ function classifyActionFamily(
         break;
       case "workspace_mutation":
       case "git_mutation":
-      case "git_workflow":
       case "workspace_redirection":
         families.add("mutation");
         break;
       case "project_toolchain":
         families.add("project_toolchain");
+        break;
+      // Routine git workflow covers local steps (add, commit, switch) and
+      // ones that reach a remote (push, fetch, pull, gh pr create).
+      case "git_workflow":
+        families.add(
+          isRemoteGitWorkflow(command, result) ? "external" : "mutation",
+        );
         break;
       case "external_path":
       case "network_or_external_effect":
@@ -1239,9 +1456,7 @@ function classifyActionFamily(
         break;
     }
   }
-  if (families.size === 0) return "unknown";
-  if (families.size > 1) return "mixed";
-  return [...families][0] ?? "unknown";
+  return families;
 }
 
 function sanitizeAuthorizationEvidence(

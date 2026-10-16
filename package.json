@@ -605,7 +605,21 @@
           "scope": "machine",
           "type": "boolean",
           "default": false,
-          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results never affect approval decisions. Bounded command-review evidence, including secret-redacted bodies of scripts and inline files the command runs, is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results do not affect approval decisions unless agentlink.guardian.typeSafeShadow.firstPass.enabled is also on. Bounded command-review evidence, including secret-redacted bodies of scripts and inline files the command runs, is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+        },
+        "agentlink.guardian.typeSafeShadow.firstPass.enabled": {
+          "scope": "machine",
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental. Let a confident TypeSafe Jev allow approve a command before the Guardian finishes. Applies only when Jev's answer is eligible (complete evidence, consistent answers), its allow probability meets the threshold, its risk is low or medium, and the command contains no step the command classifier rates dangerous and no destructive, secret, privileged or hidden-execution steps. Jev never denies on its own: anything else waits for the Guardian, which still reviews every command in the background as an audit. Requires TypeSafe shadow mode and a stored API key."
+        },
+        "agentlink.guardian.typeSafeShadow.firstPass.threshold": {
+          "scope": "machine",
+          "type": "number",
+          "default": 0.9,
+          "minimum": 0.8,
+          "maximum": 0.99,
+          "description": "Minimum TypeSafe Jev allow probability for a first-pass approval."
         },
         "agentlink.guardian.typeSafeShadow.model": {
           "scope": "machine",

@@ -1012,9 +1012,15 @@ function mergeGuardianComparison(report, record) {
     allowDenyDecisionBasis: {},
     denyAllowDecisionBasis: {},
     olderDecisionsWaived: 0,
+    firstPassApproved: 0,
+    firstPassAuditDenied: 0,
     fastPathSamples: [],
   });
   cohort.count += 1;
+  if (record.shadowFirstPassApproved === true) {
+    cohort.firstPassApproved += 1;
+    if (record.primaryOutcome === "deny") cohort.firstPassAuditDenied += 1;
+  }
   cohort.byOperationalStatus[status] =
     (cohort.byOperationalStatus[status] ?? 0) + 1;
   cohort.byClass[classification] = (cohort.byClass[classification] ?? 0) + 1;
@@ -1777,8 +1783,12 @@ function printSummary(report, inputPath, top) {
             formatCounts(cohort.byAssessment ?? {}) || "n/a",
           ],
           [
-            "older omitted answers waived (read-only/toolchain)",
+            "older omitted answers waived (local work only)",
             cohort.olderDecisionsWaived ?? 0,
+          ],
+          [
+            "live first-pass approvals / Guardian audit denied",
+            `${cohort.firstPassApproved ?? 0} / ${cohort.firstPassAuditDenied ?? 0}`,
           ],
           [
             "shadow decision basis",
