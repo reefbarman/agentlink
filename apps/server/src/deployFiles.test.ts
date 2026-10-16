@@ -473,6 +473,36 @@ describe("deployment files", () => {
     );
   });
 
+  it("ships an upgrade script for every image it builds", async () => {
+    const script = path.join(deploy, "upgrade.sh");
+    const text = await fs.readFile(script, "utf8");
+    expect((await fs.stat(script)).mode & 0o111).not.toBe(0);
+    // Parses with the bash on the machine (3.2 on macOS).
+    await expect(execFileAsync("bash", ["-n", script])).resolves.toBeDefined();
+    const targets = /^TARGETS="([^"]+)"$/mu.exec(text)?.[1]?.split(" ") ?? [];
+    const dockerfile = await fs.readFile(
+      path.join(deploy, "container", "Dockerfile"),
+      "utf8",
+    );
+    const stages = [...dockerfile.matchAll(/^FROM \S+ AS (\S+)$/gmu)].map(
+      (match) => match[1],
+    );
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) expect(stages, target).toContain(target);
+    // Everything but the bundle stage, so no image is left behind.
+    expect([...targets].sort()).toEqual(
+      stages.filter((stage) => stage !== "bundle").sort(),
+    );
+    for (const step of [
+      "drain --wait",
+      "smoke-check",
+      "--reason upgrade-rollback",
+      ":previous",
+    ]) {
+      expect(text, step).toContain(step);
+    }
+  });
+
   it("ships a launchd daemon that runs as a service user", async () => {
     const file = path.join(deploy, "launchd", "local.agentlink.server.plist");
     const plist = await fs.readFile(file, "utf8");

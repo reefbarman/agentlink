@@ -16,6 +16,17 @@ import {
 import { startBackupAgent } from "./backupAgent.js";
 import { BackupRequestError, createBackupClient } from "./backupClient.js";
 import { startCommandWorker } from "./commandWorker.js";
+import { canExecuteOnCommandWorker } from "./commandWorkerClient.js";
+import { DATA_VERSION, readDataVersion } from "./dataVersion.js";
+import {
+  DEFAULT_DRAIN_WAIT_MS,
+  readMaintenanceStatus,
+  requestDrain,
+  requestResume,
+} from "./maintenance.js";
+import net from "node:net";
+import { SERVER_BUILD, describeBuild, versionProblems } from "./serverBuild.js";
+import { serviceVersions } from "./serviceVersions.js";
 import {
   DEFAULT_EGRESS_ALLOWLIST,
   parseEgressAllowlist,
@@ -81,11 +92,15 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server audit-check --config <file>
        agentlink-server backup --config <file>
        agentlink-server backups --config <file>
+       agentlink-server drain --config <file> [--wait <minutes>] [--reason <text>]
+       agentlink-server resume --config <file>
+       agentlink-server smoke-check --config <file>
        agentlink-server backup-agent --token-file <file> --repository-file <file>
                                      --password-file <file> --deploy-root <dir>
                                      --state <dir> [--listen <host:port>]
        agentlink-server restore --repository-file <file> --password-file <file>
                                 --target <empty dir> [--snapshot <id>|latest]
+                                [--reason upgrade-rollback]
        agentlink-server command-worker --token-file <file> --root <dir>...
                                        [--listen <host:port>]
                                        [--allow-local-peers] [--reap-orphans]
@@ -134,6 +149,17 @@ Commands:
                    which does not load). Run it as the service account.
                    The running server uses the new sign-in immediately.
   codex-logout     Remove every stored ChatGPT sign-in.
+  drain            Before an upgrade: stop admitting new work (chats,
+                   tasks, scheduled runs), wait for running work (up to
+                   --wait minutes, default 15), then record what is left
+                   interrupted so it can be resumed. The server stays
+                   drained, across restarts, until \`resume\`. Run it on the
+                   server machine as the service account, like \`pair\`.
+  resume           Start admitting new work again after \`drain\`.
+  smoke-check      Check the running deployment: the server answers, the
+                   data format is current, and every service is reachable
+                   and runs this same version. Exits 1 on any problem
+                   (deploy/upgrade.sh rolls back on it).
   command-worker   Run approved commands for a server whose configuration
                    has "commandWorker" (normally in its own container).
                    Needs no server configuration: --token-file is the
@@ -207,6 +233,9 @@ const COMMANDS = new Set([
   "audit-check",
   "backup",
   "backups",
+  "drain",
+  "resume",
+  "smoke-check",
 ]);
 
 /** Returns the process exit code. */
@@ -238,6 +267,8 @@ export async function runAssistantServerCli(
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
   let check = false;
+  let drainWaitMinutes: number | undefined;
+  let drainReason: string | undefined;
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (argument === "--help" || argument === "-h") {
@@ -246,6 +277,17 @@ export async function runAssistantServerCli(
     }
     if (argument === "--check" && !command) {
       check = true;
+    } else if (argument === "--wait" && command === "drain") {
+      const minutes = Number(argv[index + 1]);
+      index += 1;
+      if (!Number.isFinite(minutes) || minutes < 0 || minutes > 24 * 60) {
+        return usageError(io, "--wait needs minutes, from 0 to 1440");
+      }
+      drainWaitMinutes = minutes;
+    } else if (argument === "--reason" && command === "drain") {
+      drainReason = argv[index + 1];
+      index += 1;
+      if (!drainReason) return usageError(io, "--reason needs a value");
     } else if (argument === "--config") {
       configPath = argv[index + 1];
       index += 1;
@@ -263,6 +305,16 @@ export async function runAssistantServerCli(
   if (command === "pair") return await runPair(config, io);
   if (command === "export-ca") return await runExportCa(config, io);
   if (command === "audit-check") return await runAuditCheck(config, io);
+  if (command === "drain") {
+    return await runDrain(config, io, {
+      ...(drainWaitMinutes !== undefined
+        ? { waitMs: drainWaitMinutes * 60_000 }
+        : {}),
+      ...(drainReason ? { reason: drainReason } : {}),
+    });
+  }
+  if (command === "resume") return await runResume(config, io);
+  if (command === "smoke-check") return await runSmokeCheck(config, io);
   if (command === "backup" || command === "backups") {
     return await runBackupCommand(command, config, io);
   }
@@ -295,6 +347,13 @@ export async function runAssistantServerCli(
     if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
     if (preflight.runners) io.stdout(`${preflight.runners}\n`);
     if (preflight.backup) io.stdout(`${preflight.backup}\n`);
+    io.stdout(`${await describeVersions(config, io.env)}\n`);
+    const maintenance = await readMaintenanceStatus(config.dataRoot);
+    if (maintenance && maintenance.state !== "running") {
+      io.stdout(
+        `Maintenance: ${maintenance.state} for ${maintenance.reason ?? "an upgrade"}; new work waits until \`agentlink-server resume\`\n`,
+      );
+    }
     return 0;
   }
 
@@ -437,6 +496,7 @@ export async function runRestore(
     "--password-file",
     "--target",
     "--snapshot",
+    "--reason",
   ];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
@@ -465,6 +525,7 @@ export async function runRestore(
         }),
       target: values["--target"]!,
       snapshot: values["--snapshot"]!,
+      ...(values["--reason"] ? { reason: values["--reason"] } : {}),
     });
     io.stdout(
       `Restored backup ${restored.snapshotId.slice(0, 8)} (taken ${restored.snapshotTime}) into ${values["--target"]}. Start the assistant there: scheduled jobs start paused, and the Inbox says what was restored.\n`,
@@ -476,6 +537,190 @@ export async function runRestore(
     );
     return 1;
   }
+}
+
+/** Refuse unless run as the data root's owner, like `pair`. */
+async function assertDataOwner(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<boolean> {
+  const stats = await fs.stat(config.dataRoot).catch(() => undefined);
+  const uid = process.getuid?.();
+  if (stats && uid !== undefined && stats.uid !== uid) {
+    io.log(
+      `agentlink-server: run this as the account that owns ${config.dataRoot} (the service account), for example with sudo -u.`,
+    );
+    return false;
+  }
+  return true;
+}
+
+async function runDrain(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+  options: { readonly waitMs?: number; readonly reason?: string },
+): Promise<number> {
+  if (!(await assertDataOwner(config, io))) return 1;
+  io.stdout(
+    `Draining: new chats, tasks and scheduled runs wait; running work has ${Math.round((options.waitMs ?? DEFAULT_DRAIN_WAIT_MS) / 60_000)} minute(s) to finish.\n`,
+  );
+  const outcome = await requestDrain({
+    dataRoot: config.dataRoot,
+    report: (line) => io.stdout(`${line}\n`),
+    ...options,
+  });
+  if (outcome.kind === "not_running") {
+    io.stdout(
+      "The server is not running (or did not answer); it will start drained.\n",
+    );
+    return 0;
+  }
+  if (outcome.kind === "timed_out") {
+    io.stdout(
+      `The server did not finish draining${outcome.status?.waiting.length ? `; still running: ${outcome.status.waiting.join("; ")}` : ""}.\n`,
+    );
+    return 1;
+  }
+  const { status } = outcome;
+  if (status.interrupted.length > 0) {
+    io.stdout(
+      `Stopped at the deadline (resume them afterwards): ${status.interrupted.join("; ")}\n`,
+    );
+  }
+  if (status.waiting.length > 0) {
+    io.stdout(
+      `Still stopping (recorded interrupted when the server restarts): ${status.waiting.join("; ")}\n`,
+    );
+  }
+  io.stdout(
+    "Drained. New work waits until `agentlink-server resume`, also across restarts.\n",
+  );
+  return 0;
+}
+
+async function runResume(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  if (!(await assertDataOwner(config, io))) return 1;
+  const outcome = await requestResume({
+    dataRoot: config.dataRoot,
+    report: (line) => io.stdout(`${line}\n`),
+  });
+  io.stdout(
+    outcome === "resumed"
+      ? "Resumed: new chats, tasks and scheduled runs start again.\n"
+      : outcome === "not_draining"
+        ? "Not drained; nothing to resume.\n"
+        : "The server is not running (or did not answer); it will start normally.\n",
+  );
+  return 0;
+}
+
+/** "Versions: ..." for `--check`. */
+async function describeVersions(
+  config: AssistantServerConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const services = await serviceVersions(config, env);
+  // Unreachable services already have their own line.
+  const problems = versionProblems(
+    SERVER_BUILD,
+    services.filter((service) => service.reachable),
+  );
+  const data = await readDataVersion(config.dataRoot).catch(() => undefined);
+  const dataText = `data format ${data ?? "new"}${data !== undefined && data > DATA_VERSION ? ` (newer than this server's ${DATA_VERSION}: it will refuse to start)` : ""}`;
+  if (problems.length > 0) {
+    return `Versions: assistant ${describeBuild(SERVER_BUILD)}, ${dataText}; ${problems.join("; ")}`;
+  }
+  return `Versions: assistant ${describeBuild(SERVER_BUILD)}${services.length > 0 ? `, and ${services.length} service(s) on the same build` : ""}; ${dataText}`;
+}
+
+/**
+ * After an upgrade: is the running deployment healthy and on one version?
+ * Exit 1 on any problem. No model calls, no changes.
+ */
+async function runSmokeCheck(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const problems: string[] = [];
+  const ok = (line: string) => io.stdout(`ok    ${line}\n`);
+  const fail = (line: string) => {
+    problems.push(line);
+    io.stdout(`FAIL  ${line}\n`);
+  };
+  const host =
+    config.listen.host === "0.0.0.0" || config.listen.host === "::"
+      ? "127.0.0.1"
+      : config.listen.host;
+  const listening = await new Promise<string | undefined>((resolve) => {
+    const socket = net.connect({ host, port: config.listen.port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve("timed out");
+    }, 5_000);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve(undefined);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      resolve(error.message);
+    });
+  });
+  if (listening) {
+    fail(`server on ${host}:${config.listen.port}: ${listening}`);
+  } else {
+    ok(`server answers on ${host}:${config.listen.port}`);
+  }
+  try {
+    const data = await readDataVersion(config.dataRoot);
+    if (data === undefined) fail("data format: no VERSION yet");
+    else if (data !== DATA_VERSION) {
+      fail(`data format ${data}, this server expects ${DATA_VERSION}`);
+    } else ok(`data format ${data}`);
+  } catch (error) {
+    fail(
+      `data format: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const services = await serviceVersions(config, io.env, 5_000);
+  const problemsByService = new Map(
+    services.map((service) => [
+      service.name,
+      versionProblems(SERVER_BUILD, [service])[0],
+    ]),
+  );
+  for (const service of services) {
+    const problem = problemsByService.get(service.name);
+    if (problem) fail(problem);
+    else ok(`${service.name} on ${describeBuild(service.build)}`);
+  }
+  if (config.commandWorker) {
+    const worker = config.commandWorker;
+    const runs = await canExecuteOnCommandWorker(
+      {
+        host: worker.host,
+        port: worker.port,
+        readToken: await prepareSecret(
+          worker.token,
+          "commandWorker.token",
+          io.env,
+        ),
+      },
+      worker.shell ?? "/bin/sh",
+    );
+    if (runs) ok(`command worker can run ${worker.shell ?? "/bin/sh"}`);
+    else fail(`command worker cannot run ${worker.shell ?? "/bin/sh"}`);
+  }
+  if (problems.length > 0) {
+    io.stdout(`Smoke check failed: ${problems.length} problem(s)\n`);
+    return 1;
+  }
+  io.stdout(`Smoke check passed: ${describeBuild(SERVER_BUILD)}\n`);
+  return 0;
 }
 
 /** Check the task audit log's hash chain; exit 1 when it is broken. */

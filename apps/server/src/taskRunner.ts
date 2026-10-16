@@ -100,7 +100,7 @@ const TURN_LIMIT_ERROR = "turn_execution_limit_reached";
 const MAX_TURN_CONTINUATIONS = 10;
 const CONTINUE_PROMPT =
   "You reached the limit for one turn; nothing is lost. Continue the task from where you stopped.";
-const TASK_PROJECT_PREFIX = "task-";
+export const TASK_PROJECT_PREFIX = "task-";
 
 export interface TaskRunnerOptions {
   readonly store: TaskStore;
@@ -146,6 +146,12 @@ export interface TaskRunnerOptions {
   readonly approvalTimeoutMs?: number;
   readonly now?: () => number;
   readonly log?: (line: string) => void;
+  /**
+   * While true (the server is draining for an upgrade), queued tasks do not
+   * start and new work (create, continue, resume, publish) is refused with
+   * `503 maintenance`; working tasks carry on. Call `wake()` after.
+   */
+  readonly paused?: () => boolean;
 }
 
 export interface TaskRunner {
@@ -186,6 +192,15 @@ export interface TaskRunner {
   ): Promise<TaskRun>;
   /** Stop it if needed, then remove its clone, chat mount and record. */
   delete(taskId: string): Promise<void>;
+  /** After a pause: start the queued tasks. */
+  wake(): void;
+  /** Tasks that have started and not finished (not those still queued). */
+  workingTasks(): readonly TaskRun[];
+  /**
+   * Stop every working task, recorded `interrupted` with `reason` so it can
+   * be resumed. A publish in flight is left to finish.
+   */
+  interruptWorking(reason: string): Promise<TaskRun[]>;
   /** Record working tasks interrupted, keeping their clones. */
   close(): Promise<void>;
 }
@@ -325,8 +340,19 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     return entry.task;
   };
 
+  const paused = options.paused ?? (() => false);
+  const assertAdmitting = () => {
+    if (closed) throw new HttpError(503, "server_closing");
+    if (paused()) throw new HttpError(503, "maintenance");
+  };
+
   const pump = () => {
-    while (!closed && running < maxConcurrent && queue.length > 0) {
+    while (
+      !closed &&
+      !paused() &&
+      running < maxConcurrent &&
+      queue.length > 0
+    ) {
       const entry = queue.shift()!;
       running += 1;
       entry.done = execute(entry).finally(() => {
@@ -1132,7 +1158,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       return requireTask(task.id);
     },
     async continueTask(taskId, instructions, extras = {}) {
-      if (closed) throw new HttpError(503, "server_closing");
+      assertAdmitting();
       const task = requireTask(taskId);
       if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
       if (!CONTINUABLE_STATES.has(task.state)) {
@@ -1165,7 +1191,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       return enqueue(updated);
     },
     async create(request, extras = {}) {
-      if (closed) throw new HttpError(503, "server_closing");
+      assertAdmitting();
       const id = newTaskId();
       const at = now();
       const task: TaskRun = {
@@ -1193,7 +1219,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       return requireTask(taskId);
     },
     async resume(taskId) {
-      if (closed) throw new HttpError(503, "server_closing");
+      assertAdmitting();
       const task = requireTask(taskId);
       if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
       if (!isResumableTask(task)) {
@@ -1202,7 +1228,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       return enqueue(task);
     },
     async publish(taskId, publishOptions = {}) {
-      if (closed) throw new HttpError(503, "server_closing");
+      assertAdmitting();
       const task = requireTask(taskId);
       if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
       const allowUnreviewed = publishOptions.allowUnreviewed === true;
@@ -1228,6 +1254,23 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       });
       await workspaces.remove(current);
       await store.delete(taskId);
+    },
+    wake() {
+      pump();
+    },
+    workingTasks() {
+      return [...live.values()]
+        .filter((entry) => !queue.includes(entry) && !entry.stopping)
+        .map((entry) => entry.task);
+    },
+    async interruptWorking(reason) {
+      const working = [...live.values()].filter(
+        (entry) => !queue.includes(entry) && entry.mode !== "publish",
+      );
+      await Promise.all(
+        working.map((entry) => stop(entry, reason, "interrupted")),
+      );
+      return working.map((entry) => entry.task);
     },
     async close() {
       closed = true;

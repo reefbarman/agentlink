@@ -560,6 +560,20 @@ describe("backup entries", () => {
     expect(entry.body).toContain("abcdef01, taken 2026-10-15 03:04 UTC");
     expect(entry.body).toContain("Morning brief");
   });
+
+  it("says an upgrade was rolled back", () => {
+    const entry = inboxEntryForRestore(
+      {
+        snapshotId: "abcdef0123456789",
+        snapshotTime: "2026-10-15T03:04:05Z",
+        reason: "upgrade-rollback",
+      },
+      [],
+      "home",
+    );
+    expect(entry.title).toBe("An upgrade failed and was rolled back");
+    expect(entry.body).toContain("went back to the version before it");
+  });
 });
 
 describe("inboxEntryForSessionAlert", () => {

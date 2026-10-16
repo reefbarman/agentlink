@@ -187,7 +187,16 @@ export interface AskAgentBridgeOptions {
   readonly assistantStatus?: () => {
     readonly inboxUnread: number;
     readonly revision: number;
+    /** Set while the server is drained for an upgrade. */
+    readonly maintenance?: "draining" | "drained";
+    /** The running server's version, for display. */
+    readonly version?: string;
   };
+  /**
+   * Whether new turns are on hold (the server is draining for an upgrade):
+   * Auto Continue waits rather than starting another turn.
+   */
+  readonly workPaused?: () => boolean;
   /**
    * Stop the scheduled run working in this chat, when the owner presses
    * Stop while viewing it. Without it the chat's turn is cancelled.
@@ -1335,6 +1344,7 @@ export async function createAskAgentBridge(
     while (
       !closed &&
       waitingSends.size === 0 &&
+      !options.workPaused?.() &&
       !delivery.stopped.has(workspaceSessionId) &&
       shouldAutoContinue({
         ...last,
@@ -2734,6 +2744,8 @@ function describeError(error: unknown): string {
         return "This chat is busy with another turn. Try again when it finishes.";
       case "interaction_pending":
         return "This chat is waiting for an approval.";
+      case "maintenance":
+        return "The Assistant is being upgraded, so it is not starting new work right now. Send this again once the upgrade is done (usually a few minutes).";
       case "authentication_required":
         return "Your sign-in expired. Reload the page and pair again.";
       default:

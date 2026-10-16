@@ -75,6 +75,9 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     delete: vi.fn(async (taskId: string) => {
       await store.delete(taskId);
     }),
+    wake: vi.fn(() => undefined),
+    workingTasks: vi.fn(() => []),
+    interruptWorking: vi.fn(async () => []),
     close: vi.fn(async () => undefined),
   } satisfies TaskRunner;
   const repositories = await openRepositorySettings({

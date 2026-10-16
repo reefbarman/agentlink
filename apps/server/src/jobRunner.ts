@@ -79,6 +79,11 @@ export interface JobRunnerOptions {
     projectId: string,
     sessionId: string,
   ) => string | undefined;
+  /**
+   * While true (the server is draining for an upgrade), schedules wait and
+   * queued runs do not start; `runNow` is refused. Call `wake()` after.
+   */
+  readonly paused?: () => boolean;
 }
 
 export interface JobRunner {
@@ -93,6 +98,15 @@ export interface JobRunner {
   stopJob(jobId: string, reason: string): Promise<void>;
   /** Run a job now; `job_busy` while one of its runs is still going. */
   runNow(jobId: string): Promise<JobRun>;
+  /** After a pause: start queued runs and catch up on schedules. */
+  wake(): void;
+  /** Runs that have started and not finished. */
+  activeRuns(): ReadonlyArray<{
+    readonly run: JobRun;
+    readonly job: JobDefinition;
+  }>;
+  /** Stop every started run, recorded `interrupted` with `reason`. */
+  interruptRuns(reason: string): Promise<JobRun[]>;
   close(): Promise<void>;
 }
 
@@ -250,8 +264,15 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     );
   };
 
+  const paused = options.paused ?? (() => false);
+
   const pump = () => {
-    while (!closed && running < maxConcurrent && queue.length > 0) {
+    while (
+      !closed &&
+      !paused() &&
+      running < maxConcurrent &&
+      queue.length > 0
+    ) {
       const entry = queue.shift()!;
       running += 1;
       entry.done = execute(entry).finally(() => {
@@ -433,6 +454,9 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
   };
 
   const checkDueJobs = async (): Promise<void> => {
+    // Due runs wait for `wake()`; one missed for longer than the catch-up
+    // window is then recorded missed, as after a restart.
+    if (paused()) return;
     try {
       const at = now();
       for (const job of store.list()) {
@@ -466,7 +490,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
   const arm = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
-    if (closed) return;
+    if (closed || paused()) return;
     let due: number | undefined;
     for (const job of store.list()) {
       if (!job.enabled || job.nextRunAt === undefined) continue;
@@ -531,10 +555,30 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     },
     async runNow(jobId) {
       if (closed) throw new HttpError(503, "server_closing");
+      if (paused()) throw new HttpError(503, "maintenance");
       const job = store.get(jobId);
       if (!job) throw new JobInputError("job_not_found");
       if (live.has(jobId)) throw new JobInputError("job_busy");
       return enqueue(job, "manual", undefined);
+    },
+    wake() {
+      if (closed || paused()) return;
+      pump();
+      void tick();
+    },
+    activeRuns() {
+      return [...live.values()]
+        .filter((entry) => !queue.includes(entry) && !entry.stopping)
+        .map((entry) => ({ run: entry.run, job: entry.job }));
+    },
+    async interruptRuns(reason) {
+      const started = [...live.values()].filter(
+        (entry) => !queue.includes(entry),
+      );
+      await Promise.all(
+        started.map((entry) => stop(entry, reason, "interrupted")),
+      );
+      return started.map((entry) => entry.run);
     },
     async close() {
       closed = true;

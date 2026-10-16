@@ -366,6 +366,8 @@ export interface RestoredMarker {
   /** When the snapshot was taken (ISO). */
   readonly snapshotTime: string;
   readonly restoredAt: number;
+  /** Why: `upgrade-rollback` when an upgrade was rolled back. */
+  readonly reason?: string;
 }
 
 /**
@@ -378,6 +380,7 @@ export async function restoreSnapshot(options: {
   readonly target: string;
   /** A snapshot ID, or `latest`. */
   readonly snapshot: string;
+  readonly reason?: string;
   readonly now?: () => number;
 }): Promise<RestoredMarker> {
   const now = options.now ?? Date.now;
@@ -452,7 +455,14 @@ export async function restoreSnapshot(options: {
     snapshotId: chosen.id,
     snapshotTime: chosen.time,
     restoredAt: now(),
+    ...(options.reason ? { reason: options.reason } : {}),
   };
+  // A backup taken for an upgrade was taken drained; the restored server
+  // starts in restored mode (schedules paused) instead of drained.
+  await fs.rm(path.join(target, DATA_FOLDER, "maintenance"), {
+    recursive: true,
+    force: true,
+  });
   const markerFile = path.join(target, DATA_FOLDER, RESTORED_MARKER);
   await fs.writeFile(markerFile, `${JSON.stringify(marker)}\n`, {
     mode: 0o600,
@@ -483,6 +493,7 @@ export async function takeRestoredMarker(
       snapshotId: String(parsed.snapshotId ?? ""),
       snapshotTime: String(parsed.snapshotTime ?? ""),
       restoredAt: Number(parsed.restoredAt ?? 0),
+      ...(typeof parsed.reason === "string" ? { reason: parsed.reason } : {}),
     };
   } catch {
     return { snapshotId: "", snapshotTime: "", restoredAt: 0 };

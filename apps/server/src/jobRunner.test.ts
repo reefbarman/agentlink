@@ -166,6 +166,7 @@ async function setup(
       projectId: string,
       sessionId: string,
     ) => string | undefined;
+    readonly paused?: () => boolean;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "job-runner-"));
@@ -192,6 +193,7 @@ async function setup(
       ? { maxConcurrentRuns: options.maxConcurrentRuns }
       : {}),
     ...(options.failureDetail ? { failureDetail: options.failureDetail } : {}),
+    ...(options.paused ? { paused: options.paused } : {}),
   });
   cleanup.push(() => runner.close());
   if (options.start !== false) await runner.start();
@@ -219,6 +221,38 @@ async function createJob(
   await harness.runner.jobChanged(job.id);
   return harness.store.get(job.id)!;
 }
+
+describe("job runner while draining", () => {
+  it("holds schedules and refuses runs until woken, then catches up", async () => {
+    let paused = true;
+    const harness = await setup({ paused: () => paused });
+    const job = await createJob(harness);
+    await expect(harness.runner.runNow(job.id)).rejects.toMatchObject({
+      status: 503,
+      code: "maintenance",
+    });
+    await vi.advanceTimersByTimeAsync(20 * MINUTE);
+    expect(harness.fake.turns).toHaveLength(0);
+    paused = false;
+    harness.runner.wake();
+    await vi.waitFor(() => expect(harness.fake.turns).toHaveLength(1));
+    expect(harness.runner.activeRuns()).toHaveLength(1);
+  });
+
+  it("records a started run interrupted when the drain gives up on it", async () => {
+    const harness = await setup();
+    const job = await createJob(harness);
+    await harness.runner.runNow(job.id);
+    await harness.waitForRun(job.id, "running");
+    const stopped = await harness.runner.interruptRuns("upgrade");
+    expect(stopped.map((run) => run.jobId)).toEqual([job.id]);
+    expect(harness.latestRun(job.id)).toMatchObject({
+      status: "interrupted",
+      error: "upgrade",
+    });
+    expect(harness.runner.activeRuns()).toEqual([]);
+  });
+});
 
 describe("job runner", () => {
   it("runs a due job in a new chat as the job and records its summary", async () => {

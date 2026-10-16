@@ -11,6 +11,7 @@ import {
   writeFrame,
   type CommandWorkerServerFrame,
 } from "./commandWorkerProtocol.js";
+import { SERVER_BUILD } from "./serverBuild.js";
 
 /**
  * The command worker runs approved processes for the assistant server in a
@@ -142,7 +143,11 @@ export async function startCommandWorker(
           }
           authenticated = true;
           if (frame.type === "ping") {
-            send({ type: "pong", protocol: COMMAND_WORKER_PROTOCOL });
+            send({
+              type: "pong",
+              protocol: COMMAND_WORKER_PROTOCOL,
+              build: SERVER_BUILD,
+            });
             socket.end();
             return;
           }

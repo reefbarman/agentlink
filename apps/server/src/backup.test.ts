@@ -248,6 +248,9 @@ describe("restoreSnapshot", () => {
         await fs.writeFile(path.join(deploy, "secrets/token"), "t");
         await fs.mkdir(path.join(data, "audit"), { recursive: true });
         await fs.writeFile(path.join(data, "audit/tasks.jsonl"), "{}\n");
+        // Taken while drained for an upgrade.
+        await fs.mkdir(path.join(data, "maintenance"));
+        await fs.writeFile(path.join(data, "maintenance/request.json"), "{}");
         return ok();
       }
       return fail("unexpected");
@@ -294,6 +297,23 @@ describe("restoreSnapshot", () => {
       snapshot: "11111111",
     });
     expect(restored).toEqual(["1111111111111111"]);
+  });
+
+  it("starts undrained, and records a rollback's reason", async () => {
+    const target = path.join(await tempDir("backup-restore-"), "assistant");
+    const marker = await restoreSnapshot({
+      restic: restoringRestic(),
+      target,
+      snapshot: "latest",
+      reason: "upgrade-rollback",
+    });
+    expect(marker.reason).toBe("upgrade-rollback");
+    await expect(
+      fs.stat(path.join(target, "data/maintenance")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      takeRestoredMarker(path.join(target, "data")),
+    ).resolves.toMatchObject({ reason: "upgrade-rollback" });
   });
 
   it("refuses a directory that is not empty", async () => {

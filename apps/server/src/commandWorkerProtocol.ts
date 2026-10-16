@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import type { ServerBuild } from "./serverBuild.js";
 import type { Socket } from "node:net";
 import type { WorkspaceProcessLaunchRequest } from "@agentlink/workspace-host";
 
@@ -51,7 +52,12 @@ export type CommandWorkerServerFrame =
       readonly exitCode?: number;
       readonly signal?: NodeJS.Signals;
     }
-  | { readonly type: "pong"; readonly protocol: number }
+  | {
+      readonly type: "pong";
+      readonly protocol: number;
+      /** The worker's build; absent from workers built before builds were reported. */
+      readonly build?: ServerBuild;
+    }
   | { readonly type: "probe_result"; readonly executable: boolean }
   | { readonly type: "error"; readonly code: string };
 

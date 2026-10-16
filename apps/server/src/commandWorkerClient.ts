@@ -12,6 +12,7 @@ import {
   writeFrame,
   type CommandWorkerClientFrame,
 } from "./commandWorkerProtocol.js";
+import { parseBuild, type ServerBuild } from "./serverBuild.js";
 
 export interface CommandWorkerClientOptions {
   readonly host: string;
@@ -223,14 +224,28 @@ async function requestOnce(
 export async function pingCommandWorker(
   options: CommandWorkerClientOptions,
 ): Promise<
-  { readonly ok: true } | { readonly ok: false; readonly code: string }
+  | {
+      readonly ok: true;
+      readonly protocol: number;
+      readonly build?: ServerBuild;
+    }
+  | { readonly ok: false; readonly code: string }
 > {
   const result = await requestOnce(
     options,
     (token) => ({ type: "ping", protocol: COMMAND_WORKER_PROTOCOL, token }),
     "pong",
   );
-  return result.ok ? { ok: true } : result;
+  if (!result.ok) return result;
+  const build = parseBuild(result.frame.build);
+  return {
+    ok: true,
+    protocol:
+      typeof result.frame.protocol === "number"
+        ? result.frame.protocol
+        : COMMAND_WORKER_PROTOCOL,
+    ...(build ? { build } : {}),
+  };
 }
 
 /**

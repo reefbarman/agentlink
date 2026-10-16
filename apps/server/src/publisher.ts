@@ -6,6 +6,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 
 import { tokensMatch } from "./commandWorkerProtocol.js";
+import { SERVER_BUILD } from "./serverBuild.js";
 import {
   GitHubError,
   createGitHubApi,
@@ -279,6 +280,7 @@ export async function startPublisher(
     if (url.pathname === "/v1/health" && method === "GET") {
       sendJson(response, 200, {
         protocol: PUBLISHER_PROTOCOL,
+        build: SERVER_BUILD,
         deviceFlow: options.clientId !== undefined,
       });
       return;

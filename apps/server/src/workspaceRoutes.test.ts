@@ -89,6 +89,8 @@ async function startHarness(
     approvalModes?: boolean;
     /** Children use their parent's grant, as the service sets up. */
     inheritSessionGrants?: boolean;
+    /** New turns on hold, as while the server drains. */
+    turnsPaused?: (projectId: string) => boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
@@ -231,6 +233,7 @@ async function startHarness(
     heartbeatMs: 100,
     streamStallTimeoutMs: options.streamStallTimeoutMs,
     approvalModes,
+    ...(options.turnsPaused ? { turnsPaused: options.turnsPaused } : {}),
   });
   agentNotifier = routes;
   const server = await createAssistantServer({
@@ -626,6 +629,55 @@ describe("assistant workspace routes", () => {
       restarted.waitFor((event) => event.event === "reset"),
     ).resolves.toMatchObject({ data: { reason: "epoch_changed" } });
     restarted.close();
+  });
+
+  it("holds new turns while draining, and can stop running ones", async () => {
+    let paused = false;
+    const harness = await startHarness({ turnsPaused: () => paused });
+    const { owner, request } = harness;
+    const { sessionId } = (
+      await request({
+        method: "POST",
+        path: "/api/projects/home/sessions",
+        session: owner,
+      })
+    ).body as { sessionId: string };
+    harness.fetch.mockImplementationOnce(
+      (_input: unknown, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    );
+    await expect(
+      request({
+        method: "POST",
+        path: `/api/projects/home/sessions/${sessionId}/turns`,
+        session: owner,
+        body: { text: "long task" },
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    const key = harness.routes.operations.sessionKey("home", sessionId);
+    expect(harness.routes.runningSessions()).toEqual([key]);
+    paused = true;
+    const { sessionId: other } = (
+      await request({
+        method: "POST",
+        path: "/api/projects/home/sessions",
+        session: owner,
+      })
+    ).body as { sessionId: string };
+    await expect(
+      request({
+        method: "POST",
+        path: `/api/projects/home/sessions/${other}/turns`,
+        session: owner,
+        body: { text: "new work" },
+      }),
+    ).resolves.toMatchObject({ status: 503, body: { error: "maintenance" } });
+    await expect(harness.routes.interruptTurns()).resolves.toEqual([key]);
+    expect(harness.routes.runningSessions()).toEqual([]);
   });
 
   it("keeps running when the browser disconnects and rejects a second turn", async () => {

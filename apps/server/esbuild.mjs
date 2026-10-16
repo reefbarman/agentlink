@@ -2,8 +2,10 @@ import * as esbuild from "esbuild";
 
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 // Bundles the server into one platform-neutral file that runs with Node
 // 22.19+ on Linux and macOS: dist/agentlink-server.js.
@@ -232,6 +234,32 @@ for (const required of [
   if (!webAssets[required]) throw new Error(`Web build is missing ${required}`);
 }
 
+// Which build this is (see src/serverBuild.ts). Every service image gets
+// this same file, so the ID tells a stale image apart. The commit comes from
+// AGENTLINK_BUILD_COMMIT (set by deploy/upgrade.sh) or git, when available.
+const packageJson = JSON.parse(
+  await readFile(path.join(root, "package.json"), "utf8"),
+);
+const buildCommit = (() => {
+  const fromEnv = process.env.AGENTLINK_BUILD_COMMIT?.trim();
+  if (fromEnv) return fromEnv.slice(0, 12);
+  try {
+    return execFileSync("git", ["rev-parse", "--short=8", "HEAD"], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return undefined;
+  }
+})();
+const serverBuild = {
+  version: packageJson.version,
+  ...(buildCommit ? { commit: buildCommit } : {}),
+  id: randomBytes(6).toString("hex"),
+};
+
 const build = await esbuild.build({
   entryPoints: [path.join(root, "src", "main.ts")],
   outfile: output,
@@ -241,7 +269,10 @@ const build = await esbuild.build({
   target: "node22",
   sourcemap: false,
   metafile: true,
-  define: { __AGENTLINK_WEB_ASSETS__: JSON.stringify(webAssets) },
+  define: {
+    __AGENTLINK_WEB_ASSETS__: JSON.stringify(webAssets),
+    __AGENTLINK_SERVER_BUILD__: JSON.stringify(serverBuild),
+  },
   banner: {
     js: '#!/usr/bin/env node\nimport { createRequire as __agentlinkCreateRequire } from "node:module";\nconst require = __agentlinkCreateRequire(import.meta.url);',
   },

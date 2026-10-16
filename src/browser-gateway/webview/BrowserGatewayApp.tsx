@@ -609,7 +609,12 @@ export type GatewaySnapshot = {
   /** The Assistant's per-chat approval mode; absent elsewhere. */
   approvalMode?: "autonomous" | "ask";
   /** The Assistant's unread inbox count and jobs/inbox revision. */
-  assistant?: { inboxUnread: number; revision: number };
+  assistant?: {
+    inboxUnread: number;
+    revision: number;
+    maintenance?: "draining" | "drained";
+    version?: string;
+  };
   /** The Assistant's coding tasks from the open chat; absent elsewhere. */
   tasks?: ChatTaskCard[];
   diffs: Array<{
@@ -9142,6 +9147,8 @@ export function BrowserGatewayApp({
                   <AssistantHub
                     inboxUnread={snapshot?.assistant?.inboxUnread}
                     revision={snapshot?.assistant?.revision}
+                    maintenance={snapshot?.assistant?.maintenance}
+                    version={snapshot?.assistant?.version}
                     loadSession={(sessionId) => handleLoadSession(sessionId)}
                     reloadPage={reloadPage}
                   />

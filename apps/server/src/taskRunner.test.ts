@@ -332,6 +332,7 @@ async function setup(
     readonly publishFailures?: PublisherRequestError[];
     /** The connection that can reach the repository, when none is set. */
     readonly reachable?: string | ((repository: string) => string | undefined);
+    readonly paused?: () => boolean;
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-runner-"));
@@ -418,6 +419,7 @@ async function setup(
     ...(options.approvalTimeoutMs
       ? { approvalTimeoutMs: options.approvalTimeoutMs }
       : {}),
+    ...(options.paused ? { paused: options.paused } : {}),
   });
   cleanup.push(() => runner.close());
   await runner.start();
@@ -447,6 +449,45 @@ const CONNECTION: GitHubConnection = {
   createdAt: 0,
   updatedAt: 0,
 };
+
+describe("task runner while draining", () => {
+  it("lets a working task finish but admits no new work", async () => {
+    let paused = false;
+    const test = await setup({ paused: () => paused });
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    paused = true;
+    await expect(test.runner.create(REQUEST)).rejects.toMatchObject({
+      status: 503,
+      code: "maintenance",
+    });
+    expect(test.runner.workingTasks().map((task) => task.id)).toEqual([
+      created.id,
+    ]);
+    // The running task carries on to the end.
+    test.endTurn("completed", { text: "Done." });
+    await test.waitFor(created.id, "ready");
+    expect(test.runner.workingTasks()).toEqual([]);
+    await expect(test.runner.resume(created.id)).rejects.toMatchObject({
+      code: "maintenance",
+    });
+  });
+
+  it("records what is still working interrupted, resumable", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    const stopped = await test.runner.interruptWorking("upgrade");
+    expect(stopped.map((task) => task.id)).toEqual([created.id]);
+    expect(test.store.get(created.id)).toMatchObject({
+      state: "interrupted",
+      error: "upgrade",
+    });
+    await expect(test.runner.resume(created.id)).resolves.toMatchObject({
+      state: "queued",
+    });
+  });
+});
 
 describe("task runner", () => {
   it("prepares a clone, runs the chat and accepts committed work", async () => {

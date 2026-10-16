@@ -14,6 +14,7 @@ import {
   type ResticRunner,
 } from "./backup.js";
 import { tokensMatch } from "./commandWorkerProtocol.js";
+import { SERVER_BUILD } from "./serverBuild.js";
 
 /**
  * The backup sidecar (`agentlink-server backup-agent`). It sees the deploy
@@ -215,7 +216,10 @@ export async function startBackupAgent(
     const url = new URL(request.url ?? "/", "http://backup");
     const method = request.method ?? "GET";
     if (url.pathname === "/v1/health" && method === "GET") {
-      sendJson(response, 200, { protocol: BACKUP_PROTOCOL });
+      sendJson(response, 200, {
+        protocol: BACKUP_PROTOCOL,
+        build: SERVER_BUILD,
+      });
       return;
     }
     if (url.pathname === "/v1/status" && method === "GET") {

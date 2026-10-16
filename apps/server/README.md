@@ -363,6 +363,23 @@ docker run --rm --entrypoint restic -v ~/agentlink-witness/data/agentlink:/repo 
   --keep-hourly 48 --keep-daily 14 --keep-weekly 8 --prune
 ```
 
+### Upgrades
+
+[`deploy/upgrade.sh`](deploy/upgrade.sh) upgrades a container deployment in one command, on Docker (Ubuntu) and Docker Desktop (macOS), with backups set up first:
+
+```sh
+apps/server/deploy/upgrade.sh [--deploy ~/agentlink-assistant] [--wait 15] [<git ref>]
+apps/server/deploy/upgrade.sh rollback
+```
+
+It builds the bundle and new images (tagged `:candidate`) from the checkout, or from `<git ref>` after checking it out, while the Assistant keeps working. Then it drains the Assistant, takes a backup, tags the running images `:previous` and the new ones `:local`, restarts with `docker compose up -d`, and runs `agentlink-server smoke-check` until it passes (up to 3 minutes) before resuming. If the check fails it rolls back by itself: the `:previous` images and `data/` from the backup it just took, with the failed `data/` kept beside the deploy directory. The rolled-back Assistant starts with scheduled jobs paused and an Inbox entry saying the upgrade was rolled back. `upgrade.sh rollback` does the same by hand after an upgrade that passed its checks but misbehaves later. `--simulate-failure` rehearses a rollback.
+
+**Draining.** `agentlink-server drain [--wait <minutes>]` (run by the script, or by hand as the service account, like `pair`) stops the Assistant admitting new work: chat messages outside task chats are refused with a plain "being upgraded" message, new, resumed and continued tasks are refused, and scheduled runs wait (a run missed by more than its catch-up window is recorded missed, as after a restart). Running chat turns, tasks and scheduled runs carry on, and approvals can still be answered. After `--wait` minutes (15 by default) whatever is still running is stopped and recorded `interrupted`, so it can be resumed. The drain survives restarts: the new version starts drained until `agentlink-server resume`. The app shows "Upgrading: new chats, tasks and scheduled runs wait" meanwhile.
+
+**Versions.** Every service reports its build (package version, commit, and a build ID shared by all images built from one bundle) and protocol: the command worker, publisher, runner manager, session runners and backup sidecar. `--check` prints a `Versions:` line naming any service on another build or protocol ("publisher is version X, the assistant is Y: rebuild both"), the server logs the same at start, and `smoke-check` fails on it. The Inbox panel shows the running version.
+
+**Data format.** `data/VERSION` records the format of the data root. A newer server migrates older data in order at start; a server refuses to start on data newer than it understands, so running older code needs the backup taken before the upgrade (`upgrade.sh rollback` restores it).
+
 ### Lost access
 
 If every signed-in browser is gone (cookies cleared, devices revoked or lost), run `pair` on the server machine as the service account, exactly as for the first device:

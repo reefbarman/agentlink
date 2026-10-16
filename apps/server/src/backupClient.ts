@@ -19,7 +19,7 @@ export class BackupRequestError extends Error {
 }
 
 export interface BackupClient {
-  health(): Promise<{ readonly protocol: number }>;
+  health(): Promise<{ readonly protocol: number; readonly build?: unknown }>;
   status(): Promise<BackupStatus>;
   /** Waits for the backup (or the one already running). */
   backupNow(): Promise<BackupStatus>;

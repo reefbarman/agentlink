@@ -82,7 +82,10 @@ describe("backup agent", () => {
       status: 401,
       code: "unauthorized",
     });
-    await expect(client().health()).resolves.toEqual({ protocol: 1 });
+    await expect(client().health()).resolves.toEqual({
+      protocol: 1,
+      build: { version: "dev", id: "dev" },
+    });
   });
 
   it("backs up on request and reports it", async () => {

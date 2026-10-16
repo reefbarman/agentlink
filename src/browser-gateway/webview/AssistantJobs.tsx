@@ -405,17 +405,35 @@ export async function openAssistantChat(params: {
   }
 }
 
+/** The banner shown while the server is drained for an upgrade. */
+export function maintenanceNotice(
+  maintenance: "draining" | "drained" | undefined,
+): string | undefined {
+  if (maintenance === "draining") {
+    return "Upgrading: new chats, tasks and scheduled runs wait while running work finishes.";
+  }
+  if (maintenance === "drained") {
+    return "Upgrading: new chats, tasks and scheduled runs wait until the upgrade is done.";
+  }
+  return undefined;
+}
+
 export function AssistantHub({
   inboxUnread = 0,
   revision = 0,
+  maintenance,
+  version,
   loadSession,
   reloadPage,
 }: {
   inboxUnread?: number;
   revision?: number;
+  maintenance?: "draining" | "drained";
+  version?: string;
   loadSession: (sessionId: string) => void;
   reloadPage: () => void;
 }) {
+  const notice = maintenanceNotice(maintenance);
   const [view, setView] = useState<
     "jobs" | "inbox" | "github" | "tasks" | null
   >(null);
@@ -510,6 +528,11 @@ export function AssistantHub({
           <span>GitHub</span>
         </button>
       </nav>
+      {notice && (
+        <p class="assistant-maintenance" role="status">
+          <i class="codicon codicon-sync" aria-hidden="true" /> {notice}
+        </p>
+      )}
       {view === "jobs" && (
         <JobsPanel
           revision={revision}
@@ -523,6 +546,7 @@ export function AssistantHub({
           onClose={() => setView(null)}
           openChat={openChat}
           openTask={openTask}
+          {...(version ? { version } : {})}
         />
       )}
       {view === "tasks" && (
@@ -1167,6 +1191,7 @@ export function InboxPanel({
   onClose,
   openChat,
   openTask,
+  version,
   now = Date.now,
 }: {
   revision: number;
@@ -1174,6 +1199,8 @@ export function InboxPanel({
   openChat: (projectId: string, sessionId: string) => Promise<void>;
   /** Opens a coding task's entry; without it those entries open nothing. */
   openTask?: (taskId: string) => void;
+  /** The running server's version, shown under the settings. */
+  version?: string;
   now?: () => number;
 }) {
   const [entries, setEntries] = useState<InboxEntry[] | null>(null);
@@ -1255,6 +1282,9 @@ export function InboxPanel({
     >
       <NotificationSettings />
       <BackupSettings />
+      {version && (
+        <p class="assistant-project-hint">AgentLink Assistant {version}</p>
+      )}
       {error && (
         <p class="assistant-project-error" role="alert">
           {error}

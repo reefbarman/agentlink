@@ -948,7 +948,11 @@ describe("publisher HTTP", { timeout: 30_000 }, () => {
       const health = await fetch(`${base}/v1/health`, {
         headers: { authorization: "Bearer shared-token" },
       });
-      expect(await health.json()).toEqual({ protocol: 1, deviceFlow: false });
+      expect(await health.json()).toEqual({
+        protocol: 1,
+        build: { version: "dev", id: "dev" },
+        deviceFlow: false,
+      });
       const device = await fetch(`${base}/v1/connections/c0ffee000005/device`, {
         method: "POST",
         headers: { authorization: "Bearer shared-token" },

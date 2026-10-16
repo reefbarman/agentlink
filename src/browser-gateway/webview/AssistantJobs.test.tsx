@@ -579,4 +579,32 @@ describe("AssistantHub", () => {
     fireEvent.click(screen.getByText("Jobs"));
     expect(await screen.findByText(/No jobs yet/u)).toBeTruthy();
   });
+
+  it("says when an upgrade holds new work, and shows the version", async () => {
+    stubFetch({
+      "GET /api/inbox": () => ({ entries: [], unread: 0 }),
+    });
+    const { rerender } = render(
+      <AssistantHub
+        maintenance="draining"
+        version="0.1.0 (abcd1234)"
+        loadSession={() => undefined}
+        reloadPage={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toMatch(
+      /Upgrading: new chats, tasks and scheduled runs wait while running work finishes/u,
+    );
+    fireEvent.click(screen.getByLabelText("Inbox"));
+    expect(
+      await screen.findByText("AgentLink Assistant 0.1.0 (abcd1234)"),
+    ).toBeTruthy();
+    rerender(
+      <AssistantHub
+        loadSession={() => undefined}
+        reloadPage={() => undefined}
+      />,
+    );
+    expect(screen.queryByText(/Upgrading:/u)).toBeNull();
+  });
 });

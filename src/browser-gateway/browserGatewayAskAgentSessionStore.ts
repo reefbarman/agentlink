@@ -234,7 +234,14 @@ export interface BrowserGatewayAskAgentSnapshot {
    * The Assistant's unread inbox entries, and a revision that changes when
    * its inbox or scheduled jobs change; absent for other hosts.
    */
-  assistant?: { inboxUnread: number; revision: number };
+  assistant?: {
+    inboxUnread: number;
+    revision: number;
+    /** Set while the server is drained for an upgrade. */
+    maintenance?: "draining" | "drained";
+    /** The running server's version, for display. */
+    version?: string;
+  };
   diffs: [];
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion: 0;

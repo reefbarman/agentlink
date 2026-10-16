@@ -509,17 +509,35 @@ export function inboxEntryForBackupProblem(
 
 /** The inbox entry for a start from a restored backup. */
 export function inboxEntryForRestore(
-  restored: { readonly snapshotId: string; readonly snapshotTime: string },
+  restored: {
+    readonly snapshotId: string;
+    readonly snapshotTime: string;
+    readonly reason?: string;
+  },
   pausedJobs: readonly string[],
   projectId: string,
 ): NewInboxEntry {
   const taken = Date.parse(restored.snapshotTime);
+  const backup = `backup ${restored.snapshotId.slice(0, 8)}${Number.isFinite(taken) ? `, taken ${new Date(taken).toISOString().replace("T", " ").slice(0, 16)} UTC` : ""}`;
+  if (restored.reason === "upgrade-rollback") {
+    return {
+      projectId,
+      kind: "restored",
+      title: "An upgrade failed and was rolled back",
+      body: joinLines(
+        `An upgrade did not pass its checks, so the Assistant went back to the version before it, with its records from ${backup} (taken just before the upgrade). Work that was stopped for the upgrade is interrupted; resume it from Tasks.`,
+        pausedJobs.length > 0
+          ? `Paused scheduled jobs until you turn them back on in Jobs: ${pausedJobs.join(", ")}.`
+          : undefined,
+      ),
+    };
+  }
   return {
     projectId,
     kind: "restored",
     title: "Restored from a backup",
     body: joinLines(
-      `The Assistant was restored from backup ${restored.snapshotId.slice(0, 8)}${Number.isFinite(taken) ? `, taken ${new Date(taken).toISOString().replace("T", " ").slice(0, 16)} UTC` : ""}. Anything after that is not here, and work that was running then is interrupted (resume it from Tasks).`,
+      `The Assistant was restored from ${backup}. Anything after that is not here, and work that was running then is interrupted (resume it from Tasks).`,
       pausedJobs.length > 0
         ? `Paused scheduled jobs until you turn them back on in Jobs: ${pausedJobs.join(", ")}.`
         : undefined,

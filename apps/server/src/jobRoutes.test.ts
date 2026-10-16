@@ -62,6 +62,9 @@ async function setup() {
       await store.saveRun(run);
       return run;
     }),
+    wake: vi.fn(() => undefined),
+    activeRuns: vi.fn(() => []),
+    interruptRuns: vi.fn(async () => []),
     close: vi.fn(async () => undefined),
   } satisfies JobRunner;
   const routes = createJobRoutes({

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tokensMatch } from "./commandWorkerProtocol.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { singleHeader } from "./requestGuard.js";
+import { SERVER_BUILD } from "./serverBuild.js";
 
 /**
  * Shared HTTP plumbing for the session runner protocols: the control plane
@@ -14,6 +15,12 @@ import { singleHeader } from "./requestGuard.js";
  * Failures are `{ error }` with the error's name, message and code, so the
  * caller can rethrow an error that the existing code paths recognize.
  */
+
+/**
+ * The runner protocols' version, reported by `GET /health` with the
+ * service's build so the assistant can tell a stale image.
+ */
+export const RUNNER_PROTOCOL = 1;
 
 /** Model requests carry whole conversations. */
 export const MAX_RUNNER_BODY_BYTES = 32 * 1024 * 1024;
@@ -117,6 +124,8 @@ export async function startRunnerHttpServer<Caller>(options: {
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, {
         ok: true,
+        protocol: RUNNER_PROTOCOL,
+        build: SERVER_BUILD,
         ...(options.health?.(caller) as object | undefined),
       });
       return;

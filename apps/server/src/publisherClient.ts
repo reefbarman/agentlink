@@ -39,6 +39,8 @@ export interface PublisherClient {
   health(): Promise<{
     readonly protocol: number;
     readonly deviceFlow: boolean;
+    /** Absent from publishers built before builds were reported. */
+    readonly build?: unknown;
   }>;
   startDeviceFlow(connectionId: string): Promise<ConnectionStatus>;
   status(connectionId: string): Promise<ConnectionStatus>;

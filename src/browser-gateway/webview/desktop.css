@@ -2522,6 +2522,18 @@ html.quick-ask-document body {
   font-weight: 700;
 }
 
+/* While the server is drained for an upgrade. */
+.browser-shell.browser-shell-desktop .assistant-maintenance {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ag-accent, currentColor);
+  border-radius: 6px;
+  color: var(--ag-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 @container desktop-sidebar (min-width: 400px) {
   .browser-shell.browser-shell-desktop .assistant-hub {
     grid-template-columns: repeat(4, minmax(0, 1fr));

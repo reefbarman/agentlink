@@ -140,6 +140,12 @@ export interface CreateAssistantWorkspaceRoutesOptions {
    * every session reports `ask`, matching hosts given no grant.
    */
   readonly approvalModes?: SessionApprovalModes;
+  /**
+   * Whether new turns in this project are on hold (the server is being
+   * drained for an upgrade). Held turns are refused with `503 maintenance`;
+   * answers to pending approvals still resume their turns.
+   */
+  readonly turnsPaused?: (projectId: string) => boolean;
 }
 
 /**
@@ -303,6 +309,13 @@ export interface AssistantWorkspaceRoutes {
   removeProject(projectId: string): boolean;
   /** Resolves once no server-owned task is running for the session. */
   whenIdle(projectId: string, sessionId: string): Promise<void>;
+  /** The keys (see `parseSessionKey`) of sessions with a turn running now. */
+  runningSessions(): readonly string[];
+  /**
+   * Stop every running turn whose session `select` picks, and wait for them
+   * to settle. Returns the stopped sessions' keys.
+   */
+  interruptTurns(select?: (key: string) => boolean): Promise<string[]>;
   /** Abort running tasks and wait for them to settle. */
   close(): Promise<void>;
 }
@@ -697,6 +710,9 @@ export function createAssistantWorkspaceRoutes(
         throw new HttpError(400, "text_invalid");
       }
       const key = sessionKey(projectId, sessionId);
+      if (options.turnsPaused?.(projectId)) {
+        throw new HttpError(503, "maintenance");
+      }
       assertStartable(key);
       await assertRunnable(mount, sessionId);
       await assertStillAuthorized(auth);
@@ -1364,6 +1380,17 @@ export function createAssistantWorkspaceRoutes(
     },
     async whenIdle(projectId, sessionId) {
       await tasks.get(sessionKey(projectId, sessionId))?.done;
+    },
+    runningSessions() {
+      return [...tasks.keys()];
+    },
+    async interruptTurns(select = () => true) {
+      const chosen = [...tasks.entries()].filter(([key]) => select(key));
+      for (const [, task] of chosen) {
+        task.controller.abort(new Error("server_maintenance"));
+      }
+      await Promise.all(chosen.map(([, task]) => task.done));
+      return chosen.map(([key]) => key);
     },
     async close() {
       closing = true;

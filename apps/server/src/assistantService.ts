@@ -124,7 +124,15 @@ import { takeRestoredMarker } from "./backup.js";
 import type { BackupStatus } from "./backupAgent.js";
 import { backupProblem, createBackupClient } from "./backupClient.js";
 import { createBackupRoutes } from "./backupRoutes.js";
-import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
+import {
+  TASK_PROJECT_PREFIX,
+  createTaskRunner,
+  type TaskRunner,
+} from "./taskRunner.js";
+import { prepareDataVersion } from "./dataVersion.js";
+import { createMaintenance, type Maintenance } from "./maintenance.js";
+import { SERVER_BUILD, describeBuild, versionProblems } from "./serverBuild.js";
+import { serviceVersions } from "./serviceVersions.js";
 import {
   auditedTaskStore,
   openTaskAudit,
@@ -691,6 +699,14 @@ export async function startAssistantService(
   const env = options.env ?? process.env;
   const preflight = await preflightAssistantService(config, env);
   await fs.mkdir(config.dataRoot, { recursive: true, mode: 0o700 });
+  // Before anything opens a store: migrate older data, refuse newer.
+  const dataVersion = await prepareDataVersion({
+    dataRoot: config.dataRoot,
+    log,
+  });
+  log(
+    `AgentLink server ${describeBuild(SERVER_BUILD)}, data format ${dataVersion.to}${dataVersion.from === dataVersion.to ? "" : ` (migrated from ${dataVersion.from})`}`,
+  );
   const certificates =
     preflight.kind === "local-ca"
       ? await startLocalCertificates(config, options)
@@ -887,6 +903,9 @@ export async function startAssistantService(
     // Bound once the runner exists; no turn can start before then.
     let jobRunner: JobRunner | undefined;
     let taskRunner: TaskRunner | undefined;
+    // Draining for an upgrade: bound before the server starts listening.
+    let maintenance: Maintenance | undefined;
+    const workPaused = () => maintenance?.paused() ?? false;
     // Every repository the owner's GitHub connections reach (asked of the
     // publisher), plus configured and project ones.
     const repositoryDirectory = createRepositoryDirectory({
@@ -1139,6 +1158,9 @@ export async function startAssistantService(
       },
       eventLog,
       approvalModes,
+      // Task chats keep going while draining: their runner admits work.
+      turnsPaused: (projectId) =>
+        workPaused() && !projectId.startsWith(TASK_PROJECT_PREFIX),
     });
     agentNotifier = routes;
     const resolveModel = (key: string) => {
@@ -1216,10 +1238,16 @@ export async function startAssistantService(
           config,
           projectId === legacyChatProject ? undefined : projectId,
         ),
-        assistantStatus: () => ({
-          inboxUnread: inbox.unreadCount(),
-          revision: assistantRevision,
-        }),
+        assistantStatus: () => {
+          const state = maintenance?.status().state ?? "running";
+          return {
+            inboxUnread: inbox.unreadCount(),
+            revision: assistantRevision,
+            version: describeBuild(SERVER_BUILD),
+            ...(state === "running" ? {} : { maintenance: state }),
+          };
+        },
+        workPaused,
         // Stop in a run's chat stops the run, recorded as cancelled; in a
         // task's chat, it stops the task (which can be resumed).
         stopRun: async (workspaceSessionId) => {
@@ -1564,6 +1592,7 @@ export async function startAssistantService(
       log,
       failureDetail: (projectId, sessionId) =>
         turnFailures.take(projectId, sessionId),
+      paused: workPaused,
       onRunRecovered: ({ run, job }) => recordInInbox(run, job),
       onRunChanged: ({ run, job, auth }) => {
         const bridge = bridges.get(run.projectId);
@@ -1759,6 +1788,7 @@ export async function startAssistantService(
             log,
             failureDetail: (projectId, sessionId) =>
               turnFailures.take(projectId, sessionId),
+            paused: workPaused,
             onTaskChanged: (task) => {
               assistantChanged();
               recordTaskInInbox(task);
@@ -1894,6 +1924,7 @@ export async function startAssistantService(
       onClose: async () => {
         // Before the routes stop turns: open runs are recorded interrupted.
         if (snapshotSweep) clearInterval(snapshotSweep);
+        await maintenance?.close();
         await jobs.close();
         await tasks?.runner.close();
         await taskDeliveries.flush();
@@ -1944,7 +1975,82 @@ export async function startAssistantService(
     };
     server.store.onSessionsRevoked(retainSignedInDevices);
     retainSignedInDevices();
+    // Read a drain request before anything can start work: a server
+    // started mid-upgrade stays drained until `agentlink-server resume`.
+    const taskWork = tasks?.runner;
+    maintenance = createMaintenance({
+      dataRoot: config.dataRoot,
+      log,
+      running: () => {
+        const working = taskWork?.workingTasks() ?? [];
+        const runs = jobs.activeRuns();
+        const ownSessions = new Set(
+          [
+            ...working.map((task) => task.sessionId),
+            ...runs.map(({ run }) => run.sessionId),
+          ].filter((id): id is string => id !== undefined),
+        );
+        return [
+          ...working.map(
+            (task) =>
+              `task ${task.id} (${task.state === "awaiting_approval" ? "waiting for your approval" : task.state}): ${task.objective.replace(/\s+/gu, " ").slice(0, 60)}`,
+          ),
+          ...runs.map(({ job }) => `scheduled run of "${job.name}"`),
+          ...routes
+            .runningSessions()
+            .map((key) => parseSessionKey(key))
+            .filter(
+              (parsed) =>
+                parsed !== undefined &&
+                !parsed.projectId.startsWith(TASK_PROJECT_PREFIX) &&
+                !ownSessions.has(parsed.sessionId),
+            )
+            .map(
+              (parsed) =>
+                `a chat turn in ${catalog.get(parsed!.projectId)?.label ?? parsed!.projectId}`,
+            ),
+        ];
+      },
+      interrupt: async (reason) => {
+        const stoppedTasks = (await taskWork?.interruptWorking(reason)) ?? [];
+        const stoppedRuns = await jobs.interruptRuns(reason);
+        // Chats last: tasks and runs have stopped their own turns.
+        const stoppedChats = await routes.interruptTurns((key) => {
+          const parsed = parseSessionKey(key);
+          return (
+            parsed !== undefined &&
+            !parsed.projectId.startsWith(TASK_PROJECT_PREFIX)
+          );
+        });
+        return [
+          ...stoppedTasks.map((task) => `task ${task.id}`),
+          ...stoppedRuns.map((run) => `scheduled run ${run.runId}`),
+          ...stoppedChats.map(
+            (key) => `a chat turn (${parseSessionKey(key)?.sessionId ?? key})`,
+          ),
+        ];
+      },
+      onChanged: (status) => {
+        if (status.state === "running") {
+          jobs.wake();
+          taskWork?.wake();
+        }
+        assistantChanged();
+      },
+    });
+    await maintenance.start();
     const { port } = await server.start();
+    // Services that answer with another build or protocol: rebuild them.
+    void serviceVersions(config, env)
+      .then((services) => {
+        for (const problem of versionProblems(
+          SERVER_BUILD,
+          services.filter((service) => service.reachable),
+        )) {
+          log(`Version mismatch: ${problem}`);
+        }
+      })
+      .catch(() => undefined);
     certificates?.watch(server);
     // Started from a restored backup: pause schedules before any can fire,
     // and tell the owner what was restored.

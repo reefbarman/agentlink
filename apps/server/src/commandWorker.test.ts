@@ -162,8 +162,11 @@ describe("command worker", () => {
     const refused = await test.run(test.request("echo hi"), wrong);
     expect(refused.startError?.code).toBe("unauthorized");
     expect(refused.stdout).toBe("");
+    // The pong carries the worker's protocol and build.
     await expect(pingCommandWorker(test.client())).resolves.toEqual({
       ok: true,
+      protocol: 1,
+      build: { version: "dev", id: "dev" },
     });
     await expect(
       pingCommandWorker(test.client("wrong-token")),
