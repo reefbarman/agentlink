@@ -1,0 +1,58 @@
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 170
+apps/server/README.md
+  h_e08a86bb3a33a2 526,529-539
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 112,1878-1898,1912-1918,1941-1944
+CHANGELOG.md
+  h_e08a86bb3a33a2 35-36
+apps/server/src/jobRoutes.ts
+  h_e08a86bb3a33a2 210-216
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 452
+apps/server/src/briefingSpec.ts
+  h_e08a86bb3a33a2 1-118
+apps/server/src/jobTools.ts
+  h_e08a86bb3a33a2 38-45,69,74-82,187-198,236,239-246,248-249,251,254-268,346-360,367-369,415-417,427,463-465,474-476,555,564-566,571-638,713-718,735,884-954,990-991
+  s_7ab2c24e29a482::t_9cfac9cdd063bf 37,269-279,361-362,413-414,461-462,639,955-957,987-989,992
+apps/server/src/jobTools.test.ts
+  h_e08a86bb3a33a2 432-477
+apps/server/src/jobStore.ts
+  h_e08a86bb3a33a2 21-25,65-69,144-145,203,307-311,316-319
+  s_7ab2c24e29a482::t_08e02a59abb988 20,312-315,320
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 91-104,128,160,223,248-271,908-911,1093,1152-1154,1213-1215
+  s_7ab2c24e29a482::t_f67b9e49c21b6f 272-273,912-913
+apps/server/src/briefings.ts
+  h_e08a86bb3a33a2 1-288
+apps/server/src/briefings.test.ts
+  h_e08a86bb3a33a2 1-453
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 50-51,113,125-136
+  s_7ab2c24e29a482::t_f6eeef79d99916 112
+apps/server/src/jobRunner.ts
+  h_e08a86bb3a33a2 89,152,156,548,570
+resources/builtin-skills/documentation/references/release-notes.md
+  s_7ab2c24e29a482::t_b1f7b249ff8706 35-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_7ab2c24e29a482": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d21a31b0-c80c-41ca-a08e-07aa1088affe",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
