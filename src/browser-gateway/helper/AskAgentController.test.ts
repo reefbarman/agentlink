@@ -154,6 +154,33 @@ describe("AskAgentController", () => {
     await controller.dispose();
   });
 
+  it("releases a pending approval without answering it", async () => {
+    const controller = createController([]);
+    const request = {
+      kind: "write" as const,
+      id: "approval-1",
+      filePath: "Schedule a job?",
+      writeOperation: "modify" as const,
+    };
+    const waiting = controller.requestApproval(
+      request,
+      new AbortController().signal,
+    );
+    expect(controller.releaseApproval("other")).toBeNull();
+    expect(controller.getPendingApproval()).toEqual(request);
+    expect(controller.releaseApproval(request.id)).toEqual(request);
+    expect(controller.getPendingApproval()).toBeNull();
+    await expect(waiting).rejects.toThrow("ask_agent_approval_released");
+    // A later approval can be requested again.
+    const next = controller.requestApproval(
+      { ...request, id: "approval-2" },
+      new AbortController().signal,
+    );
+    expect(controller.getPendingApproval()?.id).toBe("approval-2");
+    await controller.dispose();
+    await expect(next).rejects.toThrow("ask_agent_approval_cancelled");
+  });
+
   it("owns runtime approval pause, resume, and abort cleanup", async () => {
     const publications: AskAgentControllerPublication[] = [];
     const controller = createController(publications);

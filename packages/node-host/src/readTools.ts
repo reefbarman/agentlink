@@ -3,8 +3,12 @@ import {
   type AgentPrincipal,
   type HostToolResolver,
 } from "@agentlink/core";
-import { promises as fs } from "node:fs";
 import path from "node:path";
+
+import {
+  createNodeHostLocalFileSystem,
+  type NodeHostFileSystem,
+} from "./fileSystem.js";
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_LINE_LENGTH = 500;
@@ -45,6 +49,8 @@ export interface CreateNodeHostReadToolsOptions<
   readonly maxSearchDepth?: number;
   /** Optional host policy checked before files or directories are listed or read. */
   readonly shouldIncludePath?: (absolutePath: string) => boolean;
+  /** Filesystem used for every read. Defaults to this machine's filesystem. */
+  readonly fileSystem?: NodeHostFileSystem;
 }
 
 /**
@@ -77,11 +83,16 @@ export function createNodeHostReadTools<
     "maxSearchDepth",
     MAX_SEARCH_DEPTH,
   );
+  const files = options.fileSystem ?? createNodeHostLocalFileSystem();
 
   return async (request) => {
-    const grants = await resolveGrantedRoots(options.resolveGrants, request);
+    const grants = await resolveGrantedRoots(
+      files,
+      options.resolveGrants,
+      request,
+    );
     const resolve = (input: Record<string, unknown>) =>
-      resolveGrantedPath(input.path, grants);
+      resolveGrantedPath(files, input.path, grants);
 
     return [
       defineTool<TPrincipal>({
@@ -103,10 +114,10 @@ export function createNodeHostReadTools<
         handler: async (input) => {
           const resolved = await resolve(input);
           if (!resolved.ok) return error(resolved.error);
-          const stat = await fs.stat(resolved.path).catch(() => undefined);
-          if (!stat?.isFile()) return error("not_a_file");
+          const stat = await files.stat(resolved.path).catch(() => undefined);
+          if (stat?.kind !== "file") return error("not_a_file");
           if (stat.size > maxFileBytes) return error("file_too_large");
-          const bytes = await fs.readFile(resolved.path);
+          const bytes = await files.readFile(resolved.path);
           if (isBinary(bytes)) return error("binary_file");
           const redacted = redactStructuredConfig(
             resolved.path,
@@ -166,8 +177,8 @@ export function createNodeHostReadTools<
         handler: async (input) => {
           const resolved = await resolve(input);
           if (!resolved.ok) return error(resolved.error);
-          const stat = await fs.stat(resolved.path).catch(() => undefined);
-          if (!stat?.isDirectory()) return error("not_a_directory");
+          const stat = await files.stat(resolved.path).catch(() => undefined);
+          if (stat?.kind !== "directory") return error("not_a_directory");
           const recursive =
             input.recursive === true || input.depth !== undefined;
           const depth = recursive
@@ -175,6 +186,7 @@ export function createNodeHostReadTools<
             : 0;
           const entries: string[] = [];
           await visitDirectory({
+            files,
             directory: resolved.path,
             displayRoot: resolved.path,
             rootPath: resolved.rootPath,
@@ -240,6 +252,7 @@ export function createNodeHostReadTools<
           const matches: Array<{ path: string; line: number; text: string }> =
             [];
           await searchPath({
+            files,
             target: resolved.path,
             rootPath: resolved.rootPath,
             shouldIncludePath: options.shouldIncludePath,
@@ -275,19 +288,23 @@ interface GrantedRoot {
 }
 
 async function resolveGrantedRoots<TPrincipal extends AgentPrincipal>(
+  files: NodeHostFileSystem,
   resolveGrants: ResolveNodeHostReadGrants<TPrincipal>,
   request: ResolveNodeHostReadGrantsRequest<TPrincipal>,
 ): Promise<readonly GrantedRoot[]> {
   const roots: GrantedRoot[] = [];
   for (const grant of await resolveGrants(request)) {
     if (!path.isAbsolute(grant.rootPath)) continue;
-    const realPath = await fs.realpath(grant.rootPath).catch(() => undefined);
+    const realPath = await files
+      .realpath(grant.rootPath)
+      .catch(() => undefined);
     if (realPath) roots.push({ path: realPath, kind: grant.kind });
   }
   return roots;
 }
 
 async function resolveGrantedPath(
+  files: NodeHostFileSystem,
   input: unknown,
   grants: readonly GrantedRoot[],
 ): Promise<
@@ -297,7 +314,7 @@ async function resolveGrantedPath(
     return { ok: false, error: "absolute_path_required" };
   }
   const requested = path.resolve(input);
-  const resolved = await fs.realpath(requested).catch(() => undefined);
+  const resolved = await files.realpath(requested).catch(() => undefined);
   if (!resolved) return { ok: false, error: "path_not_found" };
   if (resolved !== requested) return { ok: false, error: "path_alias" };
   for (const grant of grants) {
@@ -312,6 +329,7 @@ async function resolveGrantedPath(
 }
 
 async function visitDirectory(options: {
+  readonly files: NodeHostFileSystem;
   readonly directory: string;
   readonly displayRoot: string;
   readonly rootPath: string;
@@ -322,20 +340,23 @@ async function visitDirectory(options: {
   readonly shouldIncludePath?: (absolutePath: string) => boolean;
 }): Promise<void> {
   if (options.entries.length >= options.limit) return;
-  const directory = await fs.realpath(options.directory).catch(() => undefined);
+  const { files } = options;
+  const directory = await files
+    .realpath(options.directory)
+    .catch(() => undefined);
   if (!directory || !isPathWithin(directory, options.rootPath)) return;
-  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+  for (const entry of await files.readDirectory(directory)) {
     if (options.entries.length >= options.limit) return;
-    if (entry.isSymbolicLink()) continue;
+    if (entry.kind === "symlink") continue;
     const requestedChild = path.join(directory, entry.name);
     if (options.shouldIncludePath?.(requestedChild) === false) continue;
-    const child = await fs.realpath(requestedChild).catch(() => undefined);
+    const child = await files.realpath(requestedChild).catch(() => undefined);
     if (!child || !isPathWithin(child, options.rootPath)) continue;
-    const stat = await fs.stat(child).catch(() => undefined);
+    const stat = await files.stat(child).catch(() => undefined);
     if (!stat) continue;
     const relative = path.relative(options.displayRoot, child) || entry.name;
-    options.entries.push(stat.isDirectory() ? `${relative}/` : relative);
-    if (stat.isDirectory() && options.depth < options.maxDepth) {
+    options.entries.push(stat.kind === "directory" ? `${relative}/` : relative);
+    if (stat.kind === "directory" && options.depth < options.maxDepth) {
       await visitDirectory({
         ...options,
         directory: child,
@@ -346,6 +367,7 @@ async function visitDirectory(options: {
 }
 
 async function searchPath(options: {
+  readonly files: NodeHostFileSystem;
   readonly target: string;
   readonly rootPath: string;
   readonly maxDepth: number;
@@ -362,17 +384,18 @@ async function searchPath(options: {
     return;
   if (options.shouldIncludePath?.(path.resolve(options.target)) === false)
     return;
-  const target = await fs.realpath(options.target).catch(() => undefined);
+  const { files } = options;
+  const target = await files.realpath(options.target).catch(() => undefined);
   if (
     !target ||
     target !== path.resolve(options.target) ||
     !isPathWithin(target, options.rootPath)
   )
     return;
-  const stat = await fs.stat(target).catch(() => undefined);
+  const stat = await files.stat(target).catch(() => undefined);
   if (!stat) return;
-  if (stat.isFile()) {
-    const bytes = await fs.readFile(target).catch(() => undefined);
+  if (stat.kind === "file") {
+    const bytes = await files.readFile(target).catch(() => undefined);
     if (!bytes || bytes.length > MAX_FILE_BYTES || isBinary(bytes)) return;
     const redacted = redactStructuredConfig(target, bytes.toString("utf8"));
     if (redacted.error) return;
@@ -388,10 +411,10 @@ async function searchPath(options: {
     }
     return;
   }
-  if (!stat.isDirectory()) return;
-  for (const entry of await fs.readdir(target, { withFileTypes: true })) {
+  if (stat.kind !== "directory") return;
+  for (const entry of await files.readDirectory(target)) {
     if (options.matches.length >= options.limit) return;
-    if (entry.isSymbolicLink()) continue;
+    if (entry.kind === "symlink") continue;
     const child = path.join(target, entry.name);
     if (options.shouldIncludePath?.(child) === false) continue;
     await searchPath({

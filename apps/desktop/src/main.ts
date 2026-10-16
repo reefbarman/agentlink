@@ -39,6 +39,12 @@ import {
   QUICK_ASK_PANEL_WIDTH,
 } from "./DesktopQuickAsk.js";
 import { DesktopRemoteView } from "./DesktopRemoteView.js";
+import { DesktopAssistantView } from "./DesktopAssistantView.js";
+import {
+  assistantSettingsFrom,
+  readAssistantConfig,
+  updateAssistantSettings,
+} from "./desktopAssistantSettings.js";
 import {
   DesktopMcpWindow,
   isDesktopMcpManagerOpenRequest,
@@ -71,6 +77,7 @@ const authController = new DesktopAuthController();
 const compatibleController = new DesktopOpenAiCompatibleController();
 
 let chatWindow: BrowserWindow | null = null;
+let assistantView: DesktopAssistantView | null = null;
 let setupWindow: BrowserWindow | null = null;
 let leaseClient: BrowserGatewayHelperLeaseClient | null = null;
 let authClient: BrowserGatewayHelperModelAuthLeaseClient | null = null;
@@ -400,6 +407,12 @@ async function showChatWindow(): Promise<void> {
   chatWindow = nextWindow;
   allowOnlyLocalService(nextWindow.webContents, discovery.url);
   new DesktopRemoteView(nextWindow, new URL(discovery.url).origin);
+  const nextAssistantView = new DesktopAssistantView(
+    nextWindow,
+    new URL(discovery.url).origin,
+    await readAssistantConfig(preferencesPath),
+  );
+  assistantView = nextAssistantView;
   // Closing hides the chat so reopening is instant and drafts survive; the
   // app keeps running in the menu bar for Quick Ask.
   nextWindow.on("close", (event) => {
@@ -412,6 +425,7 @@ async function showChatWindow(): Promise<void> {
   nextWindow.on("hide", syncDockVisibility);
   nextWindow.on("closed", () => {
     if (chatWindow === nextWindow) chatWindow = null;
+    if (assistantView === nextAssistantView) assistantView = null;
     syncDockVisibility();
   });
 
@@ -783,6 +797,16 @@ function registerCredentialIpc(): void {
       throw new Error("invalid_shortcut");
     }
     return await quickAsk.setShortcut(value);
+  });
+  ipcMain.handle("agentlink:assistant:get", async (event) => {
+    assertSetupSender(event.sender);
+    return assistantSettingsFrom(await readAssistantConfig(preferencesPath));
+  });
+  ipcMain.handle("agentlink:assistant:set", async (event, value) => {
+    assertSetupSender(event.sender);
+    const config = await updateAssistantSettings(preferencesPath, value);
+    assistantView?.configure(config);
+    return assistantSettingsFrom(config);
   });
   ipcMain.handle("agentlink:open-at-login:get", (event) => {
     assertSetupSender(event.sender);

@@ -1,0 +1,97 @@
+# The publisher: the only part of the assistant that holds GitHub tokens
+# and can push. Use it as an overlay on compose.yaml, for example with
+#   COMPOSE_FILE=compose.yaml:compose.publisher.yaml
+# in .env (append :compose.meridian.yaml and others as you use them).
+#
+# It pushes a coding task's commit to its own agentlink/* branch (never
+# forced) and opens or updates that task's draft pull request, nothing
+# else. It sees the task clones read-only and its own data; the assistant
+# reaches it on a private network with a shared token, and the command
+# worker cannot reach it at all.
+#
+# One-time setup (see "Publishing tasks to GitHub" in apps/server/README.md):
+#   docker build --target publisher -t agentlink-publisher:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
+#   mkdir -m 700 publisher && mkdir -p projects/.tasks
+#   openssl rand -hex 32 > secrets/publisher-token
+#   openssl rand -hex 32 > secrets/publisher-key
+#   chmod 600 secrets/publisher-token secrets/publisher-key
+#   echo AGENTLINK_GITHUB_CLIENT_ID=Iv23... >> .env   # your GitHub App
+# and add to server.json:
+#   "publisher": { "host": "publisher", "port": 7400,
+#                  "token": { "file": "/run/secrets/publisher-token" } }
+
+services:
+  assistant:
+    networks:
+      - publisher
+    secrets:
+      - source: publisher_token
+        target: publisher-token
+    depends_on:
+      publisher:
+        condition: service_started
+
+  publisher:
+    image: agentlink-publisher:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    user: "${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    command:
+      - --token-file
+      - /run/secrets/publisher-token
+      - --key-file
+      - /run/secrets/publisher-key
+      - --tasks-root
+      - /srv/agentlink/projects/.tasks
+      - --data
+      - /var/lib/agentlink-publisher
+    environment:
+      # The GitHub App's client ID (not a secret). Without it, connections
+      # can only use pasted fine-grained tokens.
+      AGENTLINK_GITHUB_CLIENT_ID: ${AGENTLINK_GITHUB_CLIENT_ID:-}
+    secrets:
+      - source: publisher_token
+        target: publisher-token
+      - source: publisher_key
+        target: publisher-key
+    volumes:
+      # Task clones only, read-only, at the same path as the assistant.
+      - ./projects/.tasks:/srv/agentlink/projects/.tasks:ro
+      # Encrypted GitHub connections and scratch repositories.
+      - ./publisher:/var/lib/agentlink-publisher
+    # The assistant reaches it on `publisher`; it reaches GitHub through
+    # `publisher-egress`. It only ever connects to github.com and
+    # api.github.com, and runs no commands but its own git.
+    networks:
+      - publisher
+      - publisher-egress
+    expose:
+      - "7400"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  publisher:
+    internal: true
+  publisher-egress: {}
+
+secrets:
+  publisher_token:
+    file: ./secrets/publisher-token
+  publisher_key:
+    file: ./secrets/publisher-key

@@ -324,3 +324,84 @@ describe("runAgentToolLoop bounded execution", () => {
     ).rejects.toMatchObject({ limit: "maxElapsedMs" });
   });
 });
+
+describe("runAgentToolLoop interjections", () => {
+  const user = (text: string): CoreModelMessage => ({
+    role: "user",
+    content: text,
+  });
+
+  it("admits queued messages after a tool batch, oldest first, each its own message", async () => {
+    const queue: CoreModelMessage[] = [];
+    const seen: CoreModelMessage[][] = [];
+    let iteration = 0;
+    const result = await runAgentToolLoop(
+      makeHandlers({
+        takeInterjections: () => queue.splice(0),
+        callModel: async ({ iterationMessages }) => {
+          seen.push(structuredClone(iterationMessages));
+          iteration += 1;
+          return iteration === 1
+            ? { text: "", toolCalls: [{ id: "a", name: "read", input: {} }] }
+            : { text: "done", toolCalls: [] };
+        },
+        runTool: async () => {
+          // Sent while the tool ran.
+          queue.push(user("use blue"), user("and the footer"));
+          return { stop: false, content: "", toolMessage: toolMessage("ok") };
+        },
+      }),
+    );
+    expect(result.text).toBe("done");
+    expect(seen[1]!.slice(-3)).toEqual([
+      toolMessage("ok"),
+      user("use blue"),
+      user("and the footer"),
+    ]);
+  });
+
+  it("keeps the turn going when a message arrives as it would end", async () => {
+    const queue: CoreModelMessage[] = [user("one more thing")];
+    let calls = 0;
+    const result = await runAgentToolLoop(
+      makeHandlers({
+        takeInterjections: () => queue.splice(0),
+        callModel: async ({ iterationMessages }) => {
+          calls += 1;
+          return calls === 1
+            ? { text: "Finished.", toolCalls: [] }
+            : {
+                text: ` Answered ${iterationMessages.length} messages.`,
+                toolCalls: [],
+              };
+        },
+      }),
+    );
+    expect(calls).toBe(2);
+    expect(result.text).toBe(" Answered 2 messages.");
+  });
+
+  it("takes nothing once cancelled", async () => {
+    const controller = new AbortController();
+    let taken = 0;
+    await expect(
+      runAgentToolLoop(
+        makeHandlers({
+          execution: { signal: controller.signal },
+          takeInterjections: () => {
+            taken += 1;
+            return [user("late")];
+          },
+          callModel: async () => {
+            controller.abort();
+            return {
+              text: "",
+              toolCalls: [{ id: "a", name: "read", input: {} }],
+            };
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(TurnExecutionCancelledError);
+    expect(taken).toBe(0);
+  });
+});

@@ -9,6 +9,7 @@ import {
   type AgentTranscriptPolicy,
   type AgentTurnLeaseProvider,
   type AuthorizeToolCall,
+  type CreateAgentEngineOptions,
   type CoreModelAuthContext,
   type CoreModelRuntime,
   type DurableToolInteractionRepository,
@@ -96,6 +97,8 @@ export interface CreateNodeHostAgentOptions<
   readonly createTurnId?: () => string;
   readonly createInteractionId?: () => string;
   readonly now?: () => number;
+  /** Private cause of a failed turn, before it is made safe for events. */
+  readonly onTurnError?: CreateAgentEngineOptions<TPrincipal>["onTurnError"];
 }
 
 /**
@@ -150,5 +153,6 @@ export function createNodeHostAgent<
       ? { createInteractionId: options.createInteractionId }
       : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.onTurnError ? { onTurnError: options.onTurnError } : {}),
   });
 }

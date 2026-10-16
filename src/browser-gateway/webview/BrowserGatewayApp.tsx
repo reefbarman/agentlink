@@ -53,7 +53,12 @@ import {
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
+import { AssistantProjectSwitcher } from "./AssistantProjects";
+import { AssistantHub } from "./AssistantJobs";
+import { ChatTaskStrip, type ChatTaskCard } from "./AssistantTasks";
+import { RememberedStrip, type RememberedCard } from "./AssistantMemory";
 import { DesktopRemotePane } from "./DesktopRemotePane";
+import { AssistantLauncher } from "./AssistantLauncher";
 import type {
   DesktopMode,
   DesktopQuickAskSubmission,
@@ -80,6 +85,7 @@ import type { ProviderUsageSnapshot } from "../../shared/providerUsage";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { ModelSetupCard } from "../../agent/webview/components/ModelSetupCard";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
+import { BrowserFileViewer } from "./components/BrowserFileViewer";
 import { LazyAgentPluginManagerPanel } from "./components/LazyAgentPluginManagerPanel";
 import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
 import {
@@ -202,6 +208,22 @@ import {
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
+/** How often the Assistant refreshes chat and project status. */
+const ASSISTANT_STATUS_REFRESH_MS = 5_000;
+/** Why the Assistant kept a chat it was asked to delete, in plain words. */
+const DELETE_SESSION_ERRORS: Readonly<Record<string, string>> = {
+  ask_agent_turn_in_progress:
+    "This chat is still working. Stop it first, then delete it.",
+  session_busy: "This chat is still working. Stop it first, then delete it.",
+  session_waiting:
+    "This chat is waiting for your approval. Answer it first, then delete the chat.",
+  session_agent_running:
+    "A background agent in this chat is still running. Stop it first, then delete the chat.",
+  session_command_running:
+    "A command in this chat is still running. Stop it first, then delete the chat.",
+  ask_agent_task_chat:
+    "This chat belongs to a coding task. Delete the task in Tasks to delete its chat.",
+};
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
 const SELECTION_CACHE_KEY = "agentlink.browserGateway.selection.v1";
@@ -599,6 +621,19 @@ export type GatewaySnapshot = {
     } | null;
   };
   background: BgSessionInfo[];
+  /** The Assistant's per-chat approval mode; absent elsewhere. */
+  approvalMode?: "autonomous" | "ask";
+  /** The Assistant's unread inbox count and jobs/inbox revision. */
+  assistant?: {
+    inboxUnread: number;
+    revision: number;
+    maintenance?: "draining" | "drained";
+    version?: string;
+  };
+  /** The Assistant's coding tasks from the open chat; absent elsewhere. */
+  tasks?: ChatTaskCard[];
+  /** What the Assistant just remembered in the open chat; absent elsewhere. */
+  memories?: RememberedCard[];
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -1032,6 +1067,11 @@ interface BrowserGatewayAppProps {
   workspaceName: string;
   routeByInstance?: boolean;
   askAgentOnly?: boolean;
+  /**
+   * Which product the Ask Agent shell presents as. The standalone AgentLink
+   * Assistant reuses this UI with its own name, copy and violet accent.
+   */
+  product?: BrowserGatewayProduct;
   /** Desktop quick-ask panel: renders only the composer and hands sends to the main window. */
   quickAsk?: boolean;
   workspaceOnly?: boolean;
@@ -1282,6 +1322,20 @@ function safeTranscriptFilename(title: string): string {
   return `${base || "ask-agent"}-${stamp}.md`;
 }
 
+export type BrowserGatewayProduct = "ask-agent" | "assistant";
+
+interface ProductCopy {
+  readonly name: string;
+  readonly placeholder: string;
+  readonly welcomeTitle: string;
+  readonly welcomeCopy: string;
+  readonly starters: readonly {
+    readonly icon: string;
+    readonly title: string;
+    readonly prompt: string;
+  }[];
+}
+
 const ASK_AGENT_STARTERS = [
   {
     icon: "sparkle",
@@ -1300,12 +1354,52 @@ const ASK_AGENT_STARTERS = [
   },
 ] as const;
 
+const PRODUCT_COPY: Record<BrowserGatewayProduct, ProductCopy> = {
+  "ask-agent": {
+    name: "AgentLink",
+    placeholder: "Ask AgentLink anything",
+    welcomeTitle: "What can I help you with?",
+    welcomeCopy:
+      "Think, research, create, and work through the details together.",
+    starters: ASK_AGENT_STARTERS,
+  },
+  assistant: {
+    name: "AgentLink Assistant",
+    placeholder: "Message your assistant",
+    welcomeTitle: "What should we work on?",
+    welcomeCopy:
+      "Your own assistant, running on your machine. It can work in your projects, run commands and keep going while you are away.",
+    starters: [
+      {
+        icon: "folder",
+        title: "Get to know this project",
+        prompt:
+          "Look around this project and tell me what is here and what state it is in.",
+      },
+      {
+        icon: "checklist",
+        title: "Plan a task",
+        prompt:
+          "Help me plan a task, then break it into steps you can work through.",
+      },
+      {
+        icon: "search",
+        title: "Research a topic",
+        prompt:
+          "Research a topic with me and separate facts from open questions.",
+      },
+    ],
+  },
+};
+
 function AskAgentWelcome({
   onStart,
   desktop = false,
+  copy = PRODUCT_COPY["ask-agent"],
 }: {
   onStart: (prompt: string) => void;
   desktop?: boolean;
+  copy?: ProductCopy;
 }): JSX.Element {
   return (
     <section class="consumer-welcome" aria-labelledby="consumer-welcome-title">
@@ -1319,13 +1413,11 @@ function AskAgentWelcome({
           </>
         )}
       </div>
-      <p class="consumer-welcome-eyebrow">AgentLink</p>
-      <h1 id="consumer-welcome-title">What can I help you with?</h1>
-      <p class="consumer-welcome-copy">
-        Think, research, create, and work through the details together.
-      </p>
+      <p class="consumer-welcome-eyebrow">{copy.name}</p>
+      <h1 id="consumer-welcome-title">{copy.welcomeTitle}</h1>
+      <p class="consumer-welcome-copy">{copy.welcomeCopy}</p>
       <div class="consumer-starters" aria-label="Conversation starters">
-        {ASK_AGENT_STARTERS.map((starter) => (
+        {copy.starters.map((starter) => (
           <button
             key={starter.title}
             class="consumer-starter"
@@ -1347,6 +1439,7 @@ export function BrowserGatewayApp({
   workspaceName: _workspaceName,
   routeByInstance = false,
   askAgentOnly = false,
+  product = "ask-agent",
   quickAsk = false,
   workspaceOnly = false,
   browserShell = false,
@@ -1356,6 +1449,7 @@ export function BrowserGatewayApp({
   reloadPage = () => window.location.reload(),
 }: BrowserGatewayAppProps) {
   const consumerShell = askAgentOnly || browserShell;
+  const productCopy = PRODUCT_COPY[product];
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("ask");
   const [browserWorkspaceMounted, setBrowserWorkspaceMounted] = useState(false);
   const desktopModesAvailable =
@@ -1365,8 +1459,12 @@ export function BrowserGatewayApp({
     setDesktopMode(mode);
     if (browserShell && window.innerWidth <= 720) setDesktopSidebarOpen(false);
   };
-  const desktopRemoteSelected =
-    desktopModesAvailable && desktopMode === "vscode";
+  const desktopRemoteSelected = desktopModesAvailable && desktopMode !== "ask";
+  // The desktop embeds the Assistant natively; the browser links to it.
+  const desktopAssistantAvailable =
+    desktopModesAvailable &&
+    !browserShell &&
+    Boolean(window.agentlinkDesktopShell?.onAssistantState);
   const surfaceVisibleRef = useRef(true);
   surfaceVisibleRef.current = !desktopRemoteSelected;
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
@@ -1520,6 +1618,14 @@ export function BrowserGatewayApp({
     snapshot?.session.projects?.[0]?.projectId;
   const selectedProjectIdRef = useRef<string | undefined>(selectedProjectId);
   selectedProjectIdRef.current = selectedProjectId;
+  // The Assistant has no editor to reveal files in; file links open a
+  // read-only viewer of the selected project's file instead. Ask Agent in
+  // the VS Code gateway keeps file links inert, as before.
+  const [viewedFile, setViewedFile] = useState<{
+    path: string;
+    line?: number;
+  } | null>(null);
+  const closeViewedFile = useCallback(() => setViewedFile(null), []);
 
   function logAskAgentBrowserEvent(
     event: string,
@@ -2967,23 +3073,49 @@ export function BrowserGatewayApp({
         : undefined,
     [background, transcriptView],
   );
+  // The Assistant reaches the open chat's background agents through its Ask
+  // Agent bridge (cookie auth): transcript, stop and steer only. Workspace
+  // tabs use the mirrored VS Code window's background API.
+  const assistantFleet = product === "assistant" && isAskAgentSelected;
+  const postBackground = useCallback(
+    (
+      endpoint: "stop" | "open-transcript" | "action",
+      body: Record<string, unknown>,
+    ): Promise<Response> => {
+      if (assistantFleet) {
+        const route =
+          endpoint === "open-transcript"
+            ? "transcript"
+            : endpoint === "action"
+              ? "steer"
+              : "stop";
+        return fetch(`/api/ask-agent/background/${route}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+      return fetch(buildApiPath(`/api/background/${endpoint}`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+    },
+    [assistantFleet, authToken, buildApiPath],
+  );
   useEffect(() => {
     if (!transcriptView?.visible || !openTranscriptBackground) return;
     let cancelled = false;
     const sessionId = transcriptView.sessionId;
     void (async () => {
       try {
-        const response = await fetch(
-          buildApiPath("/api/background/open-transcript"),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ sessionId }),
-          },
-        );
+        const response = await postBackground("open-transcript", {
+          sessionId,
+        });
         const body = (await response.json()) as {
           ok?: boolean;
           transcript?: {
@@ -3017,8 +3149,7 @@ export function BrowserGatewayApp({
       cancelled = true;
     };
   }, [
-    authToken,
-    buildApiPath,
+    postBackground,
     openTranscriptBackground?.completedAt,
     openTranscriptBackground?.errorMessage,
     openTranscriptBackground?.lastActiveAt,
@@ -6029,10 +6160,13 @@ export function BrowserGatewayApp({
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         message?: string;
+        error?: string;
       };
       if (!response.ok || body.ok === false) {
         setSessionHistoryError(
-          body.message ?? `Failed to delete session (${response.status}).`,
+          body.message ??
+            (body.error ? DELETE_SESSION_ERRORS[body.error] : undefined) ??
+            `Failed to delete session (${response.status}).`,
         );
         return;
       }
@@ -7037,17 +7171,48 @@ export function BrowserGatewayApp({
     void handleSend(`/checkpoint diff ${checkpointId} ${scope}`, []);
   };
 
+  const handleSetSessionApprovalMode = (mode: "autonomous" | "ask"): void => {
+    void (async () => {
+      try {
+        const response = await fetch("/api/ask-agent/approval-mode", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (!body.ok) {
+          setModeStatus(
+            `Approval mode change failed: ${body.error ?? response.status}`,
+          );
+          return;
+        }
+        if (!relayClientEnabled && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+            selectedTabGenerationRef.current,
+          );
+        }
+        setModeStatus(
+          mode === "ask"
+            ? "This chat now asks before every edit and command."
+            : "This chat now works on its own.",
+        );
+      } catch (err) {
+        setModeStatus(`Approval mode change failed: ${String(err)}`);
+      }
+    })();
+  };
+
   const handleStopBackground = (sessionId: string): void => {
     void (async () => {
       try {
-        const response = await fetch(buildApiPath("/api/background/stop"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({ sessionId }),
-        });
+        const response = await postBackground("stop", { sessionId });
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
@@ -7079,17 +7244,9 @@ export function BrowserGatewayApp({
     }
     void (async () => {
       try {
-        const response = await fetch(
-          buildApiPath("/api/background/open-transcript"),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ sessionId }),
-          },
-        );
+        const response = await postBackground("open-transcript", {
+          sessionId,
+        });
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
@@ -7138,21 +7295,21 @@ export function BrowserGatewayApp({
     sessionId: string,
     message?: string,
   ): void => {
-    void fetch(buildApiPath("/api/background/action"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
+    // The Assistant's agents support steering only.
+    if (assistantFleet && action !== "steer") return;
+    void postBackground("action", { action, sessionId, message }).then(
+      async (response) => {
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+        };
+        setModeStatus(
+          body.ok
+            ? `Background ${action} accepted`
+            : `${action} failed: ${body.error ?? response.status}`,
+        );
       },
-      body: JSON.stringify({ action, sessionId, message }),
-    }).then(async (response) => {
-      const body = (await response.json()) as { ok?: boolean; error?: string };
-      setModeStatus(
-        body.ok
-          ? `Background ${action} accepted`
-          : `${action} failed: ${body.error ?? response.status}`,
-      );
-    });
+    );
   };
 
   const handleAskAgentExecuteBuiltinCommand = (
@@ -7160,6 +7317,10 @@ export function BrowserGatewayApp({
     _args: string,
   ): void => {
     switch (name) {
+      case "fleet":
+        // Only the Assistant serves its chat's agents to Ask Agent.
+        if (assistantFleet) setShowFleetRequest((request) => request + 1);
+        break;
       case "memory":
         setMemoryPanelOpen(true);
         setShowAskAgentMemory(false);
@@ -7460,6 +7621,26 @@ export function BrowserGatewayApp({
   useEffect(() => {
     if (consumerShell && !streaming) void fetchSessions();
   }, [consumerShell, streaming, foreground?.sessionId]);
+
+  // The Assistant runs chats in the background: keep their status
+  // (working, needs you, new reply) current while the page is visible.
+  const fetchSessionsRef = useRef(fetchSessions);
+  fetchSessionsRef.current = fetchSessions;
+  useEffect(() => {
+    if (!consumerShell || product !== "assistant") return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        void fetchSessionsRef.current();
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, ASSISTANT_STATUS_REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [consumerShell, product, streaming]);
 
   useEffect(() => {
     const sessionId =
@@ -8235,6 +8416,19 @@ export function BrowserGatewayApp({
     },
   };
 
+  const openFileHandler:
+    | ((filePath: string, line?: number) => void)
+    | undefined = !isAskAgentSelected
+    ? (filePath, line) =>
+        browserVscodeApi.postMessage({
+          command: "agentOpenFile",
+          path: filePath,
+          line,
+        })
+    : product === "assistant"
+      ? (filePath, line) => setViewedFile({ path: filePath, line })
+      : undefined;
+
   quickAskSubmissionHandlerRef.current = (submission) => {
     selectSurfaceMode("ask");
     const started = startAskAgentSession();
@@ -8274,7 +8468,7 @@ export function BrowserGatewayApp({
         <div class="browser-chat-composer">
           <InputArea
             onSend={submitQuickAsk}
-            placeholder="Ask AgentLink anything"
+            placeholder={productCopy.placeholder}
             onStop={() => undefined}
             streaming={false}
             submitOnEnter={true}
@@ -8308,8 +8502,17 @@ export function BrowserGatewayApp({
 
   return (
     <div
-      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}`}
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" ? " assistant-product" : ""}`}
     >
+      {viewedFile && (
+        <BrowserFileViewer
+          key={`${viewedFile.path}:${viewedFile.line ?? ""}`}
+          path={viewedFile.path}
+          line={viewedFile.line}
+          theme={snapshot?.theme ?? initialTheme}
+          onClose={closeViewedFile}
+        />
+      )}
       {!workspaceOnly && (
         <header class="browser-header">
           {consumerShell && (
@@ -8338,7 +8541,9 @@ export function BrowserGatewayApp({
             {isAskAgentSelected && !consumerShell && (
               <span class="consumer-brand-mark" aria-hidden="true" />
             )}
-            <span>{isAskAgentSelected ? "AgentLink" : "AgentLink Remote"}</span>
+            <span>
+              {isAskAgentSelected ? productCopy.name : "AgentLink Remote"}
+            </span>
             {isAskAgentSelected && !consumerShell && (
               <span class="consumer-brand-mode">Ask</span>
             )}
@@ -8416,12 +8621,18 @@ export function BrowserGatewayApp({
           )}
           {desktopRemoteSelected && (
             <div class="desktop-header-actions">
-              <span>VS Code</span>
+              <span>
+                {desktopMode === "assistant" ? "Assistant" : "VS Code"}
+              </span>
               {!browserShell && (
                 <button
                   class="desktop-more-trigger"
                   type="button"
-                  onClick={() => window.agentlinkDesktopShell?.retryRemote()}
+                  onClick={() =>
+                    desktopMode === "assistant"
+                      ? window.agentlinkDesktopShell?.retryAssistant?.()
+                      : window.agentlinkDesktopShell?.retryRemote()
+                  }
                 >
                   Reconnect
                 </button>
@@ -8877,7 +9088,9 @@ export function BrowserGatewayApp({
         aria-label={
           consumerShell
             ? desktopRemoteSelected
-              ? "VS Code"
+              ? desktopMode === "assistant"
+                ? "AgentLink Assistant"
+                : "VS Code"
               : "Ask Agent"
             : undefined
         }
@@ -8941,6 +9154,27 @@ export function BrowserGatewayApp({
             onManage={handleShowHistory}
             mode={desktopMode}
             onModeChange={desktopModesAvailable ? selectSurfaceMode : undefined}
+            assistantMode={desktopAssistantAvailable}
+            assistantLink={
+              browserShell && product !== "assistant" ? (
+                <AssistantLauncher />
+              ) : undefined
+            }
+            header={
+              product === "assistant" ? (
+                <>
+                  <AssistantProjectSwitcher reloadPage={reloadPage} />
+                  <AssistantHub
+                    inboxUnread={snapshot?.assistant?.inboxUnread}
+                    revision={snapshot?.assistant?.revision}
+                    maintenance={snapshot?.assistant?.maintenance}
+                    version={snapshot?.assistant?.version}
+                    loadSession={(sessionId) => handleLoadSession(sessionId)}
+                    reloadPage={reloadPage}
+                  />
+                </>
+              ) : undefined
+            }
           />
         )}
         {desktopModesAvailable && !browserShell && (
@@ -8951,7 +9185,7 @@ export function BrowserGatewayApp({
             class="browser-workspace-frame"
             title="VS Code workspaces"
             src="/?browserWorkspace=1"
-            hidden={!desktopRemoteSelected}
+            hidden={desktopMode !== "vscode"}
           />
         )}
         <section
@@ -8977,12 +9211,9 @@ export function BrowserGatewayApp({
                   )}
                   sessions={background}
                   workspaceActionsEnabled={!isAskAgentSelected}
+                  fleetActionsEnabled={!isAskAgentSelected || assistantFleet}
                   onOpenFile={(filePath, line) =>
-                    browserVscodeApi.postMessage({
-                      command: "agentOpenFile",
-                      path: filePath,
-                      line,
-                    })
+                    openFileHandler?.(filePath, line)
                   }
                   onOpenImageInEditor={(image) =>
                     browserVscodeApi.postMessage({
@@ -9792,6 +10023,7 @@ export function BrowserGatewayApp({
                           ) : (
                             <AskAgentWelcome
                               desktop={consumerShell}
+                              copy={productCopy}
                               onStart={(prompt) => {
                                 void handleSend(prompt, []);
                               }}
@@ -9803,16 +10035,7 @@ export function BrowserGatewayApp({
                           void handleSend(payload, []);
                         }}
                         onDismissDetectedQuestion={() => undefined}
-                        onOpenFile={
-                          isAskAgentSelected
-                            ? undefined
-                            : (filePath, line) =>
-                                browserVscodeApi.postMessage({
-                                  command: "agentOpenFile",
-                                  path: filePath,
-                                  line,
-                                })
-                        }
+                        onOpenFile={openFileHandler}
                         onOpenImageInEditor={
                           isAskAgentSelected
                             ? undefined
@@ -10353,6 +10576,24 @@ export function BrowserGatewayApp({
                     className="browser-streaming-row"
                   />
                 ) : null}
+                {assistantFleet && !mobileReviewOpen && (
+                  <ChatTaskStrip tasks={snapshot?.tasks} />
+                )}
+                {assistantFleet && !mobileReviewOpen && (
+                  <RememberedStrip memories={snapshot?.memories} />
+                )}
+                {assistantFleet && !mobileReviewOpen && (
+                  <BackgroundSessionStrip
+                    key={foreground?.sessionId ?? selectedTabId}
+                    sessions={background}
+                    showFleetRequest={showFleetRequest}
+                    onStop={handleStopBackground}
+                    onOpenTranscript={handleOpenBgTranscript}
+                    onSteer={(sessionId, message) =>
+                      handleBackgroundAction("steer", sessionId, message)
+                    }
+                  />
+                )}
                 {!isAskAgentSelected && !mobileReviewOpen && (
                   <BackgroundSessionStrip
                     key={foreground?.sessionId ?? selectedTabId}
@@ -10387,7 +10628,7 @@ export function BrowserGatewayApp({
                     onSend={handleSend}
                     voiceInput={voiceInput}
                     placeholder={
-                      isAskAgentSelected ? "Ask AgentLink anything" : undefined
+                      isAskAgentSelected ? productCopy.placeholder : undefined
                     }
                     contextMode={
                       visibleQuestion && activeQuestionContextMode
@@ -10438,16 +10679,7 @@ export function BrowserGatewayApp({
                                 questions={visibleQuestion.questions}
                                 backgroundTask={visibleQuestion.backgroundTask}
                                 modes={modes}
-                                onOpenFile={
-                                  isAskAgentSelected
-                                    ? undefined
-                                    : (filePath, line) =>
-                                        browserVscodeApi.postMessage({
-                                          command: "agentOpenFile",
-                                          path: filePath,
-                                          line,
-                                        })
-                                }
+                                onOpenFile={openFileHandler}
                                 attachmentCounts={Object.fromEntries(
                                   Object.entries(activeQuestionAttachments).map(
                                     ([questionId, value]) => [
@@ -10626,6 +10858,12 @@ export function BrowserGatewayApp({
                     }
                     onSetAgentWriteApproval={
                       isAskAgentSelected ? undefined : handleSetWriteApproval
+                    }
+                    sessionApprovalMode={snapshot?.approvalMode}
+                    onSetSessionApprovalMode={
+                      assistantFleet && snapshot?.approvalMode
+                        ? handleSetSessionApprovalMode
+                        : undefined
                     }
                     commandApprovalPolicy={
                       isAskAgentSelected

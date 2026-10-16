@@ -135,6 +135,99 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(reloaded.getTranscriptMessages()).toEqual([]);
   });
 
+  it("keeps writing a reply to its own chat after switching to another", () => {
+    const store = createStore();
+    store.createSession(100);
+    const working = store.getActiveSessionId();
+    store.appendUserMessage({ text: "long job", now: 110 });
+    const reply = store.startAssistantMessage({ now: 120 });
+    store.createSession(200);
+    const other = store.getActiveSessionId();
+    expect(other).not.toBe(working);
+
+    store.appendAssistantDelta(reply.id, "done");
+    store.finishAssistantMessage(reply.id);
+    expect(store.getTranscriptMessages()).toEqual([]);
+
+    expect(store.loadSession(working, { streaming: true })).toBe(true);
+    expect(store.getTranscriptMessages().at(-1)).toMatchObject({
+      id: reply.id,
+      role: "assistant",
+      content: "done",
+    });
+  });
+
+  it("keeps the open chat streaming when a reply in another chat finishes", () => {
+    const store = createStore();
+    const streaming = () =>
+      store.getOrCreate({
+        now: 300,
+        theme,
+        modelCredentialStatus: { state: "not_required", providerId: "test" },
+      }).snapshot.session.foreground.streaming;
+    store.createSession(100);
+    store.appendUserMessage({ text: "long job", now: 110 });
+    const background = store.startAssistantMessage({ now: 120 });
+    store.createSession(200);
+    store.appendUserMessage({ text: "quick question", now: 210 });
+    const open = store.startAssistantMessage({ now: 220 });
+    expect(streaming()).toBe(true);
+
+    // The other chat's reply ends: this chat is still answering.
+    store.finishAssistantMessage(background.id, "done");
+    expect(streaming()).toBe(true);
+    store.finishAssistantErrorMessage({
+      messageId: background.id,
+      text: "Stopped.",
+      code: "model_stopped",
+      retryable: false,
+    });
+    expect(streaming()).toBe(true);
+    // Its own reply ending does stop it.
+    store.finishAssistantMessage(open.id, "answer");
+    expect(streaming()).toBe(false);
+  });
+
+  it("upserts a host-projected session without switching chats", () => {
+    const store = createStore();
+    store.createSession(100);
+    const active = store.getActiveSessionId();
+    store.appendUserMessage({ text: "hello", now: 110 });
+    const template = store.getHistorySnapshot().sessions[0]!;
+
+    const projected = {
+      ...template,
+      id: "run-chat",
+      title: "Daily check in",
+      messages: [...template.messages],
+      lastActiveAt: 120,
+    };
+    store.upsertSession(projected);
+    expect(store.getActiveSessionId()).toBe(active);
+    expect(store.listSessions().map((session) => session.id)).toContain(
+      "run-chat",
+    );
+
+    // The kept object receives later message updates from the store.
+    store.appendSessionMessage("run-chat", {
+      role: "assistant",
+      content: "run update",
+      blocks: [{ type: "text", text: "run update" }],
+      now: 130,
+    });
+    expect(projected.messages.at(-1)).toMatchObject({ content: "run update" });
+
+    // Replacing by id swaps in the new object without duplicating it.
+    const replacement = { ...projected, title: "Replaced" };
+    store.upsertSession(replacement);
+    const matches = store
+      .getHistorySnapshot()
+      .sessions.filter((session) => session.id === "run-chat");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.title).toBe("Replaced");
+    expect(store.getActiveSessionId()).toBe(active);
+  });
+
   it("drops non-active empty sessions from the history snapshot", () => {
     const store = createStore();
     store.createSession(100);

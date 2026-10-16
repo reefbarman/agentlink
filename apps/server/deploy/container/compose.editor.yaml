@@ -1,0 +1,53 @@
+# Editor takeover: open a coding task's folder in a browser editor
+# (code-server), read-only while the task works, or writable after
+# **Take over** until you **Hand back**. Needs compose.runners.yaml: the
+# runner manager starts one editor container per open task, with only that
+# task's folder mounted, no credentials, a read-only root filesystem and the
+# runners' limits, on an internal network the assistant and the egress
+# gateway share. Extensions come from Open VSX through the egress gateway.
+#
+# The assistant serves editors on their own HTTPS port (8444, the app's
+# certificate), so editor pages never run on the app's origin; the app
+# hands out one-time links to it.
+#
+# The AgentLink extension is built into the editor image. Its model calls
+# go to the assistant on this network (port 7900, one token per editor),
+# never with a key of its own. upgrade.sh packages the extension; to build
+# the image by hand, first run from the repository root:
+#   AGENTLINK_VSCE_TARGET=linux-x64 npm run package -- /tmp/agentlink.vsix
+#   cp /tmp/agentlink.vsix apps/server/dist/agentlink-editor.vsix
+#
+# Once, in the deploy directory:
+# .env: COMPOSE_FILE=...:compose.runners.yaml:compose.editor.yaml
+# server.json: "editor": { "port": 8444 }   (optional "idleMinutes": 30)
+# upgrade.sh then builds agentlink-editor:local with the other images; or,
+# with the extension packaged as above,
+#   docker build --target editor -t agentlink-editor:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
+#
+# .env setting (optional): AGENTLINK_EDITOR_PUBLISH, the host address and
+# port to publish (default 0.0.0.0:8444).
+
+services:
+  assistant:
+    ports:
+      - "${AGENTLINK_EDITOR_PUBLISH:-0.0.0.0:8444}:8444"
+    networks:
+      - editors
+
+  egress-gateway:
+    networks:
+      - editors
+
+  runner-manager:
+    environment:
+      AGENTLINK_EDITOR_IMAGE: agentlink-editor:local
+      AGENTLINK_EDITOR_NETWORK: agentlink-editors
+
+networks:
+  # Editors, the assistant (which proxies to them) and the egress gateway.
+  editors:
+    name: agentlink-editors
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated

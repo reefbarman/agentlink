@@ -22,7 +22,9 @@ export function isDesktopRemoteLayout(
   if (!value || typeof value !== "object") return false;
   const layout = value as DesktopRemoteLayout;
   return (
-    (layout.mode === "ask" || layout.mode === "vscode") &&
+    (layout.mode === "ask" ||
+      layout.mode === "vscode" ||
+      layout.mode === "assistant") &&
     !!layout.bounds &&
     [
       layout.bounds.x,
@@ -178,7 +180,7 @@ export class DesktopRemoteView {
     this.layout = value;
     this.updateBounds();
     this.publish();
-    if (value.mode === "ask") this.clearTimer();
+    if (value.mode !== "vscode") this.clearTimer();
     else if (activate) void this.check();
   };
 

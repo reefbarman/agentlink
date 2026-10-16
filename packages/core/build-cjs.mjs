@@ -14,6 +14,7 @@ const modules = [
   "hostApprovalTestKit",
   "hostTools",
   "mcpCredentials",
+  "memory",
   "multiFileTransactions",
   "modelAuthProvider",
   "modelRequestScheduler",

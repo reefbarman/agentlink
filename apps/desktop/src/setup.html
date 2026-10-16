@@ -101,6 +101,61 @@
         <p id="login-note" class="field-note"></p>
       </section>
 
+      <section class="shortcut-section" aria-labelledby="assistant-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="assistant-heading">AgentLink Assistant</h2>
+            <p>
+              The Assistant tab shows your self-hosted Assistant. Pin its local
+              CA so this Mac accepts only certificates it issued.
+            </p>
+          </div>
+        </div>
+        <form id="assistant-form">
+          <label for="assistant-origin">Address</label>
+          <input
+            id="assistant-origin"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://agentlink-assistant.local:8443"
+            maxlength="2048"
+          />
+          <div class="account">
+            <span class="account-identity">
+              <strong>Local CA certificate</strong>
+              <span id="assistant-ca-status">Not pinned</span>
+            </span>
+            <span class="account-actions">
+              <button
+                id="assistant-ca-choose"
+                class="account-action secondary"
+                type="button"
+              >
+                Choose file…
+              </button>
+              <button
+                id="assistant-ca-remove"
+                class="account-action quiet"
+                type="button"
+                hidden
+              >
+                Remove
+              </button>
+            </span>
+          </div>
+          <input
+            id="assistant-ca-file"
+            type="file"
+            accept=".pem,.crt,.cer"
+            hidden
+          />
+          <button id="assistant-save" type="submit">Save address</button>
+        </form>
+        <p id="assistant-note" class="field-note"></p>
+      </section>
+
       <section class="shortcut-section" aria-labelledby="updates-heading">
         <div class="section-heading">
           <div>

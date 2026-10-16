@@ -1,0 +1,58 @@
+# Publishes agentlink-assistant.local on the LAN (Ubuntu / Avahi).
+#
+# The machine already answers to <hostname>.local; this adds a stable,
+# product-named alias so devices can use https://agentlink-assistant.local:8443
+# whatever the machine is called. The name must also be in publicOrigins.
+#
+# Install (as root):
+#   apt-get install -y avahi-daemon avahi-utils
+#   useradd --system --no-create-home --shell /usr/sbin/nologin agentlink-mdns
+#   install -m 0644 agentlink-mdns-alias.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now agentlink-mdns-alias
+# Check from another machine:
+#   macOS: dscacheutil -q host -a name agentlink-assistant.local
+#   Linux: avahi-resolve -n agentlink-assistant.local
+#
+# It publishes the address the machine uses to reach the internet, found when
+# the service starts. Give the machine a DHCP reservation (the CA already pins
+# its IP origins), or set the address explicitly with a drop-in:
+#   systemctl edit agentlink-mdns-alias
+#   [Service]
+#   Environment=AGENTLINK_MDNS_ADDRESS=192.168.1.20
+# To use another name, set AGENTLINK_MDNS_NAME the same way.
+
+[Unit]
+Description=mDNS alias for the AgentLink assistant
+After=avahi-daemon.service network-online.target
+Wants=network-online.target
+Requires=avahi-daemon.service
+
+[Service]
+Type=exec
+Environment=AGENTLINK_MDNS_NAME=agentlink-assistant.local
+ExecStart=/bin/sh -c 'address="$${AGENTLINK_MDNS_ADDRESS:-$$(ip -4 -o route get 1.1.1.1 | sed -n "s/.* src \\([0-9.]*\\).*/\\1/p")}"; [ -n "$$address" ] || { echo "no LAN address yet" >&2; exit 1; }; echo "Publishing $$AGENTLINK_MDNS_NAME -> $$address"; exec avahi-publish -a -R "$$AGENTLINK_MDNS_NAME" "$$address"'
+Restart=always
+RestartSec=10
+
+# A fixed system user, not DynamicUser=: Ubuntu's dbus-daemon cannot resolve
+# dynamic users, so avahi-publish fails with "An unexpected D-Bus error".
+User=agentlink-mdns
+Group=agentlink-mdns
+RemoveIPC=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

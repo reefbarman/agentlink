@@ -32,6 +32,7 @@ import type {
 } from "@agentlink/protocol/chat-catalog";
 
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
@@ -219,7 +220,28 @@ export interface BrowserGatewayAskAgentSnapshot {
       agentWriteApproval: "prompt";
     };
   };
-  background: [];
+  /**
+   * Background agents of the active session. The VS Code gateway's Ask
+   * Agent has none; a host that runs them may fill this in.
+   */
+  background: BgSessionInfo[];
+  /**
+   * Whether the active session works on its own or asks before each edit
+   * and command, for a host that offers the choice; absent otherwise.
+   */
+  approvalMode?: "autonomous" | "ask";
+  /**
+   * The Assistant's unread inbox entries, and a revision that changes when
+   * its inbox or scheduled jobs change; absent for other hosts.
+   */
+  assistant?: {
+    inboxUnread: number;
+    revision: number;
+    /** Set while the server is drained for an upgrade. */
+    maintenance?: "draining" | "drained";
+    /** The running server's version, for display. */
+    version?: string;
+  };
   diffs: [];
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion: 0;
@@ -508,12 +530,20 @@ export class BrowserGatewayAskAgentSessionStore {
     return { created: true };
   }
 
-  loadSession(sessionId: string): boolean {
+  /**
+   * Make a session active. `streaming` is for hosts that keep a turn running
+   * while another chat is viewed: switching back to that chat resumes its
+   * streaming state instead of showing it idle.
+   */
+  loadSession(
+    sessionId: string,
+    options: { readonly streaming?: boolean } = {},
+  ): boolean {
     if (!this.sessions.some((session) => session.id === sessionId)) {
       return false;
     }
     this.activeSessionId = sessionId;
-    this.streaming = false;
+    this.streaming = options.streaming === true;
     this.clearEphemeralUiState();
     return true;
   }
@@ -819,12 +849,21 @@ export class BrowserGatewayAskAgentSessionStore {
     return this.getActiveSession().queuedMessages?.shift() ?? null;
   }
 
+  /**
+   * Remove one queued message from whichever chat holds it, for example one
+   * a running turn took in before its turn to be sent came.
+   */
   removeQueuedMessage(messageId: string): boolean {
-    const queue = this.getActiveSession().queuedMessages;
-    const index = queue?.findIndex((message) => message.id === messageId) ?? -1;
-    if (!queue || index < 0) return false;
-    queue.splice(index, 1);
-    return true;
+    for (const session of this.sessions) {
+      const queue = session.queuedMessages;
+      const index =
+        queue?.findIndex((message) => message.id === messageId) ?? -1;
+      if (queue && index >= 0) {
+        queue.splice(index, 1);
+        return true;
+      }
+    }
+    return false;
   }
 
   updateQueuedMessageText(messageId: string, text: string): boolean {
@@ -1188,13 +1227,60 @@ export class BrowserGatewayAskAgentSessionStore {
     return message;
   }
 
+  /**
+   * Append a finished, host-projected message (for example a background
+   * agent's result card) to a session, which need not be the active one.
+   */
+  appendSessionMessage(
+    sessionId: string,
+    params: Pick<ChatMessage, "role" | "content" | "blocks"> & { now: number },
+  ): ChatMessage | undefined {
+    const session = this.sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
+    if (!session) return undefined;
+    const message: ChatMessage = {
+      id: this.nextMessageId(session, `ask-agent-${params.role}`),
+      role: params.role,
+      content: params.content,
+      timestamp: params.now,
+      blocks: params.blocks,
+    };
+    session.messages.push(message);
+    session.lastActiveAt = params.now;
+    return message;
+  }
+
+  /**
+   * Insert or replace a host-projected session (for example a chat a
+   * scheduled job is running) without switching chats or changing the
+   * streaming state. The session object is kept, not copied, so later
+   * message updates through this store reach the caller's copy too.
+   */
+  upsertSession(session: BrowserGatewayAskAgentPersistedSession): void {
+    const index = this.sessions.findIndex(
+      (candidate) => candidate.id === session.id,
+    );
+    if (index >= 0) this.sessions[index] = session;
+    else this.sessions.unshift(session);
+  }
+
   startAssistantMessage(params: {
     now: number;
     text?: string;
     memoryDisclosure?: ChatMessage["memoryDisclosure"];
+    /** A session other than the active one; it is not marked streaming. */
+    sessionId?: string;
   }): ChatMessage {
     const text = params.text ?? "";
-    const session = this.getActiveSession(params.now);
+    const target =
+      params.sessionId === undefined
+        ? undefined
+        : this.sessions.find((candidate) => candidate.id === params.sessionId);
+    if (params.sessionId !== undefined && !target) {
+      throw new Error("browser_gateway_ask_agent_session_not_found");
+    }
+    const session = target ?? this.getActiveSession(params.now);
     const message: ChatMessage = {
       id: this.nextMessageId(session, "ask-agent-assistant"),
       role: "assistant",
@@ -1207,7 +1293,7 @@ export class BrowserGatewayAskAgentSessionStore {
     };
     session.messages.push(message);
     session.lastActiveAt = params.now;
-    this.streaming = true;
+    if (session.id === this.activeSessionId) this.streaming = true;
     return message;
   }
 
@@ -1217,10 +1303,7 @@ export class BrowserGatewayAskAgentSessionStore {
 
   appendAssistantDelta(messageId: string, delta: string): void {
     if (!delta) return;
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === messageId,
-    );
+    const message = this.findMessage(messageId);
     if (!message) return;
     message.content = `${message.content}${delta}`;
     this.appendAssistantTextBlock(message, delta);
@@ -1331,10 +1414,7 @@ export class BrowserGatewayAskAgentSessionStore {
     fallbackText?: string,
     memoryDisclosure?: ChatMessage["memoryDisclosure"],
   ): void {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === messageId,
-    );
+    const message = this.findMessage(messageId);
     if (message && memoryDisclosure) {
       message.memoryDisclosure = memoryDisclosure;
     }
@@ -1342,7 +1422,7 @@ export class BrowserGatewayAskAgentSessionStore {
       message.content = fallbackText;
       this.setAssistantFallbackTextBlock(message, fallbackText);
     }
-    this.streaming = false;
+    this.stopStreamingFor(messageId);
   }
 
   finishAssistantErrorMessage(params: {
@@ -1353,10 +1433,7 @@ export class BrowserGatewayAskAgentSessionStore {
     actions?: NonNullable<ChatMessage["error"]>["actions"];
     preserveCompletedAskUserBlocks?: boolean;
   }): void {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
-      (candidate) => candidate.id === params.messageId,
-    );
+    const message = this.findMessage(params.messageId);
     if (message) {
       const preservedBlocks = params.preserveCompletedAskUserBlocks
         ? message.blocks.filter(
@@ -1377,7 +1454,21 @@ export class BrowserGatewayAskAgentSessionStore {
         ...(params.actions ? { actions: params.actions } : {}),
       };
     }
-    this.streaming = false;
+    this.stopStreamingFor(params.messageId);
+  }
+
+  /**
+   * A finished message ends the open chat's streaming state, unless it
+   * belongs to another chat (a turn still writing to the chat it started
+   * in while the viewer works in this one).
+   */
+  private stopStreamingFor(messageId: string): void {
+    const inOtherSession = this.sessions.some(
+      (session) =>
+        session.id !== this.activeSessionId &&
+        session.messages.some((candidate) => candidate.id === messageId),
+    );
+    if (!inOtherSession) this.streaming = false;
   }
 
   appendAssistantMessage(params: { text: string; now: number }): ChatMessage {
@@ -1551,11 +1642,28 @@ export class BrowserGatewayAskAgentSessionStore {
   }
 
   private getAssistantMessage(messageId: string): ChatMessage | undefined {
-    const session = this.getActiveSession();
-    const message = session.messages.find(
+    const message = this.findMessage(messageId);
+    return message?.role === "assistant" ? message : undefined;
+  }
+
+  /**
+   * A message in the active session, or else in any session: a turn keeps
+   * writing to its own chat when the viewer switches to another one.
+   */
+  private findMessage(messageId: string): ChatMessage | undefined {
+    const active = this.getActiveSession();
+    const inActive = active.messages.find(
       (candidate) => candidate.id === messageId,
     );
-    return message?.role === "assistant" ? message : undefined;
+    if (inActive) return inActive;
+    for (const session of this.sessions) {
+      if (session === active) continue;
+      const message = session.messages.find(
+        (candidate) => candidate.id === messageId,
+      );
+      if (message) return message;
+    }
+    return undefined;
   }
 
   private appendQuestionAnswerBlockFromToolResult(

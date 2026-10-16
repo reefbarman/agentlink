@@ -11,6 +11,11 @@ interface BrowserBackgroundTranscriptProps {
   runtimeStatus?: BgSessionInfoProps;
   sessions: BgSessionInfoProps[];
   workspaceActionsEnabled: boolean;
+  /**
+   * File links and the fleet's stop/open-transcript controls, for a host that
+   * serves them itself (the Assistant). Defaults to `workspaceActionsEnabled`.
+   */
+  fleetActionsEnabled?: boolean;
   onOpenFile: (path: string, line?: number) => void;
   onOpenImageInEditor: OpenImageInEditor;
   onRetry: () => void;
@@ -34,6 +39,7 @@ export function BrowserBackgroundTranscript({
   runtimeStatus,
   sessions,
   workspaceActionsEnabled,
+  fleetActionsEnabled = workspaceActionsEnabled,
   onOpenFile,
   onOpenImageInEditor,
   onRetry,
@@ -50,7 +56,7 @@ export function BrowserBackgroundTranscript({
       messages={messages}
       streaming={streaming}
       runtimeStatus={runtimeStatus}
-      onOpenFile={workspaceActionsEnabled ? onOpenFile : undefined}
+      onOpenFile={fleetActionsEnabled ? onOpenFile : undefined}
       onOpenImageInEditor={
         workspaceActionsEnabled ? onOpenImageInEditor : undefined
       }
@@ -59,9 +65,9 @@ export function BrowserBackgroundTranscript({
       onSignInAnotherAccount={
         workspaceActionsEnabled ? onSignInAnotherAccount : undefined
       }
-      bgSessions={workspaceActionsEnabled ? sessions : undefined}
-      onStopBackground={workspaceActionsEnabled ? onStopBackground : undefined}
-      onOpenTranscript={workspaceActionsEnabled ? onOpenTranscript : undefined}
+      bgSessions={fleetActionsEnabled ? sessions : undefined}
+      onStopBackground={fleetActionsEnabled ? onStopBackground : undefined}
+      onOpenTranscript={fleetActionsEnabled ? onOpenTranscript : undefined}
       onClose={onClose}
     />
   );

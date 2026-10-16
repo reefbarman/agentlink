@@ -497,6 +497,13 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
       };
     case "text.delta":
       return { ...base, type: event.type, text: event.text };
+    case "user.interjected":
+      return {
+        ...base,
+        type: event.type,
+        interjectionId: event.interjectionId,
+        text: event.text,
+      };
     case "tool.requested":
       return {
         ...base,
@@ -557,6 +564,21 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
         sessionRevision: event.sessionRevision,
       };
     case "usage.updated":
+      // Token counts only: what a host needs to report a turn's usage.
+      return {
+        ...base,
+        type: event.type,
+        usage: {
+          inputTokens: event.usage.inputTokens,
+          outputTokens: event.usage.outputTokens,
+          ...(event.usage.cacheReadTokens !== undefined
+            ? { cacheReadTokens: event.usage.cacheReadTokens }
+            : {}),
+          ...(event.usage.cacheCreationTokens !== undefined
+            ? { cacheCreationTokens: event.usage.cacheCreationTokens }
+            : {}),
+        },
+      };
     case "execution.updated":
       return { ...base, type: event.type };
     case "turn.completed":
@@ -630,6 +652,29 @@ function sessionSnapshot<TPrincipal extends AgentPrincipal>(
         }
       : {}),
   };
+}
+
+/**
+ * Host-safe public projection of an engine turn event, as streamed by the
+ * embedded web handler. Drops provenance detail, usage, and execution
+ * internals. For hosts that run turns themselves and publish them later.
+ */
+export function projectEmbeddedAgentTurnEvent(
+  event: AgentTurnEvent,
+): EmbeddedAgentTurnEvent {
+  return projectTurnEvent(event);
+}
+
+/**
+ * Host-safe session snapshot (phase, revision, pending interaction) as
+ * returned by the embedded web handler. Never includes the transcript.
+ */
+export function projectEmbeddedAgentSessionSnapshot<
+  TPrincipal extends AgentPrincipal,
+>(
+  inspection: AgentSessionInspection<TPrincipal>,
+): EmbeddedAgentSessionSnapshot {
+  return sessionSnapshot(inspection);
 }
 
 export function parseEmbeddedAgentRequest(

@@ -169,6 +169,24 @@ export interface HeadlessTurnKernelOptions<
     | Promise<CoreModelAuthContext | undefined>;
   /** Injectable clock for deterministic event timestamps and execution limits. */
   readonly now?: () => number;
+  /**
+   * Observe the private cause of a failed turn before it is mapped to the
+   * safe public error. Host-side only: whatever the host keeps or shows is
+   * its own redaction decision. Errors thrown here are ignored.
+   */
+  readonly onTurnError?: (report: HeadlessTurnErrorReport<TPrincipal>) => void;
+}
+
+export interface HeadlessTurnErrorReport<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  readonly turnId: string;
+  /** The original error. Never projected into events. */
+  readonly error: unknown;
+  /** The error the turn's public result carries. */
+  readonly publicError: AgentTurnError;
 }
 
 export interface HeadlessTurnKernel<
@@ -701,9 +719,10 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           options.authorizeToolCall !== undefined,
       )
       .map((tool) => tool.definition);
-    const authorizedToolCallIds = new Set(
-      continuation?.state.authorizedToolCallIds ?? [],
-    );
+    // Ids persisted by older continuations are ignored: an id alone does not
+    // say which call or input was approved, so every pending call is
+    // authorized again on its own input (the resumed call excepted).
+    const authorizedToolCallIds = new Set<string>();
     const resumedDecisions = new Map<string, ToolAuthorizationDecision>();
     const resumedCall = continuation?.state.pendingToolCalls[0];
     if (continuation && resumedCall) {
@@ -901,6 +920,17 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         tools.get(call.name)?.parallelSafe === true &&
         (tools.get(call.name)?.authorization === undefined ||
           tools.get(call.name)?.authorization === "none"),
+      takeInterjections: () =>
+        (runOptions.takeInterjections?.() ?? []).flatMap((interjection) => {
+          const text = interjection.text.trim();
+          if (!text) return [];
+          emit({
+            type: "user.interjected",
+            interjectionId: interjection.id,
+            text,
+          });
+          return [{ role: "user" as const, content: text }];
+        }),
       onIterationMessagesComplete: (messages) => {
         durableIterationMessages = structuredClone(messages);
         durableMessages = [
@@ -964,12 +994,24 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       return cancelled;
     }
 
+    const publicError = toTurnError(error);
+    try {
+      options.onTurnError?.({
+        principal: prepared.request.principal,
+        sessionId: prepared.request.sessionId,
+        turnId: prepared.turnId,
+        error,
+        publicError,
+      });
+    } catch {
+      // Observation must never change the turn's outcome.
+    }
     const failed: Extract<AgentTurnResult, { status: "failed" }> = {
       status: "failed",
       sessionId: prepared.request.sessionId,
       turnId: prepared.turnId,
       sessionRevision,
-      error: toTurnError(error),
+      error: publicError,
       usage,
       execution,
       provenance: provenance(),
@@ -1059,7 +1101,11 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
     if (resumedDecision === "deny") {
       return authorizationDenied(call, emit, undefined, tool);
     }
-    if (resumedDecision !== "allow" && !authorizedToolCallIds.has(call.id)) {
+    // A recorded authorization is single-use. Providers may reuse a tool call
+    // id across iterations; a later call with the same id must be authorized
+    // on its own input, never inherit an earlier call's approval.
+    const previouslyAuthorized = authorizedToolCallIds.delete(call.id);
+    if (resumedDecision !== "allow" && !previouslyAuthorized) {
       if (!options.authorizeToolCall) {
         return authorizationRequired(call, emit, tool);
       }
@@ -1108,7 +1154,6 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
           emit,
         );
       }
-      authorizedToolCallIds.add(call.id);
       if (authorization.preparedInput) {
         canonicalInput = structuredClone(authorization.preparedInput);
       }

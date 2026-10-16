@@ -1,0 +1,115 @@
+# Backups: a sidecar that backs up this deploy directory to an append-only
+# restic store (the witness, a separate compose project; see
+# witness/compose.yaml). Use it as an overlay on compose.yaml, for example
+# with
+#   COMPOSE_FILE=compose.yaml:compose.backup.yaml
+# in .env (append the other overlays you use).
+#
+# It sees this directory read-only and holds the store's address and the
+# backup password; the assistant reaches it on a private network with a
+# shared token, and can only ask for its status, its backups, or a backup
+# now. The store refuses to delete or replace backups, so neither the
+# assistant nor this sidecar can destroy them.
+#
+# It backs up hourly when the assistant's records changed, and at least
+# daily. The Inbox says when a backup fails or none has finished for a day.
+#
+# One-time setup (see "Backups" in apps/server/README.md):
+#   docker build --target backup -t agentlink-backup:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
+#   (start the witness first; it creates the agentlink-witness network)
+#   openssl rand -hex 32 > secrets/backup-token
+#   echo rest:http://witness:8000/agentlink/ > secrets/backup-repository
+#   openssl rand -base64 33 > secrets/backup-password   # write it down!
+#   chmod 600 secrets/backup-token secrets/backup-repository secrets/backup-password
+# and add to server.json:
+#   "backup": { "host": "backup", "port": 7800,
+#               "token": { "file": "/run/secrets/backup-token" } }
+
+services:
+  assistant:
+    networks:
+      - backup
+    secrets:
+      - source: backup_token
+        target: backup-token
+
+  backup:
+    image: agentlink-backup:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    # Root, with every capability dropped but file access regardless of
+    # owner (the deploy directory has files owned by several container
+    # users; its mount is read-only, so this only reads it) and keeping
+    # owners on its staging copy of the records, so a restore gives them
+    # back.
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 64
+    command:
+      - backup-agent
+      - --token-file
+      - /run/secrets/backup-token
+      - --repository-file
+      - /run/secrets/backup-repository
+      - --password-file
+      - /run/secrets/backup-password
+      - --deploy-root
+      - /srv/agentlink/deploy
+      - --state
+      - /var/lib/agentlink-backup
+    secrets:
+      - source: backup_token
+        target: backup-token
+      - source: backup_repository
+        target: backup-repository
+      - source: backup_password
+        target: backup-password
+    volumes:
+      # This whole deploy directory, read-only.
+      - .:/srv/agentlink/deploy:ro
+      # Its status, restic's cache, and the staging copy of the records:
+      # outside the deploy directory, so they are never backed up.
+      - backup-state:/var/lib/agentlink-backup
+    # The assistant reaches it on `backup`; it reaches the store on
+    # `agentlink-witness`. Neither leads to the internet.
+    networks:
+      - backup
+      - witness
+    expose:
+      - "7800"
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  backup:
+    internal: true
+  witness:
+    name: agentlink-witness
+    external: true
+
+volumes:
+  backup-state: {}
+
+secrets:
+  backup_token:
+    file: ./secrets/backup-token
+  backup_repository:
+    file: ./secrets/backup-repository
+  backup_password:
+    file: ./secrets/backup-password

@@ -12,11 +12,18 @@ import {
   createNodeHostReadTools,
   createNodeHostWriteTools,
 } from "@agentlink/node-host";
-import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { createTwoFilesPatch } from "diff";
+
+import {
+  createLocalWorkspaceExecutionBackend,
+  type WorkspaceExecutionBackend,
+  type WorkspaceFileSystem,
+  type WorkspaceProcessHandle,
+  type WorkspaceProcessLauncher,
+} from "./workspaceExecutionBackend.js";
 
 const MAX_CONTEXT_BYTES = 1_000_000;
 const MAX_CONTEXT_LINES = 200;
@@ -36,7 +43,10 @@ const GIT_CANDIDATES = [
   "/opt/homebrew/bin/git",
   "/usr/local/bin/git",
 ] as const;
-let gitExecutable: Promise<string | undefined> | undefined;
+const DEFAULT_PROCESS_OWNER_ID = "workspace-file-tools";
+const BACKEND_SEARCH_ENVIRONMENT: Readonly<Record<string, string>> = {
+  PATH: "/usr/bin:/bin",
+};
 
 export interface WorkspaceFileApprovalDisplay {
   readonly kind: "file_write";
@@ -104,6 +114,22 @@ export interface CreateWorkspaceFileToolsOptions {
     relativePath: string,
   ) => void | Promise<void>;
   readonly mutations?: WorkspaceFileMutationCoordinator;
+  /**
+   * Backend for file access and the ripgrep/git subprocesses. Defaults to
+   * this machine. An injected backend never receives the host environment:
+   * search runs with a minimal fixed PATH.
+   */
+  readonly executionBackend?: WorkspaceExecutionBackend;
+  /** Owner identity attached to search and git process requests. */
+  readonly processOwnerId?: string;
+}
+
+interface FileToolsRuntime {
+  readonly files: WorkspaceFileSystem;
+  readonly processes: WorkspaceProcessLauncher;
+  readonly processOwnerId: string;
+  readonly searchEnvironment: Readonly<Record<string, string>>;
+  readonly resolveGitExecutable: () => Promise<string | undefined>;
 }
 
 export interface WorkspaceFileTools {
@@ -126,22 +152,32 @@ export function createWorkspaceFileTools(
     throw new Error("Workspace file tools require an absolute project root");
   }
   const projectRoot = path.resolve(options.projectRoot);
+  const runtime = createFileToolsRuntime(options);
+  const { files } = runtime;
   const resolveScopes: ResolveWorkspaceFileScopes =
     options.resolveScopes ??
     (() => [{ path: ".", kind: "directory", access: "read_write" }]);
   const resolveTools: HostToolResolver = async (request) => {
-    const scopes = await resolveFileScopes(projectRoot, resolveScopes, request);
+    const scopes = await resolveFileScopes(
+      files,
+      projectRoot,
+      resolveScopes,
+      request,
+    );
     const [reads, writes, diffs] = await Promise.all([
       createNodeHostReadTools({
         resolveGrants: () => nodeGrantsForScopes(scopes, "read"),
         shouldIncludePath: (absolutePath) =>
           shouldIncludeProjectReadPath(projectRoot, absolutePath),
+        fileSystem: files,
       })(request),
       createNodeHostWriteTools({
         resolveGrants: () => nodeGrantsForScopes(scopes, "write"),
+        fileSystem: files,
       })(request),
       createNodeHostApplyDiffTools({
         resolveGrants: () => nodeGrantsForScopes(scopes, "write"),
+        fileSystem: files,
       })(request),
     ]);
     const tools = [...reads, ...writes, ...diffs];
@@ -151,6 +187,7 @@ export function createWorkspaceFileTools(
       );
       if (searchIndex >= 0) {
         tools[searchIndex] = createRipgrepSearchTool(
+          runtime,
           options.ripgrepExecutable,
           projectRoot,
         );
@@ -159,6 +196,7 @@ export function createWorkspaceFileTools(
     return [
       ...tools.map((tool) =>
         wrapProjectTool(
+          files,
           tool,
           request,
           projectRoot,
@@ -169,6 +207,7 @@ export function createWorkspaceFileTools(
         ),
       ),
       createContextTool(
+        runtime,
         request,
         projectRoot,
         resolveScopes,
@@ -189,11 +228,13 @@ export function createWorkspaceFileTools(
         };
       }
       const scopes = await resolveFileScopes(
+        files,
         projectRoot,
         resolveScopes,
         request,
       );
       const prepared = await prepareWriteApproval(
+        files,
         projectRoot,
         request.toolName,
         request.input,
@@ -244,12 +285,18 @@ export function createWorkspaceFileTools(
       if (!isWorkspaceFileApprovalDisplay(request.displayContent)) {
         return { ok: false, reason: "Pending file proposal is invalid" };
       }
-      const scopes = await resolveFileScopes(projectRoot, resolveScopes, {
-        principal: request.principal,
-        sessionId: request.sessionId,
-        turnId: request.turnId,
-      });
+      const scopes = await resolveFileScopes(
+        files,
+        projectRoot,
+        resolveScopes,
+        {
+          principal: request.principal,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+        },
+      );
       const prepared = await prepareWriteApproval(
+        files,
         projectRoot,
         request.toolName,
         request.input,
@@ -267,7 +314,82 @@ export function createWorkspaceFileTools(
   return { resolveTools, authorizeToolCall, validatePendingWrite };
 }
 
+function createFileToolsRuntime(
+  options: CreateWorkspaceFileToolsOptions,
+): FileToolsRuntime {
+  const backend =
+    options.executionBackend ?? createLocalWorkspaceExecutionBackend();
+  const files = backend.fileSystem;
+  let gitExecutable: Promise<string | undefined> | undefined;
+  return {
+    files,
+    processes: backend,
+    processOwnerId: options.processOwnerId ?? DEFAULT_PROCESS_OWNER_ID,
+    // The local default keeps the historical inherited environment; an
+    // injected backend only ever receives a fixed minimal environment.
+    searchEnvironment: options.executionBackend
+      ? BACKEND_SEARCH_ENVIRONMENT
+      : definedEnvironment(process.env),
+    resolveGitExecutable() {
+      gitExecutable ??= (async () => {
+        for (const candidate of GIT_CANDIDATES) {
+          if (await files.canExecute(candidate)) return candidate;
+        }
+        return undefined;
+      })();
+      return gitExecutable;
+    },
+  };
+}
+
+function definedEnvironment(
+  source: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> {
+  const environment: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined) environment[key] = value;
+  }
+  return environment;
+}
+
+function launchFileToolProcess(
+  runtime: FileToolsRuntime,
+  input: {
+    readonly executable: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly environment: Readonly<Record<string, string>>;
+    readonly sessionId: string;
+    readonly turnId: string;
+  },
+  onOutput: (stream: "stdout" | "stderr", bytes: Buffer) => void,
+): WorkspaceProcessHandle {
+  return runtime.processes.launchProcess({
+    request: {
+      schemaVersion: 1,
+      operationId: randomUUID(),
+      ownerId: runtime.processOwnerId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      policyFingerprint: POLICY_REVISION,
+      operationDigest: contentHash(
+        JSON.stringify({
+          executable: input.executable,
+          args: input.args,
+          cwd: input.cwd,
+        }),
+      ),
+      executable: input.executable,
+      args: [...input.args],
+      cwd: input.cwd,
+      environment: { ...input.environment },
+    },
+    onOutput,
+  });
+}
+
 function wrapProjectTool(
+  files: WorkspaceFileSystem,
   tool: HostTool,
   discovery: HostToolResolveRequest,
   projectRoot: string,
@@ -290,12 +412,18 @@ function wrapProjectTool(
     displayInput: (input) => ({ path: input.path }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const resolved = await resolveProjectPath(projectRoot, input.path, {
-        allowAbsent: name === "write_file" && input.expectedAbsent === true,
-      });
+      const resolved = await resolveProjectPath(
+        files,
+        projectRoot,
+        input.path,
+        {
+          allowAbsent: name === "write_file" && input.expectedAbsent === true,
+        },
+      );
       if (!resolved.ok) return toolError(resolved.error);
       const relativePath = toRelativePath(projectRoot, resolved.path);
       const scopes = await resolveFileScopes(
+        files,
         projectRoot,
         resolveScopes,
         discovery,
@@ -320,7 +448,11 @@ function wrapProjectTool(
           return toolError("path_reserved_by_active_writer");
         }
         if (name === "write_file" && input.expectedAbsent === true) {
-          const parent = await ensureSafeParent(projectRoot, resolved.path);
+          const parent = await ensureSafeParent(
+            files,
+            projectRoot,
+            resolved.path,
+          );
           if (!parent.ok) return toolError(parent.error);
         }
         const result = await tool.execute(
@@ -342,6 +474,7 @@ function wrapProjectTool(
 }
 
 function createRipgrepSearchTool(
+  runtime: FileToolsRuntime,
   executable: string,
   projectRoot: string,
 ): HostTool {
@@ -380,11 +513,13 @@ function createRipgrepSearchTool(
         MAX_SEARCH_RESULTS,
       );
       return await executeRipgrepSearch(
+        runtime,
         executable,
         projectRoot,
         input.path,
         input.regex,
         limit,
+        { sessionId: context.sessionId, turnId: context.turnId },
         context.signal,
       );
     },
@@ -392,18 +527,17 @@ function createRipgrepSearchTool(
 }
 
 async function executeRipgrepSearch(
+  runtime: FileToolsRuntime,
   executable: string,
   projectRoot: string,
   target: string,
   regex: string,
   limit: number,
+  identity: { readonly sessionId: string; readonly turnId: string },
   signal?: AbortSignal,
 ) {
   if (signal?.aborted) return toolError("search_cancelled");
-  const available = await fs
-    .access(executable, fsConstants.X_OK)
-    .then(() => true)
-    .catch(() => false);
+  const available = await runtime.files.canExecute(executable);
   if (!available) return toolError("packaged_ripgrep_unavailable");
   return await new Promise<
     | ReturnType<typeof toolError>
@@ -412,32 +546,19 @@ async function executeRipgrepSearch(
         displayContent: { path: string; count: number; truncated: boolean };
       }
   >((resolve) => {
-    const child = spawn(
-      executable,
-      [
-        "--json",
-        "--ignore-case",
-        "--no-config",
-        "--max-filesize",
-        "1000K",
-        "--glob",
-        "!.git/**",
-        "--glob",
-        "!node_modules/**",
-        "--regexp",
-        regex,
-        "--",
-        target,
-      ],
-      { cwd: projectRoot, stdio: ["ignore", "pipe", "ignore"] },
-    );
     const matches: Array<{ path: string; line: number; text: string }> = [];
     let buffered = "";
     let outputBytes = 0;
     let truncated = false;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const abort = () => child.kill("SIGTERM");
+    let child: WorkspaceProcessHandle | undefined;
+    let terminateRequested = false;
+    const terminate = () => {
+      terminateRequested = true;
+      child?.signal("SIGTERM");
+    };
+    const abort = terminate;
     const finish = (
       result:
         | ReturnType<typeof toolError>
@@ -454,7 +575,7 @@ async function executeRipgrepSearch(
     };
     const stopForBound = () => {
       truncated = true;
-      child.kill("SIGTERM");
+      terminate();
     };
     const consumeLine = (line: string) => {
       if (!line.trim() || matches.length >= limit) return;
@@ -488,19 +609,25 @@ async function executeRipgrepSearch(
         // Ignore malformed or partial protocol lines from the subprocess.
       }
     };
-    child.stdout.on("data", (chunk: Buffer) => {
+    const decoder = new StringDecoder("utf8");
+    const onStdout = (chunk: Buffer) => {
+      if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) return;
       outputBytes += chunk.length;
       if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) {
         stopForBound();
         return;
       }
-      buffered += chunk.toString("utf8");
+      buffered += decoder.write(chunk);
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) consumeLine(line);
-    });
-    child.once("error", () => finish(toolError("packaged_ripgrep_failed")));
-    child.once("exit", (code, exitSignal) => {
+    };
+    const onExit = (exit: {
+      readonly exitCode?: number;
+      readonly signal?: NodeJS.Signals;
+    }) => {
+      const code = exit.exitCode ?? null;
+      const exitSignal = exit.signal ?? null;
       if (buffered) consumeLine(buffered);
       if (signal?.aborted) {
         finish(toolError("search_cancelled"));
@@ -520,10 +647,48 @@ async function executeRipgrepSearch(
         modelContent: JSON.stringify(payload),
         displayContent: { path: target, count: matches.length, truncated },
       });
-    });
+    };
+    try {
+      child = launchFileToolProcess(
+        runtime,
+        {
+          executable,
+          args: [
+            "--json",
+            "--ignore-case",
+            "--no-config",
+            "--max-filesize",
+            "1000K",
+            "--glob",
+            "!.git/**",
+            "--glob",
+            "!node_modules/**",
+            "--regexp",
+            regex,
+            "--",
+            target,
+          ],
+          cwd: projectRoot,
+          environment: runtime.searchEnvironment,
+          ...identity,
+        },
+        (stream, chunk) => {
+          if (stream === "stdout") onStdout(chunk);
+        },
+      );
+    } catch {
+      finish(toolError("packaged_ripgrep_failed"));
+      return;
+    }
+    const launched = child;
+    if (terminateRequested) launched.signal("SIGTERM");
+    launched.started.then(
+      () => launched.exited.then(onExit),
+      () => finish(toolError("packaged_ripgrep_failed")),
+    );
     timeout = setTimeout(() => {
       truncated = true;
-      child.kill("SIGTERM");
+      terminate();
     }, SEARCH_TIMEOUT_MS);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
@@ -531,6 +696,7 @@ async function executeRipgrepSearch(
 }
 
 function createContextTool(
+  runtime: FileToolsRuntime,
   discovery: HostToolResolveRequest,
   projectRoot: string,
   resolveScopes: ResolveWorkspaceFileScopes,
@@ -554,12 +720,19 @@ function createContextTool(
     displayInput: (input) => ({ path: input.path }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const resolved = await resolveProjectPath(projectRoot, input.path, {
-        allowAbsent: false,
-      });
+      const { files } = runtime;
+      const resolved = await resolveProjectPath(
+        files,
+        projectRoot,
+        input.path,
+        {
+          allowAbsent: false,
+        },
+      );
       if (!resolved.ok) return toolError(resolved.error);
       const relativePath = toRelativePath(projectRoot, resolved.path);
       const scopes = await resolveFileScopes(
+        files,
         projectRoot,
         resolveScopes,
         discovery,
@@ -572,12 +745,12 @@ function createContextTool(
         return toolError(protection.reason ?? "protected_content");
       }
       if (isIgnoredPath(relativePath)) return toolError("path_ignored");
-      const stat = await fs.lstat(resolved.path).catch(() => undefined);
-      if (!stat?.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+      const stat = await files.lstat(resolved.path).catch(() => undefined);
+      if (stat?.kind !== "file" || stat.nlink > 1) {
         return toolError("not_a_private_regular_file");
       }
       if (stat.size > MAX_CONTEXT_BYTES) return toolError("file_too_large");
-      const bytes = await fs.readFile(resolved.path);
+      const bytes = await files.readFile(resolved.path);
       if (bytes.includes(0)) return toolError("binary_file");
       const text = bytes.toString("utf8");
       const lines = text.split(/\r?\n/u);
@@ -590,7 +763,7 @@ function createContextTool(
       );
       const selected = lines.slice(offset - 1, offset - 1 + limit);
       const [git, languageIntelligence] = await Promise.all([
-        readGitStatus(projectRoot, relativePath),
+        readGitStatus(runtime, projectRoot, relativePath, discovery),
         enrichContext
           ? Promise.resolve(
               enrichContext(discovery, relativePath, context.signal),
@@ -605,7 +778,7 @@ function createContextTool(
         path: relativePath,
         contentHash: contentHash(bytes),
         bytes: bytes.length,
-        modifiedAt: stat.mtime.toISOString(),
+        modifiedAt: new Date(stat.mtimeMs).toISOString(),
         offset,
         totalLines: lines.length,
         truncated: offset - 1 + selected.length < lines.length,
@@ -670,6 +843,7 @@ function projectDescription(name: string): string {
 }
 
 async function prepareWriteApproval(
+  files: WorkspaceFileSystem,
   projectRoot: string,
   toolName: "write_file" | "apply_diff",
   input: Readonly<Record<string, unknown>>,
@@ -678,7 +852,7 @@ async function prepareWriteApproval(
   | { ok: true; display: WorkspaceFileApprovalDisplay }
   | { ok: false; reason: string }
 > {
-  const resolved = await resolveProjectPath(projectRoot, input.path, {
+  const resolved = await resolveProjectPath(files, projectRoot, input.path, {
     allowAbsent: toolName === "write_file" && input.expectedAbsent === true,
   });
   if (!resolved.ok) return { ok: false, reason: resolved.error };
@@ -693,14 +867,14 @@ async function prepareWriteApproval(
       reason: `Writes to ${protection.reason ?? "this protected path"} are not supported`,
     };
   }
-  const stat = await fs.lstat(resolved.path).catch(() => undefined);
-  if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1)) {
+  const stat = await files.lstat(resolved.path).catch(() => undefined);
+  if (stat && (stat.kind !== "file" || stat.nlink > 1)) {
     return { ok: false, reason: "Target is not a private regular file" };
   }
   if (stat && stat.size > MAX_CONTEXT_BYTES) {
     return { ok: false, reason: "File is too large for reviewed editing" };
   }
-  const currentBytes = stat ? await fs.readFile(resolved.path) : undefined;
+  const currentBytes = stat ? await files.readFile(resolved.path) : undefined;
   if (currentBytes?.includes(0)) {
     return { ok: false, reason: "Binary files cannot be reviewed as text" };
   }
@@ -783,6 +957,7 @@ async function prepareWriteApproval(
 }
 
 async function resolveProjectPath(
+  files: WorkspaceFileSystem,
   projectRoot: string,
   input: unknown,
   options: { allowAbsent: boolean },
@@ -793,7 +968,7 @@ async function resolveProjectPath(
   const requested = path.resolve(projectRoot, input);
   if (!isPathWithin(requested, projectRoot))
     return { ok: false, error: "path_escape" };
-  const existing = await fs.realpath(requested).catch(() => undefined);
+  const existing = await files.realpath(requested).catch(() => undefined);
   if (existing) {
     if (!isPathWithin(existing, projectRoot)) {
       return { ok: false, error: "symlink_escape" };
@@ -803,9 +978,12 @@ async function resolveProjectPath(
       : { ok: false, error: "path_alias" };
   }
   if (!options.allowAbsent) return { ok: false, error: "path_not_found" };
-  const ancestor = await nearestExistingAncestor(path.dirname(requested));
+  const ancestor = await nearestExistingAncestor(
+    files,
+    path.dirname(requested),
+  );
   if (!ancestor) return { ok: false, error: "parent_not_found" };
-  const realAncestor = await fs.realpath(ancestor).catch(() => undefined);
+  const realAncestor = await files.realpath(ancestor).catch(() => undefined);
   if (!realAncestor || !isPathWithin(realAncestor, projectRoot)) {
     return { ok: false, error: "parent_escape" };
   }
@@ -814,6 +992,7 @@ async function resolveProjectPath(
 }
 
 async function ensureSafeParent(
+  files: WorkspaceFileSystem,
   projectRoot: string,
   target: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -822,31 +1001,32 @@ async function ensureSafeParent(
   let current = projectRoot;
   for (const segment of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
-    const stat = await fs.lstat(current).catch(() => undefined);
+    const stat = await files.lstat(current).catch(() => undefined);
     if (stat) {
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      if (stat.kind !== "directory") {
         return { ok: false, error: "unsafe_parent" };
       }
       continue;
     }
     try {
-      await fs.mkdir(current, { mode: 0o700 });
+      await files.mkdir(current, { mode: 0o700 });
     } catch {
       return { ok: false, error: "parent_creation_failed" };
     }
   }
-  const realParent = await fs.realpath(parent).catch(() => undefined);
+  const realParent = await files.realpath(parent).catch(() => undefined);
   return realParent && isPathWithin(realParent, projectRoot)
     ? { ok: true }
     : { ok: false, error: "parent_escape" };
 }
 
 async function nearestExistingAncestor(
+  files: WorkspaceFileSystem,
   candidate: string,
 ): Promise<string | undefined> {
   let current = candidate;
   for (;;) {
-    if (await fs.lstat(current).catch(() => undefined)) return current;
+    if (await files.lstat(current).catch(() => undefined)) return current;
     const parent = path.dirname(current);
     if (parent === current) return undefined;
     current = parent;
@@ -976,10 +1156,12 @@ export async function workspaceFileScopesContain(
   projectRoot: string,
   parentScopes: readonly WorkspaceFileScope[],
   childScopes: readonly WorkspaceFileScope[],
+  fileSystem: WorkspaceFileSystem = createLocalWorkspaceExecutionBackend()
+    .fileSystem,
 ): Promise<boolean> {
   const [parents, children] = await Promise.all([
-    resolveDeclaredFileScopes(projectRoot, parentScopes),
-    resolveDeclaredFileScopes(projectRoot, childScopes),
+    resolveDeclaredFileScopes(fileSystem, projectRoot, parentScopes),
+    resolveDeclaredFileScopes(fileSystem, projectRoot, childScopes),
   ]);
   return children.every((child) =>
     parents.some((parent) => {
@@ -996,17 +1178,20 @@ export async function workspaceFileScopesContain(
 }
 
 async function resolveFileScopes(
+  files: WorkspaceFileSystem,
   projectRoot: string,
   resolveScopes: ResolveWorkspaceFileScopes,
   request: WorkspaceFileScopeRequest,
 ): Promise<readonly ResolvedWorkspaceFileScope[]> {
   return await resolveDeclaredFileScopes(
+    files,
     projectRoot,
     await resolveScopes(request),
   );
 }
 
 async function resolveDeclaredFileScopes(
+  files: WorkspaceFileSystem,
   projectRoot: string,
   scopes: readonly WorkspaceFileScope[],
 ): Promise<readonly ResolvedWorkspaceFileScope[]> {
@@ -1022,23 +1207,23 @@ async function resolveDeclaredFileScopes(
     ) {
       throw new Error("invalid_workspace_file_scope");
     }
-    const candidate = await resolveProjectPath(projectRoot, scope.path, {
+    const candidate = await resolveProjectPath(files, projectRoot, scope.path, {
       allowAbsent: true,
     });
     if (!candidate.ok)
       throw new Error(`invalid_workspace_file_scope:${candidate.error}`);
-    const stat = await fs.lstat(candidate.path).catch(() => undefined);
+    const stat = await files.lstat(candidate.path).catch(() => undefined);
     if (
       stat &&
-      ((scope.kind === "file" && !stat.isFile()) ||
-        (scope.kind === "directory" && !stat.isDirectory()))
+      ((scope.kind === "file" && stat.kind !== "file") ||
+        (scope.kind === "directory" && stat.kind !== "directory"))
     ) {
       throw new Error("invalid_workspace_file_scope:kind_mismatch");
     }
     const relativePath = toRelativePath(projectRoot, candidate.path);
     const ancestor = stat
       ? candidate.path
-      : await nearestExistingAncestor(path.dirname(candidate.path));
+      : await nearestExistingAncestor(files, path.dirname(candidate.path));
     if (!ancestor)
       throw new Error("invalid_workspace_file_scope:parent_not_found");
     resolved.push({
@@ -1248,55 +1433,61 @@ function replaceAbsolutePaths(value: unknown, projectRoot: string): unknown {
 }
 
 async function readGitStatus(
+  runtime: FileToolsRuntime,
   projectRoot: string,
   relativePath: string,
+  identity: { readonly sessionId: string; readonly turnId: string },
 ): Promise<{ status: "available"; value: string } | { status: "unavailable" }> {
-  const executable = await resolveGitExecutable();
+  const executable = await runtime.resolveGitExecutable();
   if (!executable) return { status: "unavailable" };
   return await new Promise((resolve) => {
-    const child = spawn(
-      executable,
-      ["status", "--short", "--untracked-files=all", "--", relativePath],
-      {
-        cwd: projectRoot,
-        env: { PATH: "/usr/bin:/bin", GIT_OPTIONAL_LOCKS: "0" },
-        stdio: ["ignore", "pipe", "ignore"],
+    let output = "";
+    const decoder = new StringDecoder("utf8");
+    let child: WorkspaceProcessHandle;
+    try {
+      child = launchFileToolProcess(
+        runtime,
+        {
+          executable,
+          args: [
+            "status",
+            "--short",
+            "--untracked-files=all",
+            "--",
+            relativePath,
+          ],
+          cwd: projectRoot,
+          environment: { PATH: "/usr/bin:/bin", GIT_OPTIONAL_LOCKS: "0" },
+          sessionId: identity.sessionId,
+          turnId: identity.turnId,
+        },
+        (stream, chunk) => {
+          if (stream === "stdout" && output.length < 4_000) {
+            output += decoder.write(chunk);
+          }
+        },
+      );
+    } catch {
+      resolve({ status: "unavailable" });
+      return;
+    }
+    const timer = setTimeout(() => child.signal("SIGKILL"), 2_000);
+    child.started.then(
+      () =>
+        child.exited.then((exit) => {
+          clearTimeout(timer);
+          resolve(
+            exit.exitCode === 0
+              ? { status: "available", value: output.trim() || "clean" }
+              : { status: "unavailable" },
+          );
+        }),
+      () => {
+        clearTimeout(timer);
+        resolve({ status: "unavailable" });
       },
     );
-    let output = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (output.length < 4_000) output += chunk;
-    });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve({ status: "unavailable" });
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve(
-        code === 0
-          ? { status: "available", value: output.trim() || "clean" }
-          : { status: "unavailable" },
-      );
-    });
   });
-}
-
-function resolveGitExecutable(): Promise<string | undefined> {
-  gitExecutable ??= (async () => {
-    for (const candidate of GIT_CANDIDATES) {
-      try {
-        await fs.access(candidate, fsConstants.X_OK);
-        return candidate;
-      } catch {
-        // Try the next fixed executable location.
-      }
-    }
-    return undefined;
-  })();
-  return gitExecutable;
 }
 
 function sameTurn(

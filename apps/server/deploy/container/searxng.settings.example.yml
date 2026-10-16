@@ -1,0 +1,20 @@
+# SearXNG settings for the assistant's private instance (compose.searxng.yaml).
+# Everything not set here keeps SearXNG's defaults. The secret comes from
+# SEARXNG_SECRET in .env.
+use_default_settings: true
+
+general:
+  instance_name: AgentLink search
+
+server:
+  # Only the assistant calls it, so no bot limiter (it would need Valkey).
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # The assistant reads results as JSON.
+  formats:
+    - html
+    - json

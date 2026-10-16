@@ -5056,7 +5056,14 @@ describe("protocol package boundary", () => {
     expect(contractsSource).toContain(
       'export * from "@agentlink/protocol/autonomous-memory";',
     );
-    expect(contractsSource).toContain("export interface MemoryRepository");
+    // The repository contracts are owned by the portable core package.
+    expect(contractsSource).toContain('} from "@agentlink/core/memory";');
+    expect(
+      fs.readFileSync(
+        path.join(ROOT, "packages/core/src/memory/contracts.ts"),
+        "utf8",
+      ),
+    ).toContain("export interface MemoryRepository");
     const capabilitySource = fs.readFileSync(
       path.join(ROOT, "src/core/capabilities/memory.ts"),
       "utf8",

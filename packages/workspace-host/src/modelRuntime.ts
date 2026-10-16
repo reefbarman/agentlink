@@ -62,10 +62,20 @@ export interface WorkspaceCompatibleProviderConfig extends Omit<
     | Promise<string | undefined>;
 }
 
+/**
+ * A backend the host built itself, for example one that forwards model
+ * calls to another process that holds the provider sign-ins.
+ */
+export interface WorkspaceBackendProviderConfig {
+  readonly type: "backend";
+  readonly backend: CoreModelBackend;
+}
+
 export type WorkspaceProviderConfig =
   | WorkspaceOpenAiProviderConfig
   | WorkspaceCodexProviderConfig
-  | WorkspaceCompatibleProviderConfig;
+  | WorkspaceCompatibleProviderConfig
+  | WorkspaceBackendProviderConfig;
 
 export interface WorkspaceModelRequestLimits {
   /** Absolute encoded request ceiling before the model-specific token envelope. */
@@ -184,7 +194,15 @@ class BoundedWorkspaceModelRuntime implements CoreModelRuntime {
   }
 }
 
+/** The model backend one provider configuration describes. */
+export function createWorkspaceModelBackend(
+  config: WorkspaceProviderConfig,
+): CoreModelBackend {
+  return createProvider(config);
+}
+
 function createProvider(config: WorkspaceProviderConfig): CoreModelBackend {
+  if (config.type === "backend") return config.backend;
   if (config.type === "codex") {
     return createCodexProvider({
       credentialProvider: config.credentialProvider,
