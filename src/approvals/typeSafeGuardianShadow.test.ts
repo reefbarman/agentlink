@@ -392,6 +392,102 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(JSON.stringify(body)).not.toContain("ghp_");
   });
 
+  it("keeps every supplied decision and shortens only long agent-authored context", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const decision = (index: number) =>
+      JSON.stringify({
+        questionRequestId: `request-${index}`,
+        toolCallId: `tool-${index}`,
+        agentAuthoredSubject: {
+          context: `Background ${index}. ${"Long agent explanation. ".repeat(80)}`,
+          question: { id: "go", question: `Proceed with step ${index}?` },
+        },
+        humanAnswer: `Yes, step ${index}`,
+      });
+    const input = reviewInput();
+    input.context = [
+      ...input.context!,
+      ...Array.from({ length: 8 }, (_, index) => ({
+        role: "tool" as const,
+        content: decision(index),
+        humanDecisionEvidence: true,
+      })),
+    ];
+
+    const result = await reviewer.review(input);
+    expect(result).toMatchObject({
+      humanDecisionEvidence: "complete",
+      humanDecisionCount: 8,
+    });
+    expect(
+      result.observation?.projection.coverage.human_authority.reasons,
+    ).not.toContain("projection_budget");
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+    const decisions = body.state.action.humanDecisions as Array<{
+      humanAnswer: string;
+      agentAuthoredSubject: {
+        context: string;
+        contextShortened?: boolean;
+        question: { question: string };
+      };
+    }>;
+    expect(decisions.map((item) => item.humanAnswer)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `Yes, step ${index}`),
+    );
+    expect(decisions[0]!.agentAuthoredSubject).toMatchObject({
+      contextShortened: true,
+      question: { question: "Proceed with step 0?" },
+    });
+    expect(decisions[0]!.agentAuthoredSubject.context.length).toBeLessThan(700);
+  });
+
+  it("redacts secrets in agent-authored subjects without omitting the human answer", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      ...input.context!,
+      {
+        role: "tool",
+        content: JSON.stringify({
+          agentAuthoredSubject: {
+            context:
+              "Use token=ghp_abcdefghijklmnopqrstuvwxyz123456 to publish?",
+            question: { id: "publish", question: "Publish now?" },
+          },
+          humanAnswer: "Yes",
+        }),
+        humanDecisionEvidence: true,
+      },
+    ];
+
+    const result = await reviewer.review(input);
+    expect(result).toMatchObject({
+      humanDecisionEvidence: "complete",
+      inputRedacted: true,
+    });
+    const bodyText = String(fetch.mock.calls[0]![1]?.body);
+    expect(bodyText).not.toContain("ghp_");
+    const body = JSON.parse(bodyText);
+    expect(body.state.action.humanDecisions[0]).toMatchObject({
+      humanAnswer: "Yes",
+      agentAuthoredSubject: { question: { question: "Publish now?" } },
+    });
+  });
+
   it("flags a queued human message as the latest instruction", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

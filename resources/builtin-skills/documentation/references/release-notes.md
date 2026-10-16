@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- TypeSafe Guardian shadow mode no longer drops your answers to the agent's questions. Jev now receives the same recorded answers as the main Guardian (up to 8, previously 6). When the agent's explanation around a question is long, only that explanation is shortened; previously the whole answer was dropped, which marked 70 of 76 recent shadow reviews as having incomplete evidence. Human answers are still never shortened, and a human answer containing a likely secret is still left out rather than redacted.
+- `npm run telemetry:sessions` now shows Jev's decision reasons for each shadow comparison group, including for the commands where Jev and the main Guardian disagreed, and runs the fast-path simulation for each group. The simulation only trusts a Jev allow when its evidence was complete and its answers were consistent.
+
 ## 1.32.0
 
 - TypeSafe Guardian shadow mode now defaults to the pinned `jev-1.14.0` model instead of the `jev-latest` alias, so shadow results stay comparable when TypeSafe moves its aliases. An explicitly configured model is unchanged.
