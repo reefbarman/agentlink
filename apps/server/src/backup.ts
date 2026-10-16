@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { promises as fs, type Stats } from "node:fs";
+import { createWriteStream, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 /**
  * Backups of an assistant deployment with restic, taken by the backup
@@ -157,7 +158,7 @@ export async function stageData(
         await copyDirectory(fromPath, toPath, false);
       } else if (entry.isFile()) {
         // A file removed while copying is simply not in this backup.
-        const copied = await fs.copyFile(fromPath, toPath).then(
+        const copied = await copyFileContents(fromPath, toPath).then(
           () => true,
           (error: NodeJS.ErrnoException) => {
             if (error.code === "ENOENT") return false;
@@ -173,6 +174,24 @@ export async function stageData(
   };
   await copyDirectory(source, target, true);
   return files;
+}
+
+/**
+ * A plain read-and-write copy. Node's `copyFile` fails with EPERM in the
+ * backup container (its copy fast paths are refused there), where reading
+ * and writing work.
+ */
+async function copyFileContents(from: string, to: string): Promise<void> {
+  // Open the source first, so a file that is gone leaves nothing behind.
+  const source = await fs.open(from, "r");
+  try {
+    await pipeline(
+      source.createReadStream({ autoClose: false }),
+      createWriteStream(to, { flags: "wx", mode: 0o600 }),
+    );
+  } finally {
+    await source.close();
+  }
 }
 
 async function keepMetadata(file: string, stats: Stats | null): Promise<void> {

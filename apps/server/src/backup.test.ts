@@ -58,16 +58,16 @@ describe("stageData", () => {
     const root = await deployDir();
     const stage = path.join(await tempDir("backup-stage-"), "stage");
     const copied: string[] = [];
-    const originalCopy = fs.copyFile;
-    // Record the copy order.
-    fs.copyFile = (async (from: string, to: string) => {
-      copied.push(path.relative(path.join(root, "data"), String(from)));
-      return originalCopy(from, to);
-    }) as typeof fs.copyFile;
+    const originalOpen = fs.open;
+    // Record the copy order: each source is opened to be copied.
+    fs.open = ((file: string, ...rest: unknown[]) => {
+      copied.push(path.relative(path.join(root, "data"), String(file)));
+      return (originalOpen as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.open;
     try {
       expect(await stageData(root, stage)).toBe(3);
     } finally {
-      fs.copyFile = originalCopy;
+      fs.open = originalOpen;
     }
     expect(copied.indexOf("audit/head.json")).toBeLessThan(
       copied.indexOf("audit/tasks.jsonl"),
