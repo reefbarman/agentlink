@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
+import type { CheckpointStatus } from "./auditCheckpoint.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
@@ -32,7 +33,9 @@ import {
  * - `GET /api/tasks/:id` (record and state history), `DELETE` (also removes
  *   its clone)
  * - `GET /api/tasks/:id/audit`: the task's audit entries (kept after it is
- *   deleted) and whether the whole log's hash chain is intact
+ *   deleted), whether the whole log's hash chain is intact, and the audit
+ *   checkpoints' status (last checkpoint, and whether the log still matches
+ *   the checkpoints in the backup store)
  * - `POST /api/tasks/:id/stop`, `POST /api/tasks/:id/resume`
  * - `POST /api/tasks/:id/publish` (`{ allowUnreviewed? }`): push a ready
  *   task and open its draft pull request, within the repository's
@@ -61,6 +64,8 @@ export interface TaskRoutesOptions {
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
   /** The audit log: read for `/audit`, told who asked for each action. */
   readonly audit?: Pick<TaskAudit, "entries" | "request" | "verify">;
+  /** The audit checkpoints' status, when they are running. */
+  readonly checkpoints?: () => CheckpointStatus | undefined;
   readonly models: readonly AssistantServerModelChoice[];
   readonly now?: () => number;
 }
@@ -227,9 +232,11 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       if (entries.length === 0 && !store.get(taskId)) {
         throw new HttpError(404, "task_not_found");
       }
+      const checkpoints = options.checkpoints?.();
       sendJson(response, 200, {
         entries,
         verification: await options.audit.verify(),
+        ...(checkpoints ? { checkpoints } : {}),
       });
       return true;
     }

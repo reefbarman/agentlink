@@ -74,6 +74,7 @@ import {
 import { createInboxRoutes } from "./inboxRoutes.js";
 import {
   inboxEntryForBackupProblem,
+  inboxEntryForCheckpointProblem,
   inboxEntryForInterruptedChat,
   inboxEntryForRestore,
   inboxEntryForRun,
@@ -137,8 +138,15 @@ import { serviceVersions } from "./serviceVersions.js";
 import {
   auditedTaskStore,
   openTaskAudit,
+  readAuditHashes,
   type TaskAuditActor,
 } from "./taskAudit.js";
+import {
+  checkpointKeyFile,
+  loadCheckpointKey,
+  startAuditCheckpointer,
+  type AuditCheckpointer,
+} from "./auditCheckpoint.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
 import { openRepositorySnapshots } from "./repositorySnapshots.js";
@@ -239,6 +247,13 @@ export function serverInboxDirectory(config: AssistantServerConfig): string {
 /** The coding tasks' hash-chained audit log; only the server writes it. */
 export function serverAuditDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "audit");
+}
+
+/** What the audit checkpointer last did (beside the log it checkpoints). */
+export function serverCheckpointStateFile(
+  config: AssistantServerConfig,
+): string {
+  return path.join(config.dataRoot, "audit", "checkpoints.json");
 }
 
 /** Coding task records and their state history. */
@@ -782,10 +797,16 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // Started once backups are known (checkpoints go to the backup store).
+  let checkpointer: AuditCheckpointer | undefined;
   // Opened before the tasks, so every change to them is on record.
   const taskAudit = await openTaskAudit({
     directory: serverAuditDirectory(config),
     log,
+    // A push or pull request is checkpointed straight away.
+    onWritten: (kinds) => {
+      if (kinds.includes("effect")) checkpointer?.effectRecorded();
+    },
   }).catch(async (error: unknown) => {
     await eventLog.close();
     await certificates?.stop();
@@ -1418,6 +1439,38 @@ export async function startAssistantService(
       ? setInterval(() => void checkBackups(), 10 * 60_000)
       : undefined;
     backupTimer?.unref();
+    // Signed heads of the audit log, kept in the backup store.
+    if (backupClient) {
+      const projectId = config.projects[0]?.id ?? "home";
+      const key = await loadCheckpointKey(checkpointKeyFile(config.dataRoot));
+      checkpointer = await startAuditCheckpointer({
+        key: key!,
+        witness: {
+          write: (checkpoint) => backupClient.writeCheckpoint(checkpoint),
+          list: () => backupClient.checkpoints(),
+        },
+        head: () => taskAudit.head(),
+        hashes: () => readAuditHashes(serverAuditDirectory(config)),
+        stateFile: serverCheckpointStateFile(config),
+        log,
+        onFailure: (error) => {
+          void addToInbox(
+            inboxEntryForCheckpointProblem(
+              { kind: "failed", error },
+              projectId,
+            ),
+          ).then(() => assistantChanged());
+        },
+        onMismatch: (problems) => {
+          void addToInbox(
+            inboxEntryForCheckpointProblem(
+              { kind: "mismatch", problems },
+              projectId,
+            ),
+          ).then(() => assistantChanged());
+        },
+      });
+    }
     /** Raise or settle the inbox entry a run's new record calls for. */
     const recordInInbox = (run: JobRun, job: JobDefinition) => {
       void (async () => {
@@ -1834,6 +1887,7 @@ export async function startAssistantService(
       connections: githubConnections,
       runner: tasks?.runner,
       audit: taskAudit,
+      checkpoints: () => checkpointer?.status(),
       isOwner: (auth) =>
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
@@ -1888,6 +1942,7 @@ export async function startAssistantService(
     });
     const backupRoutes = createBackupRoutes({
       client: backupClient,
+      checkpoints: () => checkpointer?.status(),
       isOwner: (auth) =>
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
@@ -1933,6 +1988,7 @@ export async function startAssistantService(
         await taskDeliveries.flush();
         await taskStore.flush();
         await taskAudit.flush();
+        await checkpointer?.close();
         await taskInboxWrites;
         clearInterval(watchTimer);
         if (backupTimer) clearInterval(backupTimer);

@@ -7,12 +7,15 @@ import { writeFileAtomic } from "./atomicFile.js";
 import {
   BackupError,
   dataFingerprint,
+  listCheckpointSnapshots,
   listSnapshots,
   runBackup,
+  writeCheckpointSnapshot,
   type BackupSnapshot,
   type BackupSummary,
   type ResticRunner,
 } from "./backup.js";
+import { isSignedCheckpoint } from "./auditCheckpoint.js";
 import { tokensMatch } from "./commandWorkerProtocol.js";
 import { SERVER_BUILD } from "./serverBuild.js";
 
@@ -20,9 +23,10 @@ import { SERVER_BUILD } from "./serverBuild.js";
  * The backup sidecar (`agentlink-server backup-agent`). It sees the deploy
  * directory read-only, and holds the backup store's address and password;
  * the assistant reaches it on a private network with a shared token and can
- * only ask for its status, its snapshots, or a backup now. It cannot read
- * files through it, and the store (an append-only rest-server) does not let
- * it delete or replace backups.
+ * only ask for its status, its snapshots, or a backup now, and add or list
+ * audit checkpoints. It cannot read files through it, and the store (an
+ * append-only rest-server) does not let it delete or replace backups or
+ * checkpoints.
  *
  * It backs up by itself: hourly when `data/` changed, and at least daily.
  */
@@ -37,6 +41,7 @@ const MIN_AGE_MS = 60 * 60 * 1_000;
 /** A failed backup is retried after this long. */
 const RETRY_MS = 30 * 60 * 1_000;
 const STATUS_FILE = "status.json";
+const MAX_CHECKPOINT_BODY = 4_096;
 
 export interface BackupStatus {
   readonly lastSuccess?: BackupSummary & {
@@ -201,20 +206,47 @@ export async function startBackupAgent(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    // No request bodies are accepted.
-    request.resume();
     const header = request.headers.authorization;
     const presented =
       typeof header === "string" && header.startsWith("Bearer ")
         ? header.slice("Bearer ".length)
         : undefined;
     if (!tokensMatch(options.token, presented)) {
+      request.resume();
       log("backup-agent: rejected a request with a bad token");
       sendJson(response, 401, { error: "unauthorized" });
       return;
     }
     const url = new URL(request.url ?? "/", "http://backup");
     const method = request.method ?? "GET";
+    if (url.pathname === "/v1/checkpoints" && method === "POST") {
+      const body = await readSmallBody(request, MAX_CHECKPOINT_BODY);
+      let parsed: unknown;
+      try {
+        parsed = body === undefined ? undefined : JSON.parse(body);
+      } catch {
+        parsed = undefined;
+      }
+      if (!isSignedCheckpoint(parsed)) {
+        sendJson(response, 400, { error: "checkpoint_invalid" });
+        return;
+      }
+      const snapshotId = await writeCheckpointSnapshot({
+        restic: options.restic,
+        scratch: path.join(options.stateDirectory, "checkpoint"),
+        checkpoint: { payload: parsed.payload, signature: parsed.signature },
+      });
+      sendJson(response, 200, { snapshotId });
+      return;
+    }
+    // No other request has a body.
+    request.resume();
+    if (url.pathname === "/v1/checkpoints" && method === "GET") {
+      sendJson(response, 200, {
+        checkpoints: await listCheckpointSnapshots(options.restic),
+      });
+      return;
+    }
     if (url.pathname === "/v1/health" && method === "GET") {
       sendJson(response, 200, {
         protocol: BACKUP_PROTOCOL,
@@ -268,6 +300,24 @@ export async function startBackupAgent(
       await done;
     },
   };
+}
+
+/** The body as text, or undefined when it is larger than `limit` bytes. */
+async function readSmallBody(
+  request: IncomingMessage,
+  limit: number,
+): Promise<string | undefined> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > limit) {
+      request.resume();
+      return undefined;
+    }
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function readStatus(file: string): Promise<StoredStatus> {

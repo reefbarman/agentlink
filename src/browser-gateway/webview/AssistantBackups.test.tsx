@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BackupSettings,
   backupSummary,
+  checkpointSummary,
   timeAgo,
   type BackupsResponse,
 } from "./AssistantBackups";
@@ -111,6 +112,48 @@ describe("backupSummary", () => {
         NOW,
       ),
     ).toEqual({ text: "The last backup failed 1 hour ago", tone: "bad" });
+  });
+});
+
+describe("checkpointSummary", () => {
+  it("reports the audit checkpoints, worst first", () => {
+    expect(checkpointSummary(undefined, NOW)).toBeUndefined();
+    expect(checkpointSummary({ pending: 3 }, NOW)).toEqual({
+      text: "No audit checkpoint yet",
+      tone: "busy",
+    });
+    expect(
+      checkpointSummary(
+        { pending: 0, lastCheckpoint: { seq: 4, at: NOW - 12 * 60_000 } },
+        NOW,
+      ),
+    ).toEqual({ text: "Audit log checkpointed 12 minutes ago", tone: "ok" });
+    expect(
+      checkpointSummary(
+        {
+          pending: 2,
+          lastCheckpoint: { seq: 4, at: NOW - 3 * HOUR },
+          lastFailure: { at: NOW - 2 * HOUR, error: "refused" },
+        },
+        NOW,
+      ),
+    ).toEqual({
+      text: "Audit checkpoints are failing (since 2 hours ago)",
+      tone: "bad",
+    });
+    expect(
+      checkpointSummary(
+        {
+          pending: 0,
+          lastCheckpoint: { seq: 4, at: NOW - HOUR },
+          lastVerification: { at: NOW, ok: false, problems: ["rewritten"] },
+        },
+        NOW,
+      ),
+    ).toEqual({
+      text: "The audit log does not match its checkpoints",
+      tone: "bad",
+    });
   });
 });
 

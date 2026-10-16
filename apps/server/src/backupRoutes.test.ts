@@ -2,6 +2,7 @@ import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
+import type { CheckpointStatus } from "./auditCheckpoint.js";
 import type { BackupStatus } from "./backupAgent.js";
 import { BackupRequestError, type BackupClient } from "./backupClient.js";
 import { createBackupRoutes } from "./backupRoutes.js";
@@ -30,10 +31,14 @@ const auth = (subjectId: string, valid = true): AssistantServerAuth => {
   return signedIn;
 };
 
-async function setup(client: BackupClient | undefined) {
+async function setup(
+  client: BackupClient | undefined,
+  checkpoints?: () => CheckpointStatus | undefined,
+) {
   const finished: Array<BackupStatus | undefined> = [];
   const routes = createBackupRoutes({
     client,
+    ...(checkpoints ? { checkpoints } : {}),
     isOwner: (request) => request.principal.subjectId === "owner",
     onFinished: (status) => finished.push(status),
   });
@@ -97,6 +102,8 @@ const fakeClient = (overrides: Partial<BackupClient> = {}): BackupClient => ({
   status: async () => STATUS,
   backupNow: async () => STATUS,
   snapshots: async () => [],
+  writeCheckpoint: async () => ({ snapshotId: "cp" }),
+  checkpoints: async () => [],
   ...overrides,
 });
 
@@ -135,6 +142,29 @@ describe("backup routes", () => {
     await expect(down.call("GET")).resolves.toMatchObject({
       status: 200,
       body: { configured: true, error: "backup_unavailable" },
+    });
+  });
+
+  it("includes the audit checkpoints' status, even with the sidecar down", async () => {
+    const checkpoints: CheckpointStatus = {
+      publicKey: "key",
+      pending: 2,
+      lastCheckpoint: { seq: 5, hash: "h", at: 10, snapshotId: "cp" },
+    };
+    const { call } = await setup(fakeClient(), () => checkpoints);
+    await expect(call("GET")).resolves.toMatchObject({
+      body: { status: STATUS, checkpoints },
+    });
+    const down = await setup(
+      fakeClient({
+        status: async () => {
+          throw new BackupRequestError(503, "backup_unavailable");
+        },
+      }),
+      () => checkpoints,
+    );
+    await expect(down.call("GET")).resolves.toMatchObject({
+      body: { error: "backup_unavailable", checkpoints },
     });
   });
 

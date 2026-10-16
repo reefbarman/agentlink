@@ -40,7 +40,9 @@ export type InboxEntryKind =
   /** The server started from a restored backup. */
   | "restored"
   /** A chat's turn was stopped (for an upgrade); asking again continues. */
-  | "chat_interrupted";
+  | "chat_interrupted"
+  /** Audit checkpoints are not reaching the witness, or the log no longer matches them. */
+  | "audit_checkpoint";
 
 export interface InboxEntry {
   readonly id: string;
@@ -558,6 +560,35 @@ export function inboxEntryForInterruptedChat(chat: {
     kind: "chat_interrupted",
     title: "A chat was stopped for an upgrade",
     body: "It was still working when the Assistant was upgraded. Open the chat and ask it to carry on.",
+  };
+}
+
+/** The inbox entry for a checkpoint that failed, or a log that no longer matches. */
+export function inboxEntryForCheckpointProblem(
+  problem:
+    | { readonly kind: "failed"; readonly error: string }
+    | { readonly kind: "mismatch"; readonly problems: readonly string[] },
+  projectId: string,
+): NewInboxEntry {
+  if (problem.kind === "failed") {
+    return {
+      projectId,
+      kind: "audit_checkpoint",
+      title: "Audit checkpoints are not reaching the backup store",
+      body: withDetail(
+        "The audit log's latest entries are not checkpointed yet. It tries again every 10 minutes; check that the backup service and its store are running.",
+        problem.error,
+      ),
+    };
+  }
+  return {
+    projectId,
+    kind: "audit_checkpoint",
+    title: "The audit log does not match its checkpoints",
+    body: truncate(
+      `The task audit log was changed after it was checkpointed: ${problem.problems.join("; ")}. Run \`agentlink-server audit-check --checkpoints\` on the server for details.`,
+      MAX_BODY_LENGTH,
+    ),
   };
 }
 

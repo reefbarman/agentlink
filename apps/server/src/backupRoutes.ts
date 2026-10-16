@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { AssistantServerAuth } from "./assistantServer.js";
+import type { CheckpointStatus } from "./auditCheckpoint.js";
 import type { BackupStatus } from "./backupAgent.js";
 import {
   BACKUP_OVERDUE_MS,
@@ -12,7 +13,8 @@ import { HttpError, sendJson } from "./httpJson.js";
 /**
  * Owner-only backup API:
  *
- * - `GET /api/backups`: `{ configured, status?, overdueAfterMs, error? }`
+ * - `GET /api/backups`: `{ configured, status?, overdueAfterMs, error?,
+ *   checkpoints? }` (the audit checkpoints, which go to the same store)
  * - `POST /api/backups`: start a backup now (`202`); poll `GET` for its
  *   outcome
  *
@@ -23,6 +25,8 @@ import { HttpError, sendJson } from "./httpJson.js";
 export interface BackupRoutesOptions {
   /** Undefined when no backup sidecar is configured. */
   readonly client: BackupClient | undefined;
+  /** The audit checkpoints' status, when they are running. */
+  readonly checkpoints?: () => CheckpointStatus | undefined;
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
   /** After a backup started here finishes (or fails). */
   readonly onFinished?: (status: BackupStatus | undefined) => void;
@@ -50,16 +54,20 @@ export function createBackupRoutes(options: BackupRoutesOptions): BackupRoutes {
           sendJson(response, 200, { configured: false });
           return true;
         }
+        const checkpoints = options.checkpoints?.();
+        const extra = checkpoints ? { checkpoints } : {};
         try {
           sendJson(response, 200, {
             configured: true,
             overdueAfterMs: BACKUP_OVERDUE_MS,
             status: await client.status(),
+            ...extra,
           });
         } catch (error) {
           sendJson(response, 200, {
             configured: true,
             overdueAfterMs: BACKUP_OVERDUE_MS,
+            ...extra,
             error:
               error instanceof BackupRequestError
                 ? error.code

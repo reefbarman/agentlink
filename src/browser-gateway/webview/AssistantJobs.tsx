@@ -103,7 +103,8 @@ export interface InboxEntry {
     | "session_stuck"
     | "backup_failed"
     | "restored"
-    | "chat_interrupted";
+    | "chat_interrupted"
+    | "audit_checkpoint";
   createdAt: number;
   title: string;
   body?: string;
@@ -162,6 +163,7 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   backup_failed: "warning",
   restored: "history",
   chat_interrupted: "debug-pause",
+  audit_checkpoint: "shield",
 };
 
 /** Runaway-guard notices: the chat keeps working until the owner stops it. */

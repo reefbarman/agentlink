@@ -14,9 +14,10 @@ import { writeFileAtomic } from "./atomicFile.js";
  * Each line is hash-chained to the one before it (`hash` is SHA-256 of the
  * previous hash and the entry), so changing or removing a line breaks the
  * chain. `head.json` records the last entry, so removing lines from the end
- * is detected too. The chain has no secret key and is not anchored outside
- * this machine yet: it detects edits and truncation, not someone who
- * rewrites the whole log and its head consistently.
+ * is detected too. The chain itself detects edits and truncation, not
+ * someone who rewrites the whole log and its head consistently: signed
+ * checkpoints of the head kept in the backup witness (`auditCheckpoint.ts`)
+ * catch that.
  *
  * Every entry says who caused it where that is known: a `request` entry
  * names who asked (the owner in the app, a chat, or the task's own chat),
@@ -128,6 +129,8 @@ export interface TaskAudit {
   entries(taskId: string): readonly TaskAuditEntry[];
   /** Check the whole log on disk, after the writes so far. */
   verify(): Promise<TaskAuditVerification>;
+  /** The last entry written (after the writes so far), for checkpoints. */
+  head(): Promise<{ readonly seq: number; readonly hash: string } | undefined>;
   flush(): Promise<void>;
 }
 
@@ -430,6 +433,14 @@ function damageRecords(
     }));
 }
 
+/**
+ * The hashes of the log's entries, in order (only the good part of a
+ * broken log), to compare with its checkpoints.
+ */
+export async function readAuditHashes(directory: string): Promise<string[]> {
+  return (await readLog(directory)).entries.map((entry) => entry.hash);
+}
+
 /** Check the audit log without changing it (`agentlink-server audit-check`). */
 export async function verifyTaskAudit(
   directory: string,
@@ -454,6 +465,8 @@ export async function openTaskAudit(options: {
   readonly directory: string;
   readonly log?: (line: string) => void;
   readonly now?: () => number;
+  /** After entries are written, with their kinds (checkpoints follow effects). */
+  readonly onWritten?: (kinds: readonly TaskAuditKind[]) => void;
 }): Promise<TaskAudit> {
   const log = options.log ?? (() => undefined);
   const now = options.now ?? Date.now;
@@ -506,6 +519,7 @@ export async function openTaskAudit(options: {
         { encoding: "utf8", mode: 0o600 },
       );
       await writeFileAtomic(headFile, `${JSON.stringify(head)}\n`);
+      options.onWritten?.(entries.map((entry) => entry.kind));
     });
     writes = next.catch((error: unknown) => {
       log(
@@ -569,6 +583,10 @@ export async function openTaskAudit(options: {
     async verify() {
       await writes;
       return verifyTaskAudit(options.directory);
+    },
+    async head() {
+      await writes;
+      return seq > 0 ? { seq, hash: prev } : undefined;
     },
     async flush() {
       await writes;

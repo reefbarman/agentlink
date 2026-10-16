@@ -2,11 +2,18 @@ import {
   preflightAssistantService,
   serverAccessDataRoot,
   serverAuditDirectory,
+  serverCheckpointStateFile,
   serverTlsDirectory,
   startAssistantService,
   type AssistantService,
 } from "./assistantService.js";
-import { verifyTaskAudit } from "./taskAudit.js";
+import { readAuditHashes, verifyTaskAudit } from "./taskAudit.js";
+import {
+  checkpointKeyFile,
+  loadCheckpointKey,
+  verifyCheckpoints,
+  type CheckpointStatus,
+} from "./auditCheckpoint.js";
 import {
   BackupError,
   restoreSnapshot,
@@ -89,7 +96,8 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server export-ca --config <file> > agentlink-ca.pem
        agentlink-server codex-login --config <file>
        agentlink-server codex-logout --config <file>
-       agentlink-server audit-check --config <file>
+       agentlink-server audit-check --config <file> [--checkpoints]
+                                    [--directory <dir>]
        agentlink-server backup --config <file>
        agentlink-server backups --config <file>
        agentlink-server drain --config <file> [--wait <minutes>] [--reason <text>]
@@ -156,6 +164,11 @@ Commands:
                    drained, across restarts, until \`resume\`. Run it on the
                    server machine as the service account, like \`pair\`.
   resume           Start admitting new work again after \`drain\`.
+  audit-check      Check the task audit log's hash chain. --checkpoints
+                   also checks it against the signed checkpoints in the
+                   backup store, which catches a log rewritten consistently
+                   with its head. --directory checks a copy of the log
+                   instead of data/audit. Exits 1 on any problem.
   smoke-check      Check the running deployment: the server answers, the
                    data format is current, and every service is reachable
                    and runs this same version. Exits 1 on any problem
@@ -269,6 +282,8 @@ export async function runAssistantServerCli(
   let check = false;
   let drainWaitMinutes: number | undefined;
   let drainReason: string | undefined;
+  let auditCheckpoints = false;
+  let auditDirectory: string | undefined;
   for (let index = command ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (argument === "--help" || argument === "-h") {
@@ -284,6 +299,12 @@ export async function runAssistantServerCli(
         return usageError(io, "--wait needs minutes, from 0 to 1440");
       }
       drainWaitMinutes = minutes;
+    } else if (argument === "--checkpoints" && command === "audit-check") {
+      auditCheckpoints = true;
+    } else if (argument === "--directory" && command === "audit-check") {
+      auditDirectory = argv[index + 1];
+      index += 1;
+      if (!auditDirectory) return usageError(io, "--directory needs a folder");
     } else if (argument === "--reason" && command === "drain") {
       drainReason = argv[index + 1];
       index += 1;
@@ -304,7 +325,12 @@ export async function runAssistantServerCli(
   const config = await loadAssistantServerConfig(configPath);
   if (command === "pair") return await runPair(config, io);
   if (command === "export-ca") return await runExportCa(config, io);
-  if (command === "audit-check") return await runAuditCheck(config, io);
+  if (command === "audit-check") {
+    return await runAuditCheck(config, io, {
+      checkpoints: auditCheckpoints,
+      ...(auditDirectory ? { directory: auditDirectory } : {}),
+    });
+  }
   if (command === "drain") {
     return await runDrain(config, io, {
       ...(drainWaitMinutes !== undefined
@@ -347,6 +373,7 @@ export async function runAssistantServerCli(
     if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
     if (preflight.runners) io.stdout(`${preflight.runners}\n`);
     if (preflight.backup) io.stdout(`${preflight.backup}\n`);
+    if (config.backup) io.stdout(`${await describeCheckpoints(config)}\n`);
     io.stdout(`${await describeVersions(config, io.env)}\n`);
     const maintenance = await readMaintenanceStatus(config.dataRoot);
     if (maintenance && maintenance.state !== "running") {
@@ -723,28 +750,120 @@ async function runSmokeCheck(
   return 0;
 }
 
-/** Check the task audit log's hash chain; exit 1 when it is broken. */
+/** "Audit checkpoints: ..." for `--check`, from the checkpointer's record. */
+async function describeCheckpoints(
+  config: AssistantServerConfig,
+): Promise<string> {
+  let state: Partial<CheckpointStatus>;
+  try {
+    state = JSON.parse(
+      await fs.readFile(serverCheckpointStateFile(config), "utf8"),
+    ) as Partial<CheckpointStatus>;
+  } catch {
+    return "Audit checkpoints: none yet (the first follows within an hour of the server starting)";
+  }
+  const last = state.lastCheckpoint;
+  const failure = state.lastFailure;
+  const parts = [
+    last
+      ? `last at entry ${last.seq}, ${new Date(last.at).toISOString()}`
+      : "none yet",
+  ];
+  if (failure && (!last || failure.at > last.at)) {
+    parts.push(
+      `failing since ${new Date(failure.at).toISOString()} (${failure.error})`,
+    );
+  }
+  const verification = state.lastVerification;
+  if (verification && !verification.ok) {
+    parts.push(
+      `the log does NOT match them: ${verification.problems.join("; ")}`,
+    );
+  } else if (verification) {
+    parts.push(`the log matched ${verification.checked} checkpoint(s)`);
+  }
+  return `Audit checkpoints: ${parts.join("; ")}`;
+}
+
+/**
+ * Check the task audit log's hash chain, and with --checkpoints that it
+ * still matches the signed checkpoints in the backup store; exit 1 when
+ * either fails.
+ */
 async function runAuditCheck(
   config: AssistantServerConfig,
   io: AssistantServerCliIo,
+  options: { readonly checkpoints?: boolean; readonly directory?: string } = {},
 ): Promise<number> {
-  const directory = serverAuditDirectory(config);
+  const directory = options.directory ?? serverAuditDirectory(config);
   const result = await verifyTaskAudit(directory);
   for (const damage of result.damaged) {
     io.stdout(
       `Earlier damage, found ${new Date(damage.at).toISOString()} and kept as ${damage.keptAs}: ${damage.problems.join("; ")}\n`,
     );
   }
+  let failed = false;
   if (!result.ok) {
     io.stdout(
       `Audit log ${directory} is broken after ${result.entries} good entr${result.entries === 1 ? "y" : "ies"}: ${result.problems.join("; ")}\n`,
     );
+    failed = true;
+  } else {
+    io.stdout(
+      `Audit log OK: ${result.entries} entr${result.entries === 1 ? "y" : "ies"}, hash chain intact\n`,
+    );
+  }
+  if (!options.checkpoints) return failed ? 1 : 0;
+  if (!config.backup) {
+    io.stdout(
+      'Checkpoints: not configured (they are kept in the backup store; see "Backups" in the README)\n',
+    );
+    return 1;
+  }
+  const key = await loadCheckpointKey(checkpointKeyFile(config.dataRoot), {
+    create: false,
+  });
+  if (!key) {
+    io.stdout(
+      "Checkpoints: this server has no signing key yet (it creates one when it starts with backups configured)\n",
+    );
+    return 1;
+  }
+  const client = createBackupClient({
+    host: config.backup.host,
+    port: config.backup.port,
+    token: await prepareSecret(config.backup.token, "backup.token", io.env),
+  });
+  let checkpoints;
+  try {
+    checkpoints = await client.checkpoints();
+  } catch (error) {
+    io.stdout(
+      `Checkpoints: could not read them from the backup store (${error instanceof BackupRequestError ? (error.detail ?? error.code) : error instanceof Error ? error.message : String(error)})\n`,
+    );
+    return 1;
+  }
+  const checked = verifyCheckpoints({
+    hashes: await readAuditHashes(directory),
+    checkpoints,
+    publicKey: key.publicKey,
+  });
+  const rejected =
+    checked.rejected > 0
+      ? `; ignored ${checked.rejected} not signed by this server's key`
+      : "";
+  if (!checked.ok) {
+    io.stdout(
+      `Checkpoints: the log does NOT match the backup store's checkpoints: ${checked.problems.join("; ")}${rejected}\n`,
+    );
     return 1;
   }
   io.stdout(
-    `Audit log OK: ${result.entries} entr${result.entries === 1 ? "y" : "ies"}, hash chain intact\n`,
+    checked.latest
+      ? `Checkpoints OK: the log matches ${checked.checked} signed checkpoint(s) in the backup store, the latest at entry ${checked.latest.seq} (${new Date(checked.latest.at).toISOString()})${rejected}\n`
+      : `Checkpoints: none in the backup store yet${rejected}\n`,
   );
-  return 0;
+  return failed ? 1 : 0;
 }
 
 async function runPair(

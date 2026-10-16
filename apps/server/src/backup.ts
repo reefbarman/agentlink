@@ -4,6 +4,15 @@ import { createWriteStream, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 
+import {
+  CHECKPOINT_HOST,
+  CHECKPOINT_TAG,
+  checkpointTag,
+  parseCheckpointTag,
+  type SignedCheckpoint,
+  type StoredCheckpoint,
+} from "./auditCheckpoint.js";
+
 /**
  * Backups of an assistant deployment with restic, taken by the backup
  * sidecar (`agentlink-server backup-agent`), which sees the deploy
@@ -358,6 +367,103 @@ export async function listSnapshots(
       time: String(entry.time ?? ""),
       paths: Array.isArray(entry.paths) ? entry.paths.map(String) : [],
     }));
+}
+
+/**
+ * Store a signed audit checkpoint in the witness as its own small snapshot
+ * (host `agentlink-audit`, so backups never list or restore it). The
+ * checkpoint is in its tags, so listing them is one call.
+ */
+export async function writeCheckpointSnapshot(options: {
+  readonly restic: ResticRunner;
+  /** A private folder for the checkpoint file restic reads. */
+  readonly scratch: string;
+  readonly checkpoint: SignedCheckpoint;
+}): Promise<string> {
+  await ensureRepository(options.restic);
+  await fs.mkdir(options.scratch, { recursive: true, mode: 0o700 });
+  const file = path.join(options.scratch, "audit-checkpoint.json");
+  await fs.writeFile(file, `${JSON.stringify(options.checkpoint)}\n`, {
+    mode: 0o600,
+  });
+  try {
+    const result = await options.restic([
+      "backup",
+      "--json",
+      "--host",
+      CHECKPOINT_HOST,
+      "--tag",
+      CHECKPOINT_TAG,
+      "--tag",
+      checkpointTag(options.checkpoint),
+      file,
+    ]);
+    if (result.exitCode !== 0) {
+      throw resticFailure(result, "Storing the audit checkpoint");
+    }
+    const summary = result.stdout
+      .split("\n")
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return undefined;
+        }
+      })
+      .find((line) => line?.message_type === "summary");
+    if (!summary || typeof summary.snapshot_id !== "string") {
+      throw new BackupError(
+        "restic_failed",
+        "Storing the audit checkpoint finished without naming its snapshot",
+      );
+    }
+    return summary.snapshot_id;
+  } finally {
+    await fs.rm(file, { force: true });
+  }
+}
+
+/** The witness's audit checkpoints, oldest first. */
+export async function listCheckpointSnapshots(
+  restic: ResticRunner,
+): Promise<StoredCheckpoint[]> {
+  const result = await restic([
+    "snapshots",
+    "--json",
+    "--host",
+    CHECKPOINT_HOST,
+    "--tag",
+    CHECKPOINT_TAG,
+  ]);
+  if (result.exitCode !== 0) {
+    // A store with no repository yet has no checkpoints.
+    if (/does not exist|Is there a repository/iu.test(result.stderr)) {
+      return [];
+    }
+    throw resticFailure(result, "Listing audit checkpoints");
+  }
+  const parsed = JSON.parse(result.stdout || "[]") as Array<{
+    id?: unknown;
+    time?: unknown;
+    tags?: unknown;
+  }>;
+  const checkpoints: StoredCheckpoint[] = [];
+  for (const entry of parsed) {
+    if (typeof entry.id !== "string" || !Array.isArray(entry.tags)) continue;
+    for (const tag of entry.tags) {
+      const signed =
+        typeof tag === "string" ? parseCheckpointTag(tag) : undefined;
+      if (signed) {
+        checkpoints.push({
+          ...signed,
+          snapshotId: entry.id,
+          time: String(entry.time ?? ""),
+        });
+      }
+    }
+  }
+  // restic lists oldest first; keep that order by the witness's time.
+  return checkpoints.sort((left, right) => left.time.localeCompare(right.time));
 }
 
 /** What `data/restored.json` records. */

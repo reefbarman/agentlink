@@ -1,10 +1,12 @@
+import type { SignedCheckpoint, StoredCheckpoint } from "./auditCheckpoint.js";
+
 import type { BackupSnapshot } from "./backup.js";
 import type { BackupStatus } from "./backupAgent.js";
 
 /**
  * The assistant server's side of the backup sidecar: plain HTTP on a
  * private network with the shared token. It can only ask for the status,
- * the snapshots, or a backup now.
+ * the snapshots, or a backup now, and add or list audit checkpoints.
  */
 
 export class BackupRequestError extends Error {
@@ -24,6 +26,12 @@ export interface BackupClient {
   /** Waits for the backup (or the one already running). */
   backupNow(): Promise<BackupStatus>;
   snapshots(): Promise<readonly BackupSnapshot[]>;
+  /** Store a signed audit checkpoint in the witness. */
+  writeCheckpoint(
+    checkpoint: SignedCheckpoint,
+  ): Promise<{ readonly snapshotId: string }>;
+  /** The witness's audit checkpoints, oldest first. */
+  checkpoints(): Promise<readonly StoredCheckpoint[]>;
 }
 
 export function createBackupClient(options: {
@@ -40,12 +48,17 @@ export function createBackupClient(options: {
     method: string,
     pathname: string,
     timeoutMs: number,
+    body?: unknown,
   ): Promise<T> => {
     let response: Response;
     try {
       response = await fetchImpl(`${base}${pathname}`, {
         method,
-        headers: { authorization: `Bearer ${await options.token()}` },
+        headers: {
+          authorization: `Bearer ${await options.token()}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -95,6 +108,19 @@ export function createBackupClient(options: {
           60_000,
         )
       ).snapshots,
+    writeCheckpoint: (checkpoint) =>
+      call<{ snapshotId: string }>("POST", "/v1/checkpoints", 60_000, {
+        payload: checkpoint.payload,
+        signature: checkpoint.signature,
+      }),
+    checkpoints: async () =>
+      (
+        await call<{ checkpoints: StoredCheckpoint[] }>(
+          "GET",
+          "/v1/checkpoints",
+          60_000,
+        )
+      ).checkpoints,
   };
 }
 
