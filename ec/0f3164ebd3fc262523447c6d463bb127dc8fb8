@@ -1,0 +1,54 @@
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 42-43,550-560
+  s_166f3ae26abfac::t_3f315c4c68409c 41,561-563
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 4,578-588
+  s_166f3ae26abfac::t_ccbbd3294873e7 589
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 77,1047-1048,2028-2038
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 101-110,390-394,400,1514-1516,1518
+  s_0a2e42a6caa9e9::t_ee6fac3a07a80b 1517,1519-1520
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 106,164
+  s_166f3ae26abfac::t_551bb629100bf2 105
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 377-441
+apps/server/README.md
+  h_e08a86bb3a33a2 355,377
+CHANGELOG.md
+  h_e08a86bb3a33a2 28
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 166
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0a2e42a6caa9e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc8ebbf5-a9a3-419f-9f21-10baa6e299ad",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_166f3ae26abfac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3f95c91-c97a-4976-a7ad-56372b823759",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
