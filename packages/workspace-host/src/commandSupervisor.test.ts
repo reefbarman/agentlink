@@ -132,6 +132,59 @@ describe("WorkspaceCommandSupervisor", () => {
     }
   });
 
+  it("forgets a deleted session's commands and output, not while running", async () => {
+    const fake = fakeBackend();
+    const test = await fixture({ executionBackend: fake.backend });
+    try {
+      const running = await test.supervisor.launchBackground(
+        test.launch("marker-6620", {
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        }),
+      );
+      await expect(
+        test.supervisor.forgetSessions(["session-a"]),
+      ).rejects.toThrow("command_running");
+      fake.exit({ exitCode: 0 });
+      await vi.waitFor(() =>
+        expect(test.supervisor.list({ ownerId: "owner-a" })[0]?.state).toBe(
+          "completed",
+        ),
+      );
+      await test.supervisor.launchBackground(
+        test.launch("kept", {
+          sessionId: "session-b",
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        }),
+      );
+      fake.exit({ exitCode: 0 });
+      await vi.waitFor(() =>
+        expect(
+          test.supervisor
+            .list({ ownerId: "owner-a" })
+            .every((record) => record.state === "completed"),
+        ).toBe(true),
+      );
+      await test.supervisor.forgetSessions(["session-a"]);
+      expect(
+        test.supervisor
+          .list({ ownerId: "owner-a" })
+          .map((record) => record.sessionId),
+      ).toEqual(["session-b"]);
+      expect(running.commandId).toBeDefined();
+      const state = await fs.readFile(
+        path.join(test.parent, "state", "commands.json"),
+        "utf8",
+      );
+      expect(state).not.toContain("marker-6620");
+      expect(state).toContain("kept");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
+
   it("bounds retained output and exposes truncation offsets", async () => {
     const test = await fixture({ maxRetainedOutputBytes: 5 });
     try {

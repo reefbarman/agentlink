@@ -40,6 +40,11 @@ export interface SessionEventLog {
   /** Rewrite a session's log to just these events (the retained window). */
   compact(key: string, events: readonly SequencedSessionEvent[]): void;
   /**
+   * Delete a session's log file (the session was deleted). Its last
+   * sequence number is kept, so numbering never repeats for that key.
+   */
+  remove(key: string): void;
+  /**
    * Flush every written file to disk, then record a clean shutdown so the
    * next start keeps the epoch. Stop publishing before calling this.
    */
@@ -241,6 +246,17 @@ function startLog(
         fs.renameSync(temporary, file);
       } catch (error) {
         fs.rmSync(temporary, { force: true });
+        fail(error);
+      }
+    },
+    remove(key) {
+      if (closed) return;
+      const name = nameFor(key);
+      closeFile(name);
+      try {
+        fs.rmSync(fileFor(name), { force: true });
+        syncDirectory(directory);
+      } catch (error) {
         fail(error);
       }
     },

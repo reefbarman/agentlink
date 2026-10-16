@@ -134,6 +134,25 @@ export class SessionEventHub {
     this.closed = true;
   }
 
+  /**
+   * Drop a deleted session's events, here and in the log. Its sequence
+   * numbers keep rising, so a client still holding a cursor resets rather
+   * than replaying another session's events.
+   */
+  forget(key: string): void {
+    if (this.closed) return;
+    const channel = this.channel(key);
+    channel.retained = [];
+    channel.persisted = 0;
+    channel.openTaskId = undefined;
+    this.log?.remove(key);
+  }
+
+  /** Keys of the sessions this process has published to or read. */
+  knownKeys(): readonly string[] {
+    return [...this.channels.keys()];
+  }
+
   /** Undefined once the hub is closed. */
   publish(
     key: string,

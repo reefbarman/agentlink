@@ -218,6 +218,11 @@ export interface AskAgentBridgeOptions {
     workspaceSessionId: string,
   ) => readonly RememberedCard[];
   /**
+   * A chat of this project was deleted for good: remove what else the
+   * server keeps about it (its Inbox entries).
+   */
+  readonly chatDeleted?: (workspaceSessionId: string) => Promise<void>;
+  /**
    * A message the owner wrote in a linked chat (a coding task's). The task
    * runner takes it (steering a working task, continuing a finished one),
    * so the server's checks still run; the chat then follows its work.
@@ -663,12 +668,51 @@ export async function createAskAgentBridge(
     };
   };
 
+  /**
+   * Delete a chat of this project for good: the host's records, the event
+   * log, this bridge's notes about it, and (through `chatDeleted`) its
+   * Inbox entries. Already gone counts as deleted; anything else that
+   * refuses (a turn, an approval, a background agent or command still
+   * running) keeps the chat and is reported.
+   */
+  const purgeChat = async (
+    auth: AssistantServerAuth,
+    workspaceSessionId: string,
+  ) => {
+    try {
+      await operations.deleteSession(auth, projectId, workspaceSessionId);
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 404)) throw error;
+    }
+    for (const [alias, id] of Object.entries(state.aliases)) {
+      if (id === workspaceSessionId) delete state.aliases[alias];
+    }
+    delete state.titles[workspaceSessionId];
+    state.hidden = state.hidden.filter((id) => id !== workspaceSessionId);
+    state.unread = state.unread.filter((id) => id !== workspaceSessionId);
+    state.scheduled = state.scheduled.filter((id) => id !== workspaceSessionId);
+    await saveState();
+    sessionModels.delete(workspaceSessionId);
+    sessionEfforts.delete(workspaceSessionId);
+    sessionApprovalModes.delete(workspaceSessionId);
+    delivery.parents.get(workspaceSessionId)?.unsubscribe();
+    delivery.parents.delete(workspaceSessionId);
+    await options.chatDeleted?.(workspaceSessionId).catch(() => undefined);
+  };
+
   /** Load every visible workspace session into the store, once. */
   const ensureLoaded = (auth: AssistantServerAuth) => {
     loaded ??= (async () => {
       const reverse = new Map(
         Object.entries(state.aliases).map(([alias, id]) => [id, alias]),
       );
+      // Chats deleted before deletion was real were only hidden: delete
+      // them now. One that still refuses stays hidden and is tried again.
+      // `purgeChat` replaces `state.hidden`, so this walks the old list.
+      for (const workspaceSessionId of state.hidden) {
+        if (state.linked[workspaceSessionId]) continue;
+        await purgeChat(auth, workspaceSessionId).catch(() => undefined);
+      }
       const hidden = new Set(state.hidden);
       const summaries = await operations.listSessions(auth, projectId);
       const sessions: BrowserGatewayAskAgentPersistedSession[] = [];
@@ -2297,12 +2341,17 @@ export async function createAskAgentBridge(
         ) {
           throw new HttpError(409, "ask_agent_turn_in_progress");
         }
-        // Workspace sessions are durable; deleting hides it from the UI.
         const workspaceSessionId = workspaceSessionFor(sessionId);
-        if (workspaceSessionId && !state.hidden.includes(workspaceSessionId)) {
-          state.hidden.push(workspaceSessionId);
-          await saveState();
+        // A task's chat goes with its task (Tasks → Delete).
+        if (workspaceSessionId && state.linked[workspaceSessionId]) {
+          throw new HttpError(409, "ask_agent_task_chat");
         }
+        if (workspaceSessionId) {
+          // Deleted for good: the host's records and the event log.
+          await purgeChat(auth, workspaceSessionId);
+        }
+        pendingApprovalModes.delete(sessionId);
+        detachMirror(sessionId);
         store.deleteSession(sessionId, now());
         const publication = await publishNow();
         sendJson(response, 200, { ok: true, snapshot: publication.snapshot });

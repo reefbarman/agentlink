@@ -12,6 +12,7 @@ import {
   type AssistantServerAuth,
 } from "./assistantServer.js";
 import { commandHostOptions } from "./assistantService.js";
+import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
 import { startCommandWorker } from "./commandWorker.js";
 import {
@@ -91,10 +92,17 @@ async function startHarness(
     inheritSessionGrants?: boolean;
     /** New turns on hold, as while the server drains. */
     turnsPaused?: (projectId: string) => boolean;
+    /** Keep session events in files under `<parent>/events`. */
+    eventLog?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
   cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
+  const eventLog = options.eventLog
+    ? await openFileSessionEventLog({ directory: path.join(parent, "events") })
+    : undefined;
+  // Closed after the server (cleanup runs in reverse).
+  if (eventLog) cleanup.push(() => eventLog.close());
   const projectRoot = path.join(parent, "project");
   await fs.mkdir(projectRoot);
   const approvalModesFile = path.join(
@@ -234,6 +242,7 @@ async function startHarness(
     streamStallTimeoutMs: options.streamStallTimeoutMs,
     approvalModes,
     ...(options.turnsPaused ? { turnsPaused: options.turnsPaused } : {}),
+    ...(eventLog ? { eventLog } : {}),
   });
   agentNotifier = routes;
   const server = await createAssistantServer({
@@ -296,6 +305,7 @@ async function startHarness(
   );
 
   return {
+    parent,
     host,
     routes,
     server,
@@ -2093,4 +2103,120 @@ describe("assistant workspace routes", () => {
       expect(sessionEvents(stalled.events).length).toBeLessThan(count);
     },
   );
+});
+
+/** Files under `root` (outside the project folder) that contain `needle`. */
+async function filesContaining(
+  root: string,
+  needle: string,
+): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (directory: string) => {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (full !== path.join(root, "project")) await walk(full);
+      } else if (entry.isFile() && (await fs.readFile(full)).includes(needle)) {
+        found.push(path.relative(root, full));
+      }
+    }
+  };
+  await walk(root);
+  return found;
+}
+
+describe("deleting a chat", () => {
+  it("removes it from every file on disk", async () => {
+    const harness = await startHarness({ eventLog: true, approvalModes: true });
+    const { owner, request } = harness;
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    harness.fetch.mockResolvedValueOnce(completion("noted marker-reply-5150"));
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "please keep marker-4417 in mind" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+    await request({
+      method: "POST",
+      path: `${base}/approval-mode`,
+      session: owner,
+      body: { mode: "ask" },
+    });
+    // Written to the session store and the event log.
+    const written = [
+      ...(await filesContaining(harness.parent, "marker-4417")),
+      ...(await filesContaining(harness.parent, "marker-reply-5150")),
+    ];
+    expect(written).toContainEqual(expect.stringMatching(/^workspace-data\//u));
+    expect(written).toContainEqual(expect.stringMatching(/^events\//u));
+    expect(await filesContaining(harness.parent, sessionId)).toContainEqual(
+      expect.stringContaining("approval-modes.json"),
+    );
+
+    await expect(
+      request({ method: "DELETE", path: base, session: owner }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    await expect(
+      filesContaining(harness.parent, "marker-4417"),
+    ).resolves.toEqual([]);
+    await expect(
+      filesContaining(harness.parent, "marker-reply-5150"),
+    ).resolves.toEqual([]);
+    // Its ID may remain only as the store's fencing counter, never as text.
+    await expect(filesContaining(harness.parent, sessionId)).resolves.toEqual([
+      expect.stringMatching(/sessions\/agent-state\.json$/u),
+    ]);
+    await expect(
+      request({ path: base, session: owner }),
+    ).resolves.toMatchObject({ status: 404 });
+    // Deleted again: already gone.
+    await expect(
+      request({ method: "DELETE", path: base, session: owner }),
+    ).resolves.toMatchObject({ status: 404 });
+  });
+
+  it("refuses while a turn runs or an approval waits", async () => {
+    const harness = await startHarness();
+    const { owner, request } = harness;
+    const waiting = await suspendForApproval(harness);
+    await expect(
+      request({ method: "DELETE", path: waiting.base, session: owner }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "session_waiting" },
+    });
+
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    harness.fetch.mockImplementationOnce(
+      (_input: unknown, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    );
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "long task" },
+    });
+    await expect(
+      request({ method: "DELETE", path: base, session: owner }),
+    ).resolves.toMatchObject({ status: 409, body: { error: "session_busy" } });
+    await request({ method: "POST", path: `${base}/cancel`, session: owner });
+    await harness.routes.whenIdle("home", sessionId);
+    // Both chats are still there.
+    await expect(
+      request({ path: base, session: owner }),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      request({ path: waiting.base, session: owner }),
+    ).resolves.toMatchObject({ status: 200 });
+  });
 });

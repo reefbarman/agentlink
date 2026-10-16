@@ -72,6 +72,84 @@ export function patchFromForm(
   };
 }
 
+export interface StorageReport {
+  areas: Array<{
+    id: string;
+    label: string;
+    bytes: number;
+    files: number;
+    partial?: boolean;
+  }>;
+  retention: Array<{ label: string; text: string }>;
+  measuredAt: number;
+}
+
+/** Bytes as people read them: 0 B, 12 KB, 3.4 MB, 1.2 GB. */
+export function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const shown =
+    unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1);
+  return `${shown} ${units[unit]}`;
+}
+
+/** How much each area uses, and how long each kind of record is kept. */
+export function StorageSection() {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    requestJson<StorageReport>("/api/settings/storage").then(
+      (body) => {
+        if (!cancelled) setReport(body);
+      },
+      (caught: unknown) => {
+        if (!cancelled) setError(errorText(caught));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <section class="assistant-storage" aria-label="Storage">
+      <h3>Storage</h3>
+      {!report && !error && <p class="assistant-panel-empty">Measuring…</p>}
+      {error && (
+        <div class="assistant-project-error" role="alert">
+          <p>{error}</p>
+        </div>
+      )}
+      {report && (
+        <>
+          <ul>
+            {report.areas.map((area) => (
+              <li key={area.id}>
+                <strong>{area.label}:</strong> {area.partial ? "at least " : ""}
+                {formatBytes(area.bytes)}, {area.files}{" "}
+                {area.files === 1 ? "file" : "files"}
+              </li>
+            ))}
+          </ul>
+          <h4>How long things are kept</h4>
+          <ul>
+            {report.retention.map((entry) => (
+              <li key={entry.label}>
+                <strong>{entry.label}:</strong> {entry.text}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 /** This device's IANA time zone, if the browser says. */
 export function deviceTimeZone(): string | undefined {
   try {
@@ -297,6 +375,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <p>{error}</p>
         </div>
       )}
+      <StorageSection />
     </Dialog>
   );
 }

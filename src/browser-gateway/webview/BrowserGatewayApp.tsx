@@ -210,6 +210,20 @@ const AUTO_CONTINUE_MAX_TURNS = 10;
 const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
 /** How often the Assistant refreshes chat and project status. */
 const ASSISTANT_STATUS_REFRESH_MS = 5_000;
+/** Why the Assistant kept a chat it was asked to delete, in plain words. */
+const DELETE_SESSION_ERRORS: Readonly<Record<string, string>> = {
+  ask_agent_turn_in_progress:
+    "This chat is still working. Stop it first, then delete it.",
+  session_busy: "This chat is still working. Stop it first, then delete it.",
+  session_waiting:
+    "This chat is waiting for your approval. Answer it first, then delete the chat.",
+  session_agent_running:
+    "A background agent in this chat is still running. Stop it first, then delete the chat.",
+  session_command_running:
+    "A command in this chat is still running. Stop it first, then delete the chat.",
+  ask_agent_task_chat:
+    "This chat belongs to a coding task. Delete the task in Tasks to delete its chat.",
+};
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
 const SELECTION_CACHE_KEY = "agentlink.browserGateway.selection.v1";
@@ -6146,10 +6160,13 @@ export function BrowserGatewayApp({
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         message?: string;
+        error?: string;
       };
       if (!response.ok || body.ok === false) {
         setSessionHistoryError(
-          body.message ?? `Failed to delete session (${response.status}).`,
+          body.message ??
+            (body.error ? DELETE_SESSION_ERRORS[body.error] : undefined) ??
+            `Failed to delete session (${response.status}).`,
         );
         return;
       }

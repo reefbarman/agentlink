@@ -80,6 +80,15 @@ export interface InboxStore {
   markRunRead(runId: string, kind: InboxEntryKind): Promise<number>;
   /** Mark a task's unread entries read (it is working again). */
   markTaskRead(taskId: string): Promise<number>;
+  /**
+   * Delete the entries about a deleted chat or task, read or not, from the
+   * file. Resolves to how many.
+   */
+  remove(about: {
+    readonly projectId?: string;
+    readonly sessionId?: string;
+    readonly taskId?: string;
+  }): Promise<number>;
   flush(): Promise<void>;
 }
 
@@ -457,6 +466,19 @@ export async function openInboxStore(options: {
     },
     markTaskRead(taskId) {
       return markWhere((entry) => entry.taskId === taskId);
+    },
+    async remove(about) {
+      const matches = (entry: InboxEntry) =>
+        (about.taskId !== undefined && entry.taskId === about.taskId) ||
+        (about.sessionId !== undefined &&
+          entry.sessionId === about.sessionId &&
+          (about.projectId === undefined ||
+            entry.projectId === about.projectId));
+      const before = entries.length;
+      entries = entries.filter((entry) => !matches(entry));
+      const removed = before - entries.length;
+      if (removed > 0) await persist();
+      return removed;
     },
     async flush() {
       await writes;

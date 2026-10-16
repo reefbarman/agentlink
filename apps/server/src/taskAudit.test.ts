@@ -7,6 +7,7 @@ import {
   AUDIT_HEAD_FILE,
   AUDIT_LOG_FILE,
   auditEntryHash,
+  auditTextDigest,
   auditedTaskStore,
   openTaskAudit,
   taskAuditRecords,
@@ -76,9 +77,10 @@ describe("taskAuditRecords", () => {
     expect(records.map((record) => record.kind)).toEqual(["created", "state"]);
     expect(records[0]!.data).toMatchObject({
       repository: "https://github.com/acme/demo",
-      objective: "Fix the bug",
+      objective: auditTextDigest("Fix the bug"),
       origin: { projectId: "p", sessionId: "chat-1" },
     });
+    expect(JSON.stringify(records)).not.toContain("Fix the bug");
   });
 
   it("records the task chat and where it runs", () => {
@@ -135,7 +137,13 @@ describe("taskAuditRecords", () => {
     expect(records[1]!.data).toMatchObject({
       kind: "review",
       verdict: "changes_requested",
-      findings: [{ severity: "blocking", file: "a.ts", reason: "Off by one" }],
+      findings: [
+        {
+          severity: "blocking",
+          file: "a.ts",
+          reason: auditTextDigest("Off by one"),
+        },
+      ],
     });
     expect(JSON.stringify(taskAuditRecords(undefined, before))).not.toContain(
       "secret-looking output",
@@ -163,7 +171,10 @@ describe("taskAuditRecords", () => {
       task({ followUps: [followUp(2), followUp(3)], origin }),
     );
     expect(records).toEqual([
-      { kind: "follow_up", data: { instructions: "step 3", origin } },
+      {
+        kind: "follow_up",
+        data: { instructions: auditTextDigest("step 3"), origin },
+      },
     ]);
   });
 });
@@ -206,7 +217,7 @@ describe("openTaskAudit", () => {
     expect(head.seq).toBe(8);
   });
 
-  it("shortens long request text", async () => {
+  it("records request text only as its digest", async () => {
     const dir = await tempDir();
     const audit = await openTaskAudit({ directory: dir });
     await audit.request(
@@ -214,10 +225,14 @@ describe("openTaskAudit", () => {
       "message",
       { kind: "task_chat", sessionId: "s" },
       1,
-      { text: "x".repeat(10_000) },
+      { text: "please use the marker-7731 branch" },
     );
-    const text = audit.entries(ID)[0]!.data.text as string;
-    expect(text.length).toBeLessThan(4_100);
+    expect(audit.entries(ID)[0]!.data.text).toBe(
+      auditTextDigest("please use the marker-7731 branch"),
+    );
+    expect(
+      await fs.readFile(path.join(dir, AUDIT_LOG_FILE), "utf8"),
+    ).not.toContain("marker-7731");
   });
 
   it("detects a changed line", async () => {
@@ -405,7 +420,10 @@ describe("auditedTaskStore", () => {
     expect(await store.delete(ID)).toBe(true);
     expect(store.get(ID)).toBeUndefined();
     expect(audit.entries(ID).map((entry) => [entry.kind, entry.data])).toEqual([
-      ["created", expect.objectContaining({ objective: "Fix the bug" })],
+      [
+        "created",
+        expect.objectContaining({ objective: auditTextDigest("Fix the bug") }),
+      ],
       ["state", { state: "queued" }],
       ["state", { state: "implementing" }],
       ["session", { sessionId: "impl-1", runsIn: "runner" }],

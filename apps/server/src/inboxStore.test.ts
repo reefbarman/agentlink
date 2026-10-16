@@ -267,6 +267,38 @@ describe("openInboxStore", () => {
     expect(await store.add(ready, 4)).toBeDefined();
   });
 
+  it("removes a deleted chat's or task's entries from the file", async () => {
+    const directory = await tempDir();
+    const store = await openInboxStore({ directory });
+    await store.add(
+      inboxEntryForInterruptedChat({ projectId: "home", sessionId: "gone" }),
+      1,
+    );
+    await store.add(
+      inboxEntryForInterruptedChat({ projectId: "home", sessionId: "kept" }),
+      2,
+    );
+    await store.add(
+      inboxEntryForInterruptedChat({ projectId: "work", sessionId: "gone" }),
+      3,
+    );
+    await store.add(inboxEntryForTask(task({ state: "ready" }))!, 4);
+    await store.markRead("all");
+    expect(await store.remove({ projectId: "home", sessionId: "gone" })).toBe(
+      1,
+    );
+    expect(await store.remove({ taskId: "aaaaaaaaaaaa" })).toBe(1);
+    expect(await store.remove({ taskId: "aaaaaaaaaaaa" })).toBe(0);
+    expect(
+      store.list().map((entry) => [entry.projectId, entry.sessionId]),
+    ).toEqual([
+      ["work", "gone"],
+      ["home", "kept"],
+    ]);
+    const reopened = await openInboxStore({ directory });
+    expect(reopened.list()).toHaveLength(2);
+  });
+
   it("adds, de-duplicates, marks read and persists", async () => {
     const directory = await tempDir();
     const store = await openInboxStore({ directory });

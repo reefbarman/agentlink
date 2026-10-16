@@ -170,6 +170,11 @@ function createFakeOperations(events: SessionEventHub) {
       },
     ),
     cancel: vi.fn(async () => undefined),
+    deleteSession: vi.fn(async (_auth, _projectId, sessionId: string) => {
+      if (!sessions.delete(sessionId)) {
+        throw new HttpError(404, "session_not_found");
+      }
+    }),
     listAgents: vi.fn(
       async (_auth, _projectId, sessionId: string) =>
         agents.get(sessionId) ?? [],
@@ -257,6 +262,9 @@ async function startBridge(
       typeof createAskAgentBridge
     >[0]["linkedMessage"];
     readonly stopRun?: Parameters<typeof createAskAgentBridge>[0]["stopRun"];
+    readonly chatDeleted?: Parameters<
+      typeof createAskAgentBridge
+    >[0]["chatDeleted"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -289,6 +297,7 @@ async function startBridge(
     ...(options.chatTasks ? { chatTasks: options.chatTasks } : {}),
     ...(options.linkedMessage ? { linkedMessage: options.linkedMessage } : {}),
     ...(options.stopRun ? { stopRun: options.stopRun } : {}),
+    ...(options.chatDeleted ? { chatDeleted: options.chatDeleted } : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -1735,9 +1744,53 @@ describe("Ask Agent bridge", () => {
       title: "Renamed",
     });
     await call("/api/ask-agent/session/delete", { sessionId: session!.id });
+    // Deleted for good, and nothing about it stays in the bridge's file.
+    expect(fake.operations.deleteSession).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+    );
+    expect(fake.sessions.has("ws-1")).toBe(false);
     const saved = JSON.parse(await fs.readFile(file, "utf8"));
-    expect(saved.titles).toEqual({ "ws-1": "Renamed" });
-    expect(saved.hidden).toEqual(["ws-1"]);
+    expect(saved.titles).toEqual({});
+    expect(saved.hidden).toEqual([]);
+    expect(JSON.stringify(saved)).not.toContain("ws-1");
+  });
+
+  it("keeps a chat whose deletion is refused, and reports deletions", async () => {
+    const chatDeleted = vi.fn(async () => undefined);
+    const { fake, call } = await startBridge(undefined, { chatDeleted });
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, { type: "turn.completed", result: { text: "ok" } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    await call("/api/ask-agent/send", { text: "first" });
+    const [session] = (await call("/api/ask-agent/sessions")).body
+      .sessions as Array<{ id: string }>;
+    fake.operations.deleteSession.mockRejectedValueOnce(
+      new HttpError(409, "session_agent_running"),
+    );
+    await expect(
+      call("/api/ask-agent/session/delete", { sessionId: session!.id }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "session_agent_running" },
+    });
+    expect(fake.sessions.has("ws-1")).toBe(true);
+    expect(chatDeleted).not.toHaveBeenCalled();
+    const listed = (await call("/api/ask-agent/sessions")).body
+      .sessions as Array<{ id: string }>;
+    expect(listed).toHaveLength(1);
+
+    await expect(
+      call("/api/ask-agent/session/delete", { sessionId: session!.id }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(chatDeleted).toHaveBeenCalledWith("ws-1");
   });
 
   it("offers each model's thinking levels and applies the chosen one", async () => {
@@ -1789,7 +1842,7 @@ describe("Ask Agent bridge", () => {
     expect(fake.sessions.get("ws-1")?.reasoningEffort).toBe("low");
   });
 
-  it("restores durable sessions on first use and skips hidden ones", async () => {
+  it("restores durable sessions on first use and deletes hidden ones", async () => {
     const first = await startBridge();
     first.fake.sessions.set("ws-old", {
       model: REVIEW,
@@ -1824,6 +1877,10 @@ describe("Ask Agent bridge", () => {
     }>;
     expect(sessions.map((session) => session.title)).toContain("remember me");
     expect(sessions.map((session) => session.title)).not.toContain("secret");
+    // Hidden by an older server's delete: now deleted for good.
+    expect(second.fake.sessions.has("ws-hidden")).toBe(false);
+    const saved = JSON.parse(await fs.readFile(first.file, "utf8"));
+    expect(saved.hidden).toEqual([]);
     const loaded = await second.call("/api/ask-agent/session/load", {
       sessionId: "ws-old",
     });

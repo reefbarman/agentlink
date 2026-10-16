@@ -11,8 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SettingsPanel,
   formFromSettings,
+  formatBytes,
   patchFromForm,
   type PersonaSettings,
+  type StorageReport,
 } from "./AssistantSettings";
 
 afterEach(() => {
@@ -29,11 +31,29 @@ const SETTINGS: PersonaSettings = {
   updatedAt: 5,
 };
 
+const STORAGE: StorageReport = {
+  areas: [
+    { id: "chats", label: "Chats", bytes: 2_500_000, files: 12 },
+    {
+      id: "projects",
+      label: "Project folders",
+      bytes: 10,
+      files: 1,
+      partial: true,
+    },
+  ],
+  retention: [{ label: "Backups", text: "Up to about 8 weeks." }],
+  measuredAt: 1,
+};
+
 function stubFetch(patch: { status: number; body: unknown }) {
   const sent: unknown[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, init?: RequestInit) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/settings/storage")) {
+        return new Response(JSON.stringify(STORAGE), { status: 200 });
+      }
       if ((init?.method ?? "GET") === "GET") {
         return new Response(
           JSON.stringify({ settings: SETTINGS, defaultPersona: "Default." }),
@@ -68,6 +88,20 @@ describe("settings form", () => {
 });
 
 describe("SettingsPanel", () => {
+  it("shows storage per area and how long things are kept", async () => {
+    stubFetch({ status: 200, body: {} });
+    render(<SettingsPanel onClose={() => undefined} />);
+    const chats = await screen.findByText("Chats:");
+    expect(chats.parentElement?.textContent).toBe("Chats: 2.4 MB, 12 files");
+    expect(
+      screen.getByText("Project folders:").parentElement?.textContent,
+    ).toBe("Project folders: at least 10 B, 1 file");
+    expect(screen.getByText("Up to about 8 weeks.")).toBeTruthy();
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(15 * 1024)).toBe("15 KB");
+    expect(formatBytes(3 * 1024 ** 3)).toBe("3.0 GB");
+  });
+
   it("saves the edited settings", async () => {
     const sent = stubFetch({
       status: 200,

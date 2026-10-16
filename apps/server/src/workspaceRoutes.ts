@@ -83,6 +83,12 @@ export type AssistantWorkspaceHost = Pick<
   ):
     | ReturnType<WorkspaceHost["listBackgroundAgents"]>
     | Promise<ReturnType<WorkspaceHost["listBackgroundAgents"]>>;
+  /**
+   * Delete a session and everything the host keeps for it (background
+   * children, commands, interactions). Absent on hosts whose sessions go
+   * with their project (a task's runner).
+   */
+  deleteSession?(sessionId: string): Promise<void>;
 };
 
 export interface AssistantProjectMount {
@@ -237,6 +243,16 @@ export interface AssistantSessionOperations {
     interjection: { readonly id: string; readonly text: string },
   ): Promise<{ readonly queued: boolean }>;
   cancel(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void>;
+  /**
+   * Delete an idle session for good: the host's records and its event log.
+   * Refused (`409`) while a turn runs, an approval waits, or a background
+   * child or command is still running.
+   */
+  deleteSession(
     auth: AssistantServerAuth,
     projectId: string,
     sessionId: string,
@@ -818,6 +834,29 @@ export function createAssistantWorkspaceRoutes(
         await mount.host.cancel(sessionId, "cancelled_by_owner");
       }
     },
+    async deleteSession(auth, projectId, sessionId) {
+      assertSessionId(sessionId);
+      const mount = await authorize(auth, projectId, "write");
+      const key = sessionKey(projectId, sessionId);
+      assertStartable(key);
+      const { pendingInteraction } = await readSnapshot(mount, sessionId);
+      if (pendingInteraction) throw new HttpError(409, "session_waiting");
+      if (!mount.host.deleteSession) {
+        throw new HttpError(409, "session_not_deletable");
+      }
+      await assertStillAuthorized(auth);
+      assertStartable(key);
+      try {
+        await mount.host.deleteSession(sessionId);
+      } catch (error) {
+        throw mapDeleteError(error);
+      }
+      hub.forget(key);
+      // Only `ask` sessions are listed; a deleted one leaves the file.
+      await options.approvalModes
+        ?.set(projectId, sessionId, "autonomous")
+        .catch(() => undefined);
+    },
     async listAgents(auth, projectId, sessionId) {
       assertSessionId(sessionId);
       const mount = await authorize(auth, projectId, "read");
@@ -1040,6 +1079,12 @@ export function createAssistantWorkspaceRoutes(
       throw new HttpError(404, "session_not_found");
     }
     const key = sessionKey(projectId, sessionId);
+
+    if (operation === undefined && method === "DELETE") {
+      await operations.deleteSession(auth, projectId, sessionId);
+      sendJson(response, 200, { ok: true });
+      return true;
+    }
 
     if (operation === undefined) {
       if (method !== "GET") throw new HttpError(405, "method_not_allowed");
@@ -1530,6 +1575,18 @@ function mapSessionUpdateError(error: unknown): unknown {
     return new HttpError(409, "session_busy");
   }
   return error;
+}
+
+/** Map a host failure while deleting a session. */
+function mapDeleteError(error: unknown): unknown {
+  const code = error instanceof Error ? error.message : undefined;
+  if (code === "background_child_running") {
+    return new HttpError(409, "session_agent_running");
+  }
+  if (code === "command_running") {
+    return new HttpError(409, "session_command_running");
+  }
+  return mapSessionUpdateError(error);
 }
 
 /** Public error code only; never a message that could carry private detail. */

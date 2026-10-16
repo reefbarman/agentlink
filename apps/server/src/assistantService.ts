@@ -88,6 +88,8 @@ import {
   personaInstructions,
 } from "./persona.js";
 import { createPersonaRoutes } from "./personaRoutes.js";
+import { createStorageRoutes, measureStorage } from "./storageRoutes.js";
+import { removeTaskData } from "./taskDataDeletion.js";
 import { openAssistantMemory } from "./assistantMemory.js";
 import { createMemoryRoutes } from "./memoryRoutes.js";
 import { createPersonaTools } from "./personaTools.js";
@@ -1443,6 +1445,10 @@ export async function startAssistantService(
           chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
         chatMemories: (workspaceSessionId) =>
           memory.rememberedIn(projectId, workspaceSessionId),
+        chatDeleted: async (workspaceSessionId) => {
+          await inbox.remove({ projectId, sessionId: workspaceSessionId });
+          assistantChanged();
+        },
         // Written in a task's own chat: its runner reads it in its next
         // step, or continues the task with it once it has stopped.
         linkedMessage: async (workspaceSessionId, text) => {
@@ -2033,9 +2039,25 @@ export async function startAssistantService(
             runner: {
               ...runner,
               async delete(taskId: string) {
-                const sessionId = taskStore.get(taskId)?.sessionId;
+                const deleting = taskStore.get(taskId);
+                const sessionId = deleting?.sessionId;
                 await taskEditors?.stop(taskId);
                 await runner.delete(taskId);
+                // Its chats, their events and its Inbox entries go too.
+                if (deleting) {
+                  await removeTaskData({
+                    dataRoot: config.dataRoot,
+                    task: deleting,
+                    events: routes.events,
+                    sessionKey: routes.operations.sessionKey,
+                    inbox,
+                  }).catch((error: unknown) => {
+                    log(
+                      `Could not remove task ${taskId}'s chats: ${message(error)}`,
+                    );
+                  });
+                  assistantChanged();
+                }
                 taskDeliveries.forget(taskId);
                 taskChatActivity.delete(taskId);
                 const shown = workShownIn.get(taskId);
@@ -2138,6 +2160,18 @@ export async function startAssistantService(
         assistantChanged();
       },
     });
+    const storageRoutes = createStorageRoutes({
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      measure: () =>
+        measureStorage({
+          dataRoot: config.dataRoot,
+          projectRoots: config.projectsRoot
+            ? [config.projectsRoot]
+            : config.projects.map((project) => project.root),
+        }),
+    });
     const memoryRoutes = createMemoryRoutes({
       memory,
       isOwner: (auth) =>
@@ -2219,6 +2253,7 @@ export async function startAssistantService(
         (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await personaRoutes.handleRequest(request, response, auth)) ||
+        (await storageRoutes.handleRequest(request, response, auth)) ||
         (await memoryRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||

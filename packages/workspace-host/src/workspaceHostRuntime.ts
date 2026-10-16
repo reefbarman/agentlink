@@ -97,6 +97,21 @@ import {
 } from "./promptProfile.js";
 import type { WorkspaceExecutionBackend } from "./workspaceExecutionBackend.js";
 
+/** Background lifecycles that keep their parent session from being deleted. */
+const ACTIVE_BACKGROUND: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "awaiting_approval",
+]);
+
+function isSessionNotFound(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "session_not_found"
+  );
+}
+
 /** What a host's `instructions` function knows about the turn. */
 export interface WorkspaceHostInstructionsRequest {
   readonly sessionId: string;
@@ -1381,9 +1396,41 @@ export async function createWorkspaceHost(
     },
     async deleteSession(sessionId) {
       assertForegroundSession(sessionId);
+      // Checked before anything changes: a running child or command keeps
+      // the whole session. A running turn is refused by the engine itself.
+      const children = backgroundSupervisor?.list(sessionId) ?? [];
+      if (children.some((child) => ACTIVE_BACKGROUND.has(child.lifecycle))) {
+        throw new Error("background_child_running");
+      }
+      const sessionIds = [
+        sessionId,
+        ...children.map((child) => child.childSessionId),
+      ];
+      if (
+        supervisor &&
+        sessionIds.some((id) =>
+          supervisor
+            .list({ ownerId: commandOwnerId, sessionId: id })
+            .some((record) => record.state === "running"),
+        )
+      ) {
+        throw new Error("command_running");
+      }
       await engine.sessions.delete({ principal, sessionId });
       disposeResponsesConversationState(sessionId);
       await sharedMcpTools?.closeSession(sessionId);
+      // Its background children: their records, then their sessions.
+      for (const childSessionId of (await backgroundSupervisor?.forgetParent(
+        sessionId,
+      )) ?? []) {
+        await engine.sessions
+          .delete({ principal, sessionId: childSessionId })
+          .catch((error: unknown) => {
+            if (!isSessionNotFound(error)) throw error;
+          });
+        disposeResponsesConversationState(childSessionId);
+      }
+      await supervisor?.forgetSessions(sessionIds);
     },
     async recoverInterrupted(sessionId) {
       assertForegroundSession(sessionId);

@@ -576,6 +576,27 @@ export class WorkspaceBackgroundSupervisor {
     return cloneRecord(this.requireOwned(request));
   }
 
+  /**
+   * Forget every child of a foreground session that is being deleted: their
+   * records and queued steering leave memory and the state file. Refused
+   * while any of them is still running. Returns the children's session IDs,
+   * which the caller deletes from the session store.
+   */
+  async forgetParent(parentSessionId: string): Promise<readonly string[]> {
+    const children = [...this.records.values()].filter(
+      (record) => record.parentSessionId === parentSessionId,
+    );
+    if (children.some(isActive)) throw new Error("background_child_running");
+    for (const child of children) {
+      this.records.delete(child.childSessionId);
+      this.steering.delete(child.childSessionId);
+      this.live.delete(child.childSessionId);
+      this.notifyWaiters(child.childSessionId);
+    }
+    if (children.length > 0) await this.persist();
+    return children.map((child) => child.childSessionId);
+  }
+
   assertWriteAllowed(sessionId: string, relativePath: string): boolean {
     const child = this.records.get(sessionId);
     if (child) {

@@ -50,6 +50,27 @@ async function logFile(dir: string) {
 }
 
 describe("file session event log", () => {
+  it("forgets a deleted session's events but never reuses its numbers", async () => {
+    const dir = await directory();
+    const first = await open(dir);
+    first.hub.publish(KEY, started("t1"));
+    first.hub.publish(KEY, finished("t1"));
+    const file = await logFile(dir);
+    first.hub.forget(KEY);
+    await expect(fs.stat(file)).rejects.toThrow();
+    expect(first.hub.read(KEY, 2)).toEqual({ reset: false, events: [] });
+    // A cursor from before the delete resets rather than replaying.
+    expect(first.hub.read(KEY, 1)).toEqual({ reset: true, sequence: 2 });
+    expect(first.hub.knownKeys()).toContain(KEY);
+    await first.log.close();
+
+    const second = await open(dir);
+    expect(second.hub.latestSequence(KEY)).toBe(2);
+    expect(second.hub.read(KEY, 2)).toEqual({ reset: false, events: [] });
+    expect(second.hub.publish(KEY, started("t2"))?.sequence).toBe(3);
+    await second.log.close();
+  });
+
   it("keeps the epoch and replays events across a clean restart", async () => {
     const dir = await directory();
     const first = await open(dir);

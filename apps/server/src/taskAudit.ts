@@ -30,12 +30,16 @@ import { writeFileAtomic } from "./atomicFile.js";
  * Only the server writes here. Commands run in the command worker or a
  * session runner, neither of which can reach the data root; deleting a
  * task keeps its audit entries.
+ *
+ * Free text (a task's objective, follow-up instructions, messages, error
+ * details, review reasons) is recorded only as `sha256:<hex>`, so deleting
+ * a chat or task leaves none of its words here and the chain stays whole.
+ * Entries written before this kept the text, truncated.
  */
 
 export const AUDIT_LOG_FILE = "tasks.jsonl";
 export const AUDIT_HEAD_FILE = "head.json";
 const GENESIS = "0".repeat(64);
-const MAX_TEXT = 4_000;
 
 export type TaskAuditKind =
   | "created"
@@ -165,8 +169,15 @@ export function auditEntryHash(entry: Omit<TaskAuditEntry, "hash">): string {
     .digest("hex");
 }
 
-const text = (value: string) =>
-  value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…` : value;
+/**
+ * Free text as recorded: its SHA-256, which proves what was said to anyone
+ * holding the text without keeping the text.
+ */
+export function auditTextDigest(value: string): string {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+const text = auditTextDigest;
 
 /** The evidence as recorded: results, not command output. */
 function evidenceRecord(evidence: TaskEvidence): Record<string, unknown> {

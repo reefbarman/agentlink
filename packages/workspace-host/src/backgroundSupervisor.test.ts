@@ -124,6 +124,53 @@ function spawnRequest(pathValue: string) {
 }
 
 describe("WorkspaceBackgroundSupervisor", () => {
+  it("forgets a deleted parent's ended children, not running ones", async () => {
+    let finish!: () => void;
+    const released = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const test = await fixture({
+      runTurn: async (sessionId, message) => {
+        await released;
+        return completed(sessionId, message);
+      },
+    });
+    try {
+      const child = await test.supervisor.spawn({
+        ...spawnRequest("src/a.ts"),
+        task: "Look into marker-3307",
+        message: "slow marker-3307",
+      });
+      await expect(test.supervisor.forgetParent("parent-a")).rejects.toThrow(
+        "background_child_running",
+      );
+      finish();
+      await expect(
+        test.supervisor.wait({
+          callerSessionId: "parent-a",
+          childSessionId: child.childSessionId,
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toMatchObject({ status: "completed" });
+      await expect(test.supervisor.forgetParent("other")).resolves.toEqual([]);
+      await expect(test.supervisor.forgetParent("parent-a")).resolves.toEqual([
+        child.childSessionId,
+      ]);
+      expect(test.supervisor.list("parent-a")).toEqual([]);
+      expect(
+        test.supervisor.getRecordForSession(child.childSessionId),
+      ).toBeUndefined();
+      const state = await fs.readFile(
+        path.join(test.stateDirectory, "background-agents.json"),
+        "utf8",
+      );
+      expect(state).not.toContain("marker-3307");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.root, { recursive: true, force: true });
+    }
+  });
+
   it("reports lifecycle, phase, and tool changes once each without output deltas", async () => {
     const changes: WorkspaceBackgroundChange[] = [];
     const test = await fixture({

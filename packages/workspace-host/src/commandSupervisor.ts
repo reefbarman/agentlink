@@ -268,6 +268,26 @@ export class WorkspaceCommandSupervisor {
       : structuredClone(this.requireRecord(commandId));
   }
 
+  /**
+   * Forget the commands of sessions being deleted: their records and
+   * retained output leave memory and the state file. Refused while one of
+   * them is still running.
+   */
+  async forgetSessions(sessionIds: readonly string[]): Promise<void> {
+    const sessions = new Set(sessionIds);
+    const commands = [...this.records.values()].filter((record) =>
+      sessions.has(record.sessionId),
+    );
+    if (commands.some((record) => this.live.has(record.commandId))) {
+      throw new Error("command_running");
+    }
+    for (const record of commands) {
+      this.records.delete(record.commandId);
+      this.output.delete(record.commandId);
+    }
+    if (commands.length > 0) await this.persist();
+  }
+
   async close(): Promise<void> {
     if (this.closed && this.live.size === 0) return;
     this.closed = true;
