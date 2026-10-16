@@ -1,0 +1,30 @@
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 373-376
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 306-311
+CHANGELOG.md
+  h_e08a86bb3a33a2 31
+resources/builtin-skills/documentation/references/release-notes.md
+  s_c55995d013b59e::t_cda3806c2b1fef 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "11b37d9283ba335f56a1703f3a4afeb96c8895cb",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c55995d013b59e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2667cea-ee3a-489a-87fb-6157bc6bd59c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
