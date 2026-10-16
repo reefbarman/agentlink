@@ -1,0 +1,79 @@
+apps/server/src/taskAudit.ts
+  h_e08a86bb3a33a2 17-20,132-133,436-443,468-469,522,587-589
+  s_0235ff5d12c466::t_67b95542ab1c4e 590
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 44-45,566-591
+  s_0235ff5d12c466::t_cbb1262ccaaea7 43,592-594
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 5,10,12-16,99-100,167-171,285-286,302-307,328-333,376,753-785,789-792,796,798,805,810-842,846-858,862-864,866
+  s_0235ff5d12c466::t_51c0c9f4a876b2 11,786-788,843-845
+apps/server/src/auditCheckpoint.test.ts
+  h_e08a86bb3a33a2 1-456
+apps/server/src/backupClient.ts
+  h_e08a86bb3a33a2 1-2,9,29-34,51,58-61,111-123
+  s_0235ff5d12c466::t_82bba1194ab096 57
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 107,166
+  s_0235ff5d12c466::t_828a7543744fc2 106
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 167
+src/browser-gateway/webview/AssistantBackups.tsx
+  h_e08a86bb3a33a2 7-8,24-31,37-65,161-165,194-204
+  s_0235ff5d12c466::t_39b77dbd7c5286 205
+apps/server/src/backupRoutes.test.ts
+  h_e08a86bb3a33a2 5,35-36,41,105-106,148-167
+  s_0235ff5d12c466::t_a3a88af26524be 34,37,168-170
+src/browser-gateway/webview/AssistantBackups.test.tsx
+  h_e08a86bb3a33a2 14,118-156
+  s_1046b10737354e::t_0a813045cefffc 157-159
+apps/server/src/auditCheckpoint.ts
+  h_e08a86bb3a33a2 1-528
+apps/server/src/taskRoutes.ts
+  h_e08a86bb3a33a2 4,36-38,67-68,235,239
+apps/server/README.md
+  h_e08a86bb3a33a2 553,557-564
+CHANGELOG.md
+  h_e08a86bb3a33a2 28
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 77,141,144-149,252-256,800-801,806-809,1442-1473,1890,1945,1991
+  s_0235ff5d12c466::t_00eff2b78b0798 257-258
+apps/server/src/backupRoutes.ts
+  h_e08a86bb3a33a2 4,16-17,28-29,57-58,64,70
+apps/server/src/backup.ts
+  h_e08a86bb3a33a2 7-15,372-466
+  s_0235ff5d12c466::t_64dd936801c947 467-468
+apps/server/src/backupAgent.ts
+  h_e08a86bb3a33a2 10,13,18,26-29,44,215,222-249,305-320
+  s_0235ff5d12c466::t_7e53a097602afd 321-322
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1046b10737354e::t_06f9b669f66f50 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0235ff5d12c466": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8c5d730-771f-425a-9cd2-88128433ac0a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1046b10737354e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "839b7283-40b9-401a-9c39-91fa5996a406",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
