@@ -1,0 +1,47 @@
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 121-125,223-225,735-738,744-758,1131-1132,1142-1144,1186-1189,1202-1210,1709,1738-1743,1798
+  s_503411934860ca::t_300c32ab1f690b 226-227,1130,1133,1744-1745
+apps/server/src/taskRoutes.ts
+  h_e08a86bb3a33a2 9-13,34-35,50,62-63,108-121,211-213,221-235,256-261,272,294
+  s_503411934860ca::t_bfefac46286f4c 122
+apps/server/src/taskAudit.test.ts
+  h_e08a86bb3a33a2 1-429
+apps/server/README.md
+  h_e08a86bb3a33a2 457,461-476
+  s_503411934860ca::t_aefdb7da06e812 477
+apps/server/src/taskAudit.ts
+  h_e08a86bb3a33a2 1-577
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 4,9,73,191-192,242,287-307
+  s_503411934860ca::t_b17cff015118d0 187-190,193,308-310
+CHANGELOG.md
+  h_e08a86bb3a33a2 25
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 247-278
+apps/server/src/taskRoutes.test.ts
+  h_e08a86bb3a33a2 14,44-47,91,137,384-417,419-438
+  s_503411934860ca::t_1c21db885fa95a 48,418,439-440
+resources/builtin-skills/documentation/references/release-notes.md
+  s_503411934860ca::t_647b6297124937 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19af91afde4b6820eed84e19dce71e4787950b79",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_503411934860ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7bb60c84-73af-4d4d-b637-74388ed1dffb",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
