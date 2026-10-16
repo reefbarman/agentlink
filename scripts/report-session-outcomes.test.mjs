@@ -521,6 +521,62 @@ test("reports versioned comparison cohorts without merging outcomes across varia
   assert.deepEqual(report.guardianComparison.byOutcomeDirection, {});
 });
 
+test("breaks down cohort decision basis and gates the cohort fast path on eligibility", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  const comparison = (primaryOutcome, shadowOutcome, basis, assessment) =>
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s1",
+      primaryOutcome,
+      shadowOutcome,
+      primaryStatus: "reviewed",
+      shadowStatus: "completed",
+      shadowDecisionBasis: basis,
+      shadowAllowProbabilityPermille: shadowOutcome === "allow" ? 990 : 50,
+      shadowRiskProbabilitiesPermille: { high: 0, critical: 0 },
+      comparisonVersion: 2,
+      comparison: {
+        snapshotId: "snapshot",
+        primary: {
+          adapterVersion: "primary",
+          projection: { kind: "primary_legacy" },
+        },
+        shadow: {
+          adapterVersion: "jev-shared-v3",
+          projection: { kind: "jev_shadow" },
+          assessment,
+        },
+      },
+    });
+  writeEvents(inputPath, [
+    comparison("allow", "allow", "authorized", "eligible"),
+    comparison("allow", "allow", "authorized", "incomplete_evidence"),
+    comparison("allow", "deny", "incomplete_evidence", "eligible"),
+    comparison("deny", "allow", "authorized", "eligible"),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  const [cohort] = Object.values(report.guardianComparison.cohorts);
+  assert.deepEqual(cohort.byDecisionBasis, {
+    authorized: 3,
+    incomplete_evidence: 1,
+  });
+  assert.deepEqual(cohort.allowDenyDecisionBasis, { incomplete_evidence: 1 });
+  assert.deepEqual(cohort.denyAllowDecisionBasis, { authorized: 1 });
+  assert.deepEqual(cohort.byAssessment, {
+    eligible: 3,
+    incomplete_evidence: 1,
+  });
+  const simulation = simulateGuardianShadowFastPath(cohort.fastPathSamples);
+  const at950 = simulation.rows.find(
+    (row) => row.allowThresholdPermille === 950,
+  );
+  // The incomplete-evidence allow never takes the fast path.
+  assert.equal(at950.allowOnly.fastPath, 2);
+  assert.equal(at950.allowOnly.leakedDenials, 1);
+});
+
 test("simulates TypeSafe fast-path thresholds against Guardian decisions", () => {
   const directory = makeTempDirectory();
   const inputPath = path.join(directory, "events.jsonl");

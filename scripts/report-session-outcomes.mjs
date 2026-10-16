@@ -1007,8 +1007,20 @@ function mergeGuardianComparison(report, record) {
     ...createComparisonAggregate(),
     primary: comparisonObservationKey(comparison.primary),
     shadow: comparisonObservationKey(comparison.shadow),
+    byAssessment: {},
+    byDecisionBasis: {},
+    allowDenyDecisionBasis: {},
+    denyAllowDecisionBasis: {},
+    olderDecisionsWaived: 0,
+    firstPassApproved: 0,
+    firstPassAuditDenied: 0,
+    fastPathSamples: [],
   });
   cohort.count += 1;
+  if (record.shadowFirstPassApproved === true) {
+    cohort.firstPassApproved += 1;
+    if (record.primaryOutcome === "deny") cohort.firstPassAuditDenied += 1;
+  }
   cohort.byOperationalStatus[status] =
     (cohort.byOperationalStatus[status] ?? 0) + 1;
   cohort.byClass[classification] = (cohort.byClass[classification] ?? 0) + 1;
@@ -1021,6 +1033,46 @@ function mergeGuardianComparison(report, record) {
     const direction = `${primaryOutcome}/${shadowOutcome}`;
     cohort.byOutcomeDirection[direction] =
       (cohort.byOutcomeDirection[direction] ?? 0) + 1;
+    const assessment = comparisonDimension(comparison.shadow?.assessment);
+    cohort.byAssessment[assessment] =
+      (cohort.byAssessment[assessment] ?? 0) + 1;
+    if (record.shadowOlderDecisionsWaived === true) {
+      cohort.olderDecisionsWaived += 1;
+    }
+    incrementBoundedCategory(
+      cohort.byDecisionBasis,
+      record.shadowDecisionBasis,
+      GUARDIAN_SHADOW_DECISION_BASES,
+    );
+    if (direction === "allow/deny") {
+      incrementBoundedCategory(
+        cohort.allowDenyDecisionBasis,
+        record.shadowDecisionBasis,
+        GUARDIAN_SHADOW_DECISION_BASES,
+      );
+    } else if (direction === "deny/allow") {
+      incrementBoundedCategory(
+        cohort.denyAllowDecisionBasis,
+        record.shadowDecisionBasis,
+        GUARDIAN_SHADOW_DECISION_BASES,
+      );
+    }
+    if (Number.isFinite(record.shadowAllowProbabilityPermille)) {
+      const risk = record.shadowRiskProbabilitiesPermille;
+      cohort.fastPathSamples.push({
+        guardianDenied: primaryOutcome === "deny",
+        // Only an eligible assessment (complete evidence, consistent answers)
+        // could ever be trusted, so ineligible allows never take the fast path.
+        allowPermille:
+          assessment === "eligible"
+            ? record.shadowAllowProbabilityPermille
+            : -1,
+        highRiskPermille:
+          Number.isFinite(risk?.high) && Number.isFinite(risk?.critical)
+            ? risk.high + risk.critical
+            : undefined,
+      });
+    }
   }
   for (const target of [summary, cohort]) {
     const observationCount =
@@ -1153,7 +1205,10 @@ export function simulateGuardianShadowFastPath(samples) {
   };
 }
 
-function printGuardianShadowFastPath(samples) {
+function printGuardianShadowFastPath(
+  samples,
+  title = "TypeSafe fast-path simulation (trust a TypeSafe allow above the threshold, otherwise fall back to Guardian",
+) {
   if (samples.length === 0) return;
   const simulation = simulateGuardianShadowFastPath(samples);
   const cell = ({
@@ -1167,7 +1222,7 @@ function printGuardianShadowFastPath(samples) {
   ];
   console.log("");
   console.log(
-    `TypeSafe fast-path simulation (trust a TypeSafe allow above the threshold, otherwise fall back to Guardian; ${simulation.samples} reviews, ${simulation.denials} Guardian denials, ${simulation.riskScoredSamples} with risk probabilities)`,
+    `${title}; ${simulation.samples} reviews, ${simulation.denials} Guardian denials, ${simulation.riskScoredSamples} with risk probabilities)`,
   );
   printTable(
     [
@@ -1724,6 +1779,30 @@ function printSummary(report, inputPath, top) {
             formatCounts(cohort.byOutcomeDirection),
           ],
           [
+            "shadow assessment",
+            formatCounts(cohort.byAssessment ?? {}) || "n/a",
+          ],
+          [
+            "older omitted answers waived (local work only)",
+            cohort.olderDecisionsWaived ?? 0,
+          ],
+          [
+            "live first-pass approvals / Guardian audit denied",
+            `${cohort.firstPassApproved ?? 0} / ${cohort.firstPassAuditDenied ?? 0}`,
+          ],
+          [
+            "shadow decision basis",
+            formatCounts(cohort.byDecisionBasis ?? {}) || "n/a",
+          ],
+          [
+            "primary allow -> shadow deny, basis",
+            formatCounts(cohort.allowDenyDecisionBasis ?? {}) || "n/a",
+          ],
+          [
+            "primary deny -> shadow allow, basis",
+            formatCounts(cohort.denyAllowDecisionBasis ?? {}) || "n/a",
+          ],
+          [
             "usage coverage reported / partial / not reported / missing",
             `${cohort.usageReported} / ${cohort.usagePartial} / ${cohort.usageNotReported} / ${cohort.usageMissingObservations}`,
           ],
@@ -1736,6 +1815,10 @@ function printSummary(report, inputPath, top) {
             `${cohort.usageOutputSamples} / ${cohort.usageOutputSamples ? cohort.usageOutputTokens : "n/a"}`,
           ],
         ],
+      );
+      printGuardianShadowFastPath(
+        cohort.fastPathSamples ?? [],
+        "Cohort fast-path simulation (trust an eligible shadow allow above the threshold, otherwise fall back to the primary Guardian; observational, not a safety label",
       );
     }
   }

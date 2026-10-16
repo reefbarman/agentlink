@@ -58,6 +58,25 @@
 - SDK: `@agentlink/core` exports `projectEmbeddedAgentTurnEvent(...)` and `projectEmbeddedAgentSessionSnapshot(...)`, the same host-safe projections the embedded web handler uses. Hosts that run turns themselves can publish events later without exposing provenance, usage or transcripts.
 - SDK: `createOpenAICompatibleProvider(...)` now accepts `meridianSessionAffinity`, matching the connection setting, so embedded hosts can send each session ID as `x-session-affinity` to Meridian. Previously the factory silently dropped it.
 
+## 1.36.0
+
+- Adds an experimental, opt-in TypeSafe Jev first pass for command approval (`agentlink.guardian.typeSafeShadow.firstPass.enabled`, off by default; requires shadow mode). When Jev is confident a command is fine (eligible answer, allow probability at or above `firstPass.threshold`, default 0.9, low or medium risk, and no step the command classifier rates dangerous, such as a force-push or `curl`, nor any destructive, secret, privileged or hidden-execution step), the command runs without waiting for the main Guardian. Jev never denies on its own: anything else is still decided by the Guardian, which now starts at the same time so there is no extra wait. The Guardian also reviews every first-pass approval in the background, and `npm run telemetry:sessions` reports how many it would have denied. In a replay of 118 commands (including 18 deliberately risky ones), the default rule approved 14% of commands early and let none of the should-block commands through.
+- Older answers left out of review evidence in long sessions no longer make a Jev allow ineligible for git's own local steps (staging, committing, switching branches), in addition to read-only and build or test steps. File writes, moves and redirections still need complete evidence because they can overwrite untracked files. Pushes, fetches, pulls and `gh pr create` now count as remote steps, so that gap still makes them ineligible.
+
+## 1.35.0
+
+- Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.
+
+## 1.34.0
+
+- TypeSafe Guardian shadow mode now tells Jev about the git repository a command runs in: the current branch, the default branch, the remote the branch tracks, and the configured remotes (with any credentials in remote URLs removed). AgentLink reads these from the repository's own files without running git. Commands that reach outside the machine, such as pushes and `gh` calls, were the largest source of Jev blocks that the main Guardian allowed, and they depend on exactly these facts.
+- In long sessions, the review evidence leaves out older answers to the agent's questions, which made most shadow reviews count as incomplete. For read-only commands and local build or test steps, that gap no longer makes a Jev allow ineligible, as long as every newer answer and your latest instruction are intact. Pushes, network calls, deletions and other changes still require complete evidence, and the gap is still recorded in telemetry.
+
+## 1.33.0
+
+- TypeSafe Guardian shadow mode no longer drops your answers to the agent's questions. Jev now receives the same recorded answers as the main Guardian (up to 8, previously 6). When the agent's explanation around a question is long, only that explanation is shortened; previously the whole answer was dropped, which marked 70 of 76 recent shadow reviews as having incomplete evidence. Human answers are still never shortened, and a human answer containing a likely secret is still left out rather than redacted.
+- `npm run telemetry:sessions` now shows Jev's decision reasons for each shadow comparison group, including for the commands where Jev and the main Guardian disagreed, and runs the fast-path simulation for each group. The simulation only trusts a Jev allow when its evidence was complete and its answers were consistent.
+
 ## 1.32.0
 
 - TypeSafe Guardian shadow mode now defaults to the pinned `jev-1.14.0` model instead of the `jev-latest` alias, so shadow results stay comparable when TypeSafe moves its aliases. An explicitly configured model is unchanged.

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.32.0",
+  "version": "1.36.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -605,7 +605,21 @@
           "scope": "machine",
           "type": "boolean",
           "default": false,
-          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results never affect approval decisions. Bounded command-review evidence, including secret-redacted bodies of scripts and inline files the command runs, is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results do not affect approval decisions unless agentlink.guardian.typeSafeShadow.firstPass.enabled is also on. Bounded command-review evidence, including secret-redacted bodies of scripts and inline files the command runs, is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+        },
+        "agentlink.guardian.typeSafeShadow.firstPass.enabled": {
+          "scope": "machine",
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental. Let a confident TypeSafe Jev allow approve a command before the Guardian finishes. Applies only when Jev's answer is eligible (complete evidence, consistent answers), its allow probability meets the threshold, its risk is low or medium, and the command contains no step the command classifier rates dangerous and no destructive, secret, privileged or hidden-execution steps. Jev never denies on its own: anything else waits for the Guardian, which still reviews every command in the background as an audit. Requires TypeSafe shadow mode and a stored API key."
+        },
+        "agentlink.guardian.typeSafeShadow.firstPass.threshold": {
+          "scope": "machine",
+          "type": "number",
+          "default": 0.9,
+          "minimum": 0.8,
+          "maximum": 0.99,
+          "description": "Minimum TypeSafe Jev allow probability for a first-pass approval."
         },
         "agentlink.guardian.typeSafeShadow.model": {
           "scope": "machine",
@@ -1227,12 +1241,13 @@
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "telemetry:context": "node scripts/report-context-jumps.mjs",
     "telemetry:sessions": "node scripts/report-session-outcomes.mjs",
+    "jev:replay": "node scripts/jev-replay.mjs",
     "telemetry:mcp-auth": "node scripts/report-mcp-auth-telemetry.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run build:workspaces || e=1; npm run docs:check || e=1; npm run telemetry:inventory:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
-    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/package-voice-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/generate-release-update.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/package-voice-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/jev-replay.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/generate-release-update.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
     "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "vendor:core-sdk": "npm run build:workspaces && node scripts/vendor-agentlink-sdk.mjs",
@@ -1297,8 +1312,8 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@agentlink/cli": "0.19.0",
-    "@agentlink/desktop": "0.19.0",
+    "@agentlink/cli": "0.21.0",
+    "@agentlink/desktop": "0.23.0",
     "@agentlink/server": "0.1.0",
     "@anthropic-ai/sandbox-runtime": "0.0.79",
     "@electron/osx-sign": "2.7.1",

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-  "createdAt": "2026-10-16T00:37:43.304Z",
+  "sourceSha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
+  "createdAt": "2026-10-16T10:06:04.312Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,73 +10,73 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.31.2",
-      "baselineRef": "v1.31.2",
-      "reserved": "1.31.2",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "1.35.0",
+      "baselineRef": "v1.35.0",
+      "reserved": "1.35.0",
+      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.32.0",
+      "version": "1.36.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.32.0",
+      "tag": "v1.36.0",
       "notes": [
         {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
+          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
+          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.18.2",
-      "baselineRef": "desktop-v0.18.2",
-      "reserved": "0.18.2",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "0.22.0",
+      "baselineRef": "desktop-v0.22.0",
+      "reserved": "0.22.0",
+      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.19.0",
+      "version": "0.23.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.19.0",
+      "tag": "desktop-v0.23.0",
       "notes": [
         {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
+          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
+          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.18.0",
-      "baselineRef": "cli-v0.18.0",
-      "reserved": "0.18.0",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "0.20.0",
+      "baselineRef": "cli-v0.20.0",
+      "reserved": "0.20.0",
+      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.19.0",
+      "version": "0.21.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.19.0",
+      "tag": "cli-v0.21.0",
       "notes": [
         {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
+          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
+          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
           "breaking": false
         }
       ]
@@ -115,6 +115,38 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "911aa1059aa2819e76a76519e1170e025f7f326b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "TypeSafe Guardian shadow mode now keeps up to 8 recorded human answers, redacting per field and shortening only long agent-written context, and session telemetry reports per-cohort results.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "df2457ce6f5c08620c26039a5756be435961229d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Guardian shadow reviewer now receives git branch and remote facts and no longer treats omitted older answers as missing evidence for read-only or local toolchain commands, with a new telemetry field recording waivers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d78e5b6eb34c5bf8e82d60b7568957f9dc388252": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Adds local developer tooling to replay hand-labelled commands through the Jev shadow reviewer, and exports two helper functions internally; no user-facing feature or behaviour change in the shipped products.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5accef8e78f9930bb3c5260a1a13223c624ea732": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

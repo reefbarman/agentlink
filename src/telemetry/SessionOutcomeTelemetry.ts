@@ -300,6 +300,10 @@ export interface GuardianShadowComparisonEvent {
   shadowInputTokens?: number;
   shadowOutputTokens?: number;
   shadowHttpStatus?: number;
+  /** Older omitted human answers were not treated as missing evidence. */
+  shadowOlderDecisionsWaived?: boolean;
+  /** The TypeSafe result approved the command as the opt-in first pass; the primary result is the audit. */
+  shadowFirstPassApproved?: boolean;
   comparisonVersion?: 2;
   comparison?: GuardianComparisonMetadata;
 }
