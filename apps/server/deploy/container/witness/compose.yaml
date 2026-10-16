@@ -1,0 +1,53 @@
+# The witness: an append-only restic store for the assistant's backups.
+# Run it as its own compose project, in its own directory outside the
+# assistant's deploy directory, so stopping, wiping or restoring the
+# assistant never touches it:
+#
+#   mkdir -p ~/agentlink-witness && cp compose.yaml ~/agentlink-witness/
+#   cd ~/agentlink-witness && docker compose up -d
+#
+# It creates the `agentlink-witness` network that compose.backup.yaml
+# joins. Only the backup sidecar is on it, and it leads nowhere else.
+#
+# Append-only: clients can add backups but never delete or overwrite them,
+# so a compromised assistant or backup sidecar cannot destroy history.
+# Old backups are pruned here, on the witness's side, with direct access to
+# its folder (see "Backups" in apps/server/README.md).
+#
+# On the same machine it protects against mistakes, corruption, bad
+# upgrades and a compromised assistant, not against losing the machine's
+# disk. Run it on another machine (and point secrets/backup-repository at
+# it) for that.
+
+name: agentlink-witness
+
+services:
+  witness:
+    image: restic/rest-server:0.13.0
+    restart: unless-stopped
+    environment:
+      # Reached only over the private network below.
+      DISABLE_AUTHENTICATION: "1"
+      OPTIONS: "--append-only"
+    volumes:
+      - ./data:/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    networks:
+      - witness
+    expose:
+      - "8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  witness:
+    name: agentlink-witness
+    internal: true

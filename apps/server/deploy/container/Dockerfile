@@ -7,6 +7,8 @@
 #     -f apps/server/deploy/container/Dockerfile apps/server
 #   docker build --target publisher -t agentlink-publisher:local \
 #     -f apps/server/deploy/container/Dockerfile apps/server
+#   docker build --target backup -t agentlink-backup:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
 #
 # The context is apps/server; its .dockerignore admits only the bundle.
 # Run them with compose.yaml next to this file (see apps/server/README.md).
@@ -57,6 +59,23 @@ USER node
 WORKDIR /var/lib/agentlink-publisher
 EXPOSE 7400
 ENTRYPOINT ["agentlink-server", "publisher"]
+
+# Backup: reads the deploy directory (mounted read-only) and sends it to an
+# append-only restic store. Only restic and the bundle. It runs as root with
+# every capability dropped but file access and keeping file owners (see
+# compose.backup.yaml), so a restore gives each file back its owner.
+# The same image restores: `docker run ... agentlink-backup:local restore`.
+FROM node:22-bookworm-slim AS backup
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates restic \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chmod=0755 dist/agentlink-server.js /usr/local/bin/agentlink-server
+RUN install -d -m 0700 /var/lib/agentlink-backup
+ENV NODE_ENV=production
+WORKDIR /var/lib/agentlink-backup
+EXPOSE 7800
+ENTRYPOINT ["agentlink-server"]
+CMD ["backup-agent", "--help"]
 
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git

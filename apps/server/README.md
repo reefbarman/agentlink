@@ -299,6 +299,70 @@ To stop trusting the server, remove the profile or certificate from the device.
 
 Sessions, the owner, devices, and pairings survive restarts. A turn that was running when the process died is marked interrupted at startup. After a hard crash the dead process's turn lease stays valid for up to 30 seconds and is never broken early: the server starts immediately, that session reports `409 session_busy`, and recovery completes in the background once the lease expires.
 
+### Backups
+
+[`deploy/container/compose.backup.yaml`](deploy/container/compose.backup.yaml) adds a backup sidecar that backs up the whole deploy directory with [restic](https://restic.net) to an append-only store, the witness ([`deploy/container/witness/compose.yaml`](deploy/container/witness/compose.yaml), a [rest-server](https://github.com/restic/rest-server) run as its own compose project). Each backup is one snapshot of:
+
+- the deploy directory (`server.json`, `.env`, compose files, `secrets/`, `publisher/`, `meridian/`, `projects/` without `node_modules`, `.venv`, `dist`, `build`, `target`, `.next` and `.pnpm-store`), read live;
+- a copy of `data/` taken first, in a moment, so chats, tasks, devices and the task audit log are consistent with each other (the audit log's head is copied before the log). `data/repository-snapshots` is left out; it is rebuilt on demand.
+
+The sidecar sees the deploy directory read-only and holds the store's address and the backup password. The assistant reaches it on a private network with a shared token and can only ask for its status, its backups, or a backup now. The witness refuses deletes and overwrites, so neither the assistant nor the sidecar can destroy existing backups.
+
+It backs up hourly when `data/` changed and at least daily (checked every 10 minutes; a failure is retried after 30). The Inbox reports a failed backup, or no good backup for 26 hours, and the Inbox panel shows when the last backup finished with a **Back up now** button. `agentlink-server --check` shows a `backup` line.
+
+**What it protects against.** With the witness on the same machine (the default), backups cover mistakes, corruption, a bad upgrade and a compromised assistant, but not losing the machine or its disk. Point `secrets/backup-repository` at a rest-server on another machine for that; nothing else changes.
+
+Setup:
+
+```sh
+# Build (from the repository root)
+docker build --target backup -t agentlink-backup:local -f apps/server/deploy/container/Dockerfile apps/server
+# The witness: its own directory, outside the deploy directory
+mkdir -p ~/agentlink-witness && cp apps/server/deploy/container/witness/compose.yaml ~/agentlink-witness/
+(cd ~/agentlink-witness && docker compose up -d)
+# In the deploy directory, once
+openssl rand -hex 32 > secrets/backup-token
+echo rest:http://witness:8000/agentlink/ > secrets/backup-repository
+openssl rand -base64 33 > secrets/backup-password
+chmod 600 secrets/backup-token secrets/backup-repository secrets/backup-password
+# .env: COMPOSE_FILE=compose.yaml:compose.backup.yaml (append others you use)
+# server.json: "backup": { "host": "backup", "port": 7800,
+#                          "token": { "file": "/run/secrets/backup-token" } }
+docker compose up -d
+docker compose exec assistant agentlink-server backup    # first backup, waits for it
+docker compose exec assistant agentlink-server backups   # list them
+```
+
+**Write down the backup password** (`secrets/backup-password`) somewhere off the machine, such as a password manager. The backups are encrypted with it, and the copy in `secrets/` is inside what is backed up: without another copy, a lost deploy directory means unreadable backups.
+
+**Restoring.** Stop the assistant, move the deploy directory aside (never restore over it), and restore into a new, empty directory with the backup image. Run it as root so every file gets its owner back:
+
+```sh
+cd ~ && (cd agentlink-assistant && docker compose down)
+mv agentlink-assistant agentlink-assistant.before-restore
+mkdir agentlink-assistant
+# The repository file and password from your records (or the old secrets/)
+docker run --rm --network agentlink-witness \
+  -v ~/agentlink-assistant:/restore \
+  -v ~/agentlink-assistant.before-restore/secrets/backup-repository:/run/secrets/backup-repository:ro \
+  -v ~/agentlink-assistant.before-restore/secrets/backup-password:/run/secrets/backup-password:ro \
+  agentlink-backup:local restore --target /restore \
+  --repository-file /run/secrets/backup-repository --password-file /run/secrets/backup-password
+  # add --snapshot <id> (from `backups`) for an older one
+cd agentlink-assistant && docker compose up -d
+```
+
+The restored assistant starts with its scheduled jobs paused and an Inbox entry naming the backup. Anything after the backup is gone; work that was running then is interrupted and can be resumed. Signed-in devices, GitHub connections and the Meridian sign-in come back with it. Check the audit log with `docker compose exec assistant agentlink-server audit-check`.
+
+**Pruning.** Clients cannot delete, so old backups are pruned on the witness's side, with direct access to its folder (not through rest-server). For example, weekly from the host's crontab:
+
+```sh
+docker run --rm --entrypoint restic -v ~/agentlink-witness/data/agentlink:/repo \
+  -v ~/agentlink-assistant/secrets/backup-password:/password:ro agentlink-backup:local \
+  -r /repo --password-file /password forget --host agentlink-assistant \
+  --keep-hourly 48 --keep-daily 14 --keep-weekly 8 --prune
+```
+
 ### Lost access
 
 If every signed-in browser is gone (cookies cleared, devices revoked or lost), run `pair` on the server machine as the service account, exactly as for the first device:

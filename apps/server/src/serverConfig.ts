@@ -73,6 +73,12 @@ export interface AssistantServerConfig {
    * process and their commands on the shared command worker.
    */
   readonly runners?: AssistantServerRunnersConfig;
+  /**
+   * The backup sidecar (`agentlink-server backup-agent`), which backs the
+   * deploy directory up to an append-only store. The server shows its
+   * status, asks for a backup now, and tells the owner when one fails.
+   */
+  readonly backup?: AssistantServerPublisherConfig;
 }
 
 export interface AssistantServerRunnersConfig {
@@ -395,6 +401,7 @@ export function parseAssistantServerConfig(
     "notifications",
     "publisher",
     "runners",
+    "backup",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -556,6 +563,9 @@ export function parseAssistantServerConfig(
     ...(config.runners === undefined
       ? {}
       : { runners: parseRunners(config.runners, baseDirectory) }),
+    ...(config.backup === undefined
+      ? {}
+      : { backup: parsePublisher(config.backup, baseDirectory, "backup") }),
   };
 }
 

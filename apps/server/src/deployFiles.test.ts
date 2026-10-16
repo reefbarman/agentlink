@@ -400,6 +400,79 @@ describe("deployment files", () => {
     expect(assistant).not.toContain("publisher-key");
   });
 
+  it("backs up the deploy directory read-only to an append-only witness", async () => {
+    const container = path.join(deploy, "container");
+    const dockerfile = await fs.readFile(
+      path.join(container, "Dockerfile"),
+      "utf8",
+    );
+    const backupStage = dockerfile
+      .split(/^(?=FROM )/mu)
+      .find((text) => text.split("\n")[0]!.endsWith(" AS backup"))!;
+    expect(backupStage).toMatch(/^ENTRYPOINT \["agentlink-server"\]$/mu);
+    const instructions = backupStage
+      .split("\n")
+      .filter((line) => !line.startsWith("#"))
+      .join("\n");
+    expect(instructions).toContain("restic");
+    expect(instructions).not.toMatch(/curl|wget|python|ripgrep|git /u);
+
+    const overlay = await fs.readFile(
+      path.join(container, "compose.backup.yaml"),
+      "utf8",
+    );
+    const service = overlay.slice(
+      overlay.indexOf("\n  backup:\n"),
+      overlay.indexOf("\nnetworks:\n"),
+    );
+    expect(service).not.toMatch(/^\s+ports:/mu);
+    expect(service).not.toMatch(/network_mode|privileged|docker\.sock/u);
+    expect(service).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    expect(service).toMatch(
+      /^ {4}cap_add:\n {6}- DAC_OVERRIDE\n {6}- CHOWN\n {4}security_opt:/mu,
+    );
+    for (const line of [
+      "read_only: true",
+      "init: true",
+      "pull_policy: never",
+      "- no-new-privileges:true",
+      "mem_limit:",
+      "pids_limit:",
+      // The only volume with the deploy directory: read-only.
+      "- .:/srv/agentlink/deploy:ro",
+      "- backup-state:/var/lib/agentlink-backup",
+      "target: backup-password",
+    ]) {
+      expect(service, line).toContain(line);
+    }
+    expect(service.match(/^ {6}- \.[^\n]*/gmu)).toEqual([
+      "      - .:/srv/agentlink/deploy:ro",
+    ]);
+    expect(service).toMatch(/^ {4}networks:\n {6}- backup\n {6}- witness\n/mu);
+    expect(overlay).toMatch(/^ {2}backup:\n {4}internal: true$/mu);
+    expect(overlay).toMatch(
+      /^ {2}witness:\n {4}name: agentlink-witness\n {4}external: true$/mu,
+    );
+    // The assistant gets the shared token, never the store's password.
+    const assistant = overlay.slice(
+      overlay.indexOf("\n  assistant:\n"),
+      overlay.indexOf("\n  backup:\n"),
+    );
+    expect(assistant).toContain("target: backup-token");
+    expect(assistant).not.toMatch(/backup-password|backup-repository|witness/u);
+
+    // The witness keeps history: clients can only add to it.
+    const witness = await fs.readFile(
+      path.join(container, "witness", "compose.yaml"),
+      "utf8",
+    );
+    expect(witness).toContain('OPTIONS: "--append-only"');
+    expect(witness).not.toMatch(/^\s+ports:/mu);
+    expect(witness).toMatch(
+      /^ {2}witness:\n {4}name: agentlink-witness\n {4}internal: true$/mu,
+    );
+  });
+
   it("ships a launchd daemon that runs as a service user", async () => {
     const file = path.join(deploy, "launchd", "local.agentlink.server.plist");
     const plist = await fs.readFile(file, "utf8");

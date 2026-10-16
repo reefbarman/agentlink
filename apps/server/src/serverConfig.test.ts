@@ -106,6 +106,32 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("parses the backup sidecar, on a private network only", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.backup = {
+          host: "backup",
+          port: 7800,
+          token: { file: "/run/secrets/backup-token" },
+        };
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.backup).toMatchObject({ host: "backup", port: 7800 });
+    expect(() =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          value.backup = {
+            host: "backups.example.com",
+            port: 7800,
+            token: { env: "T" },
+          };
+        }),
+        "/etc/agentlink",
+      ),
+    ).toThrow(/backup\.host/u);
+  });
+
   it("parses a review model role and lists configured models", () => {
     const config = parseAssistantServerConfig(
       withChange((value) => {

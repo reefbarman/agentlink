@@ -34,7 +34,11 @@ export type InboxEntryKind =
   /** A chat or task has been working a long time (the runaway guard). */
   | "session_long_running"
   /** A chat or task looks stuck: repeating itself, or gone quiet. */
-  | "session_stuck";
+  | "session_stuck"
+  /** A backup failed, or none has succeeded for over a day. */
+  | "backup_failed"
+  /** The server started from a restored backup. */
+  | "restored";
 
 export interface InboxEntry {
   readonly id: string;
@@ -472,6 +476,55 @@ async function readEntries(file: string): Promise<InboxEntry[]> {
   } catch {
     return [];
   }
+}
+
+/** The inbox entry for a failed or overdue backup. */
+export function inboxEntryForBackupProblem(
+  problem:
+    | { readonly kind: "failed"; readonly error: string }
+    | { readonly kind: "overdue"; readonly lastSuccessAt?: number },
+  projectId: string,
+  timeZone?: string,
+): NewInboxEntry {
+  if (problem.kind === "failed") {
+    return {
+      projectId,
+      kind: "backup_failed",
+      title: "A backup failed",
+      body: withDetail(
+        "The last backup did not finish. Nothing else is affected; it tries again within the hour.",
+        problem.error,
+      ),
+    };
+  }
+  return {
+    projectId,
+    kind: "backup_failed",
+    title: "No backup for over a day",
+    body: problem.lastSuccessAt
+      ? `The last good backup was ${new Date(problem.lastSuccessAt).toLocaleString("en-AU", timeZone ? { timeZone } : {})}. Check that the backup service and its store are running.`
+      : "No backup has finished yet. Check that the backup service and its store are running.",
+  };
+}
+
+/** The inbox entry for a start from a restored backup. */
+export function inboxEntryForRestore(
+  restored: { readonly snapshotId: string; readonly snapshotTime: string },
+  pausedJobs: readonly string[],
+  projectId: string,
+): NewInboxEntry {
+  const taken = Date.parse(restored.snapshotTime);
+  return {
+    projectId,
+    kind: "restored",
+    title: "Restored from a backup",
+    body: joinLines(
+      `The Assistant was restored from backup ${restored.snapshotId.slice(0, 8)}${Number.isFinite(taken) ? `, taken ${new Date(taken).toISOString().replace("T", " ").slice(0, 16)} UTC` : ""}. Anything after that is not here, and work that was running then is interrupted (resume it from Tasks).`,
+      pausedJobs.length > 0
+        ? `Paused scheduled jobs until you turn them back on in Jobs: ${pausedJobs.join(", ")}.`
+        : undefined,
+    ),
+  };
 }
 
 /** Runaway-guard notices, which offer Stop and Keep going. */

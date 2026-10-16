@@ -73,6 +73,8 @@ import {
 } from "./jobStore.js";
 import { createInboxRoutes } from "./inboxRoutes.js";
 import {
+  inboxEntryForBackupProblem,
+  inboxEntryForRestore,
   inboxEntryForRun,
   inboxEntryForSessionAlert,
   inboxEntryForTask,
@@ -117,6 +119,11 @@ import {
 } from "./repositoryTools.js";
 import { HttpError } from "./httpJson.js";
 import { createPublisherClient } from "./publisherClient.js";
+import { writeFileAtomic } from "./atomicFile.js";
+import { takeRestoredMarker } from "./backup.js";
+import type { BackupStatus } from "./backupAgent.js";
+import { backupProblem, createBackupClient } from "./backupClient.js";
+import { createBackupRoutes } from "./backupRoutes.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
 import {
   auditedTaskStore,
@@ -262,6 +269,8 @@ export type AssistantServicePreflight = (
   readonly publisher?: string;
   /** Present when session runners are configured. */
   readonly runners?: string;
+  /** Present when a backup sidecar is configured. */
+  readonly backup?: string;
 };
 
 /**
@@ -510,6 +519,30 @@ export async function preflightAssistantService(
       runnersStatus = `Session runners: manager not reachable at ${host}:${port} (${error instanceof Error ? error.message : String(error)}); coding tasks cannot start until it is`;
     }
     result = { ...result, runners: runnersStatus };
+  }
+  if (config.backup) {
+    const { host, port } = config.backup;
+    const client = createBackupClient({
+      host,
+      port,
+      token: await prepareSecret(config.backup.token, "backup.token", env),
+    });
+    let backupStatus: string;
+    try {
+      const status = await client.status();
+      const at = Date.now();
+      const problem = backupProblem(status, at, at);
+      backupStatus = status.runningSince
+        ? `Backups: reachable at ${host}:${port}; a backup is running`
+        : problem?.kind === "failed"
+          ? `Backups: reachable at ${host}:${port}; the last backup failed: ${problem.error}`
+          : status.lastSuccess
+            ? `Backups: reachable at ${host}:${port}; last good backup ${status.lastSuccess.snapshotId.slice(0, 8)} at ${new Date(status.lastSuccess.at).toISOString()}`
+            : `Backups: reachable at ${host}:${port}; no backup yet`;
+    } catch (error) {
+      backupStatus = `Backups: not reachable at ${host}:${port} (${error instanceof Error ? error.message : String(error)})`;
+    }
+    result = { ...result, backup: backupStatus };
   }
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
@@ -781,6 +814,13 @@ export async function startAssistantService(
           "publisher.token",
           env,
         ),
+      })
+    : undefined;
+  const backupClient = config.backup
+    ? createBackupClient({
+        host: config.backup.host,
+        port: config.backup.port,
+        token: await prepareSecret(config.backup.token, "backup.token", env),
       })
     : undefined;
   let server: AssistantServer | undefined;
@@ -1293,6 +1333,60 @@ export async function startAssistantService(
     });
     const watchTimer = setInterval(() => sessionWatch.tick(), 60_000);
     watchTimer.unref();
+    /**
+     * Backups: a failed or overdue backup goes to the Inbox once (the last
+     * one reported is remembered across restarts).
+     */
+    const backupAlertFile = path.join(
+      config.dataRoot,
+      "settings",
+      "backup-alert.json",
+    );
+    const backupWatchSince = Date.now();
+    let backupAlertKey = await fs
+      .readFile(backupAlertFile, "utf8")
+      .then((raw) => String((JSON.parse(raw) as { key?: unknown }).key ?? ""))
+      .catch(() => "");
+    let backupChecking = false;
+    // The last status seen: a sidecar that stopped answering still
+    // becomes "no backup for a day" once its last backup is that old.
+    let backupLastStatus: BackupStatus = {};
+    const checkBackups = async () => {
+      if (!backupClient || backupChecking) return;
+      backupChecking = true;
+      try {
+        const reached = await backupClient.status().catch(() => undefined);
+        let status: BackupStatus;
+        if (reached) {
+          backupLastStatus = reached;
+          status = reached;
+        } else {
+          const { runningSince: _running, ...known } = backupLastStatus;
+          status = known;
+        }
+        const problem = backupProblem(status, Date.now(), backupWatchSince);
+        if (!problem) return;
+        const key =
+          problem.kind === "failed"
+            ? `failed:${problem.at}`
+            : `overdue:${problem.lastSuccessAt ?? 0}`;
+        if (key === backupAlertKey) return;
+        backupAlertKey = key;
+        await fs.mkdir(path.dirname(backupAlertFile), { recursive: true });
+        await writeFileAtomic(backupAlertFile, `${JSON.stringify({ key })}\n`);
+        const projectId = config.projects[0]?.id ?? "home";
+        await addToInbox(inboxEntryForBackupProblem(problem, projectId));
+        assistantChanged();
+      } catch (error) {
+        log(`Could not check backups: ${message(error)}`);
+      } finally {
+        backupChecking = false;
+      }
+    };
+    const backupTimer = backupClient
+      ? setInterval(() => void checkBackups(), 10 * 60_000)
+      : undefined;
+    backupTimer?.unref();
     /** Raise or settle the inbox entry a run's new record calls for. */
     const recordInInbox = (run: JobRun, job: JobDefinition) => {
       void (async () => {
@@ -1759,6 +1853,14 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
     });
+    const backupRoutes = createBackupRoutes({
+      client: backupClient,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      onFinished: () => void checkBackups(),
+      log,
+    });
     const githubRoutes = createGitHubRoutes({
       connections: githubConnections,
       publisher,
@@ -1781,6 +1883,7 @@ export async function startAssistantService(
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||
+        (await backupRoutes.handleRequest(request, response, auth)) ||
         (await routes.handleRequest(request, response, auth)),
       deviceNotifications: {
         isOn: (deviceId) => push.isSubscribed(deviceId),
@@ -1798,6 +1901,7 @@ export async function startAssistantService(
         await taskAudit.flush();
         await taskInboxWrites;
         clearInterval(watchTimer);
+        if (backupTimer) clearInterval(backupTimer);
         stopWatching();
         await inbox.flush();
         await push.close();
@@ -1842,7 +1946,31 @@ export async function startAssistantService(
     retainSignedInDevices();
     const { port } = await server.start();
     certificates?.watch(server);
+    // Started from a restored backup: pause schedules before any can fire,
+    // and tell the owner what was restored.
+    const restored = await takeRestoredMarker(config.dataRoot);
+    if (restored) {
+      const paused: string[] = [];
+      for (const job of jobStore.list()) {
+        if (!job.enabled) continue;
+        await jobStore.update(job.id, { enabled: false }, Date.now());
+        paused.push(job.name);
+      }
+      await addToInbox(
+        inboxEntryForRestore(
+          restored,
+          paused,
+          config.projects[0]?.id ?? "home",
+        ),
+      );
+      log(
+        `Started from restored backup ${restored.snapshotId.slice(0, 8)}; paused ${paused.length} scheduled job(s)`,
+      );
+    }
     await jobs.start();
+    if (backupClient) {
+      setTimeout(() => void checkBackups(), 60_000).unref();
+    }
     if (tasks) {
       await tasks.runner.start();
       // Earlier tasks' chats stay readable: mount each clone still on disk.

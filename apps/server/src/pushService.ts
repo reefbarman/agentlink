@@ -161,6 +161,8 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
     "Still working. Open it to check in, or stop it from the Inbox.",
   session_stuck:
     "It may be stuck. Open the Inbox to stop it or let it keep going.",
+  backup_failed: "Backups need attention. Open the Inbox to see why.",
+  restored: "Restored from a backup. Scheduled jobs are paused.",
 };
 
 /**

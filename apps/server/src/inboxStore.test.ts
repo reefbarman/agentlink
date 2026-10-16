@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  inboxEntryForBackupProblem,
+  inboxEntryForRestore,
   inboxEntryForRun,
   inboxEntryForSessionAlert,
   inboxEntryForTask,
@@ -512,6 +514,51 @@ describe("inbox routes", () => {
     expect((await post({ id: "missing", action: "keep_going" })).status).toBe(
       404,
     );
+  });
+});
+
+describe("backup entries", () => {
+  it("says a backup failed, with restic's reason", () => {
+    expect(
+      inboxEntryForBackupProblem(
+        { kind: "failed", error: "Fatal: store is full" },
+        "home",
+      ),
+    ).toMatchObject({
+      kind: "backup_failed",
+      title: "A backup failed",
+      body: expect.stringContaining("store is full"),
+    });
+  });
+
+  it("says when no backup has finished for a day", () => {
+    expect(
+      inboxEntryForBackupProblem(
+        { kind: "overdue", lastSuccessAt: Date.UTC(2026, 9, 14, 1) },
+        "home",
+        "UTC",
+      ),
+    ).toMatchObject({
+      title: "No backup for over a day",
+      body: expect.stringContaining("14/10/2026"),
+    });
+    expect(
+      inboxEntryForBackupProblem({ kind: "overdue" }, "home").body,
+    ).toMatch(/No backup has finished yet/u);
+  });
+
+  it("says what a restore means and which jobs it paused", () => {
+    const entry = inboxEntryForRestore(
+      { snapshotId: "abcdef0123456789", snapshotTime: "2026-10-15T03:04:05Z" },
+      ["Morning brief"],
+      "home",
+    );
+    expect(entry).toMatchObject({
+      kind: "restored",
+      title: "Restored from a backup",
+    });
+    expect(entry.body).toContain("abcdef01, taken 2026-10-15 03:04 UTC");
+    expect(entry.body).toContain("Morning brief");
   });
 });
 

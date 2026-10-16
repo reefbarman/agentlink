@@ -1,4 +1,5 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
+import { BackupSettings } from "./AssistantBackups";
 import { GitHubPanel } from "./AssistantGitHub";
 import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
@@ -99,7 +100,9 @@ export interface InboxEntry {
     | "task_blocked"
     | "task_failed"
     | "session_long_running"
-    | "session_stuck";
+    | "session_stuck"
+    | "backup_failed"
+    | "restored";
   createdAt: number;
   title: string;
   body?: string;
@@ -155,6 +158,8 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   task_failed: "error",
   session_long_running: "watch",
   session_stuck: "warning",
+  backup_failed: "warning",
+  restored: "history",
 };
 
 /** Runaway-guard notices: the chat keeps working until the owner stops it. */
@@ -1249,6 +1254,7 @@ export function InboxPanel({
       }
     >
       <NotificationSettings />
+      <BackupSettings />
       {error && (
         <p class="assistant-project-error" role="alert">
           {error}

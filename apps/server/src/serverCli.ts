@@ -7,6 +7,14 @@ import {
   type AssistantService,
 } from "./assistantService.js";
 import { verifyTaskAudit } from "./taskAudit.js";
+import {
+  BackupError,
+  restoreSnapshot,
+  resticRunner,
+  type ResticRunner,
+} from "./backup.js";
+import { startBackupAgent } from "./backupAgent.js";
+import { BackupRequestError, createBackupClient } from "./backupClient.js";
 import { startCommandWorker } from "./commandWorker.js";
 import {
   DEFAULT_EGRESS_ALLOWLIST,
@@ -71,6 +79,13 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server codex-login --config <file>
        agentlink-server codex-logout --config <file>
        agentlink-server audit-check --config <file>
+       agentlink-server backup --config <file>
+       agentlink-server backups --config <file>
+       agentlink-server backup-agent --token-file <file> --repository-file <file>
+                                     --password-file <file> --deploy-root <dir>
+                                     --state <dir> [--listen <host:port>]
+       agentlink-server restore --repository-file <file> --password-file <file>
+                                --target <empty dir> [--snapshot <id>|latest]
        agentlink-server command-worker --token-file <file> --root <dir>...
                                        [--listen <host:port>]
                                        [--allow-local-peers] [--reap-orphans]
@@ -190,6 +205,8 @@ const COMMANDS = new Set([
   "codex-login",
   "codex-logout",
   "audit-check",
+  "backup",
+  "backups",
 ]);
 
 /** Returns the process exit code. */
@@ -211,6 +228,12 @@ export async function runAssistantServerCli(
   }
   if (argv[0] === "session-runner") {
     return await runSessionRunner(argv.slice(1), io);
+  }
+  if (argv[0] === "backup-agent") {
+    return await runBackupAgent(argv.slice(1), io);
+  }
+  if (argv[0] === "restore") {
+    return await runRestore(argv.slice(1), io);
   }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
@@ -240,6 +263,9 @@ export async function runAssistantServerCli(
   if (command === "pair") return await runPair(config, io);
   if (command === "export-ca") return await runExportCa(config, io);
   if (command === "audit-check") return await runAuditCheck(config, io);
+  if (command === "backup" || command === "backups") {
+    return await runBackupCommand(command, config, io);
+  }
   if (command === "codex-login" || command === "codex-logout") {
     if (!hasCodexProvider(config)) {
       io.log(
@@ -268,6 +294,7 @@ export async function runAssistantServerCli(
     );
     if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
     if (preflight.runners) io.stdout(`${preflight.runners}\n`);
+    if (preflight.backup) io.stdout(`${preflight.backup}\n`);
     return 0;
   }
 
@@ -282,6 +309,173 @@ export async function runAssistantServerCli(
   await service.close();
   io.log("AgentLink server stopped");
   return 0;
+}
+
+/** `backup`: back up now and wait; `backups`: list the snapshots. */
+async function runBackupCommand(
+  command: "backup" | "backups",
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  if (!config.backup) {
+    io.log(
+      'agentlink-server: no "backup" in the configuration (see Backups in the README)',
+    );
+    return 1;
+  }
+  const client = createBackupClient({
+    host: config.backup.host,
+    port: config.backup.port,
+    token: await prepareSecret(config.backup.token, "backup.token", io.env),
+  });
+  try {
+    if (command === "backups") {
+      const snapshots = await client.snapshots();
+      if (snapshots.length === 0) io.stdout("No backups yet\n");
+      for (const snapshot of snapshots) {
+        io.stdout(`${snapshot.shortId}  ${snapshot.time}\n`);
+      }
+      return 0;
+    }
+    io.stdout("Backing up (this waits for it to finish)...\n");
+    const status = await client.backupNow();
+    const failure = status.lastFailure;
+    if (
+      failure &&
+      (!status.lastSuccess || failure.at > status.lastSuccess.at)
+    ) {
+      io.stdout(`Backup failed: ${failure.error}\n`);
+      return 1;
+    }
+    const last = status.lastSuccess;
+    io.stdout(
+      last
+        ? `Backup ${last.snapshotId.slice(0, 8)} done: ${last.files} files, ${last.added} new bytes, ${Math.round(last.durationMs / 1000)}s\n`
+        : "Backup finished\n",
+    );
+    return 0;
+  } catch (error) {
+    io.log(
+      `agentlink-server: ${error instanceof BackupRequestError ? (error.detail ?? error.code) : error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+}
+
+async function runBackupAgent(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const required = [
+    "--token-file",
+    "--repository-file",
+    "--password-file",
+    "--deploy-root",
+    "--state",
+  ];
+  const values: Record<string, string | undefined> = {
+    "--listen": "0.0.0.0:7800",
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === "--help" || argument === "-h") {
+      io.stdout(ASSISTANT_SERVER_USAGE);
+      return 0;
+    }
+    if (![...required, "--listen"].includes(argument)) {
+      return usageError(io, `Unknown argument: ${argument}`);
+    }
+    const value = argv[index + 1];
+    if (!value) return usageError(io, `${argument} needs a value`);
+    values[argument] = value;
+    index += 1;
+  }
+  for (const flag of required) {
+    if (!values[flag]) return usageError(io, `${flag} is required`);
+  }
+  const address = parseListen(values["--listen"]!);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  const token = await (
+    await prepareSecret(
+      { file: values["--token-file"]! },
+      "--token-file",
+      io.env,
+    )
+  )();
+  const state = values["--state"]!;
+  const agent = await startBackupAgent({
+    host: address.host,
+    port: address.port,
+    token,
+    deployRoot: values["--deploy-root"]!,
+    stateDirectory: state,
+    restic: resticRunner({
+      repositoryFile: values["--repository-file"]!,
+      passwordFile: values["--password-file"]!,
+      cacheDirectory: `${state.replace(/\/+$/u, "")}/cache`,
+    }),
+    log: io.log,
+  });
+  io.log(
+    `AgentLink backup agent listening on ${address.host}:${agent.port} for ${values["--deploy-root"]}`,
+  );
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; stopping the backup agent`);
+  await agent.close();
+  return 0;
+}
+
+/** Restore a backup into an empty directory (run with the service stopped). */
+export async function runRestore(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+  restic?: ResticRunner,
+): Promise<number> {
+  const values: Record<string, string | undefined> = { "--snapshot": "latest" };
+  const known = [
+    "--repository-file",
+    "--password-file",
+    "--target",
+    "--snapshot",
+  ];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === "--help" || argument === "-h") {
+      io.stdout(ASSISTANT_SERVER_USAGE);
+      return 0;
+    }
+    if (!known.includes(argument)) {
+      return usageError(io, `Unknown argument: ${argument}`);
+    }
+    const value = argv[index + 1];
+    if (!value) return usageError(io, `${argument} needs a value`);
+    values[argument] = value;
+    index += 1;
+  }
+  for (const flag of ["--repository-file", "--password-file", "--target"]) {
+    if (!values[flag]) return usageError(io, `${flag} is required`);
+  }
+  try {
+    const restored = await restoreSnapshot({
+      restic:
+        restic ??
+        resticRunner({
+          repositoryFile: values["--repository-file"]!,
+          passwordFile: values["--password-file"]!,
+        }),
+      target: values["--target"]!,
+      snapshot: values["--snapshot"]!,
+    });
+    io.stdout(
+      `Restored backup ${restored.snapshotId.slice(0, 8)} (taken ${restored.snapshotTime}) into ${values["--target"]}. Start the assistant there: scheduled jobs start paused, and the Inbox says what was restored.\n`,
+    );
+    return 0;
+  } catch (error) {
+    io.log(
+      `agentlink-server: ${error instanceof BackupError || error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
 }
 
 /** Check the task audit log's hash chain; exit 1 when it is broken. */
