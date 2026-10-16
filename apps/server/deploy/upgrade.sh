@@ -246,7 +246,9 @@ say "Building ${commit:-the source} (the Assistant keeps working meanwhile)"
         *) fail "no AgentLink extension build for $(uname -m)" ;;
       esac
       vsix_dir="$(mktemp -d)"
-      AGENTLINK_VSCE_TARGET="$vsce_target" npm run package -- "$vsix_dir/agentlink.vsix" > /dev/null
+      # Packaging builds the workspaces again: keep the commit in them.
+      AGENTLINK_BUILD_COMMIT="$commit" AGENTLINK_VSCE_TARGET="$vsce_target" \
+        npm run package -- "$vsix_dir/agentlink.vsix" > /dev/null
       cp "$vsix_dir/agentlink.vsix" apps/server/dist/agentlink-editor.vsix
       rm -rf "$vsix_dir"
       ;;
