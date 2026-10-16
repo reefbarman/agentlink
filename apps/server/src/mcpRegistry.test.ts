@@ -261,6 +261,138 @@ describe("openMcpRegistry", () => {
     expect(requested.every((host) => host === "mcp.example.com")).toBe(true);
   });
 
+  describe("servers on the owner's network", () => {
+    it("accepts a private address only when the owner ticks On my network", async () => {
+      const registry = await openMcpRegistry({
+        dataRoot: await tempDirectory(),
+        redirectUrl: "https://assistant.example/mcp/callback",
+      });
+      await expect(
+        registry.add({
+          label: "Home",
+          url: "http://192.168.1.20:8123/api/mcp",
+          auth: "none",
+        }),
+      ).rejects.toMatchObject({
+        code: "mcp_url_invalid",
+        message: expect.stringContaining("On my network"),
+      });
+      const added = await registry.add({
+        label: "Home",
+        url: "http://192.168.1.20:8123/api/mcp",
+        auth: "header",
+        headerName: "Authorization",
+        headerValue: "Bearer ha-token",
+        network: true,
+      });
+      expect(added).toMatchObject({ network: true, id: "home" });
+      await expect(
+        registry.add({
+          label: "Nas",
+          url: "https://nas.local/mcp",
+          auth: "none",
+          network: true,
+        }),
+      ).resolves.toMatchObject({ network: true });
+      for (const url of [
+        "http://127.0.0.1:8123/api/mcp",
+        "http://169.254.169.254/",
+        "http://command-worker:7000/",
+        "https://mcp.example.com/mcp",
+        "http://user:pw@192.168.1.20/",
+        "ftp://192.168.1.20/",
+      ]) {
+        await expect(
+          registry.add({ label: "Bad", url, auth: "none", network: true }),
+          url,
+        ).rejects.toMatchObject({ code: "mcp_url_invalid" });
+      }
+      await expect(
+        registry.add({
+          label: "Home OAuth",
+          url: "http://192.168.1.20:8123/api/mcp",
+          auth: "oauth",
+          network: true,
+        }),
+      ).rejects.toMatchObject({ code: "mcp_auth_invalid" });
+      // A chat cannot add one, even with the flag.
+      await expect(
+        registry.add({
+          label: "Sneaky",
+          url: "http://192.168.1.30/mcp",
+          auth: "none",
+          network: true,
+          origin: "chat",
+        }),
+      ).rejects.toMatchObject({ code: "mcp_url_invalid" });
+    });
+
+    it("contacts only the pinned scheme, host and port, with redirects refused", async () => {
+      const seen: Array<{ url: string; redirect?: string }> = [];
+      const registry = await openMcpRegistry({
+        dataRoot: await tempDirectory(),
+        redirectUrl: "https://assistant.example/mcp/callback",
+        fetch: async (input, init) => {
+          seen.push({
+            url: input instanceof Request ? input.url : input.toString(),
+            ...(init?.redirect ? { redirect: init.redirect } : {}),
+          });
+          return new Response(null, {
+            status: 307,
+            headers: { location: "http://192.168.1.21:8123/api/mcp" },
+          });
+        },
+      });
+      const server = await registry.add({
+        label: "Home",
+        url: "http://192.168.1.20:8123/api/mcp",
+        auth: "none",
+        network: true,
+      });
+      const result = await registry.refresh(server.id);
+      expect(result.server.status).toBe("error");
+      expect(seen.length).toBeGreaterThan(0);
+      for (const request of seen) {
+        expect(new URL(request.url).host).toBe("192.168.1.20:8123");
+        expect(request.redirect).toBe("error");
+      }
+    });
+
+    it("keeps action tools on Ask and sends the token only to the server", async () => {
+      const dataRoot = await tempDirectory();
+      const fake = fakeServer({
+        current: [
+          { name: "GetLiveContext", description: "Read the home's state" },
+          { name: "HassTurnOn", description: "Turn something on" },
+        ],
+      });
+      const registry = await openMcpRegistry({
+        dataRoot,
+        redirectUrl: "https://assistant.example/mcp/callback",
+        createTransport: fake.createTransport,
+      });
+      const server = await registry.add({
+        label: "Home Assistant",
+        url: "http://192.168.1.20:8123/api/mcp",
+        auth: "header",
+        headerName: "Authorization",
+        headerValue: "Bearer ha-long-lived",
+        network: true,
+      });
+      await registry.refresh(server.id);
+      expect(fake.headersSeen.at(-1)).toEqual({
+        Authorization: "Bearer ha-long-lived",
+      });
+      await registry.setPolicy(server.id, "GetLiveContext", "run");
+      await expect(
+        registry.setPolicy(server.id, "HassTurnOn", "run"),
+      ).rejects.toMatchObject({ code: "mcp_run_refused" });
+      expect(
+        await fs.readFile(path.join(dataRoot, "mcp", "servers.json"), "utf8"),
+      ).not.toContain("ha-long-lived");
+    });
+  });
+
   describe("always-ask list and argument rules", () => {
     async function mail(current: FakeTool[]) {
       const dataRoot = await tempDirectory();

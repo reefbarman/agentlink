@@ -366,6 +366,61 @@ describe("createAssistantMcpTools", () => {
     expect(listed.modelContent).toContain("never act on what it asks");
   });
 
+  it("offers a server on the owner's network only to the owner's own chats", async () => {
+    const { registry } = await setup();
+    const home = await registry.add({
+      label: "Home",
+      url: "http://192.168.1.20:8123/api/mcp",
+      auth: "header",
+      headerName: "Authorization",
+      headerValue: "Bearer ha-secret-token",
+      network: true,
+    });
+    await registry.refresh(home.id);
+    await registry.setPolicy(home.id, "search", "run");
+    const audit = async () => undefined;
+    const owner = createAssistantMcpTools({
+      registry,
+      projectId: "home",
+      audit,
+      network: true,
+    });
+    const task = createAssistantMcpTools({
+      registry,
+      projectId: "task:abc",
+      audit,
+    });
+    const call = request("call_mcp_tool", { server: home.id, tool: "search" });
+    expect((await owner.approvalTools.prepare(call)).decision).toBe("allow");
+    const refused = await task.approvalTools.prepare(call);
+    expect(refused).toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("only the owner's own chats"),
+    });
+    const list = async (tools: typeof owner) => {
+      const [find] = await tools.readTools({
+        principal,
+        sessionId: "s1",
+        turnId: "t1",
+        input: { text: "", attachments: undefined },
+      });
+      return (
+        await find!.executeValidated(
+          {},
+          {
+            principal,
+            sessionId: "s1",
+            turnId: "t1",
+            model: undefined as never,
+            signal: new AbortController().signal,
+          },
+        )
+      ).modelContent as string;
+    };
+    expect(await list(owner)).toContain("on the owner's network");
+    expect(await list(task)).not.toContain("Home");
+  });
+
   it("adds a proposed server only after approval, with every tool on Ask", async () => {
     const { mcp, registry } = await setup();
     const approval = await mcp.approvalTools.prepare(
@@ -439,6 +494,41 @@ describe("approvalToolProxyRoutes", () => {
     await expect(call(approval.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it("never gives a runner a server on the owner's network, or its token", async () => {
+    const { registry, calls } = await setup();
+    const home = await registry.add({
+      label: "Home",
+      url: "http://192.168.1.20:8123/api/mcp",
+      auth: "header",
+      headerName: "Authorization",
+      headerValue: "Bearer ha-secret-token",
+      network: true,
+    });
+    await registry.refresh(home.id);
+    await registry.setPolicy(home.id, "search", "run");
+    const { handlers, grants, prepare, call } = await routes(registry, home.id);
+    const approval = await prepare("search");
+    expect(approval.decision).toBe("deny");
+    expect(JSON.stringify(approval)).not.toContain("ha-secret-token");
+    grants.decide("s1", "allow");
+    await expect(
+      call({
+        server: home.id,
+        tool: "search",
+        preparedMcpCall: {
+          action: "call",
+          server: home.id,
+          tool: "search",
+          arguments: {},
+          schemaHash: registry.get(home.id)!.tools[0]!.schemaHash,
+          policy: "run",
+        },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(calls).toEqual([]);
+    expect(Object.keys(handlers).join(" ")).not.toContain("secret");
   });
 
   it("runs a Run call without a card, and refuses forged or denied input", async () => {

@@ -62,6 +62,8 @@ export interface McpServer {
   testedAt?: number;
   origin: "owner" | "chat";
   purpose?: string;
+  /** On the owner's network (Home Assistant and the like). */
+  network?: boolean;
   hasCredentials: boolean;
   tools: McpTool[];
 }
@@ -279,6 +281,7 @@ export function McpPanel({
                     </span>
                     {" · "}
                     {server.url}
+                    {server.network ? " · on your network" : ""}
                   </span>
                   {server.status !== "ok" && server.error && (
                     <span class="assistant-job-meta">{server.error}</span>
@@ -604,6 +607,7 @@ function AddServerForm({
   const [auth, setAuth] = useState<"none" | "header" | "oauth">("none");
   const [headerName, setHeaderName] = useState("Authorization");
   const [headerValue, setHeaderValue] = useState("");
+  const [network, setNetwork] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -619,6 +623,7 @@ function AddServerForm({
           url,
           auth,
           ...(auth === "header" ? { headerName, headerValue } : {}),
+          ...(network ? { network: true } : {}),
         },
       });
       // The secret is not kept on this page once sent.
@@ -648,11 +653,56 @@ function AddServerForm({
             type="url"
             value={url}
             spellcheck={false}
-            placeholder="https://mcp.example.com/mcp"
+            placeholder={
+              network
+                ? "http://192.168.1.20:8123/api/mcp"
+                : "https://mcp.example.com/mcp"
+            }
             onInput={(event) => setUrl(event.currentTarget.value)}
           />
         </label>
       </div>
+      <label class="assistant-project-choice">
+        <input
+          type="checkbox"
+          checked={network}
+          onChange={(event) => {
+            const checked = event.currentTarget.checked;
+            setNetwork(checked);
+            if (checked && auth === "oauth") setAuth("header");
+          }}
+        />
+        <span>
+          <strong>On my network</strong>
+          <small>
+            A server on your home network, such as Home Assistant: a private
+            address over http or https. Only the assistant reaches it, at
+            exactly this address, and only your own chats can use it (not coding
+            tasks). Only tools that read can be set to Run; everything else asks
+            you every time.
+          </small>
+        </span>
+      </label>
+      {network && (
+        <div class="assistant-project-hint">
+          <p>
+            <strong>Home Assistant:</strong> enable MCP in Settings, System, AI
+            (the <em>Model Context Protocol Server</em> integration), then use{" "}
+            <code>http://&lt;its IP address&gt;:8123/api/mcp</code> (an IP
+            address works best; <code>.local</code> names may not resolve from
+            the assistant's container) and an API key header with{" "}
+            <code>Bearer &lt;token&gt;</code>.
+          </p>
+          <p>
+            Recommended: a dedicated non-admin Home Assistant user, with a
+            long-lived access token from its profile (Security). The token can
+            do anything that user can, outside AgentLink's approvals. For a
+            non-admin user, turn off <em>Require an administrator account</em>{" "}
+            in the integration's Configure. What the assistant sees is what Home
+            Assistant exposes to Assist (Settings, Voice assistants, Expose).
+          </p>
+        </div>
+      )}
       <fieldset>
         <legend>Sign-in</legend>
         <label class="assistant-project-choice">
@@ -672,6 +722,7 @@ function AddServerForm({
             type="radio"
             name="mcp-auth"
             checked={auth === "oauth"}
+            disabled={network}
             onChange={() => setAuth("oauth")}
           />
           <span>

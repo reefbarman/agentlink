@@ -227,6 +227,44 @@ describe("MCP routes", () => {
     ).resolves.toMatchObject({ status: 400 });
   });
 
+  it("add a server on the owner's network only with the flag", async () => {
+    const { call } = await setup();
+    const refused = await call("POST", "/api/mcp", {
+      label: "Home",
+      url: "http://192.168.1.20:8123/api/mcp",
+      auth: "header",
+      headerName: "Authorization",
+      headerValue: "Bearer ha-hidden",
+    });
+    expect(refused).toMatchObject({
+      status: 400,
+      body: { error: "mcp_url_invalid" },
+    });
+    expect(refused.body.detail).toContain("On my network");
+    await expect(
+      call("POST", "/api/mcp", {
+        label: "Home",
+        url: "http://192.168.1.20:8123/api/mcp",
+        auth: "none",
+        network: "yes",
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "network_invalid" },
+    });
+    const added = await call("POST", "/api/mcp", {
+      label: "Home",
+      url: "http://192.168.1.20:8123/api/mcp",
+      auth: "header",
+      headerName: "Authorization",
+      headerValue: "Bearer ha-hidden",
+      network: true,
+    });
+    expect(added.status).toBe(201);
+    expect(added.body.server).toMatchObject({ network: true, status: "ok" });
+    expect(added.text).not.toContain("ha-hidden");
+  });
+
   it("explains a refused address in plain words", async () => {
     const { call } = await setup();
     await expect(

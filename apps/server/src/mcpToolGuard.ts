@@ -6,6 +6,9 @@
  *   can never be set to Run: matched by the words in the tool's name, by
  *   the server's `destructiveHint`, and by any extra patterns the owner
  *   adds. The owner can add to the list, not take from it.
+ * - **On the owner's network** (Home Assistant and the like), only tools
+ *   whose names read (get, list, search, …) can be on Run: turning things
+ *   on or off, setting, opening and calling services always ask.
  * - **Argument rules.** A tool on Run may be limited to calls whose named
  *   arguments match the owner's values (exact, or a prefix ending in `*`),
  *   for example `calendarId` = `primary`. Any other call asks.
@@ -91,6 +94,43 @@ const READ_WORDS = new Set([
   "view",
 ]);
 
+/** Device actions: with these, a network tool acts even if it also reads. */
+const DEVICE_WORDS = new Set([
+  "turn",
+  "toggle",
+  "open",
+  "close",
+  "lock",
+  "unlock",
+  "start",
+  "stop",
+  "pause",
+  "unpause",
+  "play",
+  "press",
+  "call",
+  "trigger",
+  "activate",
+  "run",
+  "execute",
+  "increase",
+  "decrease",
+  "raise",
+  "lower",
+  "complete",
+  "broadcast",
+  "announce",
+  "say",
+  "speak",
+  "notify",
+  "arm",
+  "disarm",
+  "enable",
+  "disable",
+  "reload",
+  "restart",
+]);
+
 export const MAX_ALWAYS_ASK_PATTERNS = 50;
 const PATTERN = /^[A-Za-z0-9_.*/-]{1,100}$/u;
 const MAX_RULE_ARGUMENTS = 5;
@@ -102,6 +142,7 @@ export const BUILT_IN_ALWAYS_ASK = [
   `names with ${[...EFFECT_WORDS].join(", ")}`,
   `names that ${[...CHANGE_WORDS].filter((word) => word !== "draft").join(", ")} or draft an event, message, draft, label, thread, invitation, filter, reminder, contact or meeting`,
   "tools the server marks as destructive",
+  "on a server on your network, every tool whose name does not read (get, list, search, find, query, fetch, show, view)",
 ] as const;
 
 /** Lower-case words in a tool name: `gmail_sendMessage` → gmail, send, message. */
@@ -128,11 +169,24 @@ export function alwaysAskReason(
   serverId: string,
   tool: GuardedTool,
   patterns: readonly string[] = [],
+  options: { readonly network?: boolean } = {},
 ): string | undefined {
   if (tool.destructiveHint === true) {
     return "the server marks it as destructive";
   }
   const words = nameWords(tool.name);
+  if (
+    options.network &&
+    (!words.some((word) => READ_WORDS.has(word)) ||
+      words.some(
+        (word) =>
+          DEVICE_WORDS.has(word) ||
+          EFFECT_WORDS.has(word) ||
+          CHANGE_WORDS.has(word),
+      ))
+  ) {
+    return "it is on your network and its name does not say it only reads, so it may act on a device";
+  }
   const effect = words.find((word) => EFFECT_WORDS.has(word));
   if (effect) return `it can ${effect} things`;
   const firstRead = words.findIndex((word) => READ_WORDS.has(word));

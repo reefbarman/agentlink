@@ -191,6 +191,47 @@ describe("McpPanel", () => {
     );
   });
 
+  it("adds a server on the owner's network, with Home Assistant setup help", async () => {
+    const calls = stubFetch({
+      "GET /api/mcp": { servers: [] },
+      "POST /api/mcp": { server: server({ auth: "header", network: true }) },
+    });
+    render(<McpPanel onClose={() => undefined} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Add a server/ }),
+    );
+    fireEvent.click(screen.getByLabelText(/On my network/));
+    expect(screen.getByText(/Require an administrator account/)).toBeTruthy();
+    const oauth = screen.getByLabelText(
+      /Sign in with the service/,
+    ) as HTMLInputElement;
+    expect(oauth.disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText("Name"), {
+      target: { value: "Home Assistant" },
+    });
+    fireEvent.input(screen.getByLabelText("Address"), {
+      target: { value: "http://192.168.1.20:8123/api/mcp" },
+    });
+    fireEvent.click(screen.getByLabelText(/An API key in a header/));
+    fireEvent.input(screen.getByLabelText("Value"), {
+      target: { value: "Bearer t" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        key: "POST /api/mcp",
+        body: {
+          label: "Home Assistant",
+          url: "http://192.168.1.20:8123/api/mcp",
+          auth: "header",
+          headerName: "Authorization",
+          headerValue: "Bearer t",
+          network: true,
+        },
+      }),
+    );
+  });
+
   it("opens the service's sign-in page", async () => {
     stubFetch({
       "GET /api/mcp": {

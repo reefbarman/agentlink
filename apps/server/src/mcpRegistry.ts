@@ -94,6 +94,13 @@ export interface McpServerRecord {
   readonly origin: "owner" | "chat";
   readonly purpose?: string;
   readonly createdAt: number;
+  /**
+   * On the owner's network (Home Assistant, a NAS): a private address or
+   * LAN name over HTTP(S), reached only at its saved host and port, never
+   * with OAuth. Only tools that read can be on Run, and only the owner's
+   * own chats are offered it.
+   */
+  readonly network?: true;
 }
 
 export interface NewMcpServer {
@@ -104,6 +111,8 @@ export interface NewMcpServer {
   readonly headerValue?: string;
   readonly origin?: "owner" | "chat";
   readonly purpose?: string;
+  /** The owner ticked "On my network": a private address is accepted. */
+  readonly network?: boolean;
 }
 
 export class McpError extends Error {
@@ -210,12 +219,14 @@ export async function openMcpRegistry(options: {
   let alwaysAsk: readonly string[] = stored.alwaysAsk;
   // A tool the always-ask list now covers (a newer list, or a hand edit)
   // goes back to Ask before anything can call it.
+  const refusal = (server: McpServerRecord, tool: McpToolRecord) =>
+    alwaysAskReason(server.id, tool, alwaysAsk, {
+      network: server.network === true,
+    });
   const guarded = (server: McpServerRecord): McpServerRecord => {
     if (
       !server.tools.some(
-        (tool) =>
-          tool.policy === "run" &&
-          alwaysAskReason(server.id, tool, alwaysAsk) !== undefined,
+        (tool) => tool.policy === "run" && refusal(server, tool) !== undefined,
       )
     ) {
       return server;
@@ -223,9 +234,7 @@ export async function openMcpRegistry(options: {
     return {
       ...server,
       tools: server.tools.map((tool) =>
-        tool.policy === "run" && alwaysAskReason(server.id, tool, alwaysAsk)
-          ? onAsk(tool)
-          : tool,
+        tool.policy === "run" && refusal(server, tool) ? onAsk(tool) : tool,
       ),
     };
   };
@@ -333,19 +342,26 @@ export async function openMcpRegistry(options: {
     };
   };
 
-  /** Only the saved host for the server itself; public HTTPS for OAuth. */
+  /**
+   * Only the saved host for the server itself; public HTTPS for OAuth. A
+   * server on the owner's network is pinned to its saved scheme, host and
+   * port, with nothing else allowed.
+   */
   const fetchFor = (server: McpServerRecord): typeof globalThis.fetch => {
     const base = options.fetch ?? globalThis.fetch;
-    const host = new URL(server.url).host;
+    const saved = new URL(server.url);
+    const host = saved.host;
     return async (input, init) => {
       const url = new URL(
         input instanceof Request ? input.url : input.toString(),
       );
-      // An OAuth server's authorization server is often on another host.
-      if (
-        !isPublicHttps(url) ||
-        (url.host !== host && server.auth !== "oauth")
-      ) {
+      const refused = server.network
+        ? url.protocol !== saved.protocol ||
+          url.host !== host ||
+          Boolean(url.username || url.password)
+        : // An OAuth server's authorization server is often on another host.
+          !isPublicHttps(url) || (url.host !== host && server.auth !== "oauth");
+      if (refused) {
         throw new McpError(
           "mcp_destination_refused",
           `Refused to contact ${url.host}`,
@@ -416,10 +432,11 @@ export async function openMcpRegistry(options: {
       Boolean(secrets.headers[id] || secrets.oauth[id]?.tokens),
     alwaysAsk: () => alwaysAsk,
     runRefusal(id, toolName) {
-      const tool = registry
-        .get(id)
-        ?.tools.find((candidate) => candidate.name === toolName);
-      return tool ? alwaysAskReason(id, tool, alwaysAsk) : undefined;
+      const server = registry.get(id);
+      const tool = server?.tools.find(
+        (candidate) => candidate.name === toolName,
+      );
+      return server && tool ? refusal(server, tool) : undefined;
     },
 
     async setAlwaysAsk(patterns) {
@@ -445,15 +462,37 @@ export async function openMcpRegistry(options: {
       } catch {
         throw new McpError("mcp_url_invalid", "That is not a web address");
       }
-      if (!isPublicHttps(url)) {
+      const network = input.network === true;
+      if (network) {
+        if (!isNetworkAddress(url)) {
+          throw new McpError(
+            "mcp_url_invalid",
+            "An address on your network must be http or https on a private address (such as 192.168.1.20:8123) or a .local, .lan or .home.arpa name, with no user name or password in it",
+          );
+        }
+        if (input.origin === "chat") {
+          throw new McpError(
+            "mcp_url_invalid",
+            "Only you can add a server on your network, in the MCP panel",
+          );
+        }
+      } else if (!isPublicHttps(url)) {
         throw new McpError(
           "mcp_url_invalid",
-          "The address must be HTTPS on a public host",
+          isNetworkAddress(url)
+            ? 'That address is on your network. Tick "On my network" to add it (for example Home Assistant)'
+            : "The address must be HTTPS on a public host",
         );
       }
       url.hash = "";
       if (!["none", "header", "oauth"].includes(input.auth)) {
         throw new McpError("mcp_auth_invalid", "Unknown sign-in kind");
+      }
+      if (network && input.auth === "oauth") {
+        throw new McpError(
+          "mcp_auth_invalid",
+          "A server on your network signs in with a token in a header, or none",
+        );
       }
       if (input.auth === "header") {
         if (!input.headerName || !HEADER_NAME_PATTERN.test(input.headerName)) {
@@ -488,6 +527,7 @@ export async function openMcpRegistry(options: {
           ? { purpose: input.purpose.trim().slice(0, 300) }
           : {}),
         createdAt: at,
+        ...(network ? { network: true as const } : {}),
       };
       if (input.auth === "header") secrets.headers[id] = input.headerValue!;
       servers = [...servers, record];
@@ -525,7 +565,7 @@ export async function openMcpRegistry(options: {
       const target = server.tools.find((tool) => tool.name === toolName);
       if (!target) throw new McpError("mcp_tool_not_found", "No such tool");
       if (policy === "run") {
-        const refused = alwaysAskReason(server.id, target, alwaysAsk);
+        const refused = refusal(server, target);
         if (refused) {
           throw new McpError(
             "mcp_run_refused",
@@ -756,6 +796,26 @@ export function isPublicHttps(url: URL): boolean {
   }
   // A bare name is a container or LAN name, not a public host.
   return host.includes(".");
+}
+
+/**
+ * An address on the owner's network: HTTP(S) to a private IPv4 or IPv6
+ * address, or a `.local`, `.lan` or `.home.arpa` name. Never loopback,
+ * link-local or cloud metadata addresses, and no user name or password.
+ */
+export function isNetworkAddress(url: URL): boolean {
+  if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+  if (url.username || url.password) return false;
+  const host = url.hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/u.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    );
+  }
+  if (host.includes(":")) return /^f[cd][0-9a-f]{2}:/u.test(host);
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.(local|lan|home\.arpa)$/u.test(host);
 }
 
 function resultText(result: CallToolResult): string {

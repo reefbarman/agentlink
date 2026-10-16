@@ -75,6 +75,31 @@ describe("alwaysAskReason", () => {
     expect(reason("list_events", false)).toBeUndefined();
   });
 
+  it("lets only reading tools run on a server on the owner's network", () => {
+    const network = (name: string) =>
+      alwaysAskReason("home", { name }, [], { network: true });
+    for (const name of [
+      "HassTurnOn",
+      "HassTurnOff",
+      "HassLightSet",
+      "HassSetPosition",
+      "HassListAddItem",
+      "HassListCompleteItem",
+      "HassMediaPause",
+      "HassBroadcast",
+      "HassCancelAllTimers",
+      "call_service",
+      "lock_door",
+    ]) {
+      expect(network(name), name).toContain("on your network");
+    }
+    for (const name of ["GetLiveContext", "GetDateTime", "get_history"]) {
+      expect(network(name), name).toBeUndefined();
+    }
+    // The same names elsewhere follow the ordinary list.
+    expect(alwaysAskReason("other", { name: "HassTurnOn" })).toBeUndefined();
+  });
+
   it("adds the owner's patterns, by tool or server/tool", () => {
     expect(
       alwaysAskReason("linear", { name: "create_issue" }, ["create_*"]),

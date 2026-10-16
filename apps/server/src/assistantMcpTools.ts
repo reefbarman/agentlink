@@ -101,14 +101,27 @@ export function createAssistantMcpTools(options: {
   /** The project (or task project) these chats belong to. */
   readonly projectId: string;
   readonly audit: (record: McpCallRecord) => Promise<void>;
+  /**
+   * Whether servers on the owner's network (Home Assistant and the like)
+   * are offered: the owner's own chats only, never task chats or runners.
+   */
+  readonly network?: boolean;
   /** After a proposal is approved: test the new server (in the background). */
   readonly onProposed?: (serverId: string) => void;
 }): AssistantMcpTools {
   const { registry } = options;
 
+  const offered = (server: McpServerRecord) =>
+    options.network === true || server.network !== true;
+
   const usable = (serverId: string, toolName: string) => {
     const server = registry.get(serverId);
     if (!server) return { error: `There is no MCP server "${serverId}"` };
+    if (!offered(server)) {
+      return {
+        error: `"${server.label}" is on the owner's network; only the owner's own chats can use it, not coding tasks`,
+      };
+    }
     if (!server.enabled) {
       return { error: `The MCP server "${server.label}" is turned off` };
     }
@@ -193,6 +206,7 @@ export function createAssistantMcpTools(options: {
         .filter(
           (server) =>
             server.enabled &&
+            offered(server) &&
             (typeof input.server !== "string" || server.id === input.server),
         );
       if (servers.length === 0) {
@@ -206,7 +220,7 @@ export function createAssistantMcpTools(options: {
       let count = 0;
       for (const server of servers) {
         lines.push(
-          `## ${server.id} (${server.label}): ${server.status === "ok" ? "working" : server.status === "signed_out" ? "needs the owner to sign in" : `not working: ${server.error ?? "not tested"}`}`,
+          `## ${server.id} (${server.label}${server.network ? ", on the owner's network" : ""}): ${server.status === "ok" ? "working" : server.status === "signed_out" ? "needs the owner to sign in" : `not working: ${server.error ?? "not tested"}`}`,
         );
         for (const tool of server.tools) {
           if (tool.policy === "off") continue;

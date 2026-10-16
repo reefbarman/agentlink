@@ -20,7 +20,9 @@ import { alwaysAskReason, BUILT_IN_ALWAYS_ASK } from "./mcpToolGuard.js";
  *   and the always-ask list (built in, and the owner's extra patterns)
  * - `PUT /api/mcp` (`{ alwaysAsk: string[] }`): the owner's extra patterns
  * - `POST /api/mcp` (`{ label, url, auth: "none" | "header" | "oauth",
- *   headerName?, headerValue? }`): add one, then test it
+ *   headerName?, headerValue?, network?: true }`): add one, then test it.
+ *   `network` ("On my network", for Home Assistant and the like) accepts
+ *   a private address over HTTP(S), never with OAuth
  * - `POST /api/mcp/:id/test`: connect and list its tools again
  * - `PATCH /api/mcp/:id` (`{ enabled?, label? }`)
  * - `DELETE /api/mcp/:id`: also forgets its secrets
@@ -86,9 +88,12 @@ export function mcpServerView(
     ...(server.testedAt !== undefined ? { testedAt: server.testedAt } : {}),
     origin: server.origin,
     ...(server.purpose ? { purpose: server.purpose } : {}),
+    ...(server.network ? { network: true } : {}),
     hasCredentials,
     tools: server.tools.map((tool) => {
-      const alwaysAsks = alwaysAskReason(server.id, tool, alwaysAsk);
+      const alwaysAsks = alwaysAskReason(server.id, tool, alwaysAsk, {
+        network: server.network === true,
+      });
       const properties = tool.inputSchema.properties;
       return {
         name: tool.name,
@@ -155,7 +160,11 @@ export function createMcpRoutes(options: McpRoutesOptions): McpRoutes {
       if (auth_ !== "none" && auth_ !== "header" && auth_ !== "oauth") {
         throw new HttpError(400, "auth_invalid");
       }
+      if (body.network !== undefined && typeof body.network !== "boolean") {
+        throw new HttpError(400, "network_invalid");
+      }
       const added = await registry.add({
+        ...(body.network === true ? { network: true } : {}),
         label: text(body.label, "label"),
         url: text(body.url, "url"),
         auth: auth_ as McpAuthKind,

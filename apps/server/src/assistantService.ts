@@ -1019,10 +1019,14 @@ export async function startAssistantService(
     assistantChanged();
     return result;
   };
-  const mcpToolsFor = (projectId: string) =>
+  const mcpToolsFor = (
+    projectId: string,
+    scope: { readonly network: boolean },
+  ) =>
     createAssistantMcpTools({
       registry: mcpRegistry,
       projectId,
+      network: scope.network,
       audit: async (record) => {
         const { projectId: _projectId, ...data } = record;
         await taskAudit
@@ -1256,7 +1260,8 @@ export async function startAssistantService(
         },
         onChanged: () => assistantChanged(),
       });
-      const mcpTools = mcpToolsFor(project.id);
+      // Servers on the owner's network are for the owner's chats only.
+      const mcpTools = mcpToolsFor(project.id, { network: kind === "project" });
       // Chats can propose persona changes; the owner approves each one.
       const personaTools = createPersonaTools({
         store: persona,
@@ -2026,7 +2031,8 @@ export async function startAssistantService(
             ...(codex ? { codex: codex.provider } : {}),
           }),
         // MCP calls run here; a runner never sees a token.
-        approvalHostTools: (projectId) => mcpToolsFor(projectId).approvalTools,
+        approvalHostTools: (projectId) =>
+          mcpToolsFor(projectId, { network: false }).approvalTools,
         listen: { host: "0.0.0.0", port: runnersConfig.port },
         controlUrl: `http://${runnersConfig.controlHost}:${runnersConfig.port}`,
         dataRoot: path.join(config.dataRoot, "runners"),
