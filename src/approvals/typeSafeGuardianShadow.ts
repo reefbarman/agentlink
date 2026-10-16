@@ -1303,7 +1303,8 @@ function precedingAssistantMessage(
   return null;
 }
 
-function redactSensitiveText(value: string): {
+/** Exported for the local Jev replay tooling (scripts/jev-replay.mjs). */
+export function redactSensitiveText(value: string): {
   text: string;
   redacted: boolean;
 } {
@@ -1351,7 +1352,7 @@ function isLikelyOpaqueToken(
     );
 }
 
-function compactHomePaths(value: string): string {
+export function compactHomePaths(value: string): string {
   const home = process.env.HOME?.replace(/\\/g, "/").replace(/\/+$/, "");
   if (!home) return value;
   const escapedHome = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
