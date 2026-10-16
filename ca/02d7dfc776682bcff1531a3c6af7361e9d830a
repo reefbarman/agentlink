@@ -1,0 +1,27 @@
+apps/server/src/backup.test.ts
+  h_e08a86bb3a33a2 61-66,70
+apps/server/src/backup.ts
+  h_e08a86bb3a33a2 3,5,161,179-194
+  s_a5bc03c8b88865::t_4c7fa4f0f7b984 195-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca02d7dfc776682bcff1531a3c6af7361e9d830a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_a5bc03c8b88865": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1fc5936a-abdb-4827-b619-d472c5414579",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
