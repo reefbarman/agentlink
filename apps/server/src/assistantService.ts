@@ -118,6 +118,11 @@ import {
 import { HttpError } from "./httpJson.js";
 import { createPublisherClient } from "./publisherClient.js";
 import { createTaskRunner, type TaskRunner } from "./taskRunner.js";
+import {
+  auditedTaskStore,
+  openTaskAudit,
+  type TaskAuditActor,
+} from "./taskAudit.js";
 import { isActiveTask, openTaskStore, type TaskRun } from "./taskStore.js";
 import { combineApprovalHostTools, createTaskTools } from "./taskTools.js";
 import { openRepositorySnapshots } from "./repositorySnapshots.js";
@@ -213,6 +218,11 @@ export function serverJobsDirectory(config: AssistantServerConfig): string {
 /** The owner's inbox of job results and approvals waiting. */
 export function serverInboxDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "inbox");
+}
+
+/** The coding tasks' hash-chained audit log; only the server writes it. */
+export function serverAuditDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "audit");
 }
 
 /** Coding task records and their state history. */
@@ -722,13 +732,30 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
-  const taskStore = await openTaskStore({
-    directory: serverTasksDirectory(config),
+  // Opened before the tasks, so every change to them is on record.
+  const taskAudit = await openTaskAudit({
+    directory: serverAuditDirectory(config),
+    log,
   }).catch(async (error: unknown) => {
     await eventLog.close();
     await certificates?.stop();
     throw error;
   });
+  const taskStore = auditedTaskStore(
+    await openTaskStore({
+      directory: serverTasksDirectory(config),
+    }).catch(async (error: unknown) => {
+      await eventLog.close();
+      await certificates?.stop();
+      throw error;
+    }),
+    taskAudit,
+    {
+      // Task chats run in session runners when they are configured.
+      runsIn: () =>
+        config.runners && config.projectsRoot ? "runner" : "server",
+    },
+  );
   const repositorySettings = await openRepositorySettings({
     file: path.join(serverTasksDirectory(config), "repositories.json"),
   }).catch(async (error: unknown) => {
@@ -1100,7 +1127,10 @@ export async function startAssistantService(
      * as stopped (it can be resumed), a run as cancelled. False when neither
      * works there.
      */
-    const stopTaskOrRun = async (workspaceSessionId: string) => {
+    const stopTaskOrRun = async (
+      workspaceSessionId: string,
+      by: TaskAuditActor,
+    ) => {
       const task = taskStore
         .list()
         .find(
@@ -1109,6 +1139,9 @@ export async function startAssistantService(
             isActiveTask(candidate),
         );
       if (task && taskRunner) {
+        await taskAudit
+          .request(task.id, "stop", by, Date.now())
+          .catch(() => undefined);
         await taskRunner.stop(task.id);
         return true;
       }
@@ -1150,7 +1183,10 @@ export async function startAssistantService(
         // Stop in a run's chat stops the run, recorded as cancelled; in a
         // task's chat, it stops the task (which can be resumed).
         stopRun: async (workspaceSessionId) => {
-          await stopTaskOrRun(workspaceSessionId);
+          await stopTaskOrRun(workspaceSessionId, {
+            kind: "task_chat",
+            sessionId: workspaceSessionId,
+          });
         },
         chatTasks: (workspaceSessionId) =>
           chatTaskCards(taskStore.list(), projectId, workspaceSessionId),
@@ -1163,6 +1199,15 @@ export async function startAssistantService(
           if (!task || !taskRunner) {
             throw new HttpError(409, "ask_agent_turn_in_progress");
           }
+          await taskAudit
+            .request(
+              task.id,
+              "message",
+              { kind: "task_chat", sessionId: workspaceSessionId },
+              Date.now(),
+              { text },
+            )
+            .catch(() => undefined);
           await taskRunner.steer(task.id, text);
         },
       });
@@ -1661,6 +1706,7 @@ export async function startAssistantService(
       repositories: repositorySettings,
       connections: githubConnections,
       runner: tasks?.runner,
+      audit: taskAudit,
       isOwner: (auth) =>
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
@@ -1689,7 +1735,14 @@ export async function startAssistantService(
           sessionWatch.keepGoing(entry.projectId, entry.sessionId);
           return;
         }
-        if (await stopTaskOrRun(entry.sessionId)) return;
+        if (
+          await stopTaskOrRun(entry.sessionId, {
+            kind: "owner",
+            device: auth.session.deviceLabel,
+          })
+        ) {
+          return;
+        }
         const bridge = bridges.get(entry.projectId);
         if (bridge) {
           await bridge.stop(auth.detach(), entry.sessionId);
@@ -1742,6 +1795,7 @@ export async function startAssistantService(
         await tasks?.runner.close();
         await taskDeliveries.flush();
         await taskStore.flush();
+        await taskAudit.flush();
         await taskInboxWrites;
         clearInterval(watchTimer);
         stopWatching();

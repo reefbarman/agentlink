@@ -6,6 +6,11 @@ import { modelsByKey } from "./jobRoutes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { GitHubConnectionStore } from "./githubConnections.js";
 import { parseGitHubRepository } from "./githubApi.js";
+import type {
+  TaskAudit,
+  TaskAuditAction,
+  TaskAuditActor,
+} from "./taskAudit.js";
 import {
   parseValidationCommands,
   type RepositorySettingsStore,
@@ -26,6 +31,8 @@ import {
  *   objective, model? }`)
  * - `GET /api/tasks/:id` (record and state history), `DELETE` (also removes
  *   its clone)
+ * - `GET /api/tasks/:id/audit`: the task's audit entries (kept after it is
+ *   deleted) and whether the whole log's hash chain is intact
  * - `POST /api/tasks/:id/stop`, `POST /api/tasks/:id/resume`
  * - `POST /api/tasks/:id/publish` (`{ allowUnreviewed? }`): push a ready
  *   task and open its draft pull request, within the repository's
@@ -40,7 +47,7 @@ import {
  */
 
 const MAX_TASK_BODY_BYTES = 64 * 1024;
-const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume|publish))?$/u;
+const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume|publish|audit))?$/u;
 const REPOSITORY_FIELDS = new Set(["repository", "validation", "connectionId"]);
 const PUBLISH_FIELDS = new Set(["allowUnreviewed"]);
 
@@ -52,6 +59,8 @@ export interface TaskRoutesOptions {
   /** Undefined when the server has no `projectsRoot` for clones. */
   readonly runner: TaskRunner | undefined;
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
+  /** The audit log: read for `/audit`, told who asked for each action. */
+  readonly audit?: Pick<TaskAudit, "entries" | "request" | "verify">;
   readonly models: readonly AssistantServerModelChoice[];
   readonly now?: () => number;
 }
@@ -95,6 +104,21 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
     if (!(await auth.revalidate()).valid) {
       throw new HttpError(401, "authentication_required");
     }
+  };
+  /** Who asked: the owner, on this device. */
+  const owner = (auth: AssistantServerAuth): TaskAuditActor => ({
+    kind: "owner",
+    device: auth.session.deviceLabel,
+  });
+  const requested = async (
+    taskId: string,
+    action: TaskAuditAction,
+    auth: AssistantServerAuth,
+    detail?: Record<string, unknown>,
+  ) => {
+    await options.audit
+      ?.request(taskId, action, owner(auth), now(), detail)
+      .catch(() => undefined);
   };
   const requireTask = (taskId: string) => {
     const task = TASK_ID_PATTERN.test(taskId) ? store.get(taskId) : undefined;
@@ -184,7 +208,9 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       const modelError = taskModelError(taskRequest.model, models);
       if (modelError) throw new HttpError(400, modelError);
       await requireValid(auth);
-      sendJson(response, 202, { task: await runner.create(taskRequest) });
+      const created = await runner.create(taskRequest);
+      await requested(created.id, "create", auth);
+      sendJson(response, 202, { task: created });
       return true;
     }
 
@@ -192,6 +218,21 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
     if (!match) return false;
     const taskId = decodeURIComponent(match[1]!);
     const action = match[2];
+    if (action === "audit") {
+      if (method !== "GET") throw new HttpError(405, "method_not_allowed");
+      if (!TASK_ID_PATTERN.test(taskId) || !options.audit) {
+        throw new HttpError(404, "task_not_found");
+      }
+      const entries = options.audit.entries(taskId);
+      if (entries.length === 0 && !store.get(taskId)) {
+        throw new HttpError(404, "task_not_found");
+      }
+      sendJson(response, 200, {
+        entries,
+        verification: await options.audit.verify(),
+      });
+      return true;
+    }
     if (action) {
       if (method !== "POST") throw new HttpError(405, "method_not_allowed");
       requireTask(taskId);
@@ -212,6 +253,12 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
           throw new HttpError(400, "allow_unreviewed_invalid");
         }
         await requireValid(auth);
+        await requested(
+          taskId,
+          "publish",
+          auth,
+          body.allowUnreviewed === true ? { allowUnreviewed: true } : {},
+        );
         sendJson(response, 202, {
           task: describeTask(
             await runner.publish(taskId, {
@@ -222,6 +269,7 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
         return true;
       }
       await requireValid(auth);
+      await requested(taskId, action === "stop" ? "stop" : "resume", auth);
       if (action === "stop") {
         sendJson(response, 200, { task: await runner.stop(taskId) });
       } else {
@@ -243,6 +291,7 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       requireTask(taskId);
       const runner = requireRunner();
       await requireValid(auth);
+      await requested(taskId, "delete", auth);
       await runner.delete(taskId);
       sendJson(response, 200, { ok: true });
       return true;

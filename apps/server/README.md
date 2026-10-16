@@ -454,8 +454,26 @@ A task takes a coding objective for a repository (public, or private when the re
 | `POST /api/tasks/:id/stop`    |                                                  | `{ task }` (`cancelled`)                                                                                                                                                                   |
 | `POST /api/tasks/:id/resume`  |                                                  | `202 { task }`; `409 task_busy`, `task_not_resumable`                                                                                                                                      |
 | `DELETE /api/tasks/:id`       |                                                  | `{ ok: true }`                                                                                                                                                                             |
+| `GET /api/tasks/:id/audit`    |                                                  | `{ entries, verification }`: the task's [audit log](#task-audit-log) entries, oldest first (kept after it is deleted), and whether the whole log's hash chain is intact                    |
 
 The task's chat is `GET /api/projects/<task.projectId>/sessions/<task.sessionId>`. Only the owner can use these routes (`403 tasks_forbidden`). Errors: `400 repository_url_invalid` (https, no credentials), `objective_required`, `base_branch_invalid`, `model_not_available`, `task_field_unknown`, `validation_invalid`, `validation_command_invalid`, `too_many_validation_commands`, `repository_change_required`, `connection_not_found`, `repository_not_github`; `404 task_not_found`; `409 publisher_not_configured`, `publish_permission_missing`, `connection_changed`, `implementation_not_current`, `validation_not_passed`, `review_missing`; `409 tasks_disabled` (no `projectsRoot`), `task_limit_reached` (200 tasks). Records are stored in `<dataRoot>/tasks/tasks.json` (an unreadable file stops the server from starting), state changes in `<dataRoot>/tasks/events.jsonl` and validation commands in `<dataRoot>/tasks/repositories.json`.
+
+### Task audit log
+
+The server keeps an append-only record of what happened to every coding task in `<dataRoot>/audit/tasks.jsonl`, one JSON entry per line, never rewritten. It records:
+
+- the task's creation (repository, branch, objective, model, references, and the chat that started it), each state change with its error, and each follow-up with the chat that asked for it;
+- each gate's result: validation (each command's exit code, time-out and duration, not its output) and review (model, verdict and findings), against the exact commit;
+- each external effect: a push or draft pull request, when it is intended and when it is done or fails;
+- the implementation chat and whether it runs in a [session runner](#session-runners) or in the server, and the GitHub connection the task uses;
+- who asked: a `request` entry for each create, stop, resume, publish or delete by the owner in the app (with the device), each **Stop** and each message in the task's own chat, and each **Stop** from an Inbox notice;
+- the deletion. Deleting a task keeps its entries.
+
+Each entry has a sequence number and the SHA-256 hash of the entry before it, and `audit/head.json` records the last one, so changing, removing or reordering an entry, or removing entries from the end, breaks the chain. Check it with `agentlink-server audit-check --config <file>` (in the container, `docker compose exec assistant agentlink-server audit-check`): it exits 0 when the chain is intact and 1, naming the first broken entry, when it is not. `GET /api/tasks/:id/audit` returns a task's entries and the same check.
+
+When the server starts, a final line cut short by a crash is dropped. A damaged log is kept beside it as `tasks.jsonl.damaged-<time>`, and the log continues from its last good entry with a `log_damaged` entry naming the problem, so the damage stays on record.
+
+Only the server writes the log. The models' commands run in the command worker or a session runner, neither of which mounts the data root. The chain has no secret key and is not copied off the machine: it shows that the log was edited or cut short, not that someone with access to the data folder rewrote all of it consistently.
 
 ### Publishing tasks to GitHub
 

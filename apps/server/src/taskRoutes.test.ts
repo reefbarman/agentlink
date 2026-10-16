@@ -11,6 +11,7 @@ import type { TaskRunner } from "./taskRunner.js";
 import { openRepositorySettings } from "./taskRepositories.js";
 import { openGitHubConnections } from "./githubConnections.js";
 import { openTaskStore, type TaskRequest, type TaskRun } from "./taskStore.js";
+import { auditedTaskStore, openTaskAudit } from "./taskAudit.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -40,7 +41,11 @@ const ID = "aaaaaaaaaaaa";
 async function setup(options: { readonly enabled?: boolean } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-routes-"));
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
-  const store = await openTaskStore({ directory: dir });
+  const audit = await openTaskAudit({ directory: path.join(dir, "audit") });
+  const store = auditedTaskStore(
+    await openTaskStore({ directory: dir }),
+    audit,
+  );
   const record = (request: TaskRequest): TaskRun => ({
     ...request,
     id: ID,
@@ -83,6 +88,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     repositories,
     connections,
     runner: options.enabled === false ? undefined : runner,
+    audit,
     isOwner: (request) => request.principal.subjectId === "owner",
     models: [{ providerId: "codex", modelId: "gpt-5" }],
   });
@@ -128,6 +134,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
   };
   return {
     store,
+    audit,
     runner,
     connections,
     call,
@@ -372,6 +379,63 @@ describe("task routes", () => {
     expect((body.task as { current: unknown }).current).toEqual({
       implementation: { kind: "implementation", commit: "c2", at: 3 },
     });
+  });
+
+  it("records who asked, and keeps a deleted task's audit", async () => {
+    const test = await setup();
+    await test.call("POST", "/api/tasks", REQUEST);
+    await test.call("POST", `/api/tasks/${ID}/stop`);
+    await test.call("POST", `/api/tasks/${ID}/publish`, {
+      allowUnreviewed: true,
+    });
+    await test.call("DELETE", `/api/tasks/${ID}`);
+    const { status, body } = await test.call("GET", `/api/tasks/${ID}/audit`);
+    expect(status).toBe(200);
+    const entries = body.entries as Array<{
+      kind: string;
+      data: Record<string, unknown>;
+    }>;
+    const owner = { kind: "owner", device: "Laptop" };
+    expect(entries.map((entry) => [entry.kind, entry.data.action])).toEqual([
+      ["created", undefined],
+      ["state", undefined],
+      ["request", "create"],
+      ["request", "stop"],
+      ["request", "publish"],
+      ["request", "delete"],
+      ["deleted", undefined],
+    ]);
+    expect(entries[4]!.data).toEqual({
+      action: "publish",
+      by: owner,
+      allowUnreviewed: true,
+    });
+    expect(body.verification).toEqual({
+      ok: true,
+      entries: 7,
+      problems: [],
+      damaged: [],
+    });
+    await expect(
+      test.call("GET", "/api/tasks/bbbbbbbbbbbb/audit"),
+    ).resolves.toMatchObject({ status: 404 });
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/audit`),
+    ).resolves.toMatchObject({ status: 405 });
+    test.setCaller(auth("guest"));
+    await expect(
+      test.call("GET", `/api/tasks/${ID}/audit`),
+    ).resolves.toMatchObject({ status: 403 });
+  });
+
+  it("does not record a request that was refused", async () => {
+    const test = await setup();
+    await test.call("POST", "/api/tasks", REQUEST);
+    test.setCaller(auth("owner", false));
+    await test.call("POST", `/api/tasks/${ID}/stop`);
+    expect(
+      test.audit.entries(ID).filter((entry) => entry.kind === "request"),
+    ).toHaveLength(1);
   });
 
   it("lists but does not start tasks without a projects folder", async () => {

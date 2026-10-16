@@ -1,10 +1,12 @@
 import {
   preflightAssistantService,
   serverAccessDataRoot,
+  serverAuditDirectory,
   serverTlsDirectory,
   startAssistantService,
   type AssistantService,
 } from "./assistantService.js";
+import { verifyTaskAudit } from "./taskAudit.js";
 import { startCommandWorker } from "./commandWorker.js";
 import {
   DEFAULT_EGRESS_ALLOWLIST,
@@ -68,6 +70,7 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server export-ca --config <file> > agentlink-ca.pem
        agentlink-server codex-login --config <file>
        agentlink-server codex-logout --config <file>
+       agentlink-server audit-check --config <file>
        agentlink-server command-worker --token-file <file> --root <dir>...
                                        [--listen <host:port>]
                                        [--allow-local-peers] [--reap-orphans]
@@ -181,7 +184,13 @@ const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
 const DEFAULT_EGRESS_GATEWAY_LISTEN = "0.0.0.0:3128";
 const DEFAULT_PUBLISHER_LISTEN = "0.0.0.0:7400";
 
-const COMMANDS = new Set(["pair", "export-ca", "codex-login", "codex-logout"]);
+const COMMANDS = new Set([
+  "pair",
+  "export-ca",
+  "codex-login",
+  "codex-logout",
+  "audit-check",
+]);
 
 /** Returns the process exit code. */
 export async function runAssistantServerCli(
@@ -230,6 +239,7 @@ export async function runAssistantServerCli(
   const config = await loadAssistantServerConfig(configPath);
   if (command === "pair") return await runPair(config, io);
   if (command === "export-ca") return await runExportCa(config, io);
+  if (command === "audit-check") return await runAuditCheck(config, io);
   if (command === "codex-login" || command === "codex-logout") {
     if (!hasCodexProvider(config)) {
       io.log(
@@ -271,6 +281,30 @@ export async function runAssistantServerCli(
   io.log(`Received ${signal}; stopping running turns and shutting down`);
   await service.close();
   io.log("AgentLink server stopped");
+  return 0;
+}
+
+/** Check the task audit log's hash chain; exit 1 when it is broken. */
+async function runAuditCheck(
+  config: AssistantServerConfig,
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const directory = serverAuditDirectory(config);
+  const result = await verifyTaskAudit(directory);
+  for (const damage of result.damaged) {
+    io.stdout(
+      `Earlier damage, found ${new Date(damage.at).toISOString()} and kept as ${damage.keptAs}: ${damage.problems.join("; ")}\n`,
+    );
+  }
+  if (!result.ok) {
+    io.stdout(
+      `Audit log ${directory} is broken after ${result.entries} good entr${result.entries === 1 ? "y" : "ies"}: ${result.problems.join("; ")}\n`,
+    );
+    return 1;
+  }
+  io.stdout(
+    `Audit log OK: ${result.entries} entr${result.entries === 1 ? "y" : "ies"}, hash chain intact\n`,
+  );
   return 0;
 }
 

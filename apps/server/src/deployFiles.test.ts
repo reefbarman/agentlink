@@ -244,6 +244,38 @@ describe("deployment files", () => {
     expect(overlay).toMatch(/^ {2}runner-manager:\n {4}internal: true\n/mu);
   });
 
+  it("mounts the whole data root (and the audit log) only in the assistant", async () => {
+    const container = path.join(deploy, "container");
+    const files = (await fs.readdir(container)).filter((file) =>
+      file.startsWith("compose"),
+    );
+    for (const file of files) {
+      const text = await fs.readFile(path.join(container, file), "utf8");
+      // Workers and runners get project folders or data/runners at most.
+      const dataMounts = text.match(/- \.\/data[^\n]*/gu) ?? [];
+      for (const mount of dataMounts) {
+        expect(
+          [
+            "- ./data:/var/lib/agentlink",
+            "- ./data/runners:/var/lib/agentlink/runners:ro",
+          ],
+          `${file}: ${mount}`,
+        ).toContain(mount);
+      }
+      expect(text, file).not.toContain("audit");
+    }
+    const compose = await fs.readFile(
+      path.join(container, "compose.yaml"),
+      "utf8",
+    );
+    const assistant = compose.slice(
+      compose.indexOf("\n  assistant:\n"),
+      compose.indexOf("\n  command-worker:\n"),
+    );
+    expect(assistant).toContain("- ./data:/var/lib/agentlink");
+    expect(compose.match(/- \.\/data:/gu)).toHaveLength(1);
+  });
+
   it("runs SearXNG unpublished and hardened, with JSON results", async () => {
     const container = path.join(deploy, "container");
     const overlay = await fs.readFile(
