@@ -121,7 +121,11 @@ describe("parseAssistantServerConfig", () => {
       }),
       "/etc/agentlink",
     );
-    expect(config.editor).toEqual({ port: 8444, idleMinutes: 30 });
+    expect(config.editor).toEqual({
+      port: 8444,
+      idleMinutes: 30,
+      modelsPort: 7900,
+    });
     expect(() =>
       parseAssistantServerConfig(
         withChange((value) => {

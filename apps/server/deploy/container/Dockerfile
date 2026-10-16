@@ -84,14 +84,43 @@ CMD ["backup-agent", "--help"]
 # mounted, no credentials, a read-only root filesystem and the editors'
 # internal network; extensions come from Open VSX through the egress
 # gateway. Pinned: bump the version deliberately.
+#
+# AgentLink comes built in: dist/agentlink-editor.vsix, the extension built
+# from the same commit for Linux on this machine's architecture (upgrade.sh
+# packages it). Its model calls go to the assistant with the editor's own
+# token, from settings the start script writes when the editor starts.
+FROM node:22-bookworm-slim AS editor-extension
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/*
+COPY dist/agentlink-editor.vsix /tmp/agentlink.vsix
+RUN unzip -q /tmp/agentlink.vsix 'extension/*' -d /tmp/vsix \
+    && mv /tmp/vsix/extension /agentlink
+
 FROM codercom/code-server:4.141.0 AS editor
 USER root
 # Nothing in an editor needs to become root.
 RUN SUDO_FORCE_REMOVE=yes apt-get purge -y sudo \
     && rm -rf /var/lib/apt/lists/*
+# Built in: always there, and not removable from the editor.
+COPY --from=editor-extension /agentlink /usr/lib/code-server/lib/vscode/extensions/agentlink.agentlink
+# The start script: the settings the runner manager passes (AgentLink's
+# connection, with the editor's model token) become the editor's
+# settings; the variable is not passed on to code-server.
+RUN printf '%s\n' '#!/bin/sh' 'set -eu' \
+    'data=/tmp/code-server/data' \
+    'mkdir -p "$data/User" "$data/Machine" "${HOME:-/tmp/home}"' \
+    'if [ -n "${AGENTLINK_EDITOR_SETTINGS:-}" ]; then' \
+    '  printf "%s" "$AGENTLINK_EDITOR_SETTINGS" > "$data/Machine/settings.json"' \
+    '  printf "%s" "$AGENTLINK_EDITOR_SETTINGS" > "$data/User/settings.json"' \
+    'fi' \
+    'unset AGENTLINK_EDITOR_SETTINGS' \
+    'exec /usr/bin/code-server "$@"' \
+    > /usr/local/bin/agentlink-editor \
+    && chmod 0755 /usr/local/bin/agentlink-editor
 USER 1000
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/code-server"]
+ENTRYPOINT ["/usr/local/bin/agentlink-editor"]
 
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git

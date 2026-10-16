@@ -121,6 +121,8 @@ describe("runner manager editors", () => {
       folder: test.folder,
       mode: "ro",
       proxy: "http://u:p@egress-gateway:3128",
+      settings: { "agentlink.disabledProviders": ["codex"] },
+      noProxy: ["assistant"],
     });
     expect(started.url).toBe("http://agentlink-editor-task-t1:8080");
     const create = test.docker.calls.find((call) =>
@@ -131,9 +133,12 @@ describe("runner manager editors", () => {
       Env: string[];
       User: string;
       Cmd: string[];
+      Entrypoint: string[];
       HostConfig: Record<string, unknown>;
     };
     expect(body.Image).toBe("agentlink-editor:local");
+    // The image's start script writes the settings, then runs code-server.
+    expect(body.Entrypoint).toEqual(["/usr/local/bin/agentlink-editor"]);
     expect(body.User).toBe("1000:1000");
     expect(body.Cmd).toContain("none");
     expect(body.Cmd.at(-1)).toBe(test.folder);
@@ -150,7 +155,8 @@ describe("runner manager editors", () => {
       "HOME=/tmp/home",
       "HTTPS_PROXY=http://u:p@egress-gateway:3128",
       "HTTP_PROXY=http://u:p@egress-gateway:3128",
-      "NO_PROXY=localhost,127.0.0.1",
+      "NO_PROXY=localhost,127.0.0.1,assistant",
+      'AGENTLINK_EDITOR_SETTINGS={"agentlink.disabledProviders":["codex"]}',
     ]);
 
     await test.client().startEditor({
@@ -180,6 +186,19 @@ describe("runner manager editors", () => {
         folder: test.folder,
         mode: "ro",
         proxy: "https://x y",
+      },
+      { id: "task-t1", folder: test.folder, mode: "ro", settings: ["x"] },
+      {
+        id: "task-t1",
+        folder: test.folder,
+        mode: "ro",
+        settings: { big: "x".repeat(300 * 1024) },
+      },
+      {
+        id: "task-t1",
+        folder: test.folder,
+        mode: "ro",
+        noProxy: ["evil host,*"],
       },
     ]) {
       await expect(client.startEditor(request as never)).rejects.toMatchObject({

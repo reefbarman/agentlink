@@ -10,10 +10,18 @@
 # certificate), so editor pages never run on the app's origin; the app
 # hands out one-time links to it.
 #
+# The AgentLink extension is built into the editor image. Its model calls
+# go to the assistant on this network (port 7900, one token per editor),
+# never with a key of its own. upgrade.sh packages the extension; to build
+# the image by hand, first run from the repository root:
+#   AGENTLINK_VSCE_TARGET=linux-x64 npm run package -- /tmp/agentlink.vsix
+#   cp /tmp/agentlink.vsix apps/server/dist/agentlink-editor.vsix
+#
 # Once, in the deploy directory:
 # .env: COMPOSE_FILE=...:compose.runners.yaml:compose.editor.yaml
 # server.json: "editor": { "port": 8444 }   (optional "idleMinutes": 30)
-# upgrade.sh then builds agentlink-editor:local with the other images; or
+# upgrade.sh then builds agentlink-editor:local with the other images; or,
+# with the extension packaged as above,
 #   docker build --target editor -t agentlink-editor:local \
 #     -f apps/server/deploy/container/Dockerfile apps/server
 #

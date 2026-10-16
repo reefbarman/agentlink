@@ -38,6 +38,14 @@ const EDITOR_LABEL = "dev.agentlink.editor";
 /** The port code-server listens on inside an editor container. */
 export const EDITOR_PORT = 8080;
 const MAX_PROXY_URL_LENGTH = 4_096;
+const MAX_EDITOR_SETTINGS_BYTES = 256 * 1024;
+const MAX_NO_PROXY_HOSTS = 8;
+const HOST_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/u;
+/**
+ * The editor image's start script: writes `AGENTLINK_EDITOR_SETTINGS` as
+ * the editor's settings, then runs code-server with the arguments.
+ */
+export const EDITOR_ENTRYPOINT = "/usr/local/bin/agentlink-editor";
 
 export interface RunnerLimits {
   /** Bytes. */
@@ -374,6 +382,33 @@ export async function startRunnerManager(
     ) {
       throw new HttpError(400, "editor_proxy_invalid");
     }
+    // AgentLink's settings, with the editor's own model token: only this
+    // editor's environment gets them.
+    const settings = body.settings;
+    let settingsJson: string | undefined;
+    if (settings !== undefined) {
+      if (
+        !settings ||
+        typeof settings !== "object" ||
+        Array.isArray(settings)
+      ) {
+        throw new HttpError(400, "editor_settings_invalid");
+      }
+      settingsJson = JSON.stringify(settings);
+      if (Buffer.byteLength(settingsJson) > MAX_EDITOR_SETTINGS_BYTES) {
+        throw new HttpError(400, "editor_settings_invalid");
+      }
+    }
+    const noProxy = body.noProxy ?? [];
+    if (
+      !Array.isArray(noProxy) ||
+      noProxy.length > MAX_NO_PROXY_HOSTS ||
+      noProxy.some(
+        (host) => typeof host !== "string" || !HOST_NAME_PATTERN.test(host),
+      )
+    ) {
+      throw new HttpError(400, "editor_no_proxy_invalid");
+    }
     const name = editorContainerName(id);
     await removeEditor(id);
     const created = await docker(
@@ -381,7 +416,7 @@ export async function startRunnerManager(
       `/containers/create?name=${encodeURIComponent(name)}`,
       {
         Image: editor.image,
-        Entrypoint: ["/usr/bin/code-server"],
+        Entrypoint: [EDITOR_ENTRYPOINT],
         Cmd: [
           "--bind-addr",
           `0.0.0.0:${EDITOR_PORT}`,
@@ -405,8 +440,11 @@ export async function startRunnerManager(
             ? [
                 `HTTPS_PROXY=${proxy}`,
                 `HTTP_PROXY=${proxy}`,
-                "NO_PROXY=localhost,127.0.0.1",
+                `NO_PROXY=${["localhost", "127.0.0.1", ...(noProxy as string[])].join(",")}`,
               ]
+            : []),
+          ...(settingsJson
+            ? [`AGENTLINK_EDITOR_SETTINGS=${settingsJson}`]
             : []),
         ],
         Labels: { [EDITOR_LABEL]: id },
@@ -531,6 +569,8 @@ export function createRunnerManagerClient(options: {
       readonly folder: string;
       readonly mode: "ro" | "rw";
       readonly proxy?: string;
+      readonly settings?: Record<string, unknown>;
+      readonly noProxy?: readonly string[];
     }) =>
       withToken(() =>
         client.call<{ url: string }>("/editors/start", { ...request }),

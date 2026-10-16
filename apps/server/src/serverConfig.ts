@@ -92,6 +92,11 @@ export interface AssistantServerEditorConfig {
   readonly port: number;
   /** Minutes an editor with nothing open may sit before it is stopped. */
   readonly idleMinutes: number;
+  /**
+   * Port of the plain-HTTP model endpoint AgentLink in an editor calls (on
+   * the editors' internal network, one token per editor).
+   */
+  readonly modelsPort: number;
 }
 
 export interface AssistantServerRunnersConfig {
@@ -593,7 +598,7 @@ function parseEditor(
 ): AssistantServerEditorConfig {
   const label = "editor";
   const item = record(value, label);
-  allowKeys(item, label, ["port", "idleMinutes"]);
+  allowKeys(item, label, ["port", "idleMinutes", "modelsPort"]);
   if (runners === undefined) {
     throw new Error(
       "editor needs runners (editors are started by the runner manager)",
@@ -615,7 +620,19 @@ function parseEditor(
   ) {
     throw new Error(`${label}.idleMinutes must be from 1 to 1440`);
   }
-  return { port: Number(port), idleMinutes };
+  const modelsPort = item.modelsPort ?? 7900;
+  if (
+    !Number.isSafeInteger(modelsPort) ||
+    Number(modelsPort) < 1 ||
+    Number(modelsPort) > 65535 ||
+    modelsPort === port ||
+    modelsPort === appPort
+  ) {
+    throw new Error(
+      `${label}.modelsPort must be an integer from 1 to 65535, other than the app's and the editor's ports`,
+    );
+  }
+  return { port: Number(port), idleMinutes, modelsPort: Number(modelsPort) };
 }
 
 function parseRunners(

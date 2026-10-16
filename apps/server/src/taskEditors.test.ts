@@ -31,8 +31,11 @@ function fakeManager() {
           folder: string;
           mode: "ro" | "rw";
           proxy?: string;
+          settings?: Record<string, unknown>;
+          noProxy?: readonly string[];
         }) => {
-          started.push({ ...request });
+          const { settings: _settings, noProxy: _noProxy, ...shown } = request;
+          started.push(shown);
           return { url: `http://agentlink-editor-${request.id}:8080` };
         },
       ),
@@ -82,6 +85,37 @@ describe("task editors", () => {
     expect(fake.started).toHaveLength(1);
     await editors.open(task(), "rw");
     expect(fake.started.map((entry) => entry.mode)).toEqual(["ro", "rw"]);
+  });
+
+  it("gives each editor its own model token in its settings, valid while it runs", async () => {
+    const fake = fakeManager();
+    const settings = vi.fn((token: string) => ({ token }));
+    editors = createTaskEditors({
+      manager: fake.manager,
+      settings,
+      noProxy: ["assistant"],
+    });
+    await editors.open(task(), "ro");
+    const call = fake.manager.startEditor.mock.calls[0]![0] as unknown as {
+      settings: { token: string };
+      noProxy: string[];
+    };
+    const first = call.settings.token;
+    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(call.noProxy).toEqual(["assistant"]);
+    expect(editors.modelAccess(first)).toBe("0123456789ab");
+    expect(editors.modelAccess("x".repeat(43))).toBeUndefined();
+    // A restart (another mode) gets a new token; the old one stops working.
+    await editors.open(task(), "rw");
+    const second = (
+      fake.manager.startEditor.mock.calls[1]![0] as unknown as {
+        settings: { token: string };
+      }
+    ).settings.token;
+    expect(second).not.toBe(first);
+    expect(editors.modelAccess(first)).toBeUndefined();
+    await editors.stop("0123456789ab");
+    expect(editors.modelAccess(second)).toBeUndefined();
   });
 
   it("redeems a link once, for that task's editor only", async () => {

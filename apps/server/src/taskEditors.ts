@@ -30,6 +30,8 @@ interface RunningEditor {
   readonly taskId: string;
   readonly mode: EditorMode;
   readonly upstream: string;
+  /** For AgentLink in the editor: its model calls to the assistant. */
+  readonly modelToken: string;
   lastActive: number;
   connections: number;
 }
@@ -45,6 +47,8 @@ export interface TaskEditors {
   redeem(
     token: string,
   ): { readonly taskId: string; readonly session: string } | undefined;
+  /** The task whose running editor holds this model token, if any. */
+  modelAccess(token: string): string | undefined;
   /** The editor's address when `session` is valid for `taskId`. */
   authorize(taskId: string, session: string | undefined): string | undefined;
   /** A request or message reached the task's editor. */
@@ -65,6 +69,13 @@ export function createTaskEditors(options: {
   readonly proxyUrl?: () => string | undefined;
   /** An editor sat idle and was stopped; `rw` means it was taken over. */
   readonly onIdle?: (taskId: string, mode: EditorMode) => Promise<void>;
+  /**
+   * The editor's settings (AgentLink's connection to the assistant, with
+   * the editor's model token), written into it when it starts.
+   */
+  readonly settings?: (modelToken: string) => Record<string, unknown>;
+  /** Host names the editor reaches directly, not through the proxy. */
+  readonly noProxy?: readonly string[];
   /** Resolves once a just-started editor at `url` answers. */
   readonly ready?: (url: string) => Promise<void>;
   readonly idleMs?: number;
@@ -128,18 +139,23 @@ export function createTaskEditors(options: {
       if (!current || current.mode !== mode) {
         forget(task.id);
         const proxy = options.proxyUrl?.();
+        const modelToken = randomBytes(32).toString("base64url");
+        const settings = options.settings?.(modelToken);
         const started = await options.manager.startEditor({
           id: runnerId(task.id),
           // The task's folder: its clone and any reference repositories.
           folder: path.dirname(task.workspace),
           mode,
           ...(proxy ? { proxy } : {}),
+          ...(settings ? { settings } : {}),
+          ...(options.noProxy?.length ? { noProxy: [...options.noProxy] } : {}),
         });
         await options.ready?.(started.url);
         editors.set(task.id, {
           taskId: task.id,
           mode,
           upstream: started.url,
+          modelToken,
           lastActive: now(),
           connections: 0,
         });
@@ -166,6 +182,12 @@ export function createTaskEditors(options: {
         expiresAt: now() + SESSION_TTL_MS,
       });
       return { taskId: entry.taskId, session };
+    },
+    modelAccess(token) {
+      for (const editor of editors.values()) {
+        if (sameToken(editor.modelToken, token)) return editor.taskId;
+      }
+      return undefined;
     },
     authorize(taskId, session) {
       if (!session) return undefined;

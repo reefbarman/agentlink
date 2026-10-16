@@ -93,7 +93,12 @@ describe("deployment files", () => {
     );
     expect(
       ignore.split("\n").filter((line) => line && !line.startsWith("#")),
-    ).toEqual(["*", "!dist/agentlink-server.js"]);
+    ).toEqual([
+      "*",
+      "!dist/agentlink-server.js",
+      // The editor image's AgentLink extension.
+      "!dist/agentlink-editor.vsix",
+    ]);
 
     const compose = await fs.readFile(
       path.join(container, "compose.yaml"),
@@ -492,9 +497,11 @@ describe("deployment files", () => {
     );
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) expect(stages, target).toContain(target);
-    // Everything but the bundle stage, so no image is left behind.
+    // Everything but the helper stages, so no image is left behind.
     expect([...targets].sort()).toEqual(
-      stages.filter((stage) => stage !== "bundle").sort(),
+      stages
+        .filter((stage) => stage !== "bundle" && stage !== "editor-extension")
+        .sort(),
     );
     for (const step of [
       "drain --wait",
@@ -526,6 +533,19 @@ describe("deployment files", () => {
     expect(dockerfile).toMatch(
       /^FROM codercom\/code-server:\d+\.\d+\.\d+ AS editor$/mu,
     );
+    // AgentLink built in, started through the script the manager expects.
+    expect(dockerfile).toContain("COPY dist/agentlink-editor.vsix");
+    expect(dockerfile).toContain(
+      'ENTRYPOINT ["/usr/local/bin/agentlink-editor"]',
+    );
+    const ignore = await fs.readFile(
+      path.join(deploy, "..", ".dockerignore"),
+      "utf8",
+    );
+    expect(ignore).toContain("!dist/agentlink-editor.vsix");
+    const upgrade = await fs.readFile(path.join(deploy, "upgrade.sh"), "utf8");
+    expect(upgrade).toContain("npm run package --");
+    expect(upgrade).toContain("apps/server/dist/agentlink-editor.vsix");
   });
 
   it("ships a launchd daemon that runs as a service user", async () => {

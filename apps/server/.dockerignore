@@ -1,3 +1,5 @@
-# The image only needs the server bundle (see deploy/container/Dockerfile).
+# The images only need the server bundle and, for the editor, the AgentLink
+# extension (see deploy/container/Dockerfile).
 *
 !dist/agentlink-server.js
+!dist/agentlink-editor.vsix

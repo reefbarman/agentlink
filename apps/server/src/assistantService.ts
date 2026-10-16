@@ -47,6 +47,11 @@ import {
 import { createTaskEditors, type TaskEditors } from "./taskEditors.js";
 import { startEditorProxy, type EditorProxy } from "./editorProxy.js";
 import {
+  editorAgentLinkSettings,
+  startEditorModelServer,
+  type EditorModelServer,
+} from "./editorModels.js";
+import {
   startSessionRunnerPool,
   type SessionRunnerPool,
 } from "./sessionRunners.js";
@@ -1743,6 +1748,11 @@ export async function startAssistantService(
     // Browser editors for task folders (Open editor / Take over).
     let taskEditors: TaskEditors | undefined;
     let editorProxy: EditorProxy | undefined;
+    let editorModels: EditorModelServer | undefined;
+    // AgentLink in an editor calls models through these, never with a key.
+    const editorBackends = config.editor
+      ? providers.map((provider) => createWorkspaceModelBackend(provider))
+      : [];
     if (config.runners && config.projectsRoot) {
       const runnersConfig = config.runners;
       runnerManager = createRunnerManagerClient({
@@ -1952,8 +1962,19 @@ export async function startAssistantService(
     if (config.editor && runnerManager && tasks) {
       const editorRunner = tasks.runner;
       const proxy = config.commandWorker?.egressProxy;
+      const modelsHost = config.runners?.controlHost ?? "assistant";
+      const modelsPort = config.editor.modelsPort;
       taskEditors = createTaskEditors({
         manager: runnerManager,
+        // AgentLink's connection to the assistant, with this editor's token.
+        settings: (token) =>
+          editorAgentLinkSettings({
+            baseUrl: `http://${modelsHost}:${modelsPort}/editor-models/${token}/v1`,
+            backends: editorBackends,
+            models: configuredModels(config),
+            noProxy: [modelsHost],
+          }),
+        noProxy: [modelsHost],
         // Package registries plus Open VSX, for extensions.
         ...(proxy
           ? {
@@ -2099,6 +2120,7 @@ export async function startAssistantService(
         await tasks?.runner.close();
         // Editor sessions live in this process: their editors go with it.
         await editorProxy?.close();
+        await editorModels?.close();
         await taskEditors?.close();
         await taskEditors?.stopAll().catch((error: unknown) => {
           log(`Could not stop the task editors: ${message(error)}`);
@@ -2243,6 +2265,14 @@ export async function startAssistantService(
       // Editors an earlier process started have no sessions any more.
       await taskEditors.stopAll().catch((error: unknown) => {
         log(`Could not stop earlier task editors: ${message(error)}`);
+      });
+      const editorsForModels = taskEditors;
+      editorModels = await startEditorModelServer({
+        backends: editorBackends,
+        models: () => configuredModels(config),
+        authorize: (token) => editorsForModels.modelAccess(token),
+        listen: { host: "0.0.0.0", port: config.editor.modelsPort },
+        log,
       });
       editorProxy = await startEditorProxy({
         editors: taskEditors,

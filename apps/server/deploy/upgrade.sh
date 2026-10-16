@@ -236,6 +236,21 @@ say "Building ${commit:-the source} (the Assistant keeps working meanwhile)"
     printf '%s\n' "$lock_sum" > node_modules/.agentlink-lock
   fi
   AGENTLINK_BUILD_COMMIT="$commit" npm run build:workspaces > /dev/null
+  case " $TARGETS " in
+    *" editor "*)
+      # The AgentLink extension built into the editor image, for Linux on
+      # this machine's architecture.
+      case "$(uname -m)" in
+        x86_64 | amd64) vsce_target=linux-x64 ;;
+        aarch64 | arm64) vsce_target=linux-arm64 ;;
+        *) fail "no AgentLink extension build for $(uname -m)" ;;
+      esac
+      vsix_dir="$(mktemp -d)"
+      AGENTLINK_VSCE_TARGET="$vsce_target" npm run package -- "$vsix_dir/agentlink.vsix" > /dev/null
+      cp "$vsix_dir/agentlink.vsix" apps/server/dist/agentlink-editor.vsix
+      rm -rf "$vsix_dir"
+      ;;
+  esac
   for target in $TARGETS; do
     docker build -q --target "$target" -t "$(image_of "$target"):candidate" \
       -f apps/server/deploy/container/Dockerfile apps/server > /dev/null
