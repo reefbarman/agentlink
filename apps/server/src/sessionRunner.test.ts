@@ -303,6 +303,12 @@ describe("session runners", () => {
       "task-t1",
     );
     await harness.run(sessionId, "Say hello");
+    // Kept by the task's project ID, not the folder's identity, which can
+    // change when the runner's container is recreated.
+    const projects = await fs.readdir(
+      path.join(harness.root, "data", "runners", "task-t1", "projects"),
+    );
+    expect(projects).toEqual(["task-t1"]);
     // The runner goes away (crash, idle stop, host restart).
     await harness.runners.get("task-t1")!.close();
     harness.runners.delete("task-t1");

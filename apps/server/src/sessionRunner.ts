@@ -370,6 +370,10 @@ export async function startSessionRunner(options: {
   const host = await (options.createHost ?? createWorkspaceHost)({
     projectRoot: spec.projectRoot,
     dataRoot: options.dataRoot,
+    // By project ID, not by folder identity: a recreated runner container
+    // can see the same folder with another device number, which would
+    // lose the task's chat.
+    storageKey: spec.projectId,
     ownerId: `agentlink-runner-${process.pid}-${randomUUID()}`,
     providers: backends.map((backend) => ({ type: "backend", backend })),
     defaultModel: spec.defaultModel,
