@@ -1,0 +1,471 @@
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 42,52-57,129,331,341,710,722,745,849,853-856,859-880,1336
+  s_0c43316b5b79da::t_a1ac1bb542f1e2 852
+apps/server/package.json
+  h_e08a86bb3a33a2 17-20
+packages/node-host/src/codexOAuthManager.ts
+  h_e08a86bb3a33a2 274,404-405,436-439,445-446,449,1253-1254,1274-1276,1279-1309,1311,1313-1354,1356-1357,1359-1360,1363-1366,1370-1377,1380-1383,1386-1387,1390,1393-1396,1399-1400,1403,1405-1409,1411-1424,1426-1449,1452-1470,1482,1484-1491,1521,1524,1531-1532,1536,1538,1540-1542,1544,1546-1573,1575-1576,1578,1580-1597,1599-1608,1628
+  s_0c43316b5b79da::t_61c030f66b54b7 280,444,447,1258,1358,1361,1384-1385,1388-1389,1391,1404,1410,1492,1529-1530,1533,1574,1577,1579
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 70-77,96,1724-1739,1741-1744,5369-5419,7797-7823,8468,9952-9954,9960-9961,9963-9964,9973-9975,10011-10019,10027,10043-10044,10108,10110-10120,10130-10131,10133,10599
+  h_e08a86bb3a33a2 78,1740,5420-5423,7824,9955-9958,9962,9976-10010,10020-10026,10028-10042,10132
+.release/last-plan.json
+  s_026c6b58460fd4::t_6dd7b7d16220bb 3-4,13-16,18-26,29-31,37-40,43,45-46,50,53-55,61-64,67-82,85-87,98,101,106,109,114,117
+.release/overrides.json
+  s_026c6b58460fd4::t_ef2a9123a77445 7-16
+.vscodeignore
+  s_026c6b58460fd4::t_382aa43af297f3 17
+apps/cli/package.json
+  s_026c6b58460fd4::t_25a53b0da9ff55 3,33-36
+apps/desktop/electron-builder.yml
+  s_026c6b58460fd4::t_0bc0a1e96ef4fa 23-26
+apps/desktop/package.json
+  s_026c6b58460fd4::t_1ee1e15ef47931 3,17-19
+esbuild.mjs
+  s_026c6b58460fd4::t_51c4d5c424052d 21,49-55,242-256,334,350,367,391,464,476-480
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_026c6b58460fd4::t_ddf44241f4a19b 13,30,47,64,81,92,103,114,125,142,159,176,193,204,215,226,237,254,271,288,305,316,327,338,349,366,383,400,417,428,439,450,461,478,495,512,529,540,551,562,573,590,607,624,641,652,663,674,681-684,688-691,695-698,702-705,709-712,716-719,726-729,734-737,742-745,750-753,758-761,766-769,804,814
+packages/core/CHANGELOG.md
+  s_026c6b58460fd4::t_ed47b8bdcafc56 5-31
+packages/core/README.md
+  s_026c6b58460fd4::t_3e9cdec4ac09d7 3,5,42,46,64,68-77,153-190
+packages/core/build-cjs.mjs
+  s_026c6b58460fd4::t_ccda36ae1c532e 8-9,35,39-42,74
+packages/core/docs/voice-input.md
+  s_026c6b58460fd4::t_a31ec496478c3e 1-420
+packages/core/package.json
+  s_026c6b58460fd4::t_56ed63da2d4936 3,15-16,19-54,391-408,430,432-433
+packages/core/src/browserRuntime.test.ts
+  s_026c6b58460fd4::t_b613ab815bd09b 1-144
+packages/core/src/browserRuntime.ts
+  s_026c6b58460fd4::t_9e5ed4a7deb639 1-57
+packages/core/src/codex.ts
+  s_026c6b58460fd4::t_bdcf436d7d1f5f 20-25
+packages/core/src/codex/credentialResolution.ts
+  s_026c6b58460fd4::t_37043f5dceb471 15-16
+packages/core/src/codex/imageGenerationPortable.test.ts
+  s_026c6b58460fd4::t_023e40b1027484 1-225
+packages/core/src/codex/imageGenerationPortable.ts
+  s_026c6b58460fd4::t_701bc4d2a78ba5 1-302
+packages/core/src/codex/models.test.ts
+  s_026c6b58460fd4::t_8d298b58de3d0c 16-32
+packages/core/src/codex/models.ts
+  s_026c6b58460fd4::t_10bb6c01701a63 30-31,369,645,658-660,664,710-712
+packages/core/src/codex/providerFactory.ts
+  s_026c6b58460fd4::t_0fa6fcf38e9c5d 657-658
+packages/core/src/codex/streamParser.ts
+  s_026c6b58460fd4::t_d3383fc8e7c015 1,86,546
+packages/core/src/codex/transcription.test.ts
+  s_026c6b58460fd4::t_d34776674a5dbf 1-239
+packages/core/src/codex/transcription.ts
+  s_026c6b58460fd4::t_82aad1aefeb887 1-337
+packages/core/src/codex/transcriptionFetch.test.ts
+  s_026c6b58460fd4::t_27545405a5b6d6 1-115
+packages/core/src/codex/transcriptionFetch.ts
+  s_026c6b58460fd4::t_21b17a4efecf95 1-76
+packages/core/src/codexDeviceAuth.test.ts
+  s_026c6b58460fd4::t_d478fa8d535a43 1-116
+packages/core/src/codexDeviceAuth.ts
+  s_026c6b58460fd4::t_4e1a150acde9a7 1-135
+packages/core/src/index.ts
+  s_026c6b58460fd4::t_8847d69a3cf577 27
+packages/core/src/modelRuntime.ts
+  s_026c6b58460fd4::t_a862d84bdac8a4 129-133,191-196
+packages/core/src/nativeWebTools.ts
+  s_026c6b58460fd4::t_6fa90a97f883cd 19,21,41,75
+packages/core/src/openAiCompatible/streamParser.ts
+  s_026c6b58460fd4::t_8af7c3282caf80 304-307,728-729,731,737,739,744,750-766
+packages/core/src/voice.ts
+  s_026c6b58460fd4::t_86b62b2ed48dab 1-8
+packages/core/src/voice/voiceActivity.test.ts
+  s_026c6b58460fd4::t_4a6f38e28adb6c 1-130
+packages/core/src/voice/voiceActivity.ts
+  s_026c6b58460fd4::t_61d62505fd4915 1-225
+packages/core/src/voice/wavEncoding.ts
+  s_026c6b58460fd4::t_d32ed93a376f90 1-32
+packages/core/src/webAccess.ts
+  s_026c6b58460fd4::t_81086d286ff5f6 27,40,61,84,98,133-152
+packages/core/watch.mjs
+  s_026c6b58460fd4::t_676558ce18d4d0 55,96
+packages/node-host/README.md
+  s_026c6b58460fd4::t_e1e24a235bb628 117,184-193
+packages/node-host/package.json
+  s_026c6b58460fd4::t_dd11a5c3a614fa 3,38-39,43,45
+packages/node-host/src/codexOAuthCallback.test.ts
+  s_026c6b58460fd4::t_fb2cd15c65eae7 1-303
+packages/node-host/src/index.ts
+  s_026c6b58460fd4::t_513ccecaff5e02 28-35
+packages/node-host/src/keychainSecretStorage.test.ts
+  s_026c6b58460fd4::t_c7debddf7aa62d 9-12,16,23-26,48,79-122
+packages/node-host/src/keychainSecretStorage.ts
+  s_026c6b58460fd4::t_d169ed9b795f82 10-12,16-22,42-46
+packages/node-host/src/mcpRemoteTools.ts
+  s_026c6b58460fd4::t_7c85137e1464bd 26,444-447
+packages/node-host/src/mcpResultRedaction.test.ts
+  s_026c6b58460fd4::t_3c55050c33c760 1-104
+packages/node-host/src/mcpResultRedaction.ts
+  s_026c6b58460fd4::t_97f839e92caaa7 1-105
+packages/node-host/src/mcpStdioTools.test.ts
+  s_026c6b58460fd4::t_5de8abbab37bc8 213-239
+packages/node-host/src/mcpStdioTools.ts
+  s_026c6b58460fd4::t_614c1e2a42a58b 23,394-397
+packages/node-host/src/mcpToolResult.ts
+  s_026c6b58460fd4::t_9eba2a93f33701 8,102,105-107
+packages/node-host/src/webImageErrors.ts
+  s_026c6b58460fd4::t_8d42bd442abc4d 1-32
+packages/node-host/src/webImageFormat.ts
+  s_026c6b58460fd4::t_f8d8cc7ab2fa2e 1-258
+packages/node-host/src/webImagePageParser.ts
+  s_026c6b58460fd4::t_8c4093ee77f12e 1-455
+packages/node-host/src/webImagePublicAddress.ts
+  s_026c6b58460fd4::t_9ca6fc83619309 1-155
+packages/node-host/src/webImageRuntime.test.ts
+  s_026c6b58460fd4::t_9d9acf9c639ae0 1-636
+packages/node-host/src/webImageRuntime.ts
+  s_026c6b58460fd4::t_4a8c53d43cba25 1-787
+packages/node-host/src/webImageTools.test.ts
+  s_026c6b58460fd4::t_5d7a5f562a4620 1-261
+packages/node-host/src/webImageTools.ts
+  s_026c6b58460fd4::t_63a67f5b657504 1-655
+packages/node-host/src/webImageTransport.ts
+  s_026c6b58460fd4::t_a278704cf2159d 1-409
+packages/node-host/src/webImageUrlPublication.ts
+  s_026c6b58460fd4::t_7dc16d354f2941 1-61
+packages/protocol/build-cjs.mjs
+  s_026c6b58460fd4::t_6afc09dd574553 618-619
+packages/protocol/package.json
+  s_026c6b58460fd4::t_50c8cea610e928 3
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  s_026c6b58460fd4::t_f6faeda9507a9c 15-16,61-62
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  s_026c6b58460fd4::t_c8da0f77b0fccb 7-8
+packages/protocol/src/browserGatewayOwnerCommandBody.test.ts
+  s_026c6b58460fd4::t_8f15b969ef4c0b 28-31
+packages/protocol/src/browserGatewayOwnerCommandBody.ts
+  s_026c6b58460fd4::t_4f147185a99e67 24-33
+packages/protocol/src/browserGatewayTranscriptMessage.test.ts
+  s_026c6b58460fd4::t_9a87a93fdede5e 6,21-29
+packages/protocol/src/browserGatewayTranscriptMessage.ts
+  s_026c6b58460fd4::t_addc790a01aa7b 3-24,38
+packages/protocol/src/chatTranscript.ts
+  s_026c6b58460fd4::t_47356ccb6efefc 1-5,23-29,40-44,194-203
+packages/protocol/src/toolResult.test.ts
+  s_026c6b58460fd4::t_49f6ac8d39b2f4 8,26-31
+packages/protocol/src/toolResult.ts
+  s_026c6b58460fd4::t_28422eee0eb90c 49-77,84-89
+packages/protocol/src/webAccessPolicy.test.ts
+  s_026c6b58460fd4::t_fb86fac09f1dca 34
+packages/protocol/src/webAccessPolicy.ts
+  s_026c6b58460fd4::t_65d1107d6157c2 5-6,12-13
+packages/protocol/watch.mjs
+  s_026c6b58460fd4::t_3ba393f0186181 566-567
+packages/workspace-host/package.json
+  s_026c6b58460fd4::t_25439736403208 3,27-29
+resources/builtin-skills/documentation/README.md
+  s_026c6b58460fd4::t_22b20f90a32481 19
+resources/builtin-skills/documentation/SKILL.md
+  s_026c6b58460fd4::t_bd274c1376d45c 23-24,29-41
+resources/builtin-skills/documentation/references/capabilities.md
+  s_026c6b58460fd4::t_a3c132a2bfaaaa 50,108,134
+resources/builtin-skills/documentation/references/complete-reference.md
+  s_026c6b58460fd4::t_046603769b0c4b 520,522,540-551,700,726,1128-1130,1132-1134,1136-1142,1147-1167,1169,1179,1502,1516,1627
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  s_026c6b58460fd4::t_5cfd1cb11e1973 10,23-30,307,311-357
+resources/builtin-skills/documentation/references/mcp.md
+  s_026c6b58460fd4::t_a0bcf3dcfbd487 87
+resources/builtin-skills/documentation/references/providers.md
+  s_026c6b58460fd4::t_8ecfce88ea907b 202-212
+resources/builtin-skills/documentation/references/settings.md
+  s_026c6b58460fd4::t_c165eaa90ea2ac 30,43,49
+resources/builtin-skills/documentation/references/tools.md
+  s_026c6b58460fd4::t_0269bb4efd61ef 12,90,112-114,164-165,197,206,208
+scripts/package-voice-runtime.mjs
+  s_026c6b58460fd4::t_889d2acf1d4a21 1-103
+scripts/package-voice-runtime.test.mjs
+  s_026c6b58460fd4::t_f83b2afdc7f680 1-108
+scripts/report-tool-usage-telemetry.mjs
+  s_026c6b58460fd4::t_a27739c3fc89e1 7,244,431-468
+scripts/report-tool-usage-telemetry.test.mjs
+  s_026c6b58460fd4::t_2f90f479d0ff29 11,79-123
+scripts/run-core-sdk-consumer-gate.mjs
+  s_026c6b58460fd4::t_9018edf3d07305 22-27,110-114,153-160,162-166,359-368,401,545-573,576-580,599
+scripts/tool-inventory.json
+  s_026c6b58460fd4::t_130afb22b72d77 442-450,552-558,560,884
+src/adapters/vscode/projectSettingsAccessor.ts
+  s_026c6b58460fd4::t_3dc840087bef02 63,79-80
+src/agent/AgentEngine.test.ts
+  s_026c6b58460fd4::t_b55655856400b4 955-1009
+src/agent/AgentEngine.ts
+  s_026c6b58460fd4::t_898063d820d181 50-55,734-735,738,1151,3397-3434
+src/agent/AgentSessionManager.background.test.ts
+  s_026c6b58460fd4::t_ada66cd9a3f8d6 400-516
+src/agent/AgentSessionManager.test.ts
+  s_026c6b58460fd4::t_302365300cf4b5 3604-3725
+src/agent/AgentSessionManager.ts
+  s_026c6b58460fd4::t_6e5d2cf3d6ffab 176-180,2303-2321,2325-2385,2445,2450-2451,2480,2486,2491,2506-2522,11517-11524,11897,13845-13915
+src/agent/AgentSessionManagerHost.ts
+  s_026c6b58460fd4::t_93298e432ff4fc 295
+src/agent/ChatViewProvider.test.ts
+  s_026c6b58460fd4::t_68716832fd5dcc 385,389-390,396-397,413-415,420-422,783,918-972,2771-2798
+src/agent/ChatViewProvider.ts
+  s_026c6b58460fd4::t_39b3fa5a5dbf34 9-21,243-247,610-614,710-717,1230-1235,1417,1549,2594,2955-2960,2963-2968,3642-3720,5561,5596,5641,5657,5662-5663,6161-6198,7126-7128,9571-9596,9963-9983,11370-11374
+src/agent/FleetScheduler.ts
+  s_026c6b58460fd4::t_d1582da8a9e822 7
+src/agent/condenseTargetWindow.test.ts
+  s_026c6b58460fd4::t_736d9b58339001 3,44-77
+src/agent/condenseTargetWindow.ts
+  s_026c6b58460fd4::t_273c64aedfc20c 7-18,23-56,73,76,79-81
+src/agent/delegatedWriteScopePreflight.test.ts
+  s_026c6b58460fd4::t_5c14b960ce658e 1-164
+src/agent/delegatedWriteScopePreflight.ts
+  s_026c6b58460fd4::t_43c40e2af8df22 1-164
+src/agent/modelCondenseThresholds.test.ts
+  s_026c6b58460fd4::t_713cd84df88069 19,35,37-39,42-45,54-81,84,86,89-91
+src/agent/modelCondenseThresholds.ts
+  s_026c6b58460fd4::t_5a3cd51cfc0d37 5,8-9,20,22-29,48-51,67-69,74-76,89
+src/agent/preCondenseNudge.test.ts
+  s_026c6b58460fd4::t_8a42b007c2fdc8 1-83
+src/agent/preCondenseNudge.ts
+  s_026c6b58460fd4::t_ed69b6c56bb0fc 1-86
+src/agent/providers/codex/CodexProvider.test.ts
+  s_026c6b58460fd4::t_182a5b284cd43a 1,120-162
+src/agent/providers/codex/CodexProvider.ts
+  s_026c6b58460fd4::t_2a2fd1cf771ec1 41,89-92,270-278,291-310
+src/agent/providers/types.ts
+  s_026c6b58460fd4::t_4a89fb8128c48f 9-12,167-175
+src/agent/sessionImages.ts
+  s_026c6b58460fd4::t_465e408c6ff0fa 38,51,73,116-122,171,180
+src/agent/toolAdapter.test.ts
+  s_026c6b58460fd4::t_f14f6afb482633 1228,1465,1470,1472-1474,1479-1480
+src/agent/toolAdapter.ts
+  s_026c6b58460fd4::t_2c8768f5a40ced 107-114,353,1216-1219,1978,4240-4267
+src/agent/toolPermissions.ts
+  s_026c6b58460fd4::t_481b463d37472b 21
+src/agent/voice/VoiceInputService.test.ts
+  s_026c6b58460fd4::t_50288503e8a9ff 1-254
+src/agent/voice/VoiceInputService.ts
+  s_026c6b58460fd4::t_43c19eec6fe71c 1-379
+src/agent/voice/voiceRecorderProtocol.ts
+  s_026c6b58460fd4::t_1053378d952262 1-37
+src/agent/voice/voiceRecorderWorker.ts
+  s_026c6b58460fd4::t_c1edcfc924e020 1-144
+src/agent/webview/App.test.ts
+  s_026c6b58460fd4::t_23866a014ecea0 360-391
+src/agent/webview/App.tsx
+  s_026c6b58460fd4::t_3e92fc47744f80 116,122-127,418-419,1434-1436,1690-1695,3673-3681,4124-4125,4127-4157,4229-4283,5030
+src/agent/webview/components/BtwPanel.tsx
+  s_026c6b58460fd4::t_8d22f7681bf625 1-3,5-7,9,53,70-71,81-86,146
+src/agent/webview/components/ImagePreview.tsx
+  s_026c6b58460fd4::t_92e07fc0f28bf8 5,51,161-193
+src/agent/webview/components/ImageSourceCaption.tsx
+  s_026c6b58460fd4::t_3789801c326b50 1-75
+src/agent/webview/components/InputArea.test.tsx
+  s_026c6b58460fd4::t_48230fbc210747 7-11,1102-1277
+src/agent/webview/components/InputArea.tsx
+  s_026c6b58460fd4::t_ce68495af360e3 62-78,215-216,280,454-495,850-856,1107-1120,1174-1177,2014-2019,2130,2138-2202
+src/agent/webview/components/MarkdownImage.tsx
+  s_026c6b58460fd4::t_a5d4767dab66c7 1-270
+src/agent/webview/components/MessageBubble.tsx
+  s_026c6b58460fd4::t_1aa0a7722402c3 10,37,98-100,108,1030-1089,1131-1139
+src/agent/webview/components/MessageQueuePanel.tsx
+  s_026c6b58460fd4::t_0a11816048d9a0 19,29-30,123,125-133,135-162,164-181
+src/agent/webview/components/RemoteToolDetail.tsx
+  s_026c6b58460fd4::t_36bb3296b59c93 1-4,19,52-55,59,66,75,79,97-139,224-225,234-284
+src/agent/webview/components/StreamingText.test.tsx
+  s_026c6b58460fd4::t_6dd75d29ed5915 16,118-224
+src/agent/webview/components/StreamingText.tsx
+  s_026c6b58460fd4::t_f8d6a69568cec0 9-18,96,161-187,414-416,521-522,537-541,590
+src/agent/webview/components/ToolCallBlock.test.ts
+  s_026c6b58460fd4::t_483f6b75600446 605-608
+src/agent/webview/components/ToolCallBlock.tsx
+  s_026c6b58460fd4::t_4f182c25208834 5,1250,1257,1265-1272
+src/agent/webview/components/composerVoiceInput.ts
+  s_026c6b58460fd4::t_e2633bab84a788 1-251
+src/agent/webview/components/markdownImagePlaceholder.ts
+  s_026c6b58460fd4::t_1f32894da75bbf 1-31
+src/agent/webview/imagePrint.test.ts
+  s_026c6b58460fd4::t_ffdae4d48f33fe 1-48
+src/agent/webview/imagePrint.ts
+  s_026c6b58460fd4::t_a92429cbad309f 1-74
+src/agent/webview/index.tsx
+  s_026c6b58460fd4::t_335097fd90e93f 2
+src/agent/webview/markdownImageRequests.ts
+  s_026c6b58460fd4::t_7fc198773c1446 1-46
+src/agent/webview/styles/chat.css
+  s_026c6b58460fd4::t_550040fca47909 1852-1971,2108-2110,2149-2150,2326,2329-2330
+src/agent/webview/styles/voice-input.css
+  s_026c6b58460fd4::t_0fd0f100bb4443 1-41
+src/agent/webview/types.ts
+  s_026c6b58460fd4::t_b693b055cecca9 39-42,69-73,330-334,417-427
+src/agent/webview/useHostVoiceInput.ts
+  s_026c6b58460fd4::t_a46b80ff7b9204 1-146
+src/approvals/commandApprovalReview.test.ts
+  s_026c6b58460fd4::t_23978f3caa0b16 162-188
+src/approvals/commandApprovalReview.ts
+  s_026c6b58460fd4::t_404f3a04c0cb56 22,315-361
+src/approvals/typeSafeGuardianShadow.test.ts
+  s_026c6b58460fd4::t_a42e755eb7a722 443,576,596,612,616-618,628,630-631,636,638,640-757,933,939-941,945-946
+src/approvals/typeSafeGuardianShadow.ts
+  s_026c6b58460fd4::t_c39727eabfdcff 32-37,46-48,85-86,303,547-551,557-558,578-580,586,605,613,658-704,707-708,744-750,753-755,759,852,861-864,867,884,897-935
+src/browser-gateway/BrowserGatewayServer.test.ts
+  s_026c6b58460fd4::t_a1c2eea31a5a98 202-212,535-639
+src/browser-gateway/BrowserGatewayServer.ts
+  s_026c6b58460fd4::t_6fa92c9b1641b1 61-65,446-457,633-638,1070-1119,2171-2200,2619
+src/browser-gateway/browserGatewayAskAgentSessionStore.test.ts
+  s_026c6b58460fd4::t_043063162b0d1c 313-331
+src/browser-gateway/dataPlane/imageAttribution.ts
+  s_026c6b58460fd4::t_cace58592b93eb 1-87
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  s_026c6b58460fd4::t_e65a52332bb63e 10-12,296,307-434
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  s_026c6b58460fd4::t_7f97d7591f3c22 7,56-57,102-104,149-150,184-191,266-271,315-316,634-635,658-659,1215-1249,1277-1284
+src/browser-gateway/dataPlane/protocol.ts
+  s_026c6b58460fd4::t_61509a0125b5f5 2,1767,1796-1801,1852,2571-2623,3084-3085
+src/browser-gateway/dataPlane/transcriptBlockDetail.ts
+  s_026c6b58460fd4::t_ebb5cb71d8962e 1-5,54-57,128-205,216,285
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  s_026c6b58460fd4::t_ea80fe325b3b94 193-197
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  s_026c6b58460fd4::t_d3c6a096816e17 181,920,961
+src/browser-gateway/helper/askAgentModelClient.ts
+  s_026c6b58460fd4::t_e2554287b7a779 34-35,94,104-105,239,312,316-317,319,326,510,513-517
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  s_026c6b58460fd4::t_79bd290c944a7f 1593-1594,1666-1667,5282-5378,8280-8406,10574
+src/browser-gateway/helper/browserGatewayHelper.ts
+  s_026c6b58460fd4::t_ab54836963db3e 93-96,214-228,232,259-268,384,400-404,931-935,960-964,981-985,990-992,996,998,1050-1051,1859-1862,1867-1868,1871-1872,2358-2406,5891-6007,6648-6654,6656,6661-6663,6669-6674,6680,7433-7437,7439-7442,7444-7466,7469,7480,7504-7585,7896-7942,7949,8000,8002-8003,8006-8007,8169-8179,8248-8263,9582-9663
+src/browser-gateway/helper/helperRouteFamilies.ts
+  s_026c6b58460fd4::t_01a16a6ee87f71 13,60-61,64-65,248-253,256-260,262
+src/browser-gateway/helper/sharedCodexOAuth.ts
+  s_026c6b58460fd4::t_cd33d6311d1ed1 2,30
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  s_026c6b58460fd4::t_5f03ded74467b2 142-153,312-317,562,569-583
+src/browser-gateway/voiceInputHttp.test.ts
+  s_026c6b58460fd4::t_90b0ebc32db049 1-44
+src/browser-gateway/voiceInputHttp.ts
+  s_026c6b58460fd4::t_2944201e4ba479 1-34
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  s_026c6b58460fd4::t_255042ea94196c 3274-3275,3290-3291,3298-3303,3331-3347
+src/browser-gateway/webview/desktop.css
+  s_026c6b58460fd4::t_34e812b86ad564 1345-1346,1350-1522
+src/browser-gateway/webview/index.tsx
+  s_026c6b58460fd4::t_ead8cb4ddd35bc 2
+src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts
+  s_026c6b58460fd4::t_6d45411719ff7a 13-20,217-287
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  s_026c6b58460fd4::t_2966af377587d0 417-419,432-460
+src/browser-gateway/webview/toolDetailTransport.ts
+  s_026c6b58460fd4::t_d49d6478ee24c3 7-37
+src/browser-gateway/webview/useBrowserVoiceInput.ts
+  s_026c6b58460fd4::t_03d30b35dcd92c 1-334
+src/core/capabilities/background.ts
+  s_026c6b58460fd4::t_8bd8d5320f7365 108-112
+src/core/capabilities/terminal.ts
+  s_026c6b58460fd4::t_8b4f1a4e1502f2 120-123
+src/core/model/providers/codex/standaloneWeb.test.ts
+  s_026c6b58460fd4::t_8ded1d14029364 192,599-650
+src/core/model/providers/codex/standaloneWeb.ts
+  s_026c6b58460fd4::t_dfec04d6a343cf 554,576-593,622-623,625
+src/core/model/providers/openaiCompatible/completionFacade.test.ts
+  s_026c6b58460fd4::t_6a8b6f0510b77b 396-434
+src/core/model/providers/openaiCompatible/streamParser.test.ts
+  s_026c6b58460fd4::t_d1314ec0a5b576 533-607
+src/core/tools/toolCapabilities.ts
+  s_026c6b58460fd4::t_ddc73e1f99c41e 162-169,324-333
+src/core/tools/types.ts
+  s_026c6b58460fd4::t_fb1439eb0030e4 55-56
+src/corePackageBoundary.test.ts
+  s_026c6b58460fd4::t_17ad45f151bb66 310-323,597-614,647-651,653-655
+src/extension.ts
+  s_026c6b58460fd4::t_b3ccbc5f1f94f5 41,144-149,188,1081,1157,1159-1164,1615-1649,2082,3160
+src/packageContributions.test.ts
+  s_026c6b58460fd4::t_cf46cde272a3cf 6-7,205
+src/protocolPackageBoundary.test.ts
+  s_026c6b58460fd4::t_bc04a40641b9fc 1872,1887
+src/shared/chatProjection.ts
+  s_026c6b58460fd4::t_7154a1fd8ad4f4 27-33,217,227,1012,1248,1289,1291,1295-1304,1460-1461
+src/shared/markdownImageSource.ts
+  s_026c6b58460fd4::t_cf72e79492774d 1-83
+src/shared/toolRegistry.ts
+  s_026c6b58460fd4::t_5204e6068d52f8 30,35,124,126-131
+src/shared/toolSchemas.ts
+  s_026c6b58460fd4::t_7322188465bcda 855,861,863-895,1117
+src/shared/voiceInputProtocol.ts
+  s_026c6b58460fd4::t_6a8fe9f11da71c 1-66
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  s_026c6b58460fd4::t_22f6acd9efd28f 1189-1228
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  s_026c6b58460fd4::t_a9eab985df277a 884,887-907
+src/tools/executeCommand.test.ts
+  s_026c6b58460fd4::t_dc923064ac06b2 5328-5362,5593-5750,10821-10822,10890-10892,10897-10899
+src/tools/executeCommand.ts
+  s_026c6b58460fd4::t_d42e5c41006101 421,561-569,1536-1603,2751-2757,2851,2903,2944,3427-3433,3930-3936
+src/tools/findAndReplace.test.ts
+  s_026c6b58460fd4::t_8020e3e17e4b9c 396-427
+src/tools/findAndReplace.ts
+  s_026c6b58460fd4::t_6f905f78676035 42-53,57-77,79-80
+src/tools/getRepoMap.test.ts
+  s_026c6b58460fd4::t_c1f6612793378f 429-493
+src/tools/getRepoMap.ts
+  s_026c6b58460fd4::t_84ab4793c9c460 320-321
+src/tools/markdownImageResolver.test.ts
+  s_026c6b58460fd4::t_f964273a754a2e 1-181
+src/tools/markdownImageResolver.ts
+  s_026c6b58460fd4::t_729a46a9babf64 1-290
+src/tools/presentImages.test.ts
+  s_026c6b58460fd4::t_cc489d1b75feb5 1,4,8-9,45,53-139
+src/tools/presentImages.ts
+  s_026c6b58460fd4::t_a90cfabddea64c 1-6,8,17-183,263
+src/tools/webImages/vscodeWebImageTools.test.ts
+  s_026c6b58460fd4::t_a95ec6e5b89361 1-48
+src/tools/webImages/vscodeWebImageTools.ts
+  s_026c6b58460fd4::t_65f1d59821f866 1-106
+src/util/httpDispatcher.test.ts
+  s_026c6b58460fd4::t_d7e094dc2269f6 91-127
+src/util/httpDispatcher.ts
+  s_026c6b58460fd4::t_10f59c3d09394e 234-288
+src/util/interactiveValidator.test.ts
+  s_026c6b58460fd4::t_2059ca35e35750 311-313,329-331
+src/util/interactiveValidator.ts
+  s_026c6b58460fd4::t_62379cd33fcfb2 650,654-657,660
+CHANGELOG.md
+  h_e08a86bb3a33a2 40-75,79,83-84,91-92
+apps/cli/THIRD_PARTY_NOTICES.md
+  h_e08a86bb3a33a2 1559-1577,3111-3137
+package-lock.json
+  h_e08a86bb3a33a2 3,9,17-20,25,44,63-64,95,104-107,136,139-141,157-160,3790-3798,14433,14436,14438-14439,14450,14453-14454,14460,14462,14494,14502,14505-14507
+package.json
+  h_e08a86bb3a33a2 5,464-479,542-555,608,613-614,1235,1250-1253,1258,1277,1300-1301
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12,78-138
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 40-75,79,83-84,91-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e265a5aa9ee3369c42573e9bc28314c9e5b49e77",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_026c6b58460fd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e42241f7-beda-4f40-a71c-578bed7e302b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0c43316b5b79da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1eb172f8-fb93-4b97-961f-3232be1a2096",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
