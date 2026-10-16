@@ -1,0 +1,27 @@
+scripts/jev-replay.mjs
+  h_e08a86bb3a33a2 7,14-18,20-21,30-33,54-58,60-61,63-70,135-196,217,261-265,305-306,390-391,394-428,431-432,438-501,503-508,513-515,525,565,601-609,635,644-704,706-722,735-739,747-748,836-837,843-844,850-864,869-872,925-933,951-961,963,973,975,981
+  s_072af792f25dfe::t_218a44d96765ff 19,62,197-198,502,509-512,526,705,723-734,740-746,749-750,962
+scripts/jev-replay.test.mjs
+  h_e08a86bb3a33a2 3,5-7,121-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60d3cb8471e06dc3515b19d54097a6e4a3c8beca",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_072af792f25dfe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee23e7b5-caf8-451d-b241-173ab22cbc99",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
