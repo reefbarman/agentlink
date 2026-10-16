@@ -1,0 +1,84 @@
+apps/server/src/egressPolicy.ts
+  h_e08a86bb3a33a2 214-216,242
+apps/server/deploy/container/compose.browser.yaml
+  h_e08a86bb3a33a2 1-39
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 83-88,97-99,435,601-603,654-675
+  s_11971a2eea3903::t_0ac44de2a0e536 82,100-101,676-677
+apps/server/src/cdpClient.ts
+  h_e08a86bb3a33a2 1-229
+apps/server/src/browserResearch.test.ts
+  h_e08a86bb3a33a2 1-342
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 516-545
+apps/server/README.md
+  h_e08a86bb3a33a2 171,605-613
+  s_1fbb3d7a559667::t_2acd05ee6065fc 614
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 47,112-114
+  s_11971a2eea3903::t_8a85c4562d80af 115
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 48-53,1227-1228,1310-1317,2069-2099,2101-2104,2107-2114,2519-2521
+  s_11971a2eea3903::t_e957f8196f5e05 2100,2105-2106,2522
+apps/server/src/egressPolicy.test.ts
+  h_e08a86bb3a33a2 216,218-222
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 154-190
+apps/server/src/cdpClient.test.ts
+  h_e08a86bb3a33a2 1-92
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 131-132,1302-1304,1315-1316,1365-1369,1402-1403
+  s_11971a2eea3903::t_af0f2b76d627c1 1404
+apps/server/src/browserResearch.ts
+  h_e08a86bb3a33a2 1-677
+CHANGELOG.md
+  h_e08a86bb3a33a2 39
+apps/server/src/runnerManager.ts
+  h_e08a86bb3a33a2 51-58,133-137,281-282,566-649,662-671,747-757
+  s_11971a2eea3903::t_2ea96e4bb59397 283-284,650-655,758
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 76-77,80-83,111,124-203
+  s_1967f90edb2e62::t_c9a98f89f05aa3 75,78,204
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 14-15,127-151
+  s_11971a2eea3903::t_eb2517b2a0f8b7 152
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1fbb3d7a559667::t_c888125d543ae1 39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c84019dccbe1476b00a8372e13cbeedb37462afd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_11971a2eea3903": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f876fda-7620-419e-b945-48b5edd4c064",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1967f90edb2e62": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2312e1a6-4f01-4958-874e-5b9975702d1f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1fbb3d7a559667": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17120195-d80a-4b33-90d9-3d5c279a0da2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
