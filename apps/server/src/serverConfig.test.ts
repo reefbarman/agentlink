@@ -106,6 +106,47 @@ describe("parseAssistantServerConfig", () => {
     }
   });
 
+  it("parses the task editor, which needs runners and its own port", () => {
+    const runners = {
+      manager: {
+        host: "runner-manager",
+        port: 7700,
+        token: { file: "/run/secrets/runner-manager-token" },
+      },
+    };
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.runners = runners;
+        value.editor = {};
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.editor).toEqual({ port: 8444, idleMinutes: 30 });
+    expect(() =>
+      parseAssistantServerConfig(
+        withChange((value) => {
+          value.editor = { port: 8444 };
+        }),
+        "/etc/agentlink",
+      ),
+    ).toThrow(/editor needs runners/u);
+    for (const editor of [
+      { port: 8443 },
+      { idleMinutes: 0 },
+      { image: "anything" },
+    ]) {
+      expect(() =>
+        parseAssistantServerConfig(
+          withChange((value) => {
+            value.runners = runners;
+            value.editor = editor;
+          }),
+          "/etc/agentlink",
+        ),
+      ).toThrow(/editor/u);
+    }
+  });
+
   it("parses the backup sidecar, on a private network only", () => {
     const config = parseAssistantServerConfig(
       withChange((value) => {

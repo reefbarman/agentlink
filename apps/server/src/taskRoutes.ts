@@ -4,6 +4,7 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import type { CheckpointStatus } from "./auditCheckpoint.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
+import { singleHeader } from "./requestGuard.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { GitHubConnectionStore } from "./githubConnections.js";
 import { parseGitHubRepository } from "./githubApi.js";
@@ -16,6 +17,7 @@ import {
   parseValidationCommands,
   type RepositorySettingsStore,
 } from "./taskRepositories.js";
+import type { TaskEditors } from "./taskEditors.js";
 import type { TaskRunner } from "./taskRunner.js";
 import {
   TASK_ID_PATTERN,
@@ -37,6 +39,12 @@ import {
  *   checkpoints' status (last checkpoint, and whether the log still matches
  *   the checkpoints in the backup store)
  * - `POST /api/tasks/:id/stop`, `POST /api/tasks/:id/resume`
+ * - `POST /api/tasks/:id/editor` (`{ action: "open" | "take_over" |
+ *   "hand_back" }`): open the task's folder in the browser editor
+ *   (read-only, or writable while the owner has taken it over), take it
+ *   over (stops the task, which becomes `editing`), or hand it back (stops
+ *   the editor and continues the task). `open` and `take_over` return the
+ *   one-time `url` to open on the editor origin.
  * - `POST /api/tasks/:id/publish` (`{ allowUnreviewed? }`): push a ready
  *   task and open its draft pull request, within the repository's
  *   standing permission
@@ -50,7 +58,9 @@ import {
  */
 
 const MAX_TASK_BODY_BYTES = 64 * 1024;
-const TASK_ROUTE = /^\/api\/tasks\/([^/]+)(?:\/(stop|resume|publish|audit))?$/u;
+const TASK_ROUTE =
+  /^\/api\/tasks\/([^/]+)(?:\/(stop|resume|publish|audit|editor))?$/u;
+const EDITOR_ACTIONS = new Set(["open", "take_over", "hand_back"]);
 const REPOSITORY_FIELDS = new Set(["repository", "validation", "connectionId"]);
 const PUBLISH_FIELDS = new Set(["allowUnreviewed"]);
 
@@ -67,7 +77,15 @@ export interface TaskRoutesOptions {
   /** The audit checkpoints' status, when they are running. */
   readonly checkpoints?: () => CheckpointStatus | undefined;
   readonly models: readonly AssistantServerModelChoice[];
+  /** Browser editors for task folders, when configured. */
+  readonly editors?: TaskEditorRoutes;
   readonly now?: () => number;
+}
+
+export interface TaskEditorRoutes {
+  /** The editor listener's port, on the host the app is using. */
+  readonly port: number;
+  readonly editors: Pick<TaskEditors, "open" | "stop" | "running">;
 }
 
 /**
@@ -244,6 +262,55 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
       if (method !== "POST") throw new HttpError(405, "method_not_allowed");
       requireTask(taskId);
       const runner = requireRunner();
+      if (action === "editor") {
+        const editors = options.editors;
+        if (!editors) throw new HttpError(409, "editors_not_configured");
+        const body = await readJsonBody(
+          request,
+          MAX_TASK_BODY_BYTES,
+          auth.signal,
+        );
+        const editorAction = body.action;
+        if (
+          typeof editorAction !== "string" ||
+          !EDITOR_ACTIONS.has(editorAction) ||
+          Object.keys(body).some((key) => key !== "action")
+        ) {
+          throw new HttpError(400, "editor_action_invalid");
+        }
+        await requireValid(auth);
+        if (editorAction === "hand_back") {
+          await requested(taskId, "hand_back", auth);
+          await editors.editors.stop(taskId);
+          sendJson(response, 202, {
+            task: describeTask(await runner.handBack(taskId)),
+          });
+          return true;
+        }
+        let task = requireTask(taskId);
+        if (editorAction === "take_over") {
+          await requested(taskId, "take_over", auth);
+          task = await runner.takeOver(taskId);
+        }
+        const mode = task.state === "editing" ? "rw" : "ro";
+        if (editorAction === "open") {
+          await requested(taskId, "open_editor", auth, { mode });
+        }
+        const { token } = await editors.editors.open(task, mode);
+        const host = new URL(
+          `https://${singleHeader(request.headers.host) ?? "localhost"}`,
+        ).hostname;
+        const url = new URL(`https://${host}`);
+        url.port = String(editors.port);
+        url.pathname = "/open";
+        url.searchParams.set("token", token);
+        sendJson(response, 200, {
+          task: describeTask(task),
+          mode,
+          url: url.href,
+        });
+        return true;
+      }
       if (action === "publish") {
         const body = await readJsonBody(
           request,
@@ -291,6 +358,15 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
         events: store.events(taskId),
         validation: repositories.get(task.repository)?.validation ?? [],
         publish: repositories.get(task.repository)?.publish ?? null,
+        // Whether the browser editor is available, and open now.
+        editor: options.editors
+          ? {
+              enabled: true,
+              ...(options.editors.editors.running(taskId)
+                ? { mode: options.editors.editors.running(taskId)!.mode }
+                : {}),
+            }
+          : { enabled: false },
       });
       return true;
     }

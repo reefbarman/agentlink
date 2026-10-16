@@ -49,7 +49,12 @@ export type TaskState =
   /** The model provider's sign-in has expired or is missing. */
   | "blocked_auth"
   /** The model provider refused for rate or subscription limits. */
-  | "blocked_quota";
+  | "blocked_quota"
+  /**
+   * The owner took the folder over in the editor: the task does not work,
+   * resume or publish until it is handed back.
+   */
+  | "editing";
 
 /** States the runner owns: the task is queued or working. */
 export const ACTIVE_TASK_STATES: readonly TaskState[] = [
@@ -246,6 +251,8 @@ export interface TaskRun extends TaskRequest {
   readonly followUps?: readonly TaskFollowUp[];
   /** A follow-up approved but not yet sent to the implementation chat. */
   readonly pendingFollowUp?: string;
+  /** While `editing`: when the owner took over, and the head then. */
+  readonly takeover?: { readonly at: number; readonly head: string };
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly startedAt?: number;

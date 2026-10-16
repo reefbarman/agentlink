@@ -74,11 +74,24 @@ export interface AssistantServerConfig {
    */
   readonly runners?: AssistantServerRunnersConfig;
   /**
+   * Browser editors for task folders (code-server, started by the runner
+   * manager), served on their own HTTPS port so they never share the app's
+   * origin. Needs `runners` and a runner manager with an editor image.
+   */
+  readonly editor?: AssistantServerEditorConfig;
+  /**
    * The backup sidecar (`agentlink-server backup-agent`), which backs the
    * deploy directory up to an append-only store. The server shows its
    * status, asks for a backup now, and tells the owner when one fails.
    */
   readonly backup?: AssistantServerPublisherConfig;
+}
+
+export interface AssistantServerEditorConfig {
+  /** The editor listener's port (same host names and certificate). */
+  readonly port: number;
+  /** Minutes an editor with nothing open may sit before it is stopped. */
+  readonly idleMinutes: number;
 }
 
 export interface AssistantServerRunnersConfig {
@@ -401,6 +414,7 @@ export function parseAssistantServerConfig(
     "notifications",
     "publisher",
     "runners",
+    "editor",
     "backup",
   ]);
   const resolvePath = (input: unknown, label: string) =>
@@ -563,10 +577,45 @@ export function parseAssistantServerConfig(
     ...(config.runners === undefined
       ? {}
       : { runners: parseRunners(config.runners, baseDirectory) }),
+    ...(config.editor === undefined
+      ? {}
+      : { editor: parseEditor(config.editor, config.runners, port) }),
     ...(config.backup === undefined
       ? {}
       : { backup: parsePublisher(config.backup, baseDirectory, "backup") }),
   };
+}
+
+function parseEditor(
+  value: unknown,
+  runners: unknown,
+  appPort: unknown,
+): AssistantServerEditorConfig {
+  const label = "editor";
+  const item = record(value, label);
+  allowKeys(item, label, ["port", "idleMinutes"]);
+  if (runners === undefined) {
+    throw new Error(
+      "editor needs runners (editors are started by the runner manager)",
+    );
+  }
+  const port = item.port ?? 8444;
+  if (!Number.isSafeInteger(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`${label}.port must be an integer from 1 to 65535`);
+  }
+  if (port === appPort) {
+    throw new Error(`${label}.port must differ from listen.port`);
+  }
+  const idleMinutes = item.idleMinutes ?? 30;
+  if (
+    typeof idleMinutes !== "number" ||
+    !Number.isFinite(idleMinutes) ||
+    idleMinutes < 1 ||
+    idleMinutes > 24 * 60
+  ) {
+    throw new Error(`${label}.idleMinutes must be from 1 to 1440`);
+  }
+  return { port: Number(port), idleMinutes };
 }
 
 function parseRunners(

@@ -196,6 +196,27 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     expect((await workspaces.inspect(task)).branch).toBe("other");
   });
 
+  it("lists the files changed since a commit, committed or not", async () => {
+    const { workspaces, taskFor, run } = await setup();
+    const base = taskFor("aaaaaaaaaaaa");
+    const task = { ...base, ...(await workspaces.prepare(base)) };
+    const head = run(task.workspace, "rev-parse", "HEAD");
+    expect(await workspaces.changedSince(task, head)).toEqual([]);
+    await fs.writeFile(path.join(task.workspace, "committed.txt"), "a\n");
+    run(task.workspace, "add", "committed.txt");
+    run(task.workspace, "commit", "-q", "-m", "owner edit");
+    await fs.writeFile(path.join(task.workspace, "untracked.txt"), "b\n");
+    await fs.writeFile(path.join(task.workspace, "README.md"), "changed\n");
+    expect(await workspaces.changedSince(task, head)).toEqual([
+      "README.md",
+      "committed.txt",
+      "untracked.txt",
+    ]);
+    await expect(
+      workspaces.changedSince(task, "--output=/tmp/x"),
+    ).rejects.toThrow();
+  });
+
   it("runs validation on the commit and puts the clone back", async () => {
     const { workspaces, taskFor, run } = await setup();
     const base = taskFor("aaaaaaaaaaaa");

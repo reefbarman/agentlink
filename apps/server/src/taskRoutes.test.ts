@@ -38,7 +38,9 @@ const auth = (subjectId: string, valid = true): AssistantServerAuth => {
 
 const ID = "aaaaaaaaaaaa";
 
-async function setup(options: { readonly enabled?: boolean } = {}) {
+async function setup(
+  options: { readonly enabled?: boolean; readonly editors?: boolean } = {},
+) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-routes-"));
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
   const audit = await openTaskAudit({ directory: path.join(dir, "audit") });
@@ -66,6 +68,13 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     ),
     stop: vi.fn(async (taskId: string) => store.get(taskId)!),
     resume: vi.fn(async (taskId: string) => store.get(taskId)!),
+    takeOver: vi.fn(async (taskId: string): Promise<TaskRun> => ({
+      ...store.get(taskId)!,
+      state: "editing",
+    })),
+    handBack: vi.fn(async (taskId: string, _options?: { idle?: boolean }) =>
+      store.get(taskId)!,
+    ),
     continueTask: vi.fn(async (taskId: string) => store.get(taskId)!),
     steer: vi.fn(async (taskId: string) => store.get(taskId)!),
     publish: vi.fn(
@@ -86,6 +95,20 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
   const connections = await openGitHubConnections({
     file: path.join(dir, "connections.json"),
   });
+  const running = new Map<string, "ro" | "rw">();
+  const editors = {
+    open: vi.fn(async (task: TaskRun, mode: "ro" | "rw") => {
+      running.set(task.id, mode);
+      return { token: `token-${mode}` };
+    }),
+    stop: vi.fn(async (taskId: string) => {
+      running.delete(taskId);
+    }),
+    running: vi.fn((taskId: string) => {
+      const mode = running.get(taskId);
+      return mode ? { mode } : undefined;
+    }),
+  };
   const routes = createTaskRoutes({
     store,
     repositories,
@@ -94,6 +117,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     audit,
     isOwner: (request) => request.principal.subjectId === "owner",
     models: [{ providerId: "codex", modelId: "gpt-5" }],
+    ...(options.editors ? { editors: { port: 8444, editors } } : {}),
   });
   let caller = auth("owner");
   const server = http.createServer((request, response) => {
@@ -139,6 +163,7 @@ async function setup(options: { readonly enabled?: boolean } = {}) {
     store,
     audit,
     runner,
+    editors,
     connections,
     call,
     setCaller(next: AssistantServerAuth) {
@@ -182,6 +207,79 @@ describe("task routes", () => {
       status: 404,
       body: { error: "task_not_found" },
     });
+  });
+
+  it("opens, takes over and hands back a task's editor, on the record", async () => {
+    const test = await setup({ editors: true });
+    await test.call("POST", "/api/tasks", REQUEST);
+    await expect(test.call("GET", `/api/tasks/${ID}`)).resolves.toMatchObject({
+      body: { editor: { enabled: true } },
+    });
+    const opened = await test.call("POST", `/api/tasks/${ID}/editor`, {
+      action: "open",
+    });
+    expect(opened.status).toBe(200);
+    // Read-only while the task has it; the link is on the editor's port.
+    expect(test.editors.open).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: ID }),
+      "ro",
+    );
+    const url = new URL(String(opened.body.url));
+    expect(url.port).toBe("8444");
+    expect(url.pathname).toBe("/open");
+    expect(url.searchParams.get("token")).toBe("token-ro");
+    await expect(test.call("GET", `/api/tasks/${ID}`)).resolves.toMatchObject({
+      body: { editor: { enabled: true, mode: "ro" } },
+    });
+    const taken = await test.call("POST", `/api/tasks/${ID}/editor`, {
+      action: "take_over",
+    });
+    expect(taken.status).toBe(200);
+    expect(test.runner.takeOver).toHaveBeenCalledWith(ID);
+    expect(test.editors.open).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "editing" }),
+      "rw",
+    );
+    const handed = await test.call("POST", `/api/tasks/${ID}/editor`, {
+      action: "hand_back",
+    });
+    expect(handed.status).toBe(202);
+    expect(test.editors.stop).toHaveBeenCalledWith(ID);
+    expect(test.runner.handBack).toHaveBeenCalledWith(ID);
+    const actions = test.audit
+      .entries(ID)
+      .filter((entry) => entry.kind === "request")
+      .map((entry) => (entry.data as { action: string }).action);
+    expect(actions).toEqual(
+      expect.arrayContaining(["open_editor", "take_over", "hand_back"]),
+    );
+  });
+
+  it("refuses editor requests that are invalid, unconfigured or not the owner's", async () => {
+    const off = await setup();
+    await off.call("POST", "/api/tasks", REQUEST);
+    await expect(off.call("GET", `/api/tasks/${ID}`)).resolves.toMatchObject({
+      body: { editor: { enabled: false } },
+    });
+    await expect(
+      off.call("POST", `/api/tasks/${ID}/editor`, { action: "open" }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "editors_not_configured" },
+    });
+    const test = await setup({ editors: true });
+    await test.call("POST", "/api/tasks", REQUEST);
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/editor`, { action: "delete" }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "editor_action_invalid" },
+    });
+    test.setCaller(auth("guest"));
+    await expect(
+      test.call("POST", `/api/tasks/${ID}/editor`, { action: "open" }),
+    ).resolves.toMatchObject({ status: 403 });
+    expect(test.editors.open).not.toHaveBeenCalled();
   });
 
   it("refuses bad requests, other people and stale sign-ins", async () => {

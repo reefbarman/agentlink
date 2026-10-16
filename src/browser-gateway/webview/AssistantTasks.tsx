@@ -25,7 +25,8 @@ export type TaskState =
   | "interrupted"
   | "blocked_auth"
   | "blocked_quota"
-  | "blocked_review";
+  | "blocked_review"
+  | "editing";
 
 export interface ValidationCommandResult {
   command: string;
@@ -99,6 +100,8 @@ export interface TaskDetail {
   validation: string[];
   /** The repository's publish permission, if any. */
   publish: { connectionId: string; grantedAt: number } | null;
+  /** The browser editor: available, and open now (`ro` or `rw`). */
+  editor?: { enabled: boolean; mode?: "ro" | "rw" };
 }
 
 type Tone = "busy" | "ok" | "warn" | "bad" | "muted";
@@ -120,6 +123,7 @@ const STATES: Record<TaskState, { label: string; tone: Tone }> = {
   blocked_auth: { label: "Blocked: sign-in", tone: "bad" },
   blocked_quota: { label: "Blocked: limits", tone: "bad" },
   blocked_review: { label: "Blocked: no reviewer", tone: "warn" },
+  editing: { label: "You're editing", tone: "warn" },
 };
 
 const ACTIVE: readonly TaskState[] = [
@@ -169,6 +173,35 @@ export interface ChatTaskCard {
   updatedAt: number;
 }
 
+type EditorAction = "open" | "take_over" | "hand_back";
+
+/**
+ * Open, take over or hand back a task's folder in the browser editor.
+ * The editor opens in a new tab, opened before the request so browsers
+ * do not block it as a pop-up.
+ */
+export async function taskEditorAction(
+  taskId: string,
+  action: EditorAction,
+): Promise<void> {
+  const tab = action === "hand_back" ? null : window.open("", "_blank");
+  try {
+    const body = await requestJson<{ url?: string }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/editor`,
+      { method: "POST", body: { action } },
+    );
+    if (tab && body.url) {
+      tab.opener = null;
+      tab.location.href = body.url;
+    } else {
+      tab?.close();
+    }
+  } catch (caught) {
+    tab?.close();
+    throw caught;
+  }
+}
+
 /** Asks the Assistant hub to open a task in the Tasks panel. */
 export const OPEN_TASK_EVENT = "agentlink-assistant-open-task";
 
@@ -186,11 +219,20 @@ export function requestOpenTask(taskId: string): void {
 export function ChatTaskStrip({
   tasks,
   onOpen = requestOpenTask,
+  onEditor = taskEditorAction,
 }: {
   tasks: readonly ChatTaskCard[] | undefined;
   onOpen?: (taskId: string) => void;
+  onEditor?: (taskId: string, action: EditorAction) => Promise<void>;
 }) {
+  const [problem, setProblem] = useState<string | null>(null);
   if (!tasks || tasks.length === 0) return null;
+  const editor = (taskId: string, action: EditorAction) => {
+    setProblem(null);
+    onEditor(taskId, action).catch((caught: unknown) => {
+      setProblem(errorText(caught));
+    });
+  };
   return (
     <ul class="assistant-chat-tasks" aria-label="Coding tasks from this chat">
       {tasks.map((task) => {
@@ -225,9 +267,32 @@ export function ChatTaskStrip({
                 Pull request
               </a>
             )}
+            {task.state === "editing" && (
+              <>
+                <button
+                  type="button"
+                  class="assistant-task-pr"
+                  onClick={() => editor(task.id, "open")}
+                >
+                  Open editor
+                </button>
+                <button
+                  type="button"
+                  class="assistant-task-pr"
+                  onClick={() => editor(task.id, "hand_back")}
+                >
+                  Hand back
+                </button>
+              </>
+            )}
           </li>
         );
       })}
+      {problem && (
+        <li class="assistant-project-error" role="alert">
+          {problem}
+        </li>
+      )}
     </ul>
   );
 }
@@ -560,6 +625,9 @@ function TaskDetailView({
   const reason = notPublishedReason(task, permitted);
   const { validation, review } = task.current;
   const active = ACTIVE.includes(task.state);
+  const editing = task.state === "editing";
+  // The editor needs the task's chat and clone; the server checks again.
+  const editorEnabled = detail.editor?.enabled === true && !!task.sessionId;
 
   return (
     <Dialog
@@ -695,6 +763,54 @@ function TaskDetailView({
           >
             <i class="codicon codicon-git-pull-request" aria-hidden="true" />{" "}
             {publish.label}
+          </button>
+        )}
+        {editorEnabled && (
+          <button
+            type="button"
+            title={
+              editing
+                ? "Open the task's folder to edit it"
+                : "Open the task's folder read-only"
+            }
+            disabled={busy}
+            onClick={() => void act(() => taskEditorAction(taskId, "open"))}
+          >
+            <i class="codicon codicon-code" aria-hidden="true" /> Open editor
+          </button>
+        )}
+        {editorEnabled && !editing && (
+          <button
+            type="button"
+            title="Stop the task and edit its folder yourself"
+            disabled={busy}
+            onClick={() => {
+              if (
+                active &&
+                !window.confirm(
+                  "Take over this task? Its current turn stops until you hand it back.",
+                )
+              ) {
+                return;
+              }
+              void act(() => taskEditorAction(taskId, "take_over"));
+            }}
+          >
+            <i class="codicon codicon-edit" aria-hidden="true" /> Take over
+          </button>
+        )}
+        {editing && (
+          <button
+            type="button"
+            class="primary"
+            title="Close the editor and let the task carry on with your changes"
+            disabled={busy}
+            onClick={() =>
+              void act(() => taskEditorAction(taskId, "hand_back"))
+            }
+          >
+            <i class="codicon codicon-debug-continue" aria-hidden="true" /> Hand
+            back
           </button>
         )}
         {active && (

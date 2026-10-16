@@ -71,7 +71,11 @@ function fakeDocker(mounts: { projects: string; data: string }) {
   return { api, calls, containers };
 }
 
-async function setup() {
+async function setup(
+  extra: { editor?: { image: string; network: string } } = {
+    editor: { image: "agentlink-editor:local", network: "agentlink-editors" },
+  },
+) {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "runner-manager-")),
   );
@@ -96,6 +100,7 @@ async function setup() {
     dataRoot: data,
     user: "1000:1000",
     limits: { memory: 2 * 1024 ** 3, cpus: 2, pids: 512 },
+    ...(extra.editor ? { editor: extra.editor } : {}),
     log: () => undefined,
   });
   cleanup.push(() => manager.close());
@@ -107,6 +112,88 @@ async function setup() {
     });
   return { root, projects, folder, dataFolder, docker, client };
 }
+
+describe("runner manager editors", () => {
+  it("starts code-server on the task folder only, read-only or not, with nothing but the proxy", async () => {
+    const test = await setup();
+    const started = await test.client().startEditor({
+      id: "task-t1",
+      folder: test.folder,
+      mode: "ro",
+      proxy: "http://u:p@egress-gateway:3128",
+    });
+    expect(started.url).toBe("http://agentlink-editor-task-t1:8080");
+    const create = test.docker.calls.find((call) =>
+      call.path.endsWith("/create"),
+    )!;
+    const body = create.body as {
+      Image: string;
+      Env: string[];
+      User: string;
+      Cmd: string[];
+      HostConfig: Record<string, unknown>;
+    };
+    expect(body.Image).toBe("agentlink-editor:local");
+    expect(body.User).toBe("1000:1000");
+    expect(body.Cmd).toContain("none");
+    expect(body.Cmd.at(-1)).toBe(test.folder);
+    // Only the task folder, on the host's path, and read-only.
+    expect(body.HostConfig.Binds).toEqual([
+      `/home/owner/assistant/projects/.tasks/t1:${test.folder}:ro`,
+    ]);
+    expect(body.HostConfig).toMatchObject({
+      NetworkMode: "agentlink-editors",
+      ReadonlyRootfs: true,
+      CapDrop: ["ALL"],
+    });
+    expect(body.Env).toEqual([
+      "HOME=/tmp/home",
+      "HTTPS_PROXY=http://u:p@egress-gateway:3128",
+      "HTTP_PROXY=http://u:p@egress-gateway:3128",
+      "NO_PROXY=localhost,127.0.0.1",
+    ]);
+
+    await test.client().startEditor({
+      id: "task-t1",
+      folder: test.folder,
+      mode: "rw",
+    });
+    const second = test.docker.calls.filter((call) =>
+      call.path.endsWith("/create"),
+    )[1]!.body as { HostConfig: { Binds: string[] }; Env: string[] };
+    expect(second.HostConfig.Binds[0]).toMatch(/:rw$/u);
+    expect(second.Env).toEqual(["HOME=/tmp/home"]);
+    await expect(test.client().stopAllEditors()).resolves.toEqual({
+      stopped: 1,
+    });
+  });
+
+  it("refuses other folders, bad modes and proxies, and editors when not configured", async () => {
+    const test = await setup();
+    const client = test.client();
+    for (const request of [
+      { id: "task-t1", folder: path.join(test.projects, "home"), mode: "rw" },
+      { id: "task-t1", folder: test.dataFolder, mode: "rw" },
+      { id: "task-t1", folder: test.folder, mode: "write" },
+      {
+        id: "task-t1",
+        folder: test.folder,
+        mode: "ro",
+        proxy: "https://x y",
+      },
+    ]) {
+      await expect(client.startEditor(request as never)).rejects.toMatchObject({
+        status: 400,
+      });
+    }
+    const without = await setup({});
+    await expect(
+      without
+        .client()
+        .startEditor({ id: "task-t1", folder: without.folder, mode: "ro" }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+});
 
 const env = {
   AGENTLINK_RUNNER_TOKEN: "runner-token",

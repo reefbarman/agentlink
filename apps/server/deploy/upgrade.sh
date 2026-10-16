@@ -42,6 +42,9 @@
 set -euo pipefail
 
 TARGETS="assistant command-worker publisher backup"
+# Built only when the deploy uses them; a rollback keeps their current
+# image when there is no earlier one (the first upgrade that adds them).
+OPTIONAL_TARGETS="editor"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(cd "$script_dir/../../.." && pwd -P)"
 deploy_dir="${AGENTLINK_DEPLOY:-$HOME/agentlink-assistant}"
@@ -102,6 +105,12 @@ server() { dc exec -T assistant agentlink-server "$@"; }
 image_of() { printf 'agentlink-%s' "$1"; }
 image_exists() { docker image inspect "$1" > /dev/null 2>&1; }
 
+# compose.editor.yaml in COMPOSE_FILE adds the editor image.
+if grep -Eq '^COMPOSE_FILE=.*compose\.editor\.yaml' "$deploy_dir/.env" 2> /dev/null; then
+  TARGETS="$TARGETS editor"
+fi
+is_optional() { case " $OPTIONAL_TARGETS " in *" $1 "*) return 0 ;; esac; return 1; }
+
 # Wait for the smoke check to pass, for up to 3 minutes.
 smoke_check() {
   local deadline=$(($(date +%s) + 180))
@@ -143,13 +152,18 @@ rollback() {
   say "Rolling back the upgrade to ${commit:-the new version} started $started"
   for target in $TARGETS; do
     image="$(image_of "$target")"
-    image_exists "$image:previous" || fail "no $image:previous image to roll back to"
+    image_exists "$image:previous" || is_optional "$target" ||
+      fail "no $image:previous image to roll back to"
   done
   say "Stopping the Assistant"
   dc stop > /dev/null
   for target in $TARGETS; do
     image="$(image_of "$target")"
-    docker tag "$image:previous" "$image:local"
+    if image_exists "$image:previous"; then
+      docker tag "$image:previous" "$image:local"
+    else
+      say "Keeping $image:local (there is no earlier one)"
+    fi
   done
   if [ -n "$snapshot" ]; then
     say "Restoring data/ from backup $snapshot (taken before the upgrade)"

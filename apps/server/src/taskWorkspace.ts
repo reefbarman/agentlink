@@ -131,6 +131,11 @@ export interface TaskWorkspaces {
   /** Fresh clone at the base on the task branch; replaces any earlier try. */
   prepare(task: TaskRun, options?: PrepareOptions): Promise<PreparedWorkspace>;
   inspect(task: TaskRun): Promise<WorkspaceInspection>;
+  /**
+   * Files changed since `commit`: committed after it, staged, unstaged or
+   * untracked (sorted, at most 200). For handing an edited folder back.
+   */
+  changedSince(task: TaskRun, commit: string): Promise<readonly string[]>;
   exists(task: TaskRun): Promise<boolean>;
   /**
    * Run validation commands in the clone, in order, stopping at the first
@@ -372,6 +377,34 @@ export function createTaskWorkspaces(options: {
         status: status.trim().slice(0, MAX_DETAIL_LENGTH),
         commits,
       };
+    },
+    async changedSince(task, commit) {
+      taskFolder(task);
+      if (!/^[0-9a-f]{7,64}$/u.test(commit)) {
+        throw new TaskWorkspaceError("workspace_unreadable");
+      }
+      const workspace = task.workspace;
+      const lines = (output: string) =>
+        output
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+      // Against the working tree: commits since, staged and unstaged.
+      const tracked = lines(
+        await run(
+          ["diff", "--name-only", commit, "--"],
+          workspace,
+          "workspace_unreadable",
+        ),
+      );
+      const untracked = lines(
+        await run(
+          ["ls-files", "--others", "--exclude-standard"],
+          workspace,
+          "workspace_unreadable",
+        ),
+      );
+      return [...new Set([...tracked, ...untracked])].sort().slice(0, 200);
     },
     async exists(task) {
       try {

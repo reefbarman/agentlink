@@ -77,7 +77,13 @@ export type TaskAuditAction =
   | "stop"
   | "resume"
   | "publish"
-  | "delete";
+  | "delete"
+  /** The owner opened the task's folder in the editor (read-only or not). */
+  | "open_editor"
+  /** The owner took the task's folder over in the editor. */
+  | "take_over"
+  /** The owner handed the folder back (or the editor sat idle). */
+  | "hand_back";
 
 /** Where a task's implementation chat runs. */
 export type TaskAuditRunsIn = "runner" | "server";

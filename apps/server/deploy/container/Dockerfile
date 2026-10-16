@@ -9,6 +9,8 @@
 #     -f apps/server/deploy/container/Dockerfile apps/server
 #   docker build --target backup -t agentlink-backup:local \
 #     -f apps/server/deploy/container/Dockerfile apps/server
+#   docker build --target editor -t agentlink-editor:local \
+#     -f apps/server/deploy/container/Dockerfile apps/server
 #
 # The context is apps/server; its .dockerignore admits only the bundle.
 # Run them with compose.yaml next to this file (see apps/server/README.md).
@@ -76,6 +78,20 @@ WORKDIR /var/lib/agentlink-backup
 EXPOSE 7800
 ENTRYPOINT ["agentlink-server"]
 CMD ["backup-agent", "--help"]
+
+# Editor: code-server for a task's folder (Open editor / Take over, with
+# compose.editor.yaml). The runner manager starts it with only that folder
+# mounted, no credentials, a read-only root filesystem and the editors'
+# internal network; extensions come from Open VSX through the egress
+# gateway. Pinned: bump the version deliberately.
+FROM codercom/code-server:4.141.0 AS editor
+USER root
+# Nothing in an editor needs to become root.
+RUN SUDO_FORCE_REMOVE=yes apt-get purge -y sudo \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/code-server"]
 
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git

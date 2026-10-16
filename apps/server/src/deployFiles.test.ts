@@ -479,7 +479,10 @@ describe("deployment files", () => {
     expect((await fs.stat(script)).mode & 0o111).not.toBe(0);
     // Parses with the bash on the machine (3.2 on macOS).
     await expect(execFileAsync("bash", ["-n", script])).resolves.toBeDefined();
-    const targets = /^TARGETS="([^"]+)"$/mu.exec(text)?.[1]?.split(" ") ?? [];
+    const targets = [
+      ...(/^TARGETS="([^"]+)"$/mu.exec(text)?.[1]?.split(" ") ?? []),
+      ...(/^OPTIONAL_TARGETS="([^"]+)"$/mu.exec(text)?.[1]?.split(" ") ?? []),
+    ];
     const dockerfile = await fs.readFile(
       path.join(deploy, "container", "Dockerfile"),
       "utf8",
@@ -501,6 +504,28 @@ describe("deployment files", () => {
     ]) {
       expect(text, step).toContain(step);
     }
+  });
+
+  it("ships an editor overlay on its own internal network and port", async () => {
+    const overlay = await fs.readFile(
+      path.join(deploy, "container", "compose.editor.yaml"),
+      "utf8",
+    );
+    expect(overlay).toContain(":8444");
+    expect(overlay).toContain("name: agentlink-editors");
+    expect(overlay).toContain("internal: true");
+    expect(overlay).toContain("AGENTLINK_EDITOR_IMAGE: agentlink-editor:local");
+    expect(overlay).toContain("AGENTLINK_EDITOR_NETWORK: agentlink-editors");
+    // Editors get no Docker socket, secrets or data.
+    expect(overlay).not.toMatch(/docker\.sock|secrets:|\.\/data/u);
+    const dockerfile = await fs.readFile(
+      path.join(deploy, "container", "Dockerfile"),
+      "utf8",
+    );
+    // A pinned code-server, never a floating tag.
+    expect(dockerfile).toMatch(
+      /^FROM codercom\/code-server:\d+\.\d+\.\d+ AS editor$/mu,
+    );
   });
 
   it("ships a launchd daemon that runs as a service user", async () => {

@@ -40,7 +40,12 @@ import {
   releaseFileLock,
 } from "./fileLock.js";
 import type { RemoteWorkspaceHost } from "./remoteWorkspaceHost.js";
-import { createRunnerManagerClient } from "./runnerManager.js";
+import {
+  createRunnerManagerClient,
+  type RunnerManagerClient,
+} from "./runnerManager.js";
+import { createTaskEditors, type TaskEditors } from "./taskEditors.js";
+import { startEditorProxy, type EditorProxy } from "./editorProxy.js";
 import {
   startSessionRunnerPool,
   type SessionRunnerPool,
@@ -620,7 +625,7 @@ async function startLocalCertificates(
   options: AssistantServiceOptions,
 ): Promise<{
   readonly tls: { readonly cert: string; readonly key: string };
-  watch(server: AssistantServer): void;
+  watch(server: Pick<AssistantServer, "setTls">): void;
   stop(): Promise<void>;
 }> {
   const { log } = options;
@@ -1734,9 +1739,13 @@ export async function startAssistantService(
     // With session runners, each task's session runs in its own container
     // instead of in this process.
     const runnerHosts = new Map<string, RemoteWorkspaceHost>();
+    let runnerManager: RunnerManagerClient | undefined;
+    // Browser editors for task folders (Open editor / Take over).
+    let taskEditors: TaskEditors | undefined;
+    let editorProxy: EditorProxy | undefined;
     if (config.runners && config.projectsRoot) {
       const runnersConfig = config.runners;
-      const runnerManager = createRunnerManagerClient({
+      runnerManager = createRunnerManagerClient({
         host: runnersConfig.manager.host,
         port: runnersConfig.manager.port,
         readToken: await prepareSecret(
@@ -1917,6 +1926,7 @@ export async function startAssistantService(
               ...runner,
               async delete(taskId: string) {
                 const sessionId = taskStore.get(taskId)?.sessionId;
+                await taskEditors?.stop(taskId);
                 await runner.delete(taskId);
                 taskDeliveries.forget(taskId);
                 taskChatActivity.delete(taskId);
@@ -1939,6 +1949,38 @@ export async function startAssistantService(
         })()
       : undefined;
     taskRunner = tasks?.runner;
+    if (config.editor && runnerManager && tasks) {
+      const editorRunner = tasks.runner;
+      const proxy = config.commandWorker?.egressProxy;
+      taskEditors = createTaskEditors({
+        manager: runnerManager,
+        // Package registries plus Open VSX, for extensions.
+        ...(proxy
+          ? {
+              proxyUrl: () =>
+                egressProxyUrl(proxy, policyKey, {
+                  preset: "dependencies",
+                  allow: ["open-vsx.org", "*.open-vsx.org"],
+                }),
+            }
+          : {}),
+        ready: waitForEditor,
+        idleMs: config.editor.idleMinutes * 60_000,
+        // A taken-over editor left idle goes back to the task.
+        onIdle: async (taskId, mode) => {
+          if (mode !== "rw" || taskStore.get(taskId)?.state !== "editing") {
+            return;
+          }
+          await taskAudit
+            .request(taskId, "hand_back", { kind: "owner" }, Date.now(), {
+              idle: true,
+            })
+            .catch(() => undefined);
+          await editorRunner.handBack(taskId, { idle: true });
+        },
+        log,
+      });
+    }
     const taskRoutes = createTaskRoutes({
       store: taskStore,
       repositories: repositorySettings,
@@ -1950,6 +1992,9 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
       models: configuredModels(config),
+      ...(taskEditors && config.editor
+        ? { editors: { port: config.editor.port, editors: taskEditors } }
+        : {}),
     });
     const jobRoutes = createJobRoutes({
       store: jobStore,
@@ -2052,6 +2097,12 @@ export async function startAssistantService(
         await maintenance?.close();
         await jobs.close();
         await tasks?.runner.close();
+        // Editor sessions live in this process: their editors go with it.
+        await editorProxy?.close();
+        await taskEditors?.close();
+        await taskEditors?.stopAll().catch((error: unknown) => {
+          log(`Could not stop the task editors: ${message(error)}`);
+        });
         await taskDeliveries.flush();
         await taskStore.flush();
         await taskAudit.flush();
@@ -2188,7 +2239,28 @@ export async function startAssistantService(
         }
       })
       .catch(() => undefined);
-    certificates?.watch(server);
+    if (taskEditors && config.editor) {
+      // Editors an earlier process started have no sessions any more.
+      await taskEditors.stopAll().catch((error: unknown) => {
+        log(`Could not stop earlier task editors: ${message(error)}`);
+      });
+      editorProxy = await startEditorProxy({
+        editors: taskEditors,
+        tls,
+        listen: { host: config.listen.host, port: config.editor.port },
+        hosts: config.publicOrigins.map((origin) =>
+          new URL(origin).hostname.replace(/^\[|\]$/gu, ""),
+        ),
+        log,
+      });
+    }
+    const appServer = server;
+    certificates?.watch({
+      setTls(next) {
+        appServer.setTls(next);
+        editorProxy?.setTls(next);
+      },
+    });
     // Started from a restored backup: pause schedules before any can fire,
     // and tell the owner what was restored.
     const restored = await takeRestoredMarker(config.dataRoot);
@@ -2358,6 +2430,23 @@ function createSessionRecovery(log: (line: string) => void) {
       await Promise.all(pending);
     },
   };
+}
+
+/** Wait until a just-started code-server answers, for up to 20 seconds. */
+async function waitForEditor(url: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(new URL("/healthz", url), {
+        signal: AbortSignal.timeout(2_000),
+      });
+      await response.body?.cancel();
+      if (response.ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 function errorCode(error: unknown): string | undefined {

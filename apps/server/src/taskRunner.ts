@@ -182,6 +182,19 @@ export interface TaskRunner {
   /** Queue a stopped, failed, blocked or interrupted task again. */
   resume(taskId: string): Promise<TaskRun>;
   /**
+   * The owner takes the folder over in the editor: a working task is
+   * stopped (like Stop), and the task is `editing` until handed back.
+   */
+  takeOver(taskId: string): Promise<TaskRun>;
+  /**
+   * Give an `editing` task back: its chat continues with a note listing
+   * the files changed since the takeover. `idle` when the editor sat idle.
+   */
+  handBack(
+    taskId: string,
+    options?: { readonly idle?: boolean },
+  ): Promise<TaskRun>;
+  /**
    * Push a ready task and open (or update) its draft pull request, within
    * its repository's standing permission. `allowUnreviewed` publishes a task
    * whose review could not happen.
@@ -1161,6 +1174,9 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       assertAdmitting();
       const task = requireTask(taskId);
       if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      if (task.state === "editing") {
+        throw new TaskInputError("task_editing", 409);
+      }
       if (!CONTINUABLE_STATES.has(task.state)) {
         throw new TaskInputError("task_not_continuable", 409);
       }
@@ -1222,10 +1238,69 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       assertAdmitting();
       const task = requireTask(taskId);
       if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      if (task.state === "editing") {
+        throw new TaskInputError("task_editing", 409);
+      }
       if (!isResumableTask(task)) {
         throw new TaskInputError("task_not_resumable", 409);
       }
       return enqueue(task);
+    },
+    async takeOver(taskId) {
+      const task = requireTask(taskId);
+      if (task.state === "editing") return task;
+      // Without its chat and clone there is nothing to hand back to.
+      if (!task.sessionId || !(await workspaces.exists(task))) {
+        throw new TaskInputError("task_not_started", 409);
+      }
+      const entry = live.get(taskId);
+      if (entry?.mode === "publish") {
+        throw new TaskInputError("task_busy", 409);
+      }
+      if (entry) await stop(entry, "taken_over", "editing");
+      const current = requireTask(taskId);
+      const inspection = await workspaces.inspect(current);
+      const at = now();
+      const updated: TaskRun = {
+        ...current,
+        state: "editing",
+        error: "taken_over",
+        takeover: { at, head: inspection.head },
+        finishedAt: current.finishedAt ?? at,
+        updatedAt: at,
+      };
+      await store.save(updated);
+      changed(updated);
+      log(`Task ${taskId} taken over in the editor`);
+      return updated;
+    },
+    async handBack(taskId, handBackOptions = {}) {
+      assertAdmitting();
+      const task = requireTask(taskId);
+      if (task.state !== "editing") {
+        throw new TaskInputError("task_not_editing", 409);
+      }
+      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      const files = task.takeover
+        ? await workspaces.changedSince(task, task.takeover.head)
+        : [];
+      const note = handBackPrompt(task, files, handBackOptions.idle === true);
+      const at = now();
+      const { takeover: _takeover, ...rest } = task;
+      const updated: TaskRun = {
+        ...rest,
+        followUps: [
+          ...(task.followUps ?? []),
+          { instructions: note, at },
+        ].slice(-MAX_FOLLOW_UPS),
+        pendingFollowUp: note,
+        updatedAt: at,
+      };
+      await store.save(updated);
+      log(
+        `Task ${taskId} handed back${handBackOptions.idle ? " (editor idle)" : ""}: ${files.length} file(s) changed`,
+      );
+      return enqueue(updated);
     },
     async publish(taskId, publishOptions = {}) {
       assertAdmitting();
@@ -1374,6 +1449,28 @@ export function taskPrompt(task: TaskRun): string {
     "- After you finish, the server runs the repository's validation commands and another model reviews your commit; you may be asked to fix what they find.",
     "- End with a short summary of what changed and how you checked it.",
   ].join("\n");
+}
+
+/** What the task's chat is told when the owner hands the folder back. */
+export function handBackPrompt(
+  task: Pick<TaskRun, "branch">,
+  files: readonly string[],
+  idle: boolean,
+): string {
+  return [
+    idle
+      ? "The owner took over your folder in the editor, and it was handed back after sitting idle."
+      : "The owner took over your folder in the editor and has handed it back.",
+    files.length === 0
+      ? "They changed no files."
+      : [
+          "Files changed since they took over (committed or not):",
+          ...files.map((file) => `- ${file}`),
+          "",
+          "Read these again before relying on what you remember of them.",
+        ].join("\n"),
+    `Keep the owner's changes, finish the task, and commit everything on ${task.branch} (their changes may be uncommitted).`,
+  ].join("\n\n");
 }
 
 /** States a follow-up may start from: the task finished, one way or another. */

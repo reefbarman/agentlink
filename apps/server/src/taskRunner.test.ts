@@ -257,7 +257,11 @@ function createFakeWorkspaces() {
   const inspections: WorkspaceInspection[] = [];
   const validations: ValidationRun[] = [];
   const existing = new Set<string>();
+  const changed: string[] = [];
   const workspaces = {
+    changedSince: vi.fn(async (_task: TaskRun, _commit: string) => [
+      ...changed,
+    ]),
     workspaceFor: (taskId: string) => `/srv/projects/.tasks/${taskId}/demo`,
     prepare: vi.fn(async (task: TaskRun, _options?: PrepareOptions) => {
       existing.add(task.id);
@@ -301,7 +305,7 @@ function createFakeWorkspaces() {
       truncated: false,
     })),
   } satisfies TaskWorkspaces;
-  return { workspaces, inspections, existing, validations };
+  return { workspaces, inspections, existing, validations, changed };
 }
 
 const failedValidation = (output: string): ValidationRun => ({
@@ -1025,6 +1029,68 @@ describe("task runner", () => {
     await test.waitFor(created.id, "ready");
     await expect(test.runner.resume(created.id)).rejects.toMatchObject({
       code: "task_not_resumable",
+    });
+  });
+
+  it("is taken over in the editor, refuses to work or publish, then is handed back with the changed files", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    const taken = await test.runner.takeOver(created.id);
+    expect(taken).toMatchObject({
+      state: "editing",
+      error: "taken_over",
+      takeover: { head: "c1" },
+    });
+    // Its turn was stopped, as Stop would.
+    expect(test.calls.cancel).toHaveBeenCalledOnce();
+    for (const attempt of [
+      () => test.runner.resume(created.id),
+      () => test.runner.continueTask(created.id, "more"),
+      () => test.runner.steer(created.id, "more"),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject({ code: "task_editing" });
+    }
+    await expect(test.runner.publish(created.id)).rejects.toMatchObject({
+      code: "task_not_ready",
+    });
+
+    test.changed.push("src/clock.ts", "notes.md");
+    await test.runner.handBack(created.id);
+    await test.waitForTurns(2);
+    expect(test.workspaces.changedSince).toHaveBeenCalledWith(
+      expect.objectContaining({ id: created.id }),
+      "c1",
+    );
+    expect(test.turns[1]).toMatchObject({ sessionId: "s1" });
+    expect(test.turns[1]!.text).toContain("handed it back");
+    expect(test.turns[1]!.text).toContain("- src/clock.ts");
+    expect(test.turns[1]!.text).toContain("- notes.md");
+    expect(test.store.get(created.id)?.takeover).toBeUndefined();
+    await expect(test.runner.handBack(created.id)).rejects.toMatchObject({
+      code: "task_not_editing",
+    });
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+  });
+
+  it("will not take over a task that has no clone yet", async () => {
+    const test = await setup();
+    const created = await test.store.create({
+      ...REQUEST,
+      id: "cccccccccccc",
+      projectId: "task-cccccccccccc",
+      branch: "agentlink/fix-cccccccccccc",
+      workspace: "/srv/projects/.tasks/cccccccccccc/demo",
+      state: "failed",
+      attempts: 0,
+      evidence: [],
+      effects: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await expect(test.runner.takeOver(created.id)).rejects.toMatchObject({
+      code: "task_not_started",
     });
   });
 

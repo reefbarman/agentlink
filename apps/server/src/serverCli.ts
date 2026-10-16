@@ -126,6 +126,8 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
                                        [--docker-socket <path>]
                                        [--projects-host-root <dir>]
                                        [--data-host-root <dir>]
+                                       [--editor-image <name>]
+                                       [--editor-network <name>]
        agentlink-server session-runner [--data <dir>] [--listen <host:port>]
 
 Runs the AgentLink assistant server over HTTPS.
@@ -1290,6 +1292,9 @@ async function runRunnerManager(
     "--memory": "2g",
     "--cpus": "2",
     "--pids": "512",
+    // From the environment, so a compose overlay can turn editors on.
+    "--editor-image": io.env.AGENTLINK_EDITOR_IMAGE || undefined,
+    "--editor-network": io.env.AGENTLINK_EDITOR_NETWORK || undefined,
   };
   const parsed = parseFlags(
     argv,
@@ -1298,6 +1303,8 @@ async function runRunnerManager(
       "--token-file",
       "--image",
       "--network",
+      "--editor-image",
+      "--editor-network",
       "--projects-root",
       "--data-root",
       "--docker-socket",
@@ -1341,6 +1348,11 @@ async function runRunnerManager(
   if (!Number.isSafeInteger(pids) || pids < 16) {
     return usageError(io, "--pids must be an integer of at least 16");
   }
+  const editorImage = values["--editor-image"];
+  const editorNetwork = values["--editor-network"];
+  if ((editorImage === undefined) !== (editorNetwork === undefined)) {
+    return usageError(io, "--editor-image and --editor-network go together");
+  }
   const projectsHost = values["--projects-host-root"];
   const dataHost = values["--data-host-root"];
   if ((projectsHost === undefined) !== (dataHost === undefined)) {
@@ -1370,6 +1382,9 @@ async function runRunnerManager(
       : {}),
     user: values["--user"]!,
     limits: { memory, cpus, pids },
+    ...(editorImage && editorNetwork
+      ? { editor: { image: editorImage, network: editorNetwork } }
+      : {}),
     log: io.log,
   });
   io.log(

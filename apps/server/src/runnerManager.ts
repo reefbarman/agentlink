@@ -34,6 +34,10 @@ const RUNNER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const RUNNER_LABEL = "dev.agentlink.runner";
 const MAX_ENV_VALUE_BYTES = 64 * 1024;
 const ALLOWED_ENV = new Set<string>(Object.values(RUNNER_ENV));
+const EDITOR_LABEL = "dev.agentlink.editor";
+/** The port code-server listens on inside an editor container. */
+export const EDITOR_PORT = 8080;
+const MAX_PROXY_URL_LENGTH = 4_096;
 
 export interface RunnerLimits {
   /** Bytes. */
@@ -62,6 +66,11 @@ export interface RunnerManagerOptions {
   /** `uid:gid` the runner runs as. */
   readonly user: string;
   readonly limits: RunnerLimits;
+  /**
+   * Browser editors (code-server) for task folders, on their own internal
+   * network. Without it the manager refuses to start editors.
+   */
+  readonly editor?: { readonly image: string; readonly network: string };
   readonly log: (line: string) => void;
   /** Tests: answer Docker API requests instead of the socket. */
   readonly dockerApi?: DockerApi;
@@ -201,6 +210,10 @@ export function runnerContainerName(id: string): string {
   return `agentlink-runner-${id}`;
 }
 
+export function editorContainerName(id: string): string {
+  return `agentlink-editor-${id}`;
+}
+
 export async function startRunnerManager(
   options: RunnerManagerOptions,
 ): Promise<RunnerManager> {
@@ -324,12 +337,147 @@ export async function startRunnerManager(
     return { stopped };
   };
 
+  const removeEditor = async (id: string) => {
+    const result = await docker(
+      "DELETE",
+      `/containers/${editorContainerName(id)}?force=true`,
+    );
+    if (result.status !== 204 && result.status !== 404) {
+      throw dockerError("remove an editor", result);
+    }
+  };
+
+  /**
+   * An editor for one task folder: code-server, mounted read-only or
+   * read-write, with no credentials, a read-only root filesystem, the
+   * runners' limits, and only the editors' internal network. `proxy` (the
+   * egress gateway, with credentials the assistant signed for extension
+   * downloads) is the only environment it gets from the caller.
+   */
+  const startEditor = async (body: Record<string, unknown>) => {
+    const editor = options.editor;
+    if (!editor) throw new HttpError(409, "editors_not_configured");
+    const id = body.id;
+    if (typeof id !== "string" || !RUNNER_ID_PATTERN.test(id)) {
+      throw new HttpError(400, "editor_id_invalid");
+    }
+    const folder = await checkFolder(body.folder, tasksRoot, "folder_invalid");
+    if (body.mode !== "ro" && body.mode !== "rw") {
+      throw new HttpError(400, "editor_mode_invalid");
+    }
+    const proxy = body.proxy;
+    if (
+      proxy !== undefined &&
+      (typeof proxy !== "string" ||
+        !/^http:\/\/\S+$/u.test(proxy) ||
+        proxy.length > MAX_PROXY_URL_LENGTH)
+    ) {
+      throw new HttpError(400, "editor_proxy_invalid");
+    }
+    const name = editorContainerName(id);
+    await removeEditor(id);
+    const created = await docker(
+      "POST",
+      `/containers/create?name=${encodeURIComponent(name)}`,
+      {
+        Image: editor.image,
+        Entrypoint: ["/usr/bin/code-server"],
+        Cmd: [
+          "--bind-addr",
+          `0.0.0.0:${EDITOR_PORT}`,
+          // The assistant's editor listener signs the owner in.
+          "--auth",
+          "none",
+          "--disable-telemetry",
+          "--disable-update-check",
+          "--disable-workspace-trust",
+          "--user-data-dir",
+          "/tmp/code-server/data",
+          "--extensions-dir",
+          "/tmp/code-server/extensions",
+          folder,
+        ],
+        User: options.user,
+        WorkingDir: folder,
+        Env: [
+          "HOME=/tmp/home",
+          ...(typeof proxy === "string"
+            ? [
+                `HTTPS_PROXY=${proxy}`,
+                `HTTP_PROXY=${proxy}`,
+                "NO_PROXY=localhost,127.0.0.1",
+              ]
+            : []),
+        ],
+        Labels: { [EDITOR_LABEL]: id },
+        ExposedPorts: { [`${EDITOR_PORT}/tcp`]: {} },
+        HostConfig: {
+          Binds: [
+            `${onHost(folder, projectsRoot, hostPaths.projects)}:${folder}:${body.mode}`,
+          ],
+          NetworkMode: editor.network,
+          ReadonlyRootfs: true,
+          Tmpfs: { "/tmp": "size=1g,mode=1777" },
+          CapDrop: ["ALL"],
+          SecurityOpt: ["no-new-privileges:true"],
+          Init: true,
+          Memory: options.limits.memory,
+          NanoCpus: Math.round(options.limits.cpus * 1e9),
+          PidsLimit: options.limits.pids,
+          LogConfig: {
+            Type: "json-file",
+            Config: { "max-size": "10m", "max-file": "2" },
+          },
+        },
+      },
+    );
+    if (created.status !== 201) throw dockerError("create an editor", created);
+    const started = await docker("POST", `/containers/${name}/start`);
+    if (started.status !== 204 && started.status !== 304) {
+      throw dockerError("start an editor", started);
+    }
+    options.log(`Started editor ${name} (${body.mode})`);
+    return { url: `http://${name}:${EDITOR_PORT}` };
+  };
+
+  const stopAllEditors = async () => {
+    const filters = encodeURIComponent(
+      JSON.stringify({ label: [EDITOR_LABEL] }),
+    );
+    const listed = await docker(
+      "GET",
+      `/containers/json?all=true&filters=${filters}`,
+    );
+    if (listed.status !== 200) throw dockerError("list editors", listed);
+    let stopped = 0;
+    for (const container of (listed.body ?? []) as Array<{
+      Labels?: Record<string, string>;
+    }>) {
+      const id = container.Labels?.[EDITOR_LABEL];
+      if (id && RUNNER_ID_PATTERN.test(id)) {
+        await removeEditor(id);
+        stopped += 1;
+      }
+    }
+    return { stopped };
+  };
+
   const server: RunnerHttpServer = await startRunnerHttpServer({
     host: options.host,
     port: options.port,
     authorize: (presented) =>
       sameToken(options.token, presented) ? true : undefined,
     routes: () => ({
+      "/editors/start": async (body) => await startEditor(body),
+      "/editors/stop": async (body) => {
+        if (typeof body.id !== "string" || !RUNNER_ID_PATTERN.test(body.id)) {
+          throw new HttpError(400, "editor_id_invalid");
+        }
+        await removeEditor(body.id);
+        return { stopped: true };
+      },
+      "/editors/stop-all": async () =>
+        options.editor ? await stopAllEditors() : { stopped: 0 },
       "/runners/start": async (body) => await start(body),
       "/runners/stop": async (body) => {
         if (typeof body.id !== "string" || !RUNNER_ID_PATTERN.test(body.id)) {
@@ -378,6 +526,21 @@ export function createRunnerManagerClient(options: {
         client.call<{ stopped: number }>("/runners/stop-all", {}),
       ),
     ping: () => withToken(() => client.health()),
+    startEditor: (request: {
+      readonly id: string;
+      readonly folder: string;
+      readonly mode: "ro" | "rw";
+      readonly proxy?: string;
+    }) =>
+      withToken(() =>
+        client.call<{ url: string }>("/editors/start", { ...request }),
+      ),
+    stopEditor: (id: string) =>
+      withToken(() => client.call("/editors/stop", { id })),
+    stopAllEditors: () =>
+      withToken(() =>
+        client.call<{ stopped: number }>("/editors/stop-all", {}),
+      ),
   };
 }
 

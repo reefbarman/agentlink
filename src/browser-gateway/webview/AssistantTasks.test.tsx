@@ -126,6 +126,27 @@ describe("chat task cards", () => {
     ...overrides,
   });
 
+  it("offer Open editor and Hand back while the owner is editing", () => {
+    const onEditor = vi.fn(async () => undefined);
+    const { rerender } = render(
+      <ChatTaskStrip tasks={[card()]} onEditor={onEditor} />,
+    );
+    expect(screen.queryByText("Hand back")).toBeNull();
+    rerender(
+      <ChatTaskStrip
+        tasks={[card({ state: "editing" })]}
+        onEditor={onEditor}
+      />,
+    );
+    expect(screen.getByText("You're editing")).toBeTruthy();
+    fireEvent.click(screen.getByText("Open editor"));
+    fireEvent.click(screen.getByText("Hand back"));
+    expect(onEditor.mock.calls).toEqual([
+      ["t1", "open"],
+      ["t1", "hand_back"],
+    ]);
+  });
+
   it("show nothing for a chat without tasks", () => {
     const { container } = render(<ChatTaskStrip tasks={[]} />);
     expect(container.innerHTML).toBe("");
@@ -311,6 +332,79 @@ describe("TasksPanel", () => {
     );
     expect(await screen.findByText(/no GitHub connection/u)).toBeTruthy();
     expect(screen.queryByText(/Publish/u)).toBeNull();
+  });
+
+  it("opens the editor read-only, takes over and hands back", async () => {
+    let current = task({ state: "implementing", current: {} });
+    const tab = { opener: {}, location: { href: "" }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as never);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = stubFetch({
+      "GET /api/tasks/t1": () => ({
+        ...detail(current),
+        editor: { enabled: true },
+      }),
+      "POST /api/tasks/t1/editor": () => {
+        const action = (calls.at(-1)!.body as { action: string }).action;
+        if (action === "take_over") {
+          current = task({ state: "editing", current: {} });
+        }
+        if (action === "hand_back") {
+          current = task({ state: "queued", current: {} });
+          return { task: current };
+        }
+        return { task: current, url: `https://host:8444/open?token=${action}` };
+      },
+    });
+    try {
+      render(
+        <TasksPanel
+          revision={0}
+          onClose={() => undefined}
+          initialTaskId="t1"
+        />,
+      );
+      expect(screen.queryByText("Hand back")).toBeNull();
+      fireEvent.click(await screen.findByText("Open editor"));
+      await waitFor(() =>
+        expect(tab.location.href).toBe("https://host:8444/open?token=open"),
+      );
+      expect(tab.opener).toBeNull();
+      fireEvent.click(screen.getByText("Take over"));
+      // A running task asks first: its turn stops.
+      expect(confirm).toHaveBeenCalled();
+      await waitFor(() =>
+        expect(tab.location.href).toBe(
+          "https://host:8444/open?token=take_over",
+        ),
+      );
+      expect(await screen.findByText("You're editing")).toBeTruthy();
+      expect(screen.queryByText("Take over")).toBeNull();
+      fireEvent.click(screen.getByText("Hand back"));
+      await waitFor(() =>
+        expect(screen.queryByText("You're editing")).toBeNull(),
+      );
+      expect(
+        calls
+          .filter((call) => call.path === "/api/tasks/t1/editor")
+          .map((call) => (call.body as { action: string }).action),
+      ).toEqual(["open", "take_over", "hand_back"]);
+      // Hand back opens no tab.
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      open.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it("hides the editor when it is not set up", async () => {
+    stubFetch({ "GET /api/tasks/t1": () => detail(task()) });
+    render(
+      <TasksPanel revision={0} onClose={() => undefined} initialTaskId="t1" />,
+    );
+    expect(await screen.findByText("Fix the README")).toBeTruthy();
+    expect(screen.queryByText("Open editor")).toBeNull();
+    expect(screen.queryByText("Take over")).toBeNull();
   });
 
   it("stops a running task and resumes a failed one", async () => {
