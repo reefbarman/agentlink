@@ -1,0 +1,25 @@
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 249-250
+  s_17273d7ada343f::t_1b0cba55cf6e59 251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed4945972f5ecc2a0f8fa30e080ee79e3d0884ce",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_17273d7ada343f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d52ec9c2-bbf4-4779-beae-56482112849e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
