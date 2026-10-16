@@ -1,0 +1,45 @@
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 12-15,41-46,106,170-175,188,295-297,305,315,325-326,445,476-479,658-659,669,925,935-943,954,959,988-1003,1006-1015,1034-1035,1052,1057-1066,1068,1091,1106-1107,1115,1118-1125
+  s_3d9c9d3e321f2c::t_0908663305168c 657,660,1004-1005,1016-1018,1126
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 108
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 43
+src/approvals/gitEnvironmentFacts.test.ts
+  h_e08a86bb3a33a2 1-124
+src/approvals/gitEnvironmentFacts.ts
+  h_e08a86bb3a33a2 1-148
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 829,834-965
+  s_3d9c9d3e321f2c::t_769118d2aa96d3 966-967
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_e08a86bb3a33a2 303-304
+scripts/report-session-outcomes.mjs
+  h_e08a86bb3a33a2 1014,1033-1035,1779-1781
+  s_3d9c9d3e321f2c::t_401aa1a5b2b0d8 1782
+resources/builtin-skills/documentation/references/release-notes.md
+  s_3d9c9d3e321f2c::t_462d7102b098b7 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df2457ce6f5c08620c26039a5756be435961229d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_3d9c9d3e321f2c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda46efb-1387-46ad-9b57-d84e496e268d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
