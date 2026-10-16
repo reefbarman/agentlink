@@ -64,9 +64,12 @@ import {
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
-import type {
-  ActionApprovalReviewer,
-  OutsideReadOperation,
+import {
+  actionApprovalActionKey,
+  createOneShotActionApproval,
+  type ActionApprovalReviewer,
+  type McpActionApprovalReviewInput,
+  type OutsideReadOperation,
 } from "../approvals/actionApprovalReview.js";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import { isTeaserOnlyFinalSummary } from "../shared/finalSummaryHeuristics.js";
@@ -248,7 +251,7 @@ import type {
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 import { isProviderSafeToolName } from "../core/tools/providerToolNames.js";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
@@ -3584,13 +3587,135 @@ async function dispatchToolCallWithTrackedApprovals(
       );
     }
 
+    // Direct and deferred MCP calls share this gate. Compose still requires
+    // pre-approved read-only tools and cannot acquire authority through review.
+    const buildMcpReviewInput = ():
+      | McpActionApprovalReviewInput
+      | undefined => {
+      const policy = ctx.getCommandApprovalMode?.(sessionId);
+      if (
+        !policy ||
+        policy.commandApprovalPolicy !== "approve-for-me" ||
+        policy.approvalReviewer !== "auto-review"
+      )
+        return undefined;
+      const definition = mcpToolInvocationProvider
+        .getToolDefs()
+        .find((tool) => tool.name === toolName);
+      if (
+        !definition ||
+        !definition.input_schema ||
+        typeof definition.input_schema !== "object" ||
+        Array.isArray(definition.input_schema)
+      ) {
+        return undefined;
+      }
+      return {
+        kind: "mcp",
+        sessionId,
+        policy: {
+          ...policy,
+          policyRevision: createHash("sha256")
+            .update(
+              JSON.stringify({
+                humanInputRevision: ctx.getHumanInputRevision?.(sessionId),
+                serverConfig:
+                  mcpToolInvocationProvider.getServerConfig(serverName),
+              }),
+            )
+            .digest("hex"),
+        },
+        serverName,
+        toolName: bareToolName,
+        definition: {
+          description: definition.description ?? "",
+          input_schema: definition.input_schema as Record<string, unknown>,
+        },
+        input,
+        userObjective: ctx.getCommandReviewObjective?.(sessionId),
+        context: ctx.getCommandReviewContext?.(sessionId) ?? [],
+        signal: toolAbortSignal,
+      };
+    };
+    let guardianApproval: ReturnType<typeof createOneShotActionApproval>;
+    const initialMcpAction = !isAutoApproved
+      ? buildMcpReviewInput()
+      : undefined;
+    const mcpActionKey = initialMcpAction
+      ? actionApprovalActionKey(initialMcpAction)
+      : undefined;
+    const mcpDenialKey = mcpActionKey
+      ? `mcp:${ctx.getHumanInputRevision?.(sessionId) ?? "unknown"}:${mcpActionKey}`
+      : undefined;
+    const retainedMcpDenial =
+      mcpDenialKey &&
+      ctx.retainedCommandReviewDenials?.has(sessionId, mcpDenialKey);
+    if (
+      !isAutoApproved &&
+      !retainedMcpDenial &&
+      !ctx.commandReviewTurnCircuit?.interrupted &&
+      ctx.actionApprovalReviewer
+    ) {
+      const action = initialMcpAction;
+      if (
+        action &&
+        ctx.isSessionActive?.(sessionId) &&
+        !toolAbortSignal?.aborted
+      ) {
+        let outcome;
+        try {
+          outcome = await ctx.actionApprovalReviewer.review(action);
+        } catch {
+          // Reviewer failure is not permission. Retain the human fallback.
+        }
+        if (toolAbortSignal?.aborted || !ctx.isSessionActive?.(sessionId)) {
+          return errorResult("MCP review was cancelled or its session ended.", {
+            status: "cancelled",
+            tool: toolName,
+          });
+        }
+        if (outcome?.disposition === "reviewed") {
+          ctx.commandReviewTurnCircuit?.record(outcome.result);
+        }
+        if (
+          outcome?.disposition === "reviewed" &&
+          outcome.result.status === "reviewed" &&
+          outcome.result.outcome === "deny"
+        ) {
+          if (mcpDenialKey)
+            ctx.retainedCommandReviewDenials?.retain(sessionId, mcpDenialKey);
+          return errorResult(
+            `Guardian denied MCP tool execution: ${outcome.result.rationale}`,
+            {
+              status: "rejected",
+              reason: "guardian_denied",
+              tool: toolName,
+            },
+          );
+        }
+        if (
+          outcome &&
+          (outcome.result.risk === "low" || outcome.result.risk === "medium")
+        ) {
+          guardianApproval = createOneShotActionApproval(outcome);
+        }
+      }
+    }
+
     let promotionMeta:
       | import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta
       | undefined;
 
     let approvalFollowUp: string | undefined;
 
-    if (!isAutoApproved) {
+    if (toolAbortSignal?.aborted) {
+      return errorResult("MCP tool execution was cancelled.", {
+        status: "cancelled",
+        tool: toolName,
+      });
+    }
+
+    if (!isAutoApproved && !guardianApproval) {
       const inputJson = JSON.stringify(input, null, 2) ?? "";
       // Inline approval cards render the detail in a scrollable box, so send
       // the full input; cap only pathological payloads (e.g. base64 blobs).
@@ -3614,7 +3739,9 @@ async function dispatchToolCallWithTrackedApprovals(
           {
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
-            detail: inputDetail,
+            detail: retainedMcpDenial
+              ? `Guardian previously denied this exact call. Human approval is required to override that denial.\n\n${inputDetail}`
+              : inputDetail,
             mcpServerName: serverName,
             mcpToolName: bareToolName,
             targetPath: projectConfigPath,
@@ -3692,6 +3819,8 @@ async function dispatchToolCallWithTrackedApprovals(
         "always-server-global",
       ]);
       if (!choice || !allowChoices.has(choice)) {
+        if (mcpDenialKey)
+          ctx.retainedCommandReviewDenials?.retain(sessionId, mcpDenialKey);
         return {
           content: [
             {
@@ -3707,6 +3836,8 @@ async function dispatchToolCallWithTrackedApprovals(
         };
       }
 
+      if (mcpDenialKey)
+        ctx.retainedCommandReviewDenials?.clear(sessionId, mcpDenialKey);
       const projectConfigPath = projectApprovalRoot
         ? getMcpConfigFilePaths(projectApprovalRoot).project
         : undefined;
@@ -3838,6 +3969,40 @@ async function dispatchToolCallWithTrackedApprovals(
           approvalManager.approveMcpServer(sessionId, serverName);
           break;
         // "allow-once" — no extra action needed
+      }
+    }
+
+    if (guardianApproval) {
+      // Another parallel review may have denied this action while we waited.
+      if (
+        (mcpDenialKey &&
+          ctx.retainedCommandReviewDenials?.has(sessionId, mcpDenialKey)) ||
+        ctx.commandReviewTurnCircuit?.interrupted
+      ) {
+        return errorResult(
+          "Automatic MCP approval was interrupted by a retained Guardian denial. Retry through human approval.",
+          { status: "rejected", reason: "guardian_denied", tool: toolName },
+        );
+      }
+      const current = buildMcpReviewInput();
+      if (
+        toolAbortSignal?.aborted ||
+        !current ||
+        !guardianApproval.consume({
+          sessionId,
+          sessionActive: ctx.isSessionActive?.(sessionId) ?? false,
+          policy: current.policy,
+          action: current,
+        }).valid
+      ) {
+        return errorResult(
+          "MCP approval context changed during Guardian review. Retry for a fresh decision.",
+          {
+            status: "retry_required",
+            reason: "guardian_approval_drift",
+            tool: toolName,
+          },
+        );
       }
     }
 

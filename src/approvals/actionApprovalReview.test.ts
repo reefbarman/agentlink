@@ -19,6 +19,7 @@ import {
   revalidateActionApprovalBinding,
   revalidateGuardianCanonicalPath,
   type ActionApprovalPolicySnapshot,
+  type McpActionApprovalReviewInput,
   type OutsideReadActionApprovalReviewInput,
   type OutsideWriteActionApprovalReviewInput,
 } from "./actionApprovalReview.js";
@@ -92,6 +93,133 @@ function makeProvider(
   };
   return { provider, complete, sessionModel };
 }
+
+function mcpInput(): McpActionApprovalReviewInput {
+  return {
+    kind: "mcp",
+    sessionId: "session-1",
+    policy,
+    serverName: "linear",
+    toolName: "list_issues",
+    definition: {
+      description: "List issues",
+      input_schema: { type: "object" },
+    },
+    input: { query: "bug" },
+    userObjective: "Find bugs assigned to me",
+    context: [
+      {
+        role: "user",
+        content: "Find bugs assigned to me",
+        directUserInstruction: true,
+      },
+    ],
+  };
+}
+
+describe("MCP action review", () => {
+  it("uses the Jev first-pass allow without invoking the full Guardian", async () => {
+    const { provider, complete, sessionModel } = makeProvider();
+    const mcpFirstPass = vi.fn(async () => ({
+      outcome: "allow" as const,
+      status: "reviewed" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Jev allowed the exact call",
+      model: "jev-1.14.0",
+    }));
+    const reviewer = createActionApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+      mcpFirstPass,
+    });
+    const input = mcpInput();
+    const outcome = await reviewer.review(input);
+    expect(mcpFirstPass).toHaveBeenCalledWith(input);
+    expect(complete).not.toHaveBeenCalled();
+    const approval = createOneShotActionApproval(outcome)!;
+    expect(
+      approval.consume({
+        sessionId: input.sessionId,
+        sessionActive: true,
+        policy,
+        action: input,
+      }),
+    ).toEqual({ valid: true });
+    expect(
+      approval.consume({
+        sessionId: input.sessionId,
+        sessionActive: true,
+        policy,
+        action: input,
+      }),
+    ).toEqual({ valid: false, reason: "already-consumed" });
+  });
+
+  it.each([undefined, "throw"])(
+    "falls back to the full Guardian when first pass returns %s",
+    async (response) => {
+      const { provider, complete, sessionModel } = makeProvider({
+        response: '{"outcome":"deny"}',
+      });
+      const reviewer = createActionApprovalReviewer({
+        resolveContext: () => ({ provider, sessionModel }),
+        mcpFirstPass: async () => {
+          if (response === "throw") throw new Error("offline");
+          return undefined;
+        },
+      });
+      const outcome = await reviewer.review(mcpInput());
+      expect(outcome.result).toMatchObject({
+        status: "reviewed",
+        outcome: "deny",
+      });
+      expect(complete).toHaveBeenCalledOnce();
+      expect(JSON.stringify(complete.mock.calls)).toContain("list_issues");
+    },
+  );
+
+  it.each(["input", "serverName", "toolName", "definition"] as const)(
+    "binds approvals to the exact %s",
+    async (field) => {
+      const { provider, sessionModel } = makeProvider();
+      const input = mcpInput();
+      const outcome = await createActionApprovalReviewer({
+        resolveContext: () => ({ provider, sessionModel }),
+      }).review(input);
+      const changed = {
+        ...input,
+        [field]:
+          field === "input"
+            ? { query: "private" }
+            : field === "definition"
+              ? { description: "Delete issues", input_schema: {} }
+              : "changed",
+      };
+      expect(
+        createOneShotActionApproval(outcome)!.consume({
+          sessionId: input.sessionId,
+          sessionActive: true,
+          policy,
+          action: changed,
+        }),
+      ).toEqual({ valid: false, reason: "action-drift" });
+    },
+  );
+
+  it("does not review truncated MCP arguments", async () => {
+    const { provider, complete, sessionModel } = makeProvider();
+    const mcpFirstPass = vi.fn();
+    const input = mcpInput();
+    input.input = { body: "x".repeat(96_001) };
+    const outcome = await createActionApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+      mcpFirstPass,
+    }).review(input);
+    expect(outcome.disposition).toBe("human-only");
+    expect(mcpFirstPass).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+});
 
 function outsideReadInput(): OutsideReadActionApprovalReviewInput {
   return {

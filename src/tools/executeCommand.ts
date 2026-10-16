@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as path from "path";
 import * as os from "os";
 import fs from "node:fs";
@@ -1914,7 +1914,6 @@ async function reviewManagedNetworkRequest(
   approvalPanel: ApprovalPanelProvider,
   providers: ExecuteCommandProviders,
   approvalMode: TerminalApprovalModeSnapshot,
-  options?: { requireHumanApproval?: boolean },
 ): Promise<"allow-once" | "reject"> {
   if (
     signal.aborted ||
@@ -1929,40 +1928,80 @@ async function reviewManagedNetworkRequest(
   if (initialPolicy.decision === "forbidden") return "reject";
   if (initialPolicy.decision === "allow") return "allow-once";
 
+  const requestSnapshot = structuredClone(request);
+  const requestKey = JSON.stringify(requestSnapshot);
+  const humanRevision = providers.getHumanInputRevision?.(request.sessionId);
+  const denialKey = `network:${humanRevision ?? "unknown"}:${createHash(
+    "sha256",
+  )
+    .update(
+      JSON.stringify({
+        command: request.command,
+        cwd: request.cwd,
+        host: request.host,
+        protocol: request.protocol,
+        port: request.port,
+      }),
+    )
+    .digest("hex")}`;
+  const retainedDenial = providers.retainedCommandReviewDenials?.has(
+    request.sessionId,
+    denialKey,
+  );
   let review: NetworkReviewSummary | undefined;
-  // Explicit prompt rules preserve human authority even in Approve for Me mode.
+  // Explicit Prompt/Forbidden rules stay authoritative. Risky, unknown and
+  // unavailable reviews reach the human card, never silently widen networking.
   if (
-    !options?.requireHumanApproval &&
     initialPolicy.decision !== "prompt" &&
-    approvalMode.approvalReviewer === "auto-review"
+    approvalMode.approvalReviewer === "auto-review" &&
+    approvalMode.commandApprovalPolicy === "approve-for-me" &&
+    !retainedDenial &&
+    !providers.commandReviewTurnCircuit?.interrupted &&
+    providers.networkApprovalReviewer
   ) {
-    const reviewer = providers.networkApprovalReviewer;
-    if (!reviewer) return "reject";
-    const result = await reviewer.review({
-      request,
-      userObjective: providers.getUserObjective?.(request.sessionId),
-      context: providers.getReviewContext?.(request.sessionId),
-      signal,
-    });
-    review = result;
-    if (result.status !== "reviewed" || result.outcome !== "allow") {
-      return "reject";
+    try {
+      review = await providers.networkApprovalReviewer.review({
+        request: requestSnapshot,
+        userObjective: providers.getUserObjective?.(request.sessionId),
+        context: providers.getReviewContext?.(request.sessionId),
+        signal,
+      });
+    } catch {
+      // No valid reviewer response means human approval is still required.
     }
+    if (review) providers.commandReviewTurnCircuit?.record(review);
     const currentPolicy = approvalManager.evaluateNetworkRules(
       request.sessionId,
       request,
     );
-    return !signal.aborted &&
-      !isCommandApprovalCancelled(request.sessionId, providers) &&
-      !hasNetworkApprovalModeDrift(
-        providers,
+    if (
+      signal.aborted ||
+      isCommandApprovalCancelled(request.sessionId, providers) ||
+      hasNetworkApprovalModeDrift(providers, request.sessionId, approvalMode) ||
+      providers.getHumanInputRevision?.(request.sessionId) !== humanRevision ||
+      JSON.stringify(request) !== requestKey ||
+      JSON.stringify(requestSnapshot) !== requestKey ||
+      currentPolicy.key !== initialPolicy.key ||
+      currentPolicy.decision !== initialPolicy.decision
+    )
+      return "reject";
+    if (
+      review?.status === "reviewed" &&
+      review.outcome === "allow" &&
+      (review.risk === "low" || review.risk === "medium") &&
+      !providers.retainedCommandReviewDenials?.has(
         request.sessionId,
-        approvalMode,
+        denialKey,
       ) &&
-      currentPolicy.key === initialPolicy.key &&
-      currentPolicy.decision === initialPolicy.decision
-      ? "allow-once"
-      : "reject";
+      !providers.commandReviewTurnCircuit?.interrupted
+    )
+      return "allow-once";
+    if (review?.status === "reviewed" && review.outcome === "deny") {
+      providers.retainedCommandReviewDenials?.retain(
+        request.sessionId,
+        denialKey,
+      );
+    }
   }
 
   const response = await approvalPanel.enqueueNetworkApproval({
@@ -1976,8 +2015,19 @@ async function reviewManagedNetworkRequest(
     hasNetworkApprovalModeDrift(providers, request.sessionId, approvalMode) ||
     response.decision === "reject"
   ) {
+    if (
+      response.decision === "reject" &&
+      !signal.aborted &&
+      !isCommandApprovalCancelled(request.sessionId, providers) &&
+      !hasNetworkApprovalModeDrift(providers, request.sessionId, approvalMode)
+    )
+      providers.retainedCommandReviewDenials?.retain(
+        request.sessionId,
+        denialKey,
+      );
     return "reject";
   }
+  providers.retainedCommandReviewDenials?.clear(request.sessionId, denialKey);
   const currentPolicy = approvalManager.evaluateNetworkRules(
     request.sessionId,
     request,
@@ -2702,7 +2752,6 @@ export async function handleExecuteCommand(
                   approvalPanel,
                   providers,
                   approvalMode,
-                  { requireHumanApproval: true },
                 )
             : undefined,
           sandboxInlineFiles: inlineFiles?.map((file) => ({

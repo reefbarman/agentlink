@@ -115,6 +115,61 @@ describe("network approval response parser", () => {
 });
 
 describe("network approval reviewer", () => {
+  it("forwards complete evidence to Jev before resolving a full Guardian provider", async () => {
+    const input = reviewInput();
+    const resolveContext = vi.fn(() => undefined);
+    const firstPass = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Routine authorized public registry",
+      model: "typesafe/jev-1.14.0",
+      status: "reviewed" as const,
+    }));
+    const result = await createNetworkApprovalReviewer({
+      resolveContext,
+      firstPass,
+    }).review(input);
+    expect(firstPass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: input.request,
+        context: input.context,
+        userObjective: input.userObjective,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(resolveContext).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      outcome: "allow",
+      model: "typesafe/jev-1.14.0",
+    });
+  });
+
+  it.each(["uncertain", "failed", "risky"])(
+    "uses full Guardian after a %s first pass",
+    async (scenario) => {
+      const { provider, model, complete } = makeProvider('{"outcome":"deny"}');
+      const result = await createNetworkApprovalReviewer({
+        resolveContext: () => ({ provider, sessionModel: model }),
+        firstPass: async () => {
+          if (scenario === "failed") throw new Error("offline");
+          return scenario === "risky"
+            ? {
+                outcome: "allow",
+                risk: "high",
+                userAuthorization: "high",
+                rationale: "Risky",
+                model: "test",
+                status: "reviewed",
+              }
+            : undefined;
+        },
+      }).review(reviewInput());
+      expect(complete).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ outcome: "deny", model });
+    },
+  );
+
   it("reviews the exact retained destination and declares encrypted evidence limits", async () => {
     const { provider, model, complete } = makeProvider(
       '{"outcome":"allow","risk_level":"medium","user_authorization":"high","rationale":"Authorized package registry"}',
