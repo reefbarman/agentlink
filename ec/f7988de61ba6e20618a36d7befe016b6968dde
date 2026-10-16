@@ -1,0 +1,94 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 35
+apps/server/src/jobRoutes.ts
+  h_e08a86bb3a33a2 42-43,47-58,118,123
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 106-107,111-113,132-134,287-291,438,456-472,878-897,1694-1705,1864-1876,1889-1928,1930,1937,2263-2281
+  s_31e7cd120cc6ce::t_96b7fcf892882c 130-131,135,473-474
+apps/server/src/watches.ts
+  h_e08a86bb3a33a2 1-525
+apps/server/src/watches.test.ts
+  h_e08a86bb3a33a2 1-667
+apps/server/src/jobRunner.ts
+  h_e08a86bb3a33a2 17,68-69,71-91,144-157,168-170,186-189,219,349,352-353,362-376,406-408,413-439,450-462,484,516,521-526,541-542,547-558,567-569,772-778
+  s_31e7cd120cc6ce::t_d965692cf440fb 158,409-412,483,485,508
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 169-170,581-582
+apps/server/src/repositoryTools.ts
+  h_e08a86bb3a33a2 451
+packages/core/src/embeddedAgentWeb.test.ts
+  h_e08a86bb3a33a2 214,216,219-220
+  s_31e7cd120cc6ce::t_2814b200919575 217-218,221
+apps/server/src/webFetch.ts
+  h_e08a86bb3a33a2 175-181,184-195,236-240,265-281,283,286-289,293-306,320-331,336,338-339,345-346,355-358,385,440
+  s_31e7cd120cc6ce::t_b3d688b387e3fa 282,284-285,332-335,337
+apps/server/src/jobTools.ts
+  h_e08a86bb3a33a2 37-41,47-50,59-63,160-168,206-220,285-297,300-303,346,356,361-362,367,390,392-393,397-399,478-479,482,485-487,492-538,565-570,582,665-727,734,760,840-842
+  s_31e7cd120cc6ce::t_87411535e327e6 57-58,205,221-231,299,304,345,363,389,391,539,728-730,843-844
+apps/server/src/watchStore.ts
+  h_e08a86bb3a33a2 1-169
+apps/server/src/storageRoutes.ts
+  h_e08a86bb3a33a2 54,73-80
+apps/server/src/jobTools.test.ts
+  h_e08a86bb3a33a2 365-464
+packages/protocol/src/embeddedAgentTransport.ts
+  h_e08a86bb3a33a2 79-86,164-166,169,1006-1007,1058-1068
+  s_31e7cd120cc6ce::t_f1e6ae86f5d857 167-168,1069-1070
+packages/core/src/embeddedAgentWeb.ts
+  h_e08a86bb3a33a2 567-581
+apps/server/src/jobStore.ts
+  h_e08a86bb3a33a2 20-25,54-58,78-85,129-132,189,283-291
+  s_31e7cd120cc6ce::t_d469fe00866a47 292
+apps/server/README.md
+  h_e08a86bb3a33a2 513,515-526,733
+  s_31e7cd120cc6ce::t_d4a73954d829d6 514
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 77-97,113-123,144-145,206-207,210-229,231-246,855-864,866,1043-1044,1098,1100-1102,1104,1150-1156,1159-1161
+  s_31e7cd120cc6ce::t_8cee6bf2cbf09b 143,230,1099,1103,1158,1162
+apps/server/src/jobUsage.ts
+  h_e08a86bb3a33a2 1-48
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 48-51,110-112,122-143,665-695
+  s_c8e52cf5461d72::t_8538e298c22ca0 47
+apps/server/src/watchTarget.ts
+  h_e08a86bb3a33a2 1-127
+resources/builtin-skills/documentation/references/release-notes.md
+  s_9fddfb77015445::t_48c6675ab6491f 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_31e7cd120cc6ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9654c411-6ef6-44dd-96f0-260a88c115ee",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_9fddfb77015445": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64089439-b3db-4180-b46e-0b61a2bf4cb7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c8e52cf5461d72": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5a24f5bb-7625-42d1-a5e7-8c232a4c4fa5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
