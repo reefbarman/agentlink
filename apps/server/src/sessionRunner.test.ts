@@ -376,6 +376,33 @@ describe("session runners", () => {
     // Writing to it starts the runner again.
     await host.runTurn(sessionId, "One more thing");
     expect(harness.manager.starts).toBe(2);
+
+    // A session the runner never had: asked once, then known missing.
+    const later = harness.reopen();
+    await expect(later.readSession("never-existed")).rejects.toMatchObject({
+      code: "session_not_found",
+    });
+    await vi.waitFor(async () =>
+      expect(
+        await fs
+          .readFile(
+            path.join(
+              harness.root,
+              "data",
+              "runner-sessions",
+              "task-t1",
+              "session-never-existed.json",
+            ),
+            "utf8",
+          )
+          .catch(() => ""),
+      ).toContain("missing"),
+    );
+    const starts = harness.manager.starts;
+    await expect(
+      harness.reopen().readSession("never-existed"),
+    ).rejects.toMatchObject({ code: "session_not_found" });
+    expect(harness.manager.starts).toBe(starts);
   });
 
   it("stops a running turn when the owner presses Stop", async () => {

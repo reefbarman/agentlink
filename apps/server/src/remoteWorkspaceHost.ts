@@ -68,6 +68,14 @@ export interface RemoteSessionCache {
 
 const SESSIONS_KEY = "sessions";
 const sessionKey = (sessionId: string) => `session-${sessionId}`;
+const MISSING = { missing: true } as const;
+const isMissing = (copy: unknown) =>
+  !!copy &&
+  typeof copy === "object" &&
+  (copy as { missing?: unknown }).missing === true &&
+  Object.keys(copy).length === 1;
+const sessionNotFound = () =>
+  Object.assign(new Error("Session not found"), { code: "session_not_found" });
 /** A session read mid-turn: only its runner can say how that ended. */
 const isMidTurn = (hydration: unknown) => {
   const phase = (
@@ -224,9 +232,19 @@ export function createRemoteWorkspaceHost(
   ): Promise<T> => {
     if (!running && options.cache) {
       const copy = await options.cache.read(key).catch(() => undefined);
+      if (isMissing(copy)) throw sessionNotFound();
       if (copy !== undefined && usable(copy)) return copy as T;
     }
-    const value = await load();
+    let value: T;
+    try {
+      value = await load();
+    } catch (error) {
+      // A session the runner does not have never appears later.
+      if ((error as { code?: unknown }).code === "session_not_found") {
+        remember(key, MISSING);
+      }
+      throw error;
+    }
     remember(key, value);
     return value;
   };
