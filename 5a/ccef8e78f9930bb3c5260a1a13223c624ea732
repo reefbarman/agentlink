@@ -1,0 +1,56 @@
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 41-52,179-180,183-186,216-221,226-227,232-325,413-415,463,639-645,666,668-671,673-703,705-741,756-758,769-772,775,778-779,1142,1406-1414,1416,1430-1436
+  s_e8b7ae43bc6823::t_d4a6465ceea095 326-327,667,704,742-745,773-774,776-777,1459
+package.json
+  h_e08a86bb3a33a2 608-621
+  s_e8b7ae43bc6823::t_7aec700e23f1f5 622
+scripts/report-session-outcomes.mjs
+  h_e08a86bb3a33a2 1015-1016,1020-1023,1786,1789-1791
+  s_e8b7ae43bc6823::t_cd564050c1d437 1792
+scripts/jev-replay.test.mjs
+  h_e08a86bb3a33a2 121-123,129-131
+  s_e8b7ae43bc6823::t_74ae6645296487 118-120,124,126-128,132
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 10,949,954,959-974,1516-1679
+  s_e8b7ae43bc6823::t_e6da4a4445c406 975-976,1680-1681
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 42-43
+scripts/jev-replay.mjs
+  h_e08a86bb3a33a2 55,60,245-247,253-254,294,310,315,450-468,592-593,596,702,707-708,712-715,718-721,867-889,910,942-949,955-976,979,986-1005,1012,1054
+  s_e8b7ae43bc6823::t_7fdab31bbeb8d9 255,893,900,906,978,1010-1011
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 108-109
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_e08a86bb3a33a2 305-306
+src/extension.ts
+  h_e08a86bb3a33a2 41,43,3177-3193
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_e08a86bb3a33a2 55-56
+resources/builtin-skills/documentation/references/package-contract.md
+  s_e8b7ae43bc6823::t_e0bf6e602f58a5 78-140
+resources/builtin-skills/documentation/references/release-notes.md
+  s_e8b7ae43bc6823::t_b8521d85a96b20 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e8b7ae43bc6823": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8dbc7db9-262b-4316-90c6-9b9f5247bbbe",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
