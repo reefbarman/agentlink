@@ -98,6 +98,16 @@ import type { WorkspaceExecutionBackend } from "./workspaceExecutionBackend.js";
 export interface CreateWorkspaceHostOptions {
   readonly projectRoot: string;
   readonly dataRoot: string;
+  /**
+   * A stable name for this project's state (sessions, commands, background
+   * agents) under `dataRoot/projects/`. Without it the project is known by
+   * its folder's path, device and inode, so a restored, copied or moved
+   * folder starts with no history. Hosts that keep their own catalogue of
+   * projects pass its ID: letters, digits, `.`, `_` and `-`. The key is
+   * also the sessions' principal, so state kept under the folder identity
+   * is not carried over when a key is first given.
+   */
+  readonly storageKey?: string;
   readonly ownerId: string;
   readonly providers: readonly WorkspaceProviderConfig[];
   readonly defaultModel: AgentModelReference;
@@ -377,12 +387,17 @@ export async function createWorkspaceHost(
       "A command execution backend requires an explicit resolveEnvironment",
     );
   }
-  const project = await resolveWorkspaceProject(options.projectRoot);
+  const resolved = await resolveWorkspaceProject(options.projectRoot);
+  const project: WorkspaceProjectIdentity =
+    options.storageKey === undefined
+      ? resolved
+      : { ...resolved, id: validStorageKey(options.storageKey) };
   const principal: AgentPrincipal = {
     tenantId: "local",
     subjectId: project.id,
   };
   const projectDataRoot = path.join(options.dataRoot, "projects", project.id);
+
   const backgroundStateDirectory = path.join(projectDataRoot, "background");
   const durableBackgroundSessionIds = await readWorkspaceBackgroundSessionIds(
     backgroundStateDirectory,
@@ -1494,6 +1509,13 @@ async function collectTurn(
     if (next.done) return next.value;
     onEvent?.(next.value);
   }
+}
+
+function validStorageKey(key: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(key)) {
+    throw new Error(`Invalid project storage key: ${JSON.stringify(key)}`);
+  }
+  return key;
 }
 
 async function readOrCreateApprovalKey(

@@ -374,6 +374,71 @@ describe("createWorkspaceHost", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps sessions by storage key when the project folder is replaced", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    const dataRoot = path.join(parent, "data");
+    await fs.mkdir(projectRoot);
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(completion("first reply"));
+    const options = {
+      projectRoot,
+      dataRoot,
+      providers: [
+        {
+          type: "openai-compatible" as const,
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true as const,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+    };
+
+    const keyed = await createWorkspaceHost({
+      ...options,
+      ownerId: "a",
+      storageKey: "home",
+    });
+    expect(keyed.project.id).toBe("home");
+    const sessionId = (await keyed.createSession({ sessionId: "kept-session" }))
+      .sessionId;
+    await keyed.runTurn(sessionId, "first message");
+    await keyed.close();
+    await expect(
+      fs.stat(path.join(dataRoot, "projects", "home", "sessions")),
+    ).resolves.toBeTruthy();
+
+    // A restored folder (same path, new inode) keeps its sessions.
+    await fs.rename(projectRoot, path.join(parent, "project-old"));
+    await fs.mkdir(projectRoot);
+    const restored = await createWorkspaceHost({
+      ...options,
+      ownerId: "c",
+      storageKey: "home",
+    });
+    try {
+      await expect(restored.listSessions()).resolves.toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+    } finally {
+      await restored.close();
+    }
+    await expect(
+      createWorkspaceHost({ ...options, ownerId: "d", storageKey: "../x" }),
+    ).rejects.toThrow("Invalid project storage key");
+  });
+
   it("gates language tools by host enablement and keeps disabled context explicit", async () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-host-lsp-"),

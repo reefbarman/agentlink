@@ -38,7 +38,9 @@ export type InboxEntryKind =
   /** A backup failed, or none has succeeded for over a day. */
   | "backup_failed"
   /** The server started from a restored backup. */
-  | "restored";
+  | "restored"
+  /** A chat's turn was stopped (for an upgrade); asking again continues. */
+  | "chat_interrupted";
 
 export interface InboxEntry {
   readonly id: string;
@@ -542,6 +544,20 @@ export function inboxEntryForRestore(
         ? `Paused scheduled jobs until you turn them back on in Jobs: ${pausedJobs.join(", ")}.`
         : undefined,
     ),
+  };
+}
+
+/** The inbox entry for a chat turn stopped by a drain at its deadline. */
+export function inboxEntryForInterruptedChat(chat: {
+  readonly projectId: string;
+  readonly sessionId: string;
+}): NewInboxEntry {
+  return {
+    projectId: chat.projectId,
+    sessionId: chat.sessionId,
+    kind: "chat_interrupted",
+    title: "A chat was stopped for an upgrade",
+    body: "It was still working when the Assistant was upgraded. Open the chat and ask it to carry on.",
   };
 }
 

@@ -74,6 +74,7 @@ import {
 import { createInboxRoutes } from "./inboxRoutes.js";
 import {
   inboxEntryForBackupProblem,
+  inboxEntryForInterruptedChat,
   inboxEntryForRestore,
   inboxEntryForRun,
   inboxEntryForSessionAlert,
@@ -1043,6 +1044,8 @@ export async function startAssistantService(
       const host = await createWorkspaceHost({
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
+        // By project ID, not by folder: chats survive a restore or a move.
+        storageKey: project.id,
         ownerId,
         providers,
         defaultModel: config.defaultModel,
@@ -2022,6 +2025,17 @@ export async function startAssistantService(
             !parsed.projectId.startsWith(TASK_PROJECT_PREFIX)
           );
         });
+        // Tasks and runs say so in the Inbox already; chats say so here,
+        // since the chat itself just ends.
+        for (const key of stoppedChats) {
+          const chat = parseSessionKey(key);
+          if (!chat) continue;
+          await addToInbox(inboxEntryForInterruptedChat(chat)).catch(
+            (error: unknown) => {
+              log(`Could not update the inbox: ${message(error)}`);
+            },
+          );
+        }
         return [
           ...stoppedTasks.map((task) => `task ${task.id}`),
           ...stoppedRuns.map((run) => `scheduled run ${run.runId}`),

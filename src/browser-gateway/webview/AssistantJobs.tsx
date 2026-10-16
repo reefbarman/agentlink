@@ -102,7 +102,8 @@ export interface InboxEntry {
     | "session_long_running"
     | "session_stuck"
     | "backup_failed"
-    | "restored";
+    | "restored"
+    | "chat_interrupted";
   createdAt: number;
   title: string;
   body?: string;
@@ -160,6 +161,7 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   session_stuck: "warning",
   backup_failed: "warning",
   restored: "history",
+  chat_interrupted: "debug-pause",
 };
 
 /** Runaway-guard notices: the chat keeps working until the owner stops it. */

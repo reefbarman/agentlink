@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inboxEntryForBackupProblem,
+  inboxEntryForInterruptedChat,
   inboxEntryForRestore,
   inboxEntryForRun,
   inboxEntryForSessionAlert,
@@ -573,6 +574,18 @@ describe("backup entries", () => {
     );
     expect(entry.title).toBe("An upgrade failed and was rolled back");
     expect(entry.body).toContain("went back to the version before it");
+  });
+
+  it("points at a chat stopped for an upgrade", () => {
+    expect(
+      inboxEntryForInterruptedChat({ projectId: "home", sessionId: "chat-1" }),
+    ).toMatchObject({
+      kind: "chat_interrupted",
+      projectId: "home",
+      sessionId: "chat-1",
+      title: "A chat was stopped for an upgrade",
+      body: expect.stringContaining("ask it to carry on"),
+    });
   });
 });
 
