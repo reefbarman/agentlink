@@ -166,6 +166,8 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
   chat_interrupted: "Stopped for an upgrade. Open the chat to carry on.",
   audit_checkpoint: "The audit log needs attention. Open the Inbox to see why.",
   mcp_changed: "MCP tools changed and ask again. Open the Inbox to see which.",
+  watch_changed: "Something you watch changed. Open it to see what.",
+  job_noisy: "A job or watch is busier than usual. Open the Inbox to see it.",
 };
 
 /**
@@ -576,7 +578,8 @@ export function connectorPushTransport(
         hostname,
         path: `${url.pathname}${url.search}`,
         method: "POST",
-        agent: false,
+        // No `agent`: with `agent: false` Node ignores `createConnection`
+        // and connects by itself, bypassing the checked connection.
         signal,
         createConnection: () => secure,
         headers: { ...headers, "content-length": String(body.length) },

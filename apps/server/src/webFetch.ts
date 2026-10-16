@@ -172,7 +172,26 @@ export interface FetchedPage {
   readonly text: string;
   /** The body was cut at the byte limit. */
   readonly bodyTruncated: boolean;
+  /** The body as received (decoded), when `keepRaw` was asked for. */
+  readonly raw?: string;
+  /** Validators for the next conditional request. */
+  readonly etag?: string;
+  readonly lastModified?: string;
+  /** `304 Not Modified`: unchanged since the validators sent. No body. */
+  readonly notModified?: true;
 }
+
+/** Validators from an earlier response, for a conditional request. */
+export interface ConditionalRequest {
+  readonly etag?: string;
+  readonly lastModified?: string;
+}
+
+/**
+ * TLS over the policy-checked connection. Tests replace it to talk plain
+ * HTTP to a local server; production always uses `tls.connect`.
+ */
+export type SecureSocket = (raw: Socket, hostname: string) => Promise<Socket>;
 
 /** Validate a URL for fetching; `http:` becomes `https:`. */
 export function webFetchTarget(raw: string): URL {
@@ -214,6 +233,11 @@ export async function fetchWebPage(options: {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
+  /** Send `If-None-Match` / `If-Modified-Since`; a `304` returns no body. */
+  readonly conditional?: ConditionalRequest;
+  /** Also return the body as received (for feeds and selectors). */
+  readonly keepRaw?: boolean;
+  readonly secureSocket?: SecureSocket;
 }): Promise<FetchedPage> {
   if (options.policy.preset === "off") {
     throw new WebFetchError("Network access is off for this project");
@@ -238,23 +262,48 @@ export async function fetchWebPage(options: {
       url = webFetchTarget(new URL(location, url).href);
       continue;
     }
-    return await readPage(url, response, options.maxBytes ?? DEFAULT_MAX_BYTES);
+    const validators = {
+      ...(header(response, "etag") ? { etag: header(response, "etag") } : {}),
+      ...(header(response, "last-modified")
+        ? { lastModified: header(response, "last-modified") }
+        : {}),
+    };
+    if (response.statusCode === 304) {
+      response.destroy();
+      return {
+        url: url.href,
+        status: 304,
+        contentType: "",
+        text: "",
+        bodyTruncated: false,
+        notModified: true,
+        ...validators,
+      };
+    }
+    const page = await readPage(
+      url,
+      response,
+      options.maxBytes ?? DEFAULT_MAX_BYTES,
+      options.keepRaw === true,
+    );
+    return { ...page, ...validators };
   }
 }
 
-async function requestOnce(
-  url: URL,
-  options: { readonly policy: NetworkPolicy; readonly connector: WebConnector },
-  signal: AbortSignal,
-): Promise<http.IncomingMessage> {
-  const hostname = url.hostname.toLowerCase();
-  const raw = await options.connector.connect({
-    hostname,
-    port: 443,
-    policy: options.policy,
-    signal,
-  });
-  const secure = await new Promise<tls.TLSSocket>((resolve, reject) => {
+function header(
+  response: http.IncomingMessage,
+  name: string,
+): string | undefined {
+  const value = response.headers[name];
+  const text = Array.isArray(value) ? value[0] : value;
+  // Echoed back in a request header: printable ASCII only.
+  return text && text.length <= 256 && /^[\x20-\x7e]+$/u.test(text)
+    ? text
+    : undefined;
+}
+
+const tlsSocket: SecureSocket = (raw, hostname) =>
+  new Promise<Socket>((resolve, reject) => {
     const socket = tls.connect({
       socket: raw,
       servername: hostname,
@@ -268,12 +317,33 @@ async function requestOnce(
       );
     });
   });
+
+async function requestOnce(
+  url: URL,
+  options: {
+    readonly policy: NetworkPolicy;
+    readonly connector: WebConnector;
+    readonly conditional?: ConditionalRequest;
+    readonly secureSocket?: SecureSocket;
+  },
+  signal: AbortSignal,
+): Promise<http.IncomingMessage> {
+  const hostname = url.hostname.toLowerCase();
+  const raw = await options.connector.connect({
+    hostname,
+    port: 443,
+    policy: options.policy,
+    signal,
+  });
+  const secure = await (options.secureSocket ?? tlsSocket)(raw, hostname);
+  const conditional = options.conditional;
   return await new Promise<http.IncomingMessage>((resolve, reject) => {
     const request = https.request({
       hostname,
       path: `${url.pathname}${url.search}`,
       method: "GET",
-      agent: false,
+      // No `agent`: with `agent: false` Node ignores `createConnection` and
+      // resolves and connects by itself, bypassing the checked connection.
       signal,
       createConnection: () => secure,
       headers: {
@@ -282,6 +352,10 @@ async function requestOnce(
           "text/html,application/xhtml+xml,text/plain,text/markdown,application/json,application/xml;q=0.9,*/*;q=0.5",
         "accept-encoding": "gzip, deflate, br",
         "accept-language": "en;q=0.9, *;q=0.5",
+        ...(conditional?.etag ? { "if-none-match": conditional.etag } : {}),
+        ...(conditional?.lastModified
+          ? { "if-modified-since": conditional.lastModified }
+          : {}),
       },
     });
     request.once("response", resolve);
@@ -308,6 +382,7 @@ async function readPage(
   url: URL,
   response: http.IncomingMessage,
   maxBytes: number,
+  keepRaw: boolean,
 ): Promise<FetchedPage> {
   const contentType = (response.headers["content-type"] ?? "")
     .split(";")[0]!
@@ -362,6 +437,7 @@ async function readPage(
     ...(page.title ? { title: page.title } : {}),
     text: page.text,
     bodyTruncated,
+    ...(keepRaw ? { raw: body } : {}),
   };
 }
 

@@ -448,5 +448,6 @@ export function assistantRoutingInstructions(capabilities: {
         ]
       : []),
     "- Schedule: anything that should happen later, on a schedule or repeatedly. Propose it with schedule_job.",
+    '- Watch: "watch this page", "tell me when X ships or changes". Propose it with watch_page, naming what matters to the owner. It checks without a model and only judges real changes, so prefer it to a scheduled job that reads a page.',
   ].join("\n");
 }

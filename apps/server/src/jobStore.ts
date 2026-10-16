@@ -17,6 +17,12 @@ import {
   SESSION_APPROVAL_MODES,
   type SessionApprovalMode,
 } from "./SessionApprovalModes.js";
+import {
+  WatchTargetError,
+  parseWatchTarget,
+  type WatchRunRecord,
+  type WatchTarget,
+} from "./watchTarget.js";
 
 /**
  * Scheduled job definitions and their run history, kept in memory and
@@ -45,6 +51,11 @@ export interface JobFields {
   readonly reasoningEffort?: CoreReasoningEffort;
   /** Same rules as a chat's approval mode. Never widened for a run. */
   readonly approvalMode: SessionApprovalMode;
+  /**
+   * A watch: each run checks this page first and only starts a chat when
+   * it changed. `prompt` is then the owner's "what matters" note.
+   */
+  readonly watch?: WatchTarget;
 }
 
 export interface JobDefinition extends JobFields {
@@ -63,6 +74,14 @@ export type JobPatch = {
     ? JobFields[K] | null
     : JobFields[K];
 };
+
+/** Model use of one run, as the provider reported it. */
+export interface JobRunUsage {
+  /** Model requests (one per model call in the turn). */
+  readonly requests: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
 
 export type JobRunStatus =
   | "queued"
@@ -107,6 +126,10 @@ export interface JobRun {
   readonly error?: string;
   /** What actually went wrong, in words (redacted), when it is known. */
   readonly errorDetail?: string;
+  /** Model use, when the run made any model request. */
+  readonly usage?: JobRunUsage;
+  /** A watch run: what its check found. */
+  readonly watch?: WatchRunRecord;
 }
 
 export class JobInputError extends Error {
@@ -163,6 +186,7 @@ export function parseJobFields(
     "model",
     "reasoningEffort",
     "approvalMode",
+    "watch",
   ]);
   if (Object.keys(body).some((key) => !known.has(key))) {
     throw new JobInputError("job_field_unknown");
@@ -255,6 +279,16 @@ export function parseJobFields(
     fields.approvalMode = body.approvalMode;
   } else if (!options.partial) {
     fields.approvalMode = "autonomous";
+  }
+  if (has("watch")) {
+    try {
+      fields.watch = parseWatchTarget(body.watch);
+    } catch (error) {
+      if (error instanceof WatchTargetError) {
+        throw new JobInputError(error.code);
+      }
+      throw error;
+    }
   }
   return fields as JobPatch | JobFields;
 }

@@ -74,6 +74,27 @@ export interface JobRun {
   error?: string;
   /** What went wrong, in words, when the server knows. */
   errorDetail?: string;
+  /** Model use, when the run called a model. */
+  usage?: { requests: number; inputTokens: number; outputTokens: number };
+  /** A watch run: what its check found. */
+  watch?: {
+    outcome:
+      | "not_modified"
+      | "unchanged"
+      | "baseline"
+      | "changed"
+      | "fetch_failed";
+    relevant?: boolean;
+    notified?: boolean;
+    heldForBriefing?: boolean;
+  };
+}
+
+/** A watch job's page; its prompt is the owner's "what matters" note. */
+export interface JobWatch {
+  url: string;
+  selector?: string;
+  notifyPerDay: number;
 }
 
 export interface Job {
@@ -89,6 +110,17 @@ export interface Job {
   nextRunAt?: number;
   lastRun?: JobRun;
   activeRun?: JobRun;
+  watch?: JobWatch;
+  watchState?: {
+    checkedAt?: number;
+    snapshots: number;
+    recentChanges: Array<{
+      at: number;
+      summary: string;
+      notified: boolean;
+      sessionId?: string;
+    }>;
+  };
 }
 
 export interface InboxEntry {
@@ -108,7 +140,9 @@ export interface InboxEntry {
     | "restored"
     | "chat_interrupted"
     | "audit_checkpoint"
-    | "mcp_changed";
+    | "mcp_changed"
+    | "watch_changed"
+    | "job_noisy";
   createdAt: number;
   title: string;
   body?: string;
@@ -169,7 +203,46 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   chat_interrupted: "debug-pause",
   audit_checkpoint: "shield",
   mcp_changed: "plug",
+  watch_changed: "eye",
+  job_noisy: "pulse",
 };
+
+/** A watch run's outcome in words, for its history. */
+export function watchOutcomeLabel(run: JobRun): string | undefined {
+  const watch = run.watch;
+  if (!watch) return undefined;
+  switch (watch.outcome) {
+    case "not_modified":
+    case "unchanged":
+      return "No change";
+    case "baseline":
+      return "First check";
+    case "fetch_failed":
+      return "Could not read the page";
+    case "changed":
+      if (watch.relevant === undefined) return "Changed";
+      if (!watch.relevant) return "Changed, not relevant";
+      return watch.notified
+        ? "Changed, told you"
+        : "Changed, kept for the briefing";
+  }
+}
+
+/** A URL's host, for a short label. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** A run's model use in words. */
+export function usageLabel(run: JobRun): string | undefined {
+  if (!run.usage) return undefined;
+  const tokens = run.usage.inputTokens + run.usage.outputTokens;
+  return `${run.usage.requests} model ${run.usage.requests === 1 ? "request" : "requests"}, ${tokens.toLocaleString()} tokens`;
+}
 
 /** Runaway-guard notices: the chat keeps working until the owner stops it. */
 function offersStop(entry: InboxEntry): boolean {
@@ -779,7 +852,18 @@ export function JobsPanel({
               <li class="assistant-job" key={job.id}>
                 <div class="assistant-job-main">
                   <strong>{job.name}</strong>
+                  {job.watch && (
+                    <span class="assistant-job-meta" title={job.watch.url}>
+                      <i class="codicon codicon-eye" aria-hidden="true" />{" "}
+                      Watches {hostOf(job.watch.url)}
+                      {job.watch.selector ? ` (${job.watch.selector})` : ""}
+                      {job.watchState?.checkedAt
+                        ? ` · checked ${formatWhen(job.watchState.checkedAt)}`
+                        : ""}
+                    </span>
+                  )}
                   <span class="assistant-job-meta">
+                    {job.watch ? "Checks " : ""}
                     {describeSchedule(job.schedule)} ·{" "}
                     {projectLabel(job.projectId)}
                   </span>
@@ -956,6 +1040,8 @@ function JobHistory({
                   : run.trigger === "catch_up"
                     ? " · caught up"
                     : ""}
+                {watchOutcomeLabel(run) ? ` · ${watchOutcomeLabel(run)}` : ""}
+                {usageLabel(run) ? ` · ${usageLabel(run)}` : ""}
               </span>
             </span>
             {(run.summary || run.errorDetail || run.error) && (
@@ -1009,7 +1095,13 @@ export function JobForm({
     event.preventDefault();
     if (busy) return;
     if (!form.name.trim()) return setError("Give the job a name.");
-    if (!form.prompt.trim()) return setError("Write what each run should ask.");
+    if (!form.prompt.trim()) {
+      return setError(
+        job?.watch
+          ? "Say what matters about the page."
+          : "Write what each run should ask.",
+      );
+    }
     const parsed = scheduleFromForm(form);
     if ("error" in parsed) return setError(parsed.error);
     setBusy(true);
@@ -1055,8 +1147,19 @@ export function JobForm({
           </select>
         </label>
       </div>
+      {job?.watch && (
+        <p class="assistant-project-hint">
+          Watches {job.watch.url}
+          {job.watch.selector ? ` (${job.watch.selector})` : ""}. To change the
+          page, ask in a chat.
+        </p>
+      )}
       <label>
-        <span>Prompt (sent to a new chat on each run)</span>
+        <span>
+          {job?.watch
+            ? "What matters (a model reads only changes, against this)"
+            : "Prompt (sent to a new chat on each run)"}
+        </span>
         <textarea
           rows={5}
           value={form.prompt}

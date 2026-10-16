@@ -34,20 +34,33 @@ import {
 } from "./jobStore.js";
 import { SESSION_APPROVAL_MODES } from "./SessionApprovalModes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
+import {
+  DEFAULT_WATCH_NOTIFY_PER_DAY,
+  MAX_WATCH_NOTIFY_PER_DAY,
+  type WatchTarget,
+} from "./watchTarget.js";
 
 /**
  * Chat tools for scheduled jobs:
  *
  * - `list_jobs` reads the jobs, with no approval.
- * - `schedule_job` creates or changes a job, and `delete_job` deletes one.
- *   Both always stop for the owner's approval, whatever the chat's approval
+ * - `schedule_job` creates or changes a job, `watch_page` creates or changes
+ *   a watch (a job that checks a page and only asks a model when it
+ *   changed), and `delete_job` deletes either.
+ *   All always stop for the owner's approval, whatever the chat's approval
  *   mode: the card shows the exact project, schedule, settings and prompt,
  *   and exactly that change is applied once approved. Nothing is stored
  *   before then. A job changed or deleted elsewhere in the meantime is not
  *   touched.
  */
 
-export const JOB_TOOL_NAMES = ["schedule_job", "delete_job"] as const;
+export const JOB_TOOL_NAMES = [
+  "schedule_job",
+  "watch_page",
+  "delete_job",
+] as const;
+/** How often a new watch checks, unless asked otherwise. */
+export const DEFAULT_WATCH_INTERVAL_MINUTES = 60;
 /** Shorter than the API's limit so the approval card shows all of it. */
 export const MAX_TOOL_PROMPT_LENGTH = 3_000;
 const MAX_LISTED_MODELS = 20;
@@ -144,6 +157,15 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         return "the job was changed or deleted after this was proposed; call list_jobs and propose the change again";
       case "nothing_to_change":
         return "the change sets no field; pass the fields to change";
+      case "watch_invalid":
+      case "watch_url_invalid":
+        return "url must be an absolute https (or http) address of a public page or RSS/Atom feed, on the standard port";
+      case "watch_selector_invalid":
+        return 'selector must be one simple CSS selector: a tag, "#id", ".class" or a mix such as "div.release"; omit it for the page\'s main text';
+      case "watch_notify_invalid":
+        return `notifyPerDay must be a whole number from 0 to ${MAX_WATCH_NOTIFY_PER_DAY}`;
+      case "not_a_watch":
+        return "that job is not a watch; change it with schedule_job";
       default:
         return code;
     }
@@ -180,18 +202,33 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     };
   };
 
-  const describeJob = (fields: JobFields, at: number): string[] => [
-    `Name: ${fields.name}`,
-    `Project: ${projectName(fields.projectId)}`,
-    `Schedule: ${describeSchedule(fields.schedule)}`,
-    fields.enabled
-      ? `First run: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
-      : "Paused: it will not run until it is turned on",
-    `Approvals: ${describeApprovalMode(fields.approvalMode)}`,
-    `Model: ${fields.model ?? "the project's default"}${fields.reasoningEffort ? `, reasoning ${fields.reasoningEffort}` : ""}`,
-    "Prompt for each run:",
-    fields.prompt,
-  ];
+  const describeJob = (fields: JobFields, at: number): string[] =>
+    fields.watch
+      ? [
+          `Name: ${fields.name}`,
+          `Page: ${fields.watch.url}`,
+          `Part of the page: ${fields.watch.selector ? `elements matching "${fields.watch.selector}"` : "its main text (or a feed's items)"}`,
+          `Checks: ${describeSchedule(fields.schedule)}, without a model; a model is asked only when it changed`,
+          `Tells you: ${describeNotifyCap(fields.watch.notifyPerDay)}`,
+          fields.enabled
+            ? `First check: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+            : "Paused: it will not check until it is turned on",
+          `Project: ${projectName(fields.projectId)}`,
+          "What matters:",
+          fields.prompt,
+        ]
+      : [
+          `Name: ${fields.name}`,
+          `Project: ${projectName(fields.projectId)}`,
+          `Schedule: ${describeSchedule(fields.schedule)}`,
+          fields.enabled
+            ? `First run: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+            : "Paused: it will not run until it is turned on",
+          `Approvals: ${describeApprovalMode(fields.approvalMode)}`,
+          `Model: ${fields.model ?? "the project's default"}${fields.reasoningEffort ? `, reasoning ${fields.reasoningEffort}` : ""}`,
+          "Prompt for each run:",
+          fields.prompt,
+        ];
 
   const describeChanges = (
     current: JobDefinition,
@@ -245,8 +282,26 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         patch.reasoningEffort ?? "default",
       );
     }
+    if (patch.watch !== undefined && current.watch) {
+      change("Page", current.watch.url, patch.watch.url);
+      change(
+        "Part of the page",
+        current.watch.selector ?? "main text",
+        patch.watch.selector ?? "main text",
+      );
+      change(
+        "Tells you",
+        describeNotifyCap(current.watch.notifyPerDay),
+        describeNotifyCap(patch.watch.notifyPerDay),
+      );
+    }
     if (patch.prompt !== undefined && patch.prompt !== current.prompt) {
-      lines.push("New prompt for each run:", patch.prompt);
+      lines.push(
+        current.watch
+          ? "New note on what matters:"
+          : "New prompt for each run:",
+        patch.prompt,
+      );
     }
     const schedule = patch.schedule ?? current.schedule;
     const enabled = patch.enabled ?? current.enabled;
@@ -287,7 +342,8 @@ export function createJobTools(options: JobToolsOptions): JobTools {
           }),
         };
       }
-      const { jobId, ...body } = input;
+      const { jobId, ...body } =
+        toolName === "watch_page" ? watchInput(input) : input;
       if (jobId !== undefined) {
         const current = requireJob(jobId);
         const patch = parseJobFields(body, {
@@ -297,19 +353,18 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         assertRunnable(merged(current, patch));
         const changes = describeChanges(current, patch, at);
         if (changes.length === 0) throw new JobInputError("nothing_to_change");
+        const noun = current.watch ? "watch" : "scheduled job";
         const display: JobChangeDisplay = {
           kind: JOB_CHANGE_DISPLAY_KIND,
           action: "update",
           jobName: current.name,
-          text: [
-            `Change the scheduled job "${current.name}":`,
-            "",
-            ...changes,
-          ].join("\n"),
+          text: [`Change the ${noun} "${current.name}":`, "", ...changes].join(
+            "\n",
+          ),
         };
         return {
           decision: "require_user",
-          summary: `Change the scheduled job "${current.name}"?`,
+          summary: `Change the ${noun} "${current.name}"?`,
           displayContent: display,
           preparedInput: preparedInput({
             action: "update",
@@ -331,13 +386,17 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         kind: JOB_CHANGE_DISPLAY_KIND,
         action: "create",
         jobName: fields.name,
-        text: ["Create a scheduled job:", "", ...describeJob(fields, at)].join(
-          "\n",
-        ),
+        text: [
+          fields.watch ? "Watch a page:" : "Create a scheduled job:",
+          "",
+          ...describeJob(fields, at),
+        ].join("\n"),
       };
       return {
         decision: "require_user",
-        summary: `Schedule "${fields.name}": ${describeSchedule(fields.schedule)}?`,
+        summary: fields.watch
+          ? `Watch "${fields.name}": ${fields.watch.url}?`
+          : `Schedule "${fields.name}": ${describeSchedule(fields.schedule)}?`,
         displayContent: display,
         preparedInput: preparedInput({ action: "create", fields }),
       };
@@ -416,17 +475,67 @@ export function createJobTools(options: JobToolsOptions): JobTools {
 
   const applied = (job: JobDefinition, verb: string): HostToolResult => ({
     modelContent: [
-      `${verb} the scheduled job "${job.name}" (jobId ${job.id}).`,
-      `Schedule: ${describeSchedule(job.schedule)}.`,
+      `${verb} the ${job.watch ? "watch" : "scheduled job"} "${job.name}" (jobId ${job.id}).`,
+      `${job.watch ? "Checks" : "Schedule"}: ${describeSchedule(job.schedule)}.`,
       job.enabled
         ? job.nextRunAt !== undefined
-          ? `Next run: ${formatInstant(job.nextRunAt, timeZoneOf(job.schedule, options.defaultTimeZone))}.`
+          ? `Next ${job.watch ? "check" : "run"}: ${formatInstant(job.nextRunAt, timeZoneOf(job.schedule, options.defaultTimeZone))}.`
           : "Next run: not scheduled."
         : "It is paused.",
-      "Each run is a new chat in its project; the owner sees results in the Inbox.",
+      job.watch
+        ? "The first check only remembers the page. After that, a change that matters goes to the owner's Inbox (up to the daily limit); others wait for the next briefing."
+        : "Each run is a new chat in its project; the owner sees results in the Inbox.",
     ].join("\n"),
     displayContent: { jobId: job.id, action: verb.toLowerCase() },
   });
+
+  /** `watch_page` input as job fields (a change merges the watch target). */
+  const watchInput = (
+    input: Readonly<Record<string, unknown>>,
+  ): Record<string, unknown> => {
+    const {
+      jobId,
+      url,
+      selector,
+      whatMatters,
+      everyMinutes,
+      notifyPerDay,
+      ...rest
+    } = input;
+    const current = jobId !== undefined ? requireJob(jobId) : undefined;
+    if (current && !current.watch) throw new JobInputError("not_a_watch");
+    const body: Record<string, unknown> = { ...rest };
+    if (jobId !== undefined) body.jobId = jobId;
+    if (whatMatters !== undefined) body.prompt = whatMatters;
+    if (everyMinutes !== undefined) {
+      body.schedule = { kind: "interval", everyMinutes };
+    }
+    if (
+      !current ||
+      url !== undefined ||
+      selector !== undefined ||
+      notifyPerDay !== undefined
+    ) {
+      const previous: Partial<WatchTarget> = current?.watch ?? {};
+      const nextSelector =
+        selector !== undefined ? selector : previous.selector;
+      body.watch = {
+        url: url ?? previous.url,
+        ...(nextSelector ? { selector: nextSelector } : {}),
+        notifyPerDay:
+          notifyPerDay ?? previous.notifyPerDay ?? DEFAULT_WATCH_NOTIFY_PER_DAY,
+      };
+    }
+    if (!current) {
+      body.schedule ??= {
+        kind: "interval",
+        everyMinutes: DEFAULT_WATCH_INTERVAL_MINUTES,
+      };
+      // The judging turn only reads; anything more asks the owner.
+      body.approvalMode = "ask";
+    }
+    return body;
+  };
 
   const listJobs = defineTool({
     name: "list_jobs",
@@ -453,7 +562,12 @@ export function createJobTools(options: JobToolsOptions): JobTools {
             const last = store.runs(job.id)[0];
             const zone = timeZoneOf(job.schedule, options.defaultTimeZone);
             return [
-              `- ${job.name} (jobId ${job.id})`,
+              `- ${job.name} (jobId ${job.id})${job.watch ? " [watch]" : ""}`,
+              ...(job.watch
+                ? [
+                    `  Watches: ${job.watch.url}${job.watch.selector ? ` (${job.watch.selector})` : ""}; tells you ${describeNotifyCap(job.watch.notifyPerDay)}`,
+                  ]
+                : []),
               `  Project: ${projectName(job.projectId)}`,
               `  Schedule: ${describeSchedule(job.schedule)}${job.enabled ? "" : " (paused)"}`,
               ...(job.enabled && job.nextRunAt !== undefined
@@ -465,7 +579,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
                   ]
                 : []),
               `  Approvals: ${job.approvalMode}; model: ${job.model ?? "project default"}`,
-              `  Prompt: ${oneLine(job.prompt, 300)}`,
+              `  ${job.watch ? "What matters" : "Prompt"}: ${oneLine(job.prompt, 300)}`,
             ].join("\n");
           })
           .join("\n"),
@@ -548,10 +662,76 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     handler: async (input) => applyPrepared(input),
   });
 
+  const watchPage = defineTool({
+    name: "watch_page",
+    description: `Watch a web page or RSS/Atom feed for the owner ("watch this page", "tell me when X ships or changes"), or change a watch by passing its jobId (from list_jobs) with only the fields to change. The server checks it on a schedule without a model, using conditional requests, and only when the watched text changed does a short model turn judge the change against whatMatters. Relevant changes go to the owner's Inbox, at most notifyPerDay a day; the rest wait for the next briefing. Prefer this to a scheduled job that reads a page each time. Pick the most specific public URL (a feed, a release page, a raw file) and a selector when only part of a page matters. The owner approves the exact watch first, so propose it directly.`,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        jobId: {
+          type: "string",
+          description: "Change this watch; omit to create a new one",
+        },
+        name: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_JOB_NAME_LENGTH,
+          description: "Short name shown in the Jobs list and the Inbox",
+        },
+        url: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2_048,
+          description: "The public https page or RSS/Atom feed to watch",
+        },
+        selector: {
+          type: "string",
+          maxLength: 200,
+          description:
+            'One simple CSS selector for the part that matters (a tag, "#id", ".class", or a mix like "div.release"); omit for the main text; "" clears it',
+        },
+        whatMatters: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_TOOL_PROMPT_LENGTH,
+          description:
+            "In the owner's terms, which changes are worth telling them about (and which are not)",
+        },
+        everyMinutes: {
+          type: "integer",
+          minimum: MIN_INTERVAL_MINUTES,
+          maximum: MAX_INTERVAL_MINUTES,
+          description: `How often to check, in minutes (default ${DEFAULT_WATCH_INTERVAL_MINUTES})`,
+        },
+        notifyPerDay: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_WATCH_NOTIFY_PER_DAY,
+          description: `Most notifications a day (default ${DEFAULT_WATCH_NOTIFY_PER_DAY}); 0 sends everything to the briefing`,
+        },
+        projectId: {
+          type: "string",
+          description: `Project its judging chats go in (default: this chat's, ${options.projectId})`,
+        },
+        enabled: {
+          type: "boolean",
+          description: "false pauses the watch (default true for a new one)",
+        },
+      },
+    },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
+    effect: "write",
+    authorization: "required",
+    presentation: { title: "Watch a page" },
+    handler: async (input) => applyPrepared(input),
+  });
+
   const deleteJob = defineTool({
     name: "delete_job",
     description:
-      "Delete a scheduled job (from list_jobs) and its run history; its run chats stay. The owner approves it first. To stop a job for a while instead, use schedule_job with enabled false.",
+      "Delete a scheduled job or watch (from list_jobs) and its run history; its run chats stay, and a watch's snapshots are deleted. The owner approves it first. To stop one for a while instead, change it with enabled false.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -577,7 +757,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     return await apply(change);
   };
 
-  const approvalTools: HostTool[] = [scheduleJob, deleteJob];
+  const approvalTools: HostTool[] = [scheduleJob, watchPage, deleteJob];
   return {
     readTools: () => [listJobs],
     approvalTools: {
@@ -655,6 +835,11 @@ export function describeSchedule(schedule: JobSchedule): string {
   if (days === "sun,sat") return `every weekend ${at}`;
   if (schedule.days.length === 7) return `every day ${at}`;
   return `every ${schedule.days.map((day) => DAY_NAMES[day]).join(", ")} ${at}`;
+}
+
+function describeNotifyCap(perDay: number): string {
+  if (perDay === 0) return "never directly; every change goes to the briefing";
+  return `at most ${perDay === 1 ? "once" : `${perDay} times`} a day; further changes go to the next briefing`;
 }
 
 function describeApprovalMode(mode: string): string {

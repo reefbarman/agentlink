@@ -44,7 +44,11 @@ export type InboxEntryKind =
   /** Audit checkpoints are not reaching the witness, or the log no longer matches them. */
   | "audit_checkpoint"
   /** An MCP server's tools changed, so they ask again. */
-  | "mcp_changed";
+  | "mcp_changed"
+  /** A watch found a change that matters. */
+  | "watch_changed"
+  /** A job's run used far more than usual, or watches told you a lot today. */
+  | "job_noisy";
 
 export interface InboxEntry {
   readonly id: string;
@@ -103,7 +107,9 @@ interface StoredInbox {
  */
 export function inboxEntryForRun(
   run: JobRun,
-  job: Pick<JobDefinition, "name">,
+  job: Pick<JobDefinition, "name"> & Partial<Pick<JobDefinition, "watch">>,
+  /** The job's run before this one, for a watch that keeps failing. */
+  previous?: JobRun,
 ): NewInboxEntry | undefined {
   const base = {
     projectId: run.projectId,
@@ -113,6 +119,28 @@ export function inboxEntryForRun(
   };
   const body = (text: string | undefined) =>
     text ? { body: truncate(text, MAX_BODY_LENGTH) } : {};
+  if (job.watch) {
+    // A watch tells you about relevant changes only, and about a page it
+    // cannot read once, not every check.
+    if (run.status === "completed") {
+      return run.watch?.notified
+        ? {
+            ...base,
+            kind: "watch_changed",
+            title: `${job.name}: changed`,
+            ...body(run.summary),
+          }
+        : undefined;
+    }
+    if (
+      run.status === "failed" &&
+      run.watch?.outcome === "fetch_failed" &&
+      previous?.watch?.outcome === "fetch_failed" &&
+      previous.error === run.error
+    ) {
+      return undefined;
+    }
+  }
   switch (run.status) {
     case "completed":
       return {
@@ -634,6 +662,37 @@ export function inboxEntryForMcpChange(
 }
 
 /** Runaway-guard notices, which offer Stop and Keep going. */
+/** A run that used far more of the model than the job usually does. */
+export function inboxEntryForUnusualUsage(
+  run: JobRun,
+  job: Pick<JobDefinition, "name">,
+  usualTokens: number,
+): NewInboxEntry {
+  const tokens = (run.usage?.inputTokens ?? 0) + (run.usage?.outputTokens ?? 0);
+  return {
+    kind: "job_noisy",
+    projectId: run.projectId,
+    jobId: run.jobId,
+    runId: run.runId,
+    ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+    title: `${job.name} used more than usual`,
+    body: `This run used ${tokens.toLocaleString("en-AU")} tokens in ${run.usage?.requests ?? 0} model requests, over three times its usual ${usualTokens.toLocaleString("en-AU")}. Nothing was stopped.`,
+  };
+}
+
+/** Watches together told the owner more than the day's guard. */
+export function inboxEntryForWatchNoise(
+  count: number,
+  projectId: string,
+): NewInboxEntry {
+  return {
+    kind: "job_noisy",
+    projectId,
+    title: "Watches are busy today",
+    body: `Your watches have told you about ${count} changes today. Each watch still stops at its own daily limit; change a watch's limit or what matters in a chat if this is too many.`,
+  };
+}
+
 export function isSessionAlertKind(kind: InboxEntryKind): boolean {
   return kind === "session_long_running" || kind === "session_stuck";
 }

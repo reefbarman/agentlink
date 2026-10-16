@@ -39,7 +39,21 @@ export interface JobRoutesOptions {
   readonly models: readonly AssistantServerModelChoice[];
   /** For daily and weekly schedules that name no time zone. */
   readonly defaultTimeZone: string;
+  /** What a watch has seen, shown with it. */
+  readonly watchSummary?: (jobId: string) => WatchSummary | undefined;
   readonly now?: () => number;
+}
+
+export interface WatchSummary {
+  readonly checkedAt?: number;
+  readonly snapshots: number;
+  /** Newest first. */
+  readonly recentChanges: ReadonlyArray<{
+    readonly at: number;
+    readonly summary: string;
+    readonly notified: boolean;
+    readonly sessionId?: string;
+  }>;
 }
 
 export interface JobRoutes {
@@ -101,10 +115,12 @@ export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
   const describe = (job: JobDefinition) => {
     const runs = store.runs(job.id);
     const activeRun = runs.find(isActiveRun);
+    const watchState = job.watch ? options.watchSummary?.(job.id) : undefined;
     return {
       ...job,
       ...(runs[0] ? { lastRun: runs[0] } : {}),
       ...(activeRun ? { activeRun } : {}),
+      ...(watchState ? { watchState } : {}),
     };
   };
 

@@ -51,6 +51,7 @@ const DATA_AREAS: ReadonlyArray<{
   { id: "memory", label: "Memory", folders: ["memory"] },
   { id: "inbox", label: "Inbox", folders: ["inbox"] },
   { id: "jobs", label: "Scheduled jobs", folders: ["jobs"] },
+  { id: "watches", label: "Watches", folders: ["watches"] },
   { id: "audit", label: "Audit log", folders: ["audit"] },
 ];
 
@@ -69,6 +70,14 @@ export const STORAGE_RETENTION: readonly StorageRetention[] = [
     text: "The latest 1,000 per chat, for reconnecting; removed with the chat.",
   },
   { label: "Inbox", text: "The latest 500 entries." },
+  {
+    label: "Scheduled jobs",
+    text: "Kept until you delete the job; the latest 50 runs of each.",
+  },
+  {
+    label: "Watches",
+    text: "The last 10 snapshots of each watched page and its latest 50 relevant changes; deleted with the watch.",
+  },
   { label: "Memory", text: "Kept until you forget it." },
   {
     label: "Audit log",

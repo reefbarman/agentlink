@@ -103,9 +103,14 @@ import {
   inboxEntryForRun,
   inboxEntryForSessionAlert,
   inboxEntryForTask,
+  inboxEntryForUnusualUsage,
+  inboxEntryForWatchNoise,
   openInboxStore,
   type NewInboxEntry,
 } from "./inboxStore.js";
+import { unusualUsage } from "./jobUsage.js";
+import { createWatcher, type Watcher } from "./watches.js";
+import { openWatchStore } from "./watchStore.js";
 import { createPushRoutes } from "./pushRoutes.js";
 import { AUTO_CONTINUE_INSTRUCTIONS } from "./sessionProgress.js";
 import { createSessionWatch } from "./sessionWatch.js";
@@ -122,7 +127,12 @@ import {
   proxyAuthorizationHeader,
   type NetworkPolicy,
 } from "./egressPolicy.js";
-import { directConnector, gatewayConnector } from "./webFetch.js";
+import {
+  directConnector,
+  fetchWebPage,
+  gatewayConnector,
+  type WebConnector,
+} from "./webFetch.js";
 import { createWebTools } from "./webTools.js";
 import { createProjectChats } from "./projectChats.js";
 import { openProjectCatalog, projectNetworkPolicy } from "./projectCatalog.js";
@@ -274,6 +284,11 @@ export function serverJobsDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "jobs");
 }
 
+/** What each watch has seen: snapshots, validators, relevant changes. */
+export function serverWatchesDirectory(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "watches");
+}
+
 /** The owner's inbox of job results and approvals waiting. */
 export function serverInboxDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "inbox");
@@ -411,7 +426,6 @@ export function projectWebTools(
     >;
   },
 ): HostToolResolver {
-  const proxy = config.commandWorker?.egressProxy;
   const key = options.key;
   const codex = options.codex;
   const codexProviderIds = new Set(
@@ -421,13 +435,7 @@ export function projectWebTools(
   );
   return createWebTools({
     policy: options.policy,
-    connector: proxy
-      ? gatewayConnector({
-          proxy,
-          authorization: (policy) =>
-            key ? proxyAuthorizationHeader(key, policy) : undefined,
-        })
-      : directConnector(),
+    connector: serverWebConnector(config, key),
     ...(codex && codexProviderIds.size > 0
       ? {
           codex: {
@@ -443,6 +451,25 @@ export function projectWebTools(
       : {}),
     ...(config.web?.searxngUrl ? { searxngUrl: config.web.searxngUrl } : {}),
   });
+}
+
+/**
+ * How the server reads web pages: through the egress gateway with a
+ * project's signed policy when there is one, otherwise directly with the
+ * same checks.
+ */
+export function serverWebConnector(
+  config: Pick<AssistantServerConfig, "commandWorker">,
+  key: Buffer | undefined,
+): WebConnector {
+  const proxy = config.commandWorker?.egressProxy;
+  return proxy
+    ? gatewayConnector({
+        proxy,
+        authorization: (policy) =>
+          key ? proxyAuthorizationHeader(key, policy) : undefined,
+      })
+    : directConnector();
 }
 
 export function commandHostOptions(
@@ -848,6 +875,26 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // What each watch has seen; a watch deleted while down loses its file.
+  const watchStore = await openWatchStore({
+    directory: serverWatchesDirectory(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  await watchStore
+    .prune(
+      new Set(
+        jobStore
+          .list()
+          .filter((job) => job.watch)
+          .map((job) => job.id),
+      ),
+    )
+    .catch((error: unknown) => {
+      log(`Could not tidy watch snapshots: ${message(error)}`);
+    });
   const inbox = await openInboxStore({
     directory: serverInboxDirectory(config),
   }).catch(async (error: unknown) => {
@@ -1644,7 +1691,18 @@ export async function startAssistantService(
         if (run.status === "running") {
           await inbox.markRunRead(run.runId, "needs_approval");
         }
-        await addToInbox(inboxEntryForRun(run, job));
+        const history = jobStore.runs(job.id);
+        const previous = history.find(
+          (other) => other.runId !== run.runId && !isActiveRun(other),
+        );
+        await addToInbox(inboxEntryForRun(run, job, previous));
+        // The usage guard: notice only, the run already finished.
+        if (!isActiveRun(run) && run.usage) {
+          const usual = unusualUsage(run, history);
+          if (usual !== undefined) {
+            await addToInbox(inboxEntryForUnusualUsage(run, job, usual));
+          }
+        }
       })()
         .catch((error: unknown) => {
           log(`Could not update the inbox: ${message(error)}`);
@@ -1803,6 +1861,19 @@ export async function startAssistantService(
         return bridge.deliverTaskResult(auth, origin.sessionId, task);
       },
     });
+    // Watches check pages through the same connector and rules as
+    // `web_fetch`, and only ask a model when the page changed.
+    const watcher: Watcher = createWatcher({
+      store: watchStore,
+      fetch: (request) =>
+        fetchWebPage({
+          ...request,
+          connector: serverWebConnector(config, policyKey),
+          keepRaw: true,
+        }),
+      policy: (projectId) => projectNetworkPolicy(catalog.get(projectId)),
+      timeZone: () => persona.get().timeZone,
+    });
     // Each run is a new chat in its project, acting for the owner.
     const jobs = createJobRunner({
       store: jobStore,
@@ -1815,15 +1886,55 @@ export async function startAssistantService(
       failureDetail: (projectId, sessionId) =>
         turnFailures.take(projectId, sessionId),
       paused: workPaused,
+      prepareRun: async (job, _run, signal) => {
+        if (!job.watch) return undefined;
+        const check = await watcher.check(job, signal);
+        switch (check.kind) {
+          case "quiet":
+            return {
+              finish: { status: "completed", summary: check.summary },
+              record: { watch: check.record },
+            };
+          case "failed":
+            return {
+              finish: {
+                status: "failed",
+                error: check.error,
+                errorDetail: check.detail,
+              },
+              record: { watch: check.record },
+            };
+          case "changed":
+            return { prompt: check.prompt, record: { watch: check.record } };
+        }
+      },
+      finishRun: async (job, run, text) => {
+        if (!job.watch || run.watch?.outcome !== "changed") return {};
+        const judged = await watcher.judge(job, run, text);
+        if (judged.noisy) {
+          await addToInbox(
+            inboxEntryForWatchNoise(judged.noisy.count, job.projectId),
+          );
+        }
+        return {
+          watch: judged.record,
+          ...(judged.summary ? { summary: judged.summary } : {}),
+        };
+      },
+      onJobDeleted: (jobId) => {
+        void watcher.forget(jobId).catch((error: unknown) => {
+          log(`Could not delete a watch's snapshots: ${message(error)}`);
+        });
+      },
       onRunRecovered: ({ run, job }) => recordInInbox(run, job),
-      onRunChanged: ({ run, job, auth }) => {
+      onRunChanged: ({ run, job, auth, prompt }) => {
         const bridge = bridges.get(run.projectId);
         // Live in its chat while it works; a finished chat once it ends.
         if (bridge && run.sessionId) {
           if (isActiveRun(run)) {
             bridge.followSession(auth, run.sessionId, {
               title: run.title ?? job.name,
-              prompt: job.prompt,
+              prompt: prompt ?? job.prompt,
             });
           } else {
             void bridge.adoptSession(
@@ -2148,6 +2259,25 @@ export async function startAssistantService(
       // The owner's, as set in Settings.
       get defaultTimeZone() {
         return persona.get().timeZone;
+      },
+      watchSummary: (jobId) => {
+        const state = watchStore.get(jobId);
+        if (!state) return undefined;
+        return {
+          ...(state.checkedAt !== undefined
+            ? { checkedAt: state.checkedAt }
+            : {}),
+          snapshots: state.snapshots.length,
+          recentChanges: state.findings
+            .slice(-5)
+            .reverse()
+            .map((finding) => ({
+              at: finding.at,
+              summary: finding.summary,
+              notified: finding.notified,
+              ...(finding.sessionId ? { sessionId: finding.sessionId } : {}),
+            })),
+        };
       },
     });
     const personaRoutes = createPersonaRoutes({

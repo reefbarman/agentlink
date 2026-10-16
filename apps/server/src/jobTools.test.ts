@@ -362,3 +362,103 @@ describe("job tools", () => {
     ).toBe("every Mon, Thu at 18:00 (UTC)");
   });
 });
+
+describe("watch_page", () => {
+  const release = {
+    name: "AgentLink releases",
+    url: "http://github.com/reefbarman/agentlink/releases.atom",
+    whatMatters: "A new stable release, not pre-releases",
+  };
+
+  it("creates a watch only after the owner approves the exact card", async () => {
+    const { store, runner, prepare, approve, byName } = await setup();
+    expect(byName("watch_page").validate(release).valid).toBe(true);
+    const approval = await prepare("watch_page", release);
+    expect(approval).toMatchObject({
+      decision: "require_user",
+      summary:
+        'Watch "AgentLink releases": https://github.com/reefbarman/agentlink/releases.atom?',
+    });
+    const text = (approval as { displayContent: { text: string } })
+      .displayContent.text;
+    expect(text).toContain("Watch a page:");
+    expect(text).toContain(
+      "Checks: every hour, without a model; a model is asked only when it changed",
+    );
+    expect(text).toContain(
+      "Tells you: at most 3 times a day; further changes go to the next briefing",
+    );
+    expect(text).toContain("A new stable release, not pre-releases");
+    expect(store.list()).toHaveLength(0);
+
+    const { result } = await approve("watch_page", approval);
+    expect(result.isError).toBeUndefined();
+    const [job] = store.list();
+    expect(job).toMatchObject({
+      prompt: "A new stable release, not pre-releases",
+      schedule: { kind: "interval", everyMinutes: 60 },
+      // Its judging turns read only; anything more asks.
+      approvalMode: "ask",
+      watch: {
+        url: "https://github.com/reefbarman/agentlink/releases.atom",
+        notifyPerDay: 3,
+      },
+    });
+    expect(runner.jobChanged).toHaveBeenCalledWith(job!.id);
+    expect(String(result.modelContent)).toContain("The first check only");
+  });
+
+  it("changes only the named watch fields, keeping the rest", async () => {
+    const { store, prepare, approve } = await setup();
+    await approve("watch_page", await prepare("watch_page", release));
+    const [job] = store.list();
+    const approval = await prepare("watch_page", {
+      jobId: job!.id,
+      selector: "entry",
+      notifyPerDay: 1,
+    });
+    expect(
+      (approval as { displayContent: { text: string } }).displayContent.text,
+    ).toContain("Part of the page: main text → entry");
+    await approve("watch_page", approval);
+    expect(store.get(job!.id)?.watch).toEqual({
+      url: "https://github.com/reefbarman/agentlink/releases.atom",
+      selector: "entry",
+      notifyPerDay: 1,
+    });
+    expect(store.get(job!.id)?.prompt).toBe(release.whatMatters);
+  });
+
+  it("refuses private addresses, odd selectors and ordinary jobs", async () => {
+    const { store, prepare } = await setup();
+    await expect(
+      prepare("watch_page", { ...release, url: "https://192.168.1.10/" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("public page"),
+    });
+    await expect(
+      prepare("watch_page", { ...release, selector: "div > p" }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("one simple CSS selector"),
+    });
+    const plain = await store.create(
+      {
+        name: "Plain",
+        projectId: "home",
+        prompt: "Hi",
+        schedule: { kind: "interval", everyMinutes: 60 },
+        enabled: true,
+        approvalMode: "autonomous",
+      },
+      NOW,
+    );
+    await expect(
+      prepare("watch_page", { jobId: plain.id, notifyPerDay: 1 }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: expect.stringContaining("not a watch"),
+    });
+  });
+});

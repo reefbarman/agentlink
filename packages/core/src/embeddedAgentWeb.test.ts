@@ -211,9 +211,14 @@ describe("embedded agent projections", () => {
         ...base,
         type: "usage.updated",
         model: { providerId: "fixture", modelId: "model" },
-        usage: { inputTokens: 1, outputTokens: 2 },
+        usage: { inputTokens: 1, outputTokens: 2, estimated: true },
       } as AgentTurnEvent),
-    ).toEqual({ ...base, type: "usage.updated" });
+      // Token counts only: no model identity or provider detail.
+    ).toEqual({
+      ...base,
+      type: "usage.updated",
+      usage: { inputTokens: 1, outputTokens: 2 },
+    });
     expect(
       projectEmbeddedAgentTurnEvent({
         ...base,

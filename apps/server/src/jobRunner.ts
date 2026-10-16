@@ -14,6 +14,7 @@ import {
   type JobDefinition,
   type JobRun,
   type JobRunStatus,
+  type JobRunUsage,
   type JobStore,
 } from "./jobStore.js";
 import type { SessionEventHub } from "./SessionEventHub.js";
@@ -64,7 +65,30 @@ export interface JobRunnerOptions {
     readonly run: JobRun;
     readonly job: JobDefinition;
     readonly auth: AssistantServerAuth;
+    /** The message the run's chat starts with, once it has one. */
+    readonly prompt?: string;
   }) => void;
+  /**
+   * Before a run's chat: decide whether it needs one. `finish` ends the run
+   * here with no model call (a watch with nothing new); `prompt` replaces
+   * the job's prompt. Either may add fields to the run's record.
+   */
+  readonly prepareRun?: (
+    job: JobDefinition,
+    run: JobRun,
+    signal: AbortSignal,
+  ) => Promise<RunPreparation | undefined>;
+  /**
+   * After a run's turn completed: fields to add to its final record, from
+   * its final text (a watch's judgement).
+   */
+  readonly finishRun?: (
+    job: JobDefinition,
+    run: JobRun,
+    text: string | undefined,
+  ) => Promise<Partial<Pick<JobRun, "summary" | "watch">>>;
+  /** A job was deleted: drop what else is kept for it. */
+  readonly onJobDeleted?: (jobId: string) => void;
   /** A run a previous process left open, now recorded as interrupted. */
   readonly onRunRecovered?: (change: {
     readonly run: JobRun;
@@ -117,6 +141,21 @@ export interface JobRunner {
   close(): Promise<void>;
 }
 
+export type RunPreparation =
+  | {
+      readonly finish: {
+        readonly status: "completed" | "failed";
+        readonly summary?: string;
+        readonly error?: string;
+        readonly errorDetail?: string;
+      };
+      readonly record?: Partial<Pick<JobRun, "watch">>;
+    }
+  | {
+      readonly prompt: string;
+      readonly record?: Partial<Pick<JobRun, "watch">>;
+    };
+
 type TurnResult = Extract<
   EmbeddedAgentTurnEvent,
   { result: unknown }
@@ -126,6 +165,9 @@ interface Outcome {
   readonly status: JobRunStatus;
   readonly summary?: string;
   readonly error?: string;
+  readonly errorDetail?: string;
+  /** The turn's whole final text, for `finishRun`. */
+  readonly text?: string;
 }
 
 interface LiveRun {
@@ -141,6 +183,10 @@ interface LiveRun {
   readonly outcome: Promise<Outcome>;
   /** Settles once the run's record is final. */
   done: Promise<void> | undefined;
+  /** The message its chat started with. */
+  prompt?: string;
+  /** Model use so far. */
+  usage?: JobRunUsage;
 }
 
 export function createJobRunner(options: JobRunnerOptions): JobRunner {
@@ -170,6 +216,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         run: entry.run,
         job: store.get(entry.job.id) ?? entry.job,
         auth: entry.auth,
+        ...(entry.prompt !== undefined ? { prompt: entry.prompt } : {}),
       });
     } catch {
       // A broken listener must not stop the run.
@@ -299,22 +346,11 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     resumed?: { readonly sessionId: string; readonly waitedMs: number },
   ): Promise<void> => {
     const { job, auth } = entry;
-    let unsubscribe: () => void = () => undefined;
-    let expiry: ReturnType<typeof setTimeout> | undefined;
-    const armExpiry = (ms: number) => {
-      if (expiry) clearTimeout(expiry);
-      expiry = setTimeout(
-        () => {
-          void stop(entry, "approval_expired", "cancelled");
-        },
-        Math.max(0, ms),
-      );
-      expiry.unref?.();
-    };
-    let final: Outcome;
+    let final: Outcome | undefined;
     try {
       if (!options.ownerId()) throw new HttpError(409, "owner_missing");
-      let sessionId: string;
+      let sessionId: string | undefined;
+      let prompt = job.prompt;
       if (resumed) {
         sessionId = resumed.sessionId;
       } else {
@@ -323,6 +359,21 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
           startedAt: now(),
           title: runTitle(job, now()),
         });
+        const prepared = await options.prepareRun?.(
+          job,
+          entry.run,
+          entry.controller.signal,
+        );
+        assertNotStopping(entry);
+        if (prepared?.record) await save(entry, prepared.record);
+        if (prepared && "finish" in prepared) {
+          final = prepared.finish;
+        } else if (prepared) {
+          prompt = prepared.prompt;
+        }
+      }
+      if (!final && !sessionId) {
+        entry.prompt = prompt;
         const model = job.model
           ? options.resolveModel(job.model)
           : options.projectDefaults?.(job.projectId).model;
@@ -352,6 +403,40 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
           );
         }
       }
+      if (!final && sessionId) {
+        final = await followTurn(entry, sessionId, prompt, resumed);
+      }
+    } catch (error) {
+      final = entry.stopping
+        ? { status: entry.stopping.status, error: entry.stopping.reason }
+        : { status: "failed", error: errorCode(error) };
+    }
+    await settle(entry, final ?? { status: "failed", error: "run_failed" });
+  };
+
+  /** Start (or keep following) the run's turn until it ends. */
+  const followTurn = async (
+    entry: LiveRun,
+    sessionId: string,
+    prompt: string,
+    resumed:
+      | { readonly sessionId: string; readonly waitedMs: number }
+      | undefined,
+  ): Promise<Outcome> => {
+    const { job, auth } = entry;
+    let unsubscribe: () => void = () => undefined;
+    let expiry: ReturnType<typeof setTimeout> | undefined;
+    const armExpiry = (ms: number) => {
+      if (expiry) clearTimeout(expiry);
+      expiry = setTimeout(
+        () => {
+          void stop(entry, "approval_expired", "cancelled");
+        },
+        Math.max(0, ms),
+      );
+      expiry.unref?.();
+    };
+    try {
       assertNotStopping(entry);
 
       const sessionKey = operations.sessionKey(job.projectId, sessionId);
@@ -362,6 +447,19 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         ({ event }) => {
           if (event.kind === "turn") {
             if ("result" in event.event) result = event.event.result;
+            if (event.event.type === "usage.updated" && event.event.usage) {
+              const usage = event.event.usage;
+              entry.usage = {
+                requests: (entry.usage?.requests ?? 0) + 1,
+                inputTokens:
+                  (entry.usage?.inputTokens ?? 0) +
+                  usage.inputTokens +
+                  (usage.cacheReadTokens ?? 0) +
+                  (usage.cacheCreationTokens ?? 0),
+                outputTokens:
+                  (entry.usage?.outputTokens ?? 0) + usage.outputTokens,
+              };
+            }
             return;
           }
           if (event.kind !== "task" || entry.stopping) return;
@@ -382,7 +480,9 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
             case "completed":
               entry.finish({
                 status: "completed",
-                ...(result?.text ? { summary: summarize(result.text) } : {}),
+                ...(result?.text
+                  ? { summary: summarize(result.text), text: result.text }
+                  : {}),
               });
               return;
             case "suspended":
@@ -405,7 +505,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         armExpiry(approvalTimeoutMs - resumed.waitedMs);
         await save(entry, {});
       } else {
-        await operations.startTurn(auth, job.projectId, sessionId, job.prompt);
+        await operations.startTurn(auth, job.projectId, sessionId, prompt);
         // Stopped while the turn was starting: its cancel came too early.
         if (entry.stopping && entry.stopping.reason !== "server_stopped") {
           await operations
@@ -413,15 +513,17 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
             .catch(() => undefined);
         }
       }
-      final = await entry.outcome;
-    } catch (error) {
-      final = entry.stopping
-        ? { status: entry.stopping.status, error: entry.stopping.reason }
-        : { status: "failed", error: errorCode(error) };
+      return await entry.outcome;
     } finally {
       unsubscribe();
       if (expiry) clearTimeout(expiry);
     }
+  };
+
+  /** Record a run's end (or leave a waiting run waiting). */
+  const settle = async (entry: LiveRun, outcome: Outcome): Promise<void> => {
+    const { job } = entry;
+    let final = outcome;
     // Left waiting for its approval (the server is stopping): its record
     // stays `awaiting_approval` for the next start to follow.
     if (entry.stopping?.status === "awaiting_approval") {
@@ -436,12 +538,24 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     }
     const runSessionId = entry.run.sessionId;
     const errorDetail =
-      runSessionId &&
+      final.errorDetail ??
+      (runSessionId &&
       (final.status === "failed" ||
         final.status === "blocked_auth" ||
         final.status === "blocked_quota")
         ? options.failureDetail?.(job.projectId, runSessionId)
-        : undefined;
+        : undefined);
+    let finished: Partial<Pick<JobRun, "summary" | "watch">> = {};
+    if (final.status === "completed" && runSessionId && options.finishRun) {
+      finished = await options
+        .finishRun(job, entry.run, final.text)
+        .catch((error: unknown) => {
+          log(
+            `Could not finish job run ${entry.run.runId}: ${describe(error)}`,
+          );
+          return {};
+        });
+    }
     // Free the job before its final record: whoever sees that may run it.
     if (live.get(job.id) === entry) live.delete(job.id);
     await save(entry, {
@@ -450,6 +564,9 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       ...(final.summary ? { summary: final.summary } : {}),
       ...(final.error ? { error: final.error } : {}),
       ...(errorDetail ? { errorDetail } : {}),
+      ...(entry.usage ? { usage: entry.usage } : {}),
+      ...(finished.summary ? { summary: summarize(finished.summary) } : {}),
+      ...(finished.watch ? { watch: finished.watch } : {}),
     });
     entry.controller.abort(new Error("job_run_finished"));
     log(
@@ -650,6 +767,13 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         const entry = live.get(jobId);
         if (entry) {
           await stop(entry, job ? "job_paused" : "job_deleted", "cancelled");
+        }
+      }
+      if (!job) {
+        try {
+          options.onJobDeleted?.(jobId);
+        } catch {
+          // A broken listener must not stop the change.
         }
       }
       if (job) await schedule(job);

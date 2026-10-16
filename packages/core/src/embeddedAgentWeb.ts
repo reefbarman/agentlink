@@ -564,6 +564,21 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
         sessionRevision: event.sessionRevision,
       };
     case "usage.updated":
+      // Token counts only: what a host needs to report a turn's usage.
+      return {
+        ...base,
+        type: event.type,
+        usage: {
+          inputTokens: event.usage.inputTokens,
+          outputTokens: event.usage.outputTokens,
+          ...(event.usage.cacheReadTokens !== undefined
+            ? { cacheReadTokens: event.usage.cacheReadTokens }
+            : {}),
+          ...(event.usage.cacheCreationTokens !== undefined
+            ? { cacheCreationTokens: event.usage.cacheCreationTokens }
+            : {}),
+        },
+      };
     case "execution.updated":
       return { ...base, type: event.type };
     case "turn.completed":
