@@ -1,0 +1,61 @@
+apps/server/deploy/container/compose.runners.yaml
+  h_e08a86bb3a33a2 1-116
+apps/server/src/remoteModels.test.ts
+  h_e08a86bb3a33a2 1-170
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 69-86,397,556-558,562-596,602
+  s_1b9055a5ba5b64::t_ef7dbe1f823d76 597-598
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 62-108
+apps/server/src/runnerManager.ts
+  h_e08a86bb3a33a2 1-384
+apps/server/src/remoteModels.ts
+  h_e08a86bb3a33a2 1-288
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 1-479
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 31-38,80-88,158-177,200-205,260,660-839
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 205-246
+apps/server/src/remoteHostTools.ts
+  h_e08a86bb3a33a2 1-115
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1,6,42-47,253-254,482-502,661,798,1454-1494,1511-1554,1581-1587,1823,1842
+  s_1b9055a5ba5b64::t_63cd98a58c7368 503
+apps/server/src/remoteWorkspaceHost.ts
+  h_e08a86bb3a33a2 1-349
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 1-227
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 1-470
+apps/server/src/sessionRunners.ts
+  h_e08a86bb3a33a2 1-215
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 61-63,80-86
+packages/workspace-host/src/modelRuntime.ts
+  h_e08a86bb3a33a2 65-73,78,197-201,205
+  s_1b9055a5ba5b64::t_70972a3310c1e0 77,202-203
+apps/server/src/runnerProtocol.ts
+  h_e08a86bb3a33a2 1-321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06168451170a90231b5e1c9d6542b56331324a06",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1b9055a5ba5b64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bfb7ea22-e573-41d9-9da2-285dcdd8eaac",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
