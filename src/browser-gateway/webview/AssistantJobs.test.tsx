@@ -371,6 +371,13 @@ describe("JobsPanel", () => {
         enabled: true,
       }),
     );
+
+    const search = screen.getByRole("searchbox", { name: "Search jobs" });
+    fireEvent.input(search, { target: { value: "weekly" } });
+    expect(screen.getByText("Weekly review")).toBeTruthy();
+    expect(screen.queryByText("Morning brief")).toBeNull();
+    fireEvent.input(search, { target: { value: "missing" } });
+    expect(screen.getByText(/No jobs match/u)).toBeTruthy();
   });
 });
 

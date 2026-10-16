@@ -467,9 +467,64 @@ export function Dialog({
   actions?: ComponentChildren;
   children: ComponentChildren;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    if (!dialog?.contains(document.activeElement)) dialog?.focus();
+    return () => {
+      // Preact removes the focused dialog after effect cleanup. Restore after
+      // that removal, otherwise the browser can move focus back to the body.
+      queueMicrotask(() => {
+        if (previous instanceof HTMLElement && previous.isConnected)
+          previous.focus();
+      });
+    };
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
+      const dialog = dialogRef.current;
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (!dialog || dialogs[dialogs.length - 1] !== dialog) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!busy) onClose();
+      }
+      if (event.key === "Tab") {
+        const focusable = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'button, a[href], input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+          ),
+        ).filter(
+          (element) =>
+            !element.matches(
+              ':disabled, [hidden], [type="hidden"], [tabindex="-1"]',
+            ) &&
+            !element.closest("[hidden], [inert]") &&
+            // Closed details and CSS-hidden controls are not Tab stops.
+            (element.checkVisibility?.({ visibilityProperty: true }) ?? true),
+        );
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (!first || !last) {
+          event.preventDefault();
+          dialog.focus();
+        } else if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            document.activeElement === dialog)
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !dialog.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -483,7 +538,9 @@ export function Dialog({
     >
       <div
         class={`assistant-project-dialog${wide ? " assistant-panel" : ""}`}
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-label={title}
       >
@@ -500,7 +557,7 @@ export function Dialog({
             <i class="codicon codicon-close" aria-hidden="true" />
           </button>
         </header>
-        {children}
+        <div class="assistant-panel-body">{children}</div>
       </div>
     </div>
   );

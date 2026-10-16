@@ -74,6 +74,20 @@ describe("MemoryPanel", () => {
     render(<MemoryPanel onClose={() => undefined} openChat={openChat} />);
     await screen.findByText("Prefers short answers");
     expect(screen.getByText(/you said “I prefer short answers”/u)).toBeTruthy();
+    expect(
+      screen.getByText(/What the Assistant remembers about you/u),
+    ).toBeTruthy();
+    fireEvent.input(
+      screen.getByRole("searchbox", { name: "Search memories" }),
+      {
+        target: { value: "short" },
+      },
+    );
+    await waitFor(() => expect(calls).toContain("GET /api/memory?q=short"));
+    fireEvent.input(
+      screen.getByRole("searchbox", { name: "Search memories" }),
+      { target: { value: "" } },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     expect(openChat).toHaveBeenCalledWith("home", "chat-1");
     fireEvent.click(screen.getByRole("button", { name: "Forget" }));

@@ -117,7 +117,10 @@ export function StorageSection() {
     };
   }, []);
   return (
-    <section class="assistant-storage" aria-label="Storage">
+    <section
+      class="assistant-storage assistant-settings-section assistant-settings-storage"
+      aria-label="Storage"
+    >
       <h3>Storage</h3>
       {!report && !error && <p class="assistant-panel-empty">Measuring…</p>}
       {error && (
@@ -127,20 +130,26 @@ export function StorageSection() {
       )}
       {report && (
         <>
-          <ul>
+          <ul class="assistant-settings-list assistant-settings-storage-list">
             {report.areas.map((area) => (
-              <li key={area.id}>
-                <strong>{area.label}:</strong> {area.partial ? "at least " : ""}
-                {formatBytes(area.bytes)}, {area.files}{" "}
-                {area.files === 1 ? "file" : "files"}
+              <li class="assistant-settings-row" key={area.id}>
+                <strong>{area.label}</strong>
+                <span>
+                  {area.partial ? "At least " : ""}
+                  {formatBytes(area.bytes)}
+                </span>
+                <small>
+                  {area.files} {area.files === 1 ? "file" : "files"}
+                </small>
               </li>
             ))}
           </ul>
           <h4>How long things are kept</h4>
-          <ul>
+          <ul class="assistant-settings-list assistant-settings-retention-list">
             {report.retention.map((entry) => (
-              <li key={entry.label}>
-                <strong>{entry.label}:</strong> {entry.text}
+              <li class="assistant-settings-row" key={entry.label}>
+                <strong>{entry.label}</strong>
+                <span>{entry.text}</span>
               </li>
             ))}
           </ul>
@@ -193,8 +202,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   const deviceZone = deviceTimeZone();
-  const update = (patch: Partial<FormState>) =>
+  const dirty =
+    form !== null &&
+    loaded !== null &&
+    JSON.stringify(form) !== JSON.stringify(formFromSettings(loaded.settings));
+  const update = (patch: Partial<FormState>) => {
+    setNotice(null);
     setForm((current) => (current ? { ...current, ...patch } : current));
+  };
 
   const submit = async (event: Event) => {
     event.preventDefault();
@@ -225,131 +240,147 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       {!form && !error && <p class="assistant-panel-empty">Loading…</p>}
       {form && loaded && (
         <form class="assistant-project-form" onSubmit={submit}>
-          <div class="assistant-project-row">
+          <section
+            class="assistant-settings-section assistant-settings-identity"
+            aria-label="Identity and persona"
+          >
+            <h3>Identity and persona</h3>
+            <div class="assistant-project-row">
+              <label>
+                <span>Assistant's name</span>
+                <input
+                  value={form.name}
+                  maxLength={40}
+                  required
+                  onInput={(event) =>
+                    update({ name: event.currentTarget.value })
+                  }
+                />
+              </label>
+              <label>
+                <span>What it calls you</span>
+                <input
+                  value={form.ownerName}
+                  maxLength={60}
+                  placeholder="(not set)"
+                  onInput={(event) =>
+                    update({ ownerName: event.currentTarget.value })
+                  }
+                />
+              </label>
+            </div>
             <label>
-              <span>Assistant's name</span>
-              <input
-                value={form.name}
-                maxLength={40}
-                required
-                onInput={(event) => update({ name: event.currentTarget.value })}
-              />
-            </label>
-            <label>
-              <span>What it calls you</span>
-              <input
-                value={form.ownerName}
-                maxLength={60}
-                placeholder="(not set)"
+              <span>Persona (how it sounds in your chats)</span>
+              <textarea
+                rows={5}
+                maxLength={2000}
+                value={form.persona}
                 onInput={(event) =>
-                  update({ ownerName: event.currentTarget.value })
+                  update({ persona: event.currentTarget.value })
                 }
               />
-            </label>
-          </div>
-          <label>
-            <span>Persona (how it sounds in your chats)</span>
-            <textarea
-              rows={5}
-              maxLength={2000}
-              value={form.persona}
-              onInput={(event) =>
-                update({ persona: event.currentTarget.value })
-              }
-            />
-            <small>
-              Not used in coding task chats, which write in the repository's own
-              voice. It never changes what the Assistant may do.{" "}
-              <button
-                type="button"
-                class="link-button"
-                onClick={() => update({ persona: loaded.defaultPersona })}
-              >
-                Use the default
-              </button>
-            </small>
-          </label>
-          <label>
-            <span>Your time zone</span>
-            <select
-              value={form.timeZone}
-              onChange={(event) =>
-                update({ timeZone: event.currentTarget.value })
-              }
-            >
-              {timeZoneOptions(form.timeZone).map((zone) => (
-                <option key={zone} value={zone}>
-                  {zone}
-                </option>
-              ))}
-            </select>
-            {deviceZone && deviceZone !== form.timeZone && (
               <small>
-                This device is on {deviceZone}.{" "}
+                Not used in coding task chats, which write in the repository's
+                own voice. It never changes what the Assistant may do.{" "}
                 <button
                   type="button"
                   class="link-button"
-                  onClick={() => update({ timeZone: deviceZone })}
+                  onClick={() => update({ persona: loaded.defaultPersona })}
                 >
-                  Use it
+                  Use the default
                 </button>
               </small>
-            )}
-          </label>
-          <fieldset>
-            <legend>Quiet hours</legend>
-            <label class="assistant-job-enabled">
-              <input
-                type="checkbox"
-                checked={form.quietOn}
-                onChange={(event) =>
-                  update({ quietOn: event.currentTarget.checked })
-                }
-              />
-              <span>
-                Hold notifications during these hours (the Inbox still fills up;
-                what is still unread is sent when they end)
-              </span>
             </label>
-            {form.quietOn && (
-              <>
-                <div class="assistant-project-row">
-                  <label>
-                    <span>From</span>
+          </section>
+          <section
+            class="assistant-settings-section assistant-settings-schedule"
+            aria-label="Schedule and quiet hours"
+          >
+            <h3>Schedule and quiet hours</h3>
+            <label>
+              <span>Your time zone</span>
+              <select
+                value={form.timeZone}
+                onChange={(event) =>
+                  update({ timeZone: event.currentTarget.value })
+                }
+              >
+                {timeZoneOptions(form.timeZone).map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </select>
+              {deviceZone && deviceZone !== form.timeZone && (
+                <small>
+                  This device is on {deviceZone}.{" "}
+                  <button
+                    type="button"
+                    class="link-button"
+                    onClick={() => update({ timeZone: deviceZone })}
+                  >
+                    Use it
+                  </button>
+                </small>
+              )}
+            </label>
+            <fieldset>
+              <legend>Quiet hours</legend>
+              <label class="assistant-job-enabled">
+                <input
+                  type="checkbox"
+                  checked={form.quietOn}
+                  onChange={(event) =>
+                    update({ quietOn: event.currentTarget.checked })
+                  }
+                />
+                <span>
+                  Hold notifications during these hours (the Inbox still fills
+                  up; what is still unread is sent when they end)
+                </span>
+              </label>
+              {form.quietOn && (
+                <>
+                  <div class="assistant-project-row">
+                    <label>
+                      <span>From</span>
+                      <input
+                        type="time"
+                        value={form.quietStart}
+                        required
+                        onInput={(event) =>
+                          update({ quietStart: event.currentTarget.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Until</span>
+                      <input
+                        type="time"
+                        value={form.quietEnd}
+                        required
+                        onInput={(event) =>
+                          update({ quietEnd: event.currentTarget.value })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label class="assistant-job-enabled">
                     <input
-                      type="time"
-                      value={form.quietStart}
-                      required
-                      onInput={(event) =>
-                        update({ quietStart: event.currentTarget.value })
+                      type="checkbox"
+                      checked={form.allowApprovals}
+                      onChange={(event) =>
+                        update({ allowApprovals: event.currentTarget.checked })
                       }
                     />
+                    <span>
+                      Still notify me when something needs my approval
+                    </span>
                   </label>
-                  <label>
-                    <span>Until</span>
-                    <input
-                      type="time"
-                      value={form.quietEnd}
-                      required
-                      onInput={(event) =>
-                        update({ quietEnd: event.currentTarget.value })
-                      }
-                    />
-                  </label>
-                </div>
-                <label class="assistant-job-enabled">
-                  <input
-                    type="checkbox"
-                    checked={form.allowApprovals}
-                    onChange={(event) =>
-                      update({ allowApprovals: event.currentTarget.checked })
-                    }
-                  />
-                  <span>Still notify me when something needs my approval</span>
-                </label>
-              </>
-            )}
-          </fieldset>
+                </>
+              )}
+            </fieldset>
+          </section>
           {notice && (
             <p class="assistant-panel-notice" role="status">
               {notice}
@@ -360,12 +391,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <p>{error}</p>
             </div>
           )}
-          <footer>
+          <footer class="assistant-settings-actions">
             <button type="button" disabled={busy} onClick={onClose}>
               Close
             </button>
-            <button class="primary" type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Save"}
+            <button class="primary" type="submit" disabled={busy || !dirty}>
+              {busy ? "Saving…" : dirty ? "Save changes" : "No changes"}
             </button>
           </footer>
         </form>

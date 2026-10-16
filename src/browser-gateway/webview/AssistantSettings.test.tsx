@@ -91,11 +91,11 @@ describe("SettingsPanel", () => {
   it("shows storage per area and how long things are kept", async () => {
     stubFetch({ status: 200, body: {} });
     render(<SettingsPanel onClose={() => undefined} />);
-    const chats = await screen.findByText("Chats:");
-    expect(chats.parentElement?.textContent).toBe("Chats: 2.4 MB, 12 files");
-    expect(
-      screen.getByText("Project folders:").parentElement?.textContent,
-    ).toBe("Project folders: at least 10 B, 1 file");
+    const chats = await screen.findByText("Chats");
+    expect(chats.closest("li")?.textContent).toBe("Chats2.4 MB12 files");
+    expect(screen.getByText("Project folders").closest("li")?.textContent).toBe(
+      "Project foldersAt least 10 B1 file",
+    );
     expect(screen.getByText("Up to about 8 weeks.")).toBeTruthy();
     expect(formatBytes(0)).toBe("0 B");
     expect(formatBytes(15 * 1024)).toBe("15 KB");
@@ -108,10 +108,35 @@ describe("SettingsPanel", () => {
       body: { settings: { ...SETTINGS, name: "Matey", updatedAt: 6 } },
     });
     render(<SettingsPanel onClose={() => undefined} />);
+    const saveButton = (await screen.findByRole("button", {
+      name: "No changes",
+    })) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+    expect(
+      screen.getByRole("region", { name: "Identity and persona" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Schedule and quiet hours" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Storage" })).toBeTruthy();
     const name = await screen.findByDisplayValue("AgentLink Assistant");
     fireEvent.input(name, { target: { value: "Matey" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByText("Saved. New messages use these settings.");
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "No changes",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     expect(sent).toEqual([
       expect.objectContaining({ expectedUpdatedAt: 5, name: "Matey" }),
     ]);
@@ -125,7 +150,7 @@ describe("SettingsPanel", () => {
     render(<SettingsPanel onClose={() => undefined} />);
     await screen.findByText(/This device is on Australia\/Perth/u);
     fireEvent.click(screen.getByRole("button", { name: "Use it" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(sent).toEqual([
         expect.objectContaining({ timeZone: "Australia/Perth" }),
@@ -136,8 +161,9 @@ describe("SettingsPanel", () => {
   it("says plainly when the settings changed elsewhere", async () => {
     stubFetch({ status: 409, body: { error: "settings_changed" } });
     render(<SettingsPanel onClose={() => undefined} />);
-    await screen.findByDisplayValue("AgentLink Assistant");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const name = await screen.findByDisplayValue("AgentLink Assistant");
+    fireEvent.input(name, { target: { value: "Matey" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain(
         "These settings changed somewhere else.",

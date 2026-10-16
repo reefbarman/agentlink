@@ -2209,8 +2209,8 @@ html.quick-ask-document body {
   gap: 12px;
   width: min(560px, 100%);
   max-height: calc(100vh - 32px);
-  overflow: auto;
-  padding: 18px 20px;
+  overflow: hidden;
+  padding: 0;
   border: 1px solid var(--ag-border-2);
   border-radius: 16px;
   background: var(--ag-panel);
@@ -2220,8 +2220,23 @@ html.quick-ask-document body {
 
 .browser-shell.browser-shell-desktop .assistant-project-dialog > header {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  line-height: 1.5;
 }
 
 .browser-shell.browser-shell-desktop .assistant-project-dialog h2 {
@@ -2255,7 +2270,7 @@ html.quick-ask-document body {
 
 .browser-shell.browser-shell-desktop
   .assistant-project-form
-  :is(input:not([type="radio"]), select, textarea) {
+  :is(input:not([type="radio"]):not([type="checkbox"]), select, textarea) {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
@@ -2647,7 +2662,7 @@ html.quick-ask-document body {
 }
 
 .browser-shell.browser-shell-desktop .assistant-project-dialog.assistant-panel {
-  width: min(760px, 100%);
+  width: min(860px, 100%);
   min-height: min(420px, calc(100vh - 32px));
 }
 
@@ -3293,6 +3308,337 @@ html.quick-ask-document body {
   padding: 4px 10px;
   color: var(--ag-muted);
   font-size: 12px;
+}
+
+/* Shared management surfaces: readable sections, consistent controls, no
+   full-width checkboxes or unstyled nested tool lists. */
+.browser-shell.browser-shell-desktop .assistant-panel-body > * {
+  flex-shrink: 0;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-panel-body
+  :is(
+    .assistant-panel-action,
+    .assistant-job-actions > button,
+    .assistant-task-actions > button
+  ) {
+  min-height: 32px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-panel-body
+  .assistant-project-error {
+  padding: 12px;
+  border: 1px solid var(--vscode-errorForeground, #ff8f8f);
+  border-radius: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-description {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--ag-muted);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-body :is(h3, h4) {
+  margin: 0 0 10px;
+  color: var(--ag-title);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-project-form
+  :is(input[type="checkbox"], input[type="radio"]) {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0;
+  accent-color: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form label > span {
+  color: var(--ag-text);
+  font-weight: 500;
+}
+
+.browser-shell.browser-shell-desktop .assistant-project-form textarea {
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-panel-body
+  :is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--ag-accent);
+  outline-offset: 3px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-panel-body
+  :is(
+    .assistant-settings-section,
+    .assistant-storage,
+    .assistant-mcp-always-ask,
+    .assistant-task-summary
+  ) {
+  padding: 18px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+  background: var(--ag-bg);
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px 16px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ag-border);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-row strong {
+  color: var(--ag-text);
+  font-weight: 500;
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-row small {
+  min-width: 60px;
+  color: var(--ag-muted);
+  text-align: right;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-settings-retention-list
+  .assistant-settings-row {
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr);
+  align-items: start;
+  color: var(--ag-muted);
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-actions {
+  position: sticky;
+  bottom: -24px;
+  z-index: 1;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--ag-border);
+  background: var(--ag-panel);
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ag-accent-a35);
+  border-radius: 8px;
+  background: var(--ag-accent-a12);
+  color: var(--ag-accent-text);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-settings-section > header p {
+  margin: 0;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.assistant-list-toolbar, .assistant-filter-bar) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-list-search {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 8px;
+  background: var(--ag-bg);
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-filter-bar {
+  flex: 1;
+}
+
+.browser-shell.browser-shell-desktop .assistant-filter-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-filter-bar
+  button[aria-pressed="true"] {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+  color: var(--ag-accent-text);
+}
+
+.browser-shell.browser-shell-desktop .assistant-filter-bar button span {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.browser-shell.browser-shell-desktop :is(.assistant-job, .assistant-run) {
+  padding: 16px;
+  background: var(--ag-bg);
+}
+
+.browser-shell.browser-shell-desktop .assistant-job-main {
+  gap: 6px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-task-list
+  .assistant-job:has(.assistant-task-open:hover) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-task-list .assistant-task-open {
+  min-height: 64px;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-task-list
+  .assistant-run-status {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-tools {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-tools > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-tools code {
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-tools > li > select {
+  flex: none;
+  min-width: 80px;
+  padding: 6px 8px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 8px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+  font: inherit;
+}
+
+.browser-shell.browser-shell-desktop .assistant-link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ag-accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-empty {
+  gap: 12px;
+  padding: 48px 20px;
+  border: 1px dashed var(--ag-border-2);
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-panel-empty strong {
+  color: var(--ag-title);
+  font-size: 15px;
+}
+
+@media (max-width: 600px) {
+  .browser-shell.browser-shell-desktop .assistant-project-backdrop {
+    padding: 8px;
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-project-dialog {
+    max-height: calc(100dvh - 16px);
+    min-width: 0;
+    border-radius: 12px;
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-project-dialog > header,
+  .browser-shell.browser-shell-desktop .assistant-panel-body {
+    padding: 16px;
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-project-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-panel-actions {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .browser-shell.browser-shell-desktop .assistant-settings-actions {
+    bottom: -16px;
+  }
+
+  .browser-shell.browser-shell-desktop
+    .assistant-panel-body
+    :is(
+      .assistant-panel-action,
+      .assistant-job-actions > button,
+      .assistant-task-actions > button,
+      .assistant-filter-bar button
+    ) {
+    min-height: 40px;
+  }
+
+  .browser-shell.browser-shell-desktop
+    .assistant-panel-body
+    :is(.assistant-settings-section, .assistant-storage) {
+    padding: 14px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

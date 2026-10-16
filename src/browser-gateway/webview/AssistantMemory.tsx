@@ -162,17 +162,18 @@ export function MemoryPanel({
 
   return (
     <Dialog title="Memory" onClose={onClose} busy={busy} wide>
-      <p class="assistant-project-hint">
+      <p class="assistant-panel-description">
         What the Assistant remembers about you, from your own words in chats. It
         reads these as notes, never as instructions: a memory cannot approve
         anything or change a setting. Forgetting removes it from the Assistant's
         store; earlier chats and backups may still contain it, and anything
         already sent to a model provider cannot be recalled.
       </p>
-      <div class="assistant-panel-actions">
+      <div class="assistant-list-toolbar">
         <input
-          class="assistant-github-filter"
+          class="assistant-list-search"
           type="search"
+          aria-label="Search memories"
           placeholder="Search memories"
           value={query}
           onInput={(event) => setQuery(event.currentTarget.value)}
@@ -229,10 +230,13 @@ export function MemoryPanel({
       {memories && memories.length === 0 && (
         <div class="assistant-panel-empty">
           <i class="codicon codicon-lightbulb" aria-hidden="true" />
+          <strong>
+            {query.trim() ? "No matching memories" : "Nothing remembered yet"}
+          </strong>
           <p>
             {query.trim()
-              ? "Nothing remembered matches."
-              : "Nothing remembered yet. Tell the Assistant a preference in a chat and it will remember it."}
+              ? "Try a different search."
+              : "Tell the Assistant something worth remembering in a chat, and it will appear here."}
           </p>
         </div>
       )}

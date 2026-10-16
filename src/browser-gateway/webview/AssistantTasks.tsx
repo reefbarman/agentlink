@@ -449,6 +449,8 @@ function TaskList({
   openTask: (taskId: string) => void;
 }) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("all");
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -469,8 +471,71 @@ function TaskList({
     };
   }, [revision]);
 
+  const matchesFilter = (task: Task, value: string) => {
+    if (value === "active") return ACTIVE.includes(task.state);
+    if (value === "attention")
+      return ["warn", "bad"].includes(taskStateLabel(task.state).tone);
+    if (value === "finished")
+      return ["ready", "published", "cancelled"].includes(task.state);
+    return true;
+  };
+  const visible = (tasks ?? [])
+    .filter(
+      (task) =>
+        matchesFilter(task, filter) &&
+        `${task.objective} ${task.repository} ${task.branch}`
+          .toLowerCase()
+          .includes(query.trim().toLowerCase()),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
   return (
     <Dialog title="Tasks" onClose={onClose} wide>
+      <p class="assistant-panel-description">
+        Follow coding work from the first change to the pull request. Open a
+        task to review its checks or jump into its chat.
+      </p>
+      {tasks && tasks.length > 0 && (
+        <div class="assistant-list-toolbar">
+          <input
+            type="search"
+            class="assistant-list-search"
+            aria-label="Search tasks"
+            placeholder="Search tasks, repositories or branches…"
+            value={query}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+          />
+          <div
+            class="assistant-filter-bar"
+            role="group"
+            aria-label="Filter tasks"
+          >
+            {(
+              [
+                ["all", "All"],
+                ["active", "Active"],
+                ["attention", "Needs you"],
+                ["finished", "Finished"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                aria-pressed={filter === value}
+                onClick={() => setFilter(value)}
+              >
+                {label}{" "}
+                <span>
+                  {tasks.filter((task) => matchesFilter(task, value)).length}
+                </span>
+              </button>
+            ))}
+          </div>
+          <span class="assistant-job-meta" role="status">
+            {visible.length} of {tasks.length} tasks
+          </span>
+        </div>
+      )}
       {error && (
         <p class="assistant-project-error" role="alert">
           {error}
@@ -487,9 +552,25 @@ function TaskList({
               : "Coding tasks need projectsRoot in the server's configuration."}
           </p>
         </div>
+      ) : visible.length === 0 ? (
+        <div class="assistant-panel-empty">
+          <i class="codicon codicon-search" aria-hidden="true" />
+          <strong>No matching tasks</strong>
+          <p>Try another search or show all tasks.</p>
+          <button
+            type="button"
+            class="assistant-panel-action"
+            onClick={() => {
+              setQuery("");
+              setFilter("all");
+            }}
+          >
+            Clear filters
+          </button>
+        </div>
       ) : (
-        <ul class="assistant-job-list">
-          {tasks.map((task) => {
+        <ul class="assistant-job-list assistant-task-list">
+          {visible.map((task) => {
             const state = taskStateLabel(task.state);
             return (
               <li class="assistant-job" key={task.id}>

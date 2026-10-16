@@ -25,6 +25,12 @@ Assistant replies and final summaries in Desktop, VS Code and browser chat hide 
 
 Completed fenced code blocks (including Markdown and plain text) have a copy button at the block's bottom-right in Desktop, VS Code and browser chat. The button sits outside the scrolling code content, so scrolling within a wide block does not move it out of reach. It appears on hover or keyboard focus and stays visible on touch devices. Diagram and chart blocks also provide a copy button for their source.
 
+## Self-hosted AgentLink Assistant
+
+The Assistant's browser app provides chats alongside Tasks, Jobs, Inbox, GitHub, MCP, Memory and Settings panels. Management panels keep their header visible while their contents scroll, support keyboard focus containment, and return focus to the opener when closed. Escape closes the topmost panel unless an operation has disabled closing.
+
+Settings separates identity/persona, time zone/quiet hours, and storage/retention. Save changes is enabled after an edit. Tasks supports search by objective, repository or branch and filters for Active, Needs you and Finished, with the most recently updated tasks first. Jobs supports search by name, instructions or project. These controls organise existing work; they do not change approval rules or stop running sessions.
+
 ## Standalone CLI preview
 
 The [macOS Apple Silicon CLI preview](standalone-cli.md#github-release-preview) can run multi-turn coding sessions without VS Code or Electron. It supports Codex OAuth, OpenAI API keys, configured OpenAI-compatible endpoints, durable sessions partitioned by canonical project identity, project-relative bounded file inspection, terminal-reviewed baseline-hash writes and patches, exact durability evidence, reviewed non-interactive commands with observable retained processes, approved stdio and HTTPS MCP tools, up to two scoped background writers, optional managed TypeScript/JavaScript intelligence, overlapping CLI-writer rejection, explicit resume/delete, Ctrl+C cancellation, and conservative limits checked before every provider dispatch. See [Standalone CLI](standalone-cli.md).

@@ -244,6 +244,52 @@ describe("task helpers", () => {
 });
 
 describe("TasksPanel", () => {
+  it("filters by state, searches repository and branch, and clears an empty result", async () => {
+    stubFetch({
+      "GET /api/tasks": () => ({
+        enabled: true,
+        tasks: [
+          task({
+            id: "active",
+            objective: "Update styling",
+            state: "implementing",
+            branch: "agentlink/polish",
+          }),
+          task({
+            id: "blocked",
+            objective: "Repair build",
+            state: "blocked_auth",
+            repository: "https://github.com/owner/service",
+          }),
+          task({ id: "done", objective: "Ship docs", state: "published" }),
+        ],
+      }),
+    });
+    render(<TasksPanel revision={0} onClose={() => {}} />);
+    await screen.findByText("Update styling");
+    fireEvent.click(screen.getByRole("button", { name: /Needs you/ }));
+    expect(screen.getByText("Repair build")).toBeTruthy();
+    expect(screen.queryByText("Update styling")).toBeNull();
+    fireEvent.input(screen.getByRole("searchbox", { name: "Search tasks" }), {
+      target: { value: "does-not-exist" },
+    });
+    expect(screen.getByText("No matching tasks")).toBeTruthy();
+    fireEvent.click(screen.getByText("Clear filters"));
+    expect(screen.getByText("Ship docs")).toBeTruthy();
+    fireEvent.input(screen.getByRole("searchbox"), {
+      target: { value: "POLISH" },
+    });
+    expect(screen.getByText("Update styling")).toBeTruthy();
+    expect(screen.queryByText("Ship docs")).toBeNull();
+    fireEvent.input(screen.getByRole("searchbox"), {
+      target: { value: "owner/service" },
+    });
+    expect(screen.getByText("Repair build")).toBeTruthy();
+    fireEvent.input(screen.getByRole("searchbox"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /Finished/ }));
+    expect(screen.getByText("Ship docs")).toBeTruthy();
+    expect(screen.queryByText("Repair build")).toBeNull();
+  });
   it("lists tasks and opens one", async () => {
     stubFetch({
       "GET /api/tasks": () => ({

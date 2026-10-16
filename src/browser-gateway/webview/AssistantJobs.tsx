@@ -755,6 +755,7 @@ export function JobsPanel({
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [view, setView] = useState<JobsView>({ kind: "list" });
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
@@ -810,6 +811,12 @@ export function JobsPanel({
       setError(errorText(caught)),
     );
   };
+  const filteredJobs = jobs?.filter((job) => {
+    const searchText = `${job.name} ${job.prompt} ${projectLabel(job.projectId)}`;
+    return searchText
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase());
+  });
 
   if (view.kind === "edit") {
     return (
@@ -871,24 +878,45 @@ export function JobsPanel({
         </button>
       }
     >
+      <p class="assistant-panel-description">
+        Schedule prompts to run in a fresh chat, even when all windows are
+        closed.
+      </p>
+      {jobs && jobs.length > 0 && (
+        <div class="assistant-list-toolbar">
+          <input
+            class="assistant-list-search"
+            type="search"
+            aria-label="Search jobs"
+            placeholder="Search jobs"
+            value={query}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+          />
+        </div>
+      )}
       {error && (
         <p class="assistant-project-error" role="alert">
           {error}
         </p>
       )}
       {!jobs ? (
-        <p class="assistant-project-hint">{error ? "" : "Loading…"}</p>
+        <p class="assistant-panel-hint">{error ? "" : "Loading jobs…"}</p>
       ) : jobs.length === 0 ? (
         <div class="assistant-panel-empty">
           <i class="codicon codicon-history" aria-hidden="true" />
+          <strong>No jobs yet</strong>
           <p>
-            No jobs yet. A job sends a prompt on a schedule, each run in a new
-            chat, and works while every window is closed.
+            Create a job to run a prompt on a schedule. Each run starts in a new
+            chat and continues while every window is closed.
           </p>
+        </div>
+      ) : filteredJobs?.length === 0 ? (
+        <div class="assistant-panel-empty">
+          <p>No jobs match “{query.trim()}”. Try another name or prompt.</p>
         </div>
       ) : (
         <ul class="assistant-job-list">
-          {jobs.map((job) => {
+          {filteredJobs?.map((job) => {
             const active = job.activeRun;
             const last = job.lastRun && !active ? job.lastRun : undefined;
             return (

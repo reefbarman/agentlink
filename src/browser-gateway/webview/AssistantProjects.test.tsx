@@ -1,5 +1,6 @@
 import {
   AssistantProjectSwitcher,
+  Dialog,
   ProjectSettingsDialog,
   parseAllowList,
   summarizeProjectActivity,
@@ -30,6 +31,85 @@ const project = (
   repositories: [],
   settings: {},
   ...(activity ? { activity } : {}),
+});
+
+describe("Dialog keyboard navigation", () => {
+  it("contains keyboard focus and restores the opener on close", async () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <Dialog title="Test panel" onClose={onClose}>
+        <input aria-label="Name" />
+        <button type="button">Save</button>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByText("Save"));
+    fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+    expect(document.activeElement).toBe(screen.getByLabelText("Close"));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    opener.remove();
+  });
+
+  it("wraps from an expandable validation row and skips hidden controls", () => {
+    render(
+      <Dialog title="Checks" onClose={() => {}}>
+        <details>
+          <summary>Validation output</summary>
+          <button type="button">Hidden output action</button>
+        </details>
+        <input type="hidden" />
+      </Dialog>,
+    );
+    const summary = screen.getByText("Validation output");
+    const hidden = screen.getByText("Hidden output action");
+    // jsdom does not implement layout visibility. In a real browser a button
+    // inside closed details has checkVisibility() === false.
+    hidden.checkVisibility = () => false;
+    summary.focus();
+    fireEvent.keyDown(summary, { key: "Tab" });
+    expect(document.activeElement).toBe(screen.getByLabelText("Close"));
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(summary);
+  });
+
+  it("only dismisses the topmost panel and does not dismiss while busy", () => {
+    const outerClose = vi.fn();
+    const innerClose = vi.fn();
+    const { rerender } = render(
+      <>
+        <Dialog title="Outer" onClose={outerClose}>
+          Outer
+        </Dialog>
+        <Dialog title="Inner" onClose={innerClose} busy>
+          Inner
+        </Dialog>
+      </>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(outerClose).not.toHaveBeenCalled();
+    expect(innerClose).not.toHaveBeenCalled();
+    rerender(
+      <>
+        <Dialog title="Outer" onClose={outerClose}>
+          Outer
+        </Dialog>
+        <Dialog title="Inner" onClose={innerClose}>
+          Inner
+        </Dialog>
+      </>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(outerClose).not.toHaveBeenCalled();
+    expect(innerClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("summarizeProjectActivity", () => {
