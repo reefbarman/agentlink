@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-  "createdAt": "2026-10-16T00:37:43.304Z",
+  "sourceSha": "911aa1059aa2819e76a76519e1170e025f7f326b",
+  "createdAt": "2026-10-16T02:20:10.149Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,76 +10,64 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.31.2",
-      "baselineRef": "v1.31.2",
-      "reserved": "1.31.2",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "1.32.0",
+      "baselineRef": "v1.32.0",
+      "reserved": "1.32.0",
+      "commits": ["911aa1059aa2819e76a76519e1170e025f7f326b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.32.0",
+      "version": "1.33.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.32.0",
+      "tag": "v1.33.0",
       "notes": [
         {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "sha": "911aa1059aa2819e76a76519e1170e025f7f326b",
+          "subject": "feat(guardian): keep human answers in Jev shadow evidence",
+          "summary": "TypeSafe Guardian shadow mode now keeps up to 8 recorded human answers, redacting per field and shortening only long agent-written context, and session telemetry reports per-cohort results.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.18.2",
-      "baselineRef": "desktop-v0.18.2",
-      "reserved": "0.18.2",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "0.19.0",
+      "baselineRef": "desktop-v0.19.0",
+      "reserved": "0.19.0",
+      "commits": ["911aa1059aa2819e76a76519e1170e025f7f326b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.19.0",
+      "version": "0.20.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.19.0",
+      "tag": "desktop-v0.20.0",
       "notes": [
         {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+          "sha": "911aa1059aa2819e76a76519e1170e025f7f326b",
+          "subject": "feat(guardian): keep human answers in Jev shadow evidence",
+          "summary": "TypeSafe Guardian shadow mode now keeps up to 8 recorded human answers, redacting per field and shortening only long agent-written context, and session telemetry reports per-cohort results.}]}</br>",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.18.0",
-      "baselineRef": "cli-v0.18.0",
-      "reserved": "0.18.0",
-      "commits": ["626c75fb4b3c87cef97840c3a12a8f82383bca23"],
+      "published": "0.19.0",
+      "baselineRef": "cli-v0.19.0",
+      "reserved": "0.19.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.19.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.19.0",
-      "notes": [
-        {
-          "sha": "626c75fb4b3c87cef97840c3a12a8f82383bca23",
-          "subject": "feat(guardian): give Jev shadow more evidence and pin jev-1.14.0",
-          "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
       "published": "0.13.0",
@@ -115,6 +103,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The optional TypeSafe Guardian shadow evaluation now defaults to the pinned jev-1.14.0 model and sends secret-redacted script bodies and environment facts with reworded questions; shadow results still never affect approvals.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "911aa1059aa2819e76a76519e1170e025f7f326b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "TypeSafe Guardian shadow mode now keeps up to 8 recorded human answers, redacting per field and shortening only long agent-written context, and session telemetry reports per-cohort results.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
