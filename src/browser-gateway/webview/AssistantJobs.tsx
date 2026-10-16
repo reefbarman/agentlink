@@ -88,6 +88,20 @@ export interface JobRun {
     notified?: boolean;
     heldForBriefing?: boolean;
   };
+  /** A briefing run: what it covered and how well it was sourced. */
+  briefing?: {
+    since: number;
+    through: number;
+    watchChanges: number;
+    unsourced?: number;
+  };
+}
+
+/** A briefing job's shape; its prompt is the owner's notes. */
+export interface JobBriefing {
+  sections: Array<"watches" | "news" | "calendar" | "email" | "open_items">;
+  topics: string[];
+  maxWords: number;
 }
 
 /** A watch job's page; its prompt is the owner's "what matters" note. */
@@ -111,6 +125,7 @@ export interface Job {
   lastRun?: JobRun;
   activeRun?: JobRun;
   watch?: JobWatch;
+  briefing?: JobBriefing;
   watchState?: {
     checkedAt?: number;
     snapshots: number;
@@ -142,6 +157,7 @@ export interface InboxEntry {
     | "audit_checkpoint"
     | "mcp_changed"
     | "watch_changed"
+    | "briefing"
     | "job_noisy";
   createdAt: number;
   title: string;
@@ -204,6 +220,7 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   audit_checkpoint: "shield",
   mcp_changed: "plug",
   watch_changed: "eye",
+  briefing: "megaphone",
   job_noisy: "pulse",
 };
 
@@ -226,6 +243,32 @@ export function watchOutcomeLabel(run: JobRun): string | undefined {
         ? "Changed, told you"
         : "Changed, kept for the briefing";
   }
+}
+
+const BRIEFING_SECTION_NAMES: Record<JobBriefing["sections"][number], string> =
+  {
+    watches: "watches",
+    news: "news",
+    calendar: "calendar",
+    email: "email",
+    open_items: "open items",
+  };
+
+/** A briefing's sections and topics in words. */
+export function describeBriefing(briefing: JobBriefing): string {
+  const sections = briefing.sections
+    .map((section) => BRIEFING_SECTION_NAMES[section])
+    .join(", ");
+  return `${sections}${briefing.topics.length > 0 ? ` · topics: ${briefing.topics.join(", ")}` : ""} · about ${briefing.maxWords} words`;
+}
+
+/** A briefing run's coverage in words, for its history. */
+export function briefingRunLabel(run: JobRun): string | undefined {
+  const briefing = run.briefing;
+  if (!briefing || run.status !== "completed") return undefined;
+  const changes = `${briefing.watchChanges} watch ${briefing.watchChanges === 1 ? "change" : "changes"}`;
+  if (!briefing.unsourced) return changes;
+  return `${changes} · ${briefing.unsourced} ${briefing.unsourced === 1 ? "item" : "items"} without a source`;
 }
 
 /** A URL's host, for a short label. */
@@ -862,6 +905,12 @@ export function JobsPanel({
                         : ""}
                     </span>
                   )}
+                  {job.briefing && (
+                    <span class="assistant-job-meta">
+                      <i class="codicon codicon-megaphone" aria-hidden="true" />{" "}
+                      Briefing: {describeBriefing(job.briefing)}
+                    </span>
+                  )}
                   <span class="assistant-job-meta">
                     {job.watch ? "Checks " : ""}
                     {describeSchedule(job.schedule)} ·{" "}
@@ -1041,6 +1090,7 @@ function JobHistory({
                     ? " · caught up"
                     : ""}
                 {watchOutcomeLabel(run) ? ` · ${watchOutcomeLabel(run)}` : ""}
+                {briefingRunLabel(run) ? ` · ${briefingRunLabel(run)}` : ""}
                 {usageLabel(run) ? ` · ${usageLabel(run)}` : ""}
               </span>
             </span>
@@ -1099,7 +1149,9 @@ export function JobForm({
       return setError(
         job?.watch
           ? "Say what matters about the page."
-          : "Write what each run should ask.",
+          : job?.briefing
+            ? "Add a note for the briefing."
+            : "Write what each run should ask.",
       );
     }
     const parsed = scheduleFromForm(form);
@@ -1158,7 +1210,9 @@ export function JobForm({
         <span>
           {job?.watch
             ? "What matters (a model reads only changes, against this)"
-            : "Prompt (sent to a new chat on each run)"}
+            : job?.briefing
+              ? "Notes for each briefing (sections and topics: ask in a chat)"
+              : "Prompt (sent to a new chat on each run)"}
         </span>
         <textarea
           rows={5}

@@ -207,6 +207,13 @@ export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
         partial: true,
         defaultTimeZone: options.defaultTimeZone,
       });
+      // A job is a watch, a briefing, or neither.
+      if (
+        (patch.watch && current.briefing) ||
+        (patch.briefing && current.watch)
+      ) {
+        throw new HttpError(400, "job_kind_conflict");
+      }
       const model =
         patch.model === null ? undefined : (patch.model ?? current.model);
       const reasoningEffort =

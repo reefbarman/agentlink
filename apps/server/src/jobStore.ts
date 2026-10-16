@@ -18,6 +18,12 @@ import {
   type SessionApprovalMode,
 } from "./SessionApprovalModes.js";
 import {
+  BriefingSpecError,
+  parseBriefingSpec,
+  type BriefingRunRecord,
+  type BriefingSpec,
+} from "./briefingSpec.js";
+import {
   WatchTargetError,
   parseWatchTarget,
   type WatchRunRecord,
@@ -56,6 +62,11 @@ export interface JobFields {
    * it changed. `prompt` is then the owner's "what matters" note.
    */
   readonly watch?: WatchTarget;
+  /**
+   * A briefing: each run gathers watch changes and open items first and
+   * asks for a short, sourced briefing. `prompt` is then the owner's notes.
+   */
+  readonly briefing?: BriefingSpec;
 }
 
 export interface JobDefinition extends JobFields {
@@ -130,6 +141,8 @@ export interface JobRun {
   readonly usage?: JobRunUsage;
   /** A watch run: what its check found. */
   readonly watch?: WatchRunRecord;
+  /** A briefing run: what it covered and how well it was sourced. */
+  readonly briefing?: BriefingRunRecord;
 }
 
 export class JobInputError extends Error {
@@ -187,6 +200,7 @@ export function parseJobFields(
     "reasoningEffort",
     "approvalMode",
     "watch",
+    "briefing",
   ]);
   if (Object.keys(body).some((key) => !known.has(key))) {
     throw new JobInputError("job_field_unknown");
@@ -289,6 +303,20 @@ export function parseJobFields(
       }
       throw error;
     }
+  }
+  if (has("briefing")) {
+    try {
+      fields.briefing = parseBriefingSpec(body.briefing);
+    } catch (error) {
+      if (error instanceof BriefingSpecError) {
+        throw new JobInputError(error.code);
+      }
+      throw error;
+    }
+  }
+  // A job is a watch, a briefing, or neither.
+  if (has("watch") && has("briefing")) {
+    throw new JobInputError("job_kind_conflict");
   }
   return fields as JobPatch | JobFields;
 }

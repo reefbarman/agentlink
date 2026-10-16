@@ -47,6 +47,8 @@ export type InboxEntryKind =
   | "mcp_changed"
   /** A watch found a change that matters. */
   | "watch_changed"
+  /** A briefing arrived. */
+  | "briefing"
   /** A job's run used far more than usual, or watches told you a lot today. */
   | "job_noisy";
 
@@ -107,7 +109,8 @@ interface StoredInbox {
  */
 export function inboxEntryForRun(
   run: JobRun,
-  job: Pick<JobDefinition, "name"> & Partial<Pick<JobDefinition, "watch">>,
+  job: Pick<JobDefinition, "name"> &
+    Partial<Pick<JobDefinition, "watch" | "briefing">>,
   /** The job's run before this one, for a watch that keeps failing. */
   previous?: JobRun,
 ): NewInboxEntry | undefined {
@@ -119,6 +122,18 @@ export function inboxEntryForRun(
   };
   const body = (text: string | undefined) =>
     text ? { body: truncate(text, MAX_BODY_LENGTH) } : {};
+  if (job.briefing && run.status === "completed") {
+    const unsourced = run.briefing?.unsourced ?? 0;
+    return {
+      ...base,
+      kind: "briefing",
+      title:
+        unsourced > 0
+          ? `${job.name} (${unsourced} ${unsourced === 1 ? "item" : "items"} without a source)`
+          : job.name,
+      ...body(run.summary),
+    };
+  }
   if (job.watch) {
     // A watch tells you about relevant changes only, and about a page it
     // cannot read once, not every check.

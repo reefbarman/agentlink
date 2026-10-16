@@ -86,7 +86,7 @@ export interface JobRunnerOptions {
     job: JobDefinition,
     run: JobRun,
     text: string | undefined,
-  ) => Promise<Partial<Pick<JobRun, "summary" | "watch">>>;
+  ) => Promise<Partial<Pick<JobRun, "summary" | "watch" | "briefing">>>;
   /** A job was deleted: drop what else is kept for it. */
   readonly onJobDeleted?: (jobId: string) => void;
   /** A run a previous process left open, now recorded as interrupted. */
@@ -149,11 +149,11 @@ export type RunPreparation =
         readonly error?: string;
         readonly errorDetail?: string;
       };
-      readonly record?: Partial<Pick<JobRun, "watch">>;
+      readonly record?: Partial<Pick<JobRun, "watch" | "briefing">>;
     }
   | {
       readonly prompt: string;
-      readonly record?: Partial<Pick<JobRun, "watch">>;
+      readonly record?: Partial<Pick<JobRun, "watch" | "briefing">>;
     };
 
 type TurnResult = Extract<
@@ -545,7 +545,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         final.status === "blocked_quota")
         ? options.failureDetail?.(job.projectId, runSessionId)
         : undefined);
-    let finished: Partial<Pick<JobRun, "summary" | "watch">> = {};
+    let finished: Partial<Pick<JobRun, "summary" | "watch" | "briefing">> = {};
     if (final.status === "completed" && runSessionId && options.finishRun) {
       finished = await options
         .finishRun(job, entry.run, final.text)
@@ -567,6 +567,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(finished.summary ? { summary: summarize(finished.summary) } : {}),
       ...(finished.watch ? { watch: finished.watch } : {}),
+      ...(finished.briefing ? { briefing: finished.briefing } : {}),
     });
     entry.controller.abort(new Error("job_run_finished"));
     log(

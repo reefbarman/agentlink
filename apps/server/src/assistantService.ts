@@ -109,6 +109,7 @@ import {
   type NewInboxEntry,
 } from "./inboxStore.js";
 import { unusualUsage } from "./jobUsage.js";
+import { briefingOpenItems, createBriefings } from "./briefings.js";
 import { createWatcher, type Watcher } from "./watches.js";
 import { openWatchStore } from "./watchStore.js";
 import { createPushRoutes } from "./pushRoutes.js";
@@ -1874,6 +1875,27 @@ export async function startAssistantService(
       policy: (projectId) => projectNetworkPolicy(catalog.get(projectId)),
       timeZone: () => persona.get().timeZone,
     });
+    // Briefings gather what the server knows itself before their turn.
+    const briefings = createBriefings({
+      watchChanges: (since, through) =>
+        watchStore.all().flatMap((state) => {
+          const name = jobStore.get(state.jobId)?.name ?? "A watch";
+          return state.findings
+            .filter((finding) => finding.at > since && finding.at <= through)
+            .map((finding) => ({
+              at: finding.at,
+              watchName: name,
+              summary: finding.summary,
+              url: finding.url,
+              notified: finding.notified,
+            }));
+        }),
+      openItems: () => briefingOpenItems(taskStore.list(), jobStore),
+      webSearch: (projectId) =>
+        projectNetworkPolicy(catalog.get(projectId)).preset === "open" &&
+        (Boolean(config.web?.searxngUrl) || codex !== undefined),
+      timeZone: () => persona.get().timeZone,
+    });
     // Each run is a new chat in its project, acting for the owner.
     const jobs = createJobRunner({
       store: jobStore,
@@ -1887,6 +1909,13 @@ export async function startAssistantService(
         turnFailures.take(projectId, sessionId),
       paused: workPaused,
       prepareRun: async (job, _run, signal) => {
+        if (job.briefing) {
+          const prepared = briefings.prepare(job, jobStore.runs(job.id));
+          return {
+            prompt: prepared.prompt,
+            record: { briefing: prepared.record },
+          };
+        }
         if (!job.watch) return undefined;
         const check = await watcher.check(job, signal);
         switch (check.kind) {
@@ -1909,6 +1938,10 @@ export async function startAssistantService(
         }
       },
       finishRun: async (job, run, text) => {
+        if (job.briefing) {
+          const briefing = briefings.finish(run, text);
+          return briefing ? { briefing } : {};
+        }
         if (!job.watch || run.watch?.outcome !== "changed") return {};
         const judged = await watcher.judge(job, run, text);
         if (judged.noisy) {

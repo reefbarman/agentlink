@@ -429,6 +429,52 @@ describe("watch_page", () => {
     expect(store.get(job!.id)?.prompt).toBe(release.whatMatters);
   });
 
+  it("schedule_briefing proposes the defaults on a card and saves only on approval", async () => {
+    const { store, prepare, approve, byName } = await setup();
+    const input = { topics: ["games", "tech"] };
+    expect(byName("schedule_briefing").validate(input).valid).toBe(true);
+    const approval = await prepare("schedule_briefing", input);
+    expect(approval).toMatchObject({
+      decision: "require_user",
+      summary:
+        'Brief you "Daily briefing": every day at 07:00 (Australia/Sydney)?',
+    });
+    const text = (approval as { displayContent: { text: string } })
+      .displayContent.text;
+    expect(text).toContain("Schedule a briefing:");
+    expect(text).toContain(
+      "Sections: watch changes, news, calendar, email, your open items",
+    );
+    expect(text).toContain("News topics: games, tech");
+    expect(text).toContain(
+      "Length: about 300 words, every item with a source link",
+    );
+    expect(store.list()).toHaveLength(0);
+    await approve("schedule_briefing", approval);
+    const [job] = store.list();
+    expect(job).toMatchObject({
+      name: "Daily briefing",
+      approvalMode: "ask",
+      schedule: { kind: "daily", time: "07:00", timeZone: "Australia/Sydney" },
+      briefing: { topics: ["games", "tech"], maxWords: 300 },
+    });
+
+    const change = await prepare("schedule_briefing", {
+      jobId: job!.id,
+      time: "06:30",
+      maxWords: 200,
+    });
+    const changeText = (change as { displayContent: { text: string } })
+      .displayContent.text;
+    expect(changeText).toContain(
+      "Schedule: every day at 07:00 (Australia/Sydney) → every day at 06:30 (Australia/Sydney)",
+    );
+    expect(changeText).toContain("Length: about 300 words → about 200 words");
+    await expect(
+      prepare("watch_page", { jobId: job!.id, notifyPerDay: 1 }),
+    ).resolves.toMatchObject({ decision: "deny" });
+  });
+
   it("refuses private addresses, odd selectors and ordinary jobs", async () => {
     const { store, prepare } = await setup();
     await expect(

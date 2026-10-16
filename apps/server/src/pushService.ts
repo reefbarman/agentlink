@@ -167,6 +167,7 @@ const ENTRY_DESCRIPTIONS: Readonly<Record<InboxEntry["kind"], string>> = {
   audit_checkpoint: "The audit log needs attention. Open the Inbox to see why.",
   mcp_changed: "MCP tools changed and ask again. Open the Inbox to see which.",
   watch_changed: "Something you watch changed. Open it to see what.",
+  briefing: "Your briefing is ready. Open it to read it.",
   job_noisy: "A job or watch is busier than usual. Open the Inbox to see it.",
 };
 

@@ -35,6 +35,15 @@ import {
 import { SESSION_APPROVAL_MODES } from "./SessionApprovalModes.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import {
+  BRIEFING_SECTIONS,
+  DEFAULT_BRIEFING_WORDS,
+  MAX_BRIEFING_TOPICS,
+  MAX_BRIEFING_WORDS,
+  MIN_BRIEFING_WORDS,
+  describeBriefingSections,
+  type BriefingSpec,
+} from "./briefingSpec.js";
+import {
   DEFAULT_WATCH_NOTIFY_PER_DAY,
   MAX_WATCH_NOTIFY_PER_DAY,
   type WatchTarget,
@@ -57,10 +66,20 @@ import {
 export const JOB_TOOL_NAMES = [
   "schedule_job",
   "watch_page",
+  "schedule_briefing",
   "delete_job",
 ] as const;
 /** How often a new watch checks, unless asked otherwise. */
 export const DEFAULT_WATCH_INTERVAL_MINUTES = 60;
+/** When a new briefing arrives, unless asked otherwise (owner's time zone). */
+export const DEFAULT_BRIEFING_TIME = "07:00";
+const DEFAULT_BRIEFING_NAME = "Daily briefing";
+const DEFAULT_BRIEFING_NOTES = "Keep it friendly and to the point.";
+
+/** What a job is, in words. */
+function jobNoun(job: Pick<JobFields, "watch" | "briefing">): string {
+  return job.watch ? "watch" : job.briefing ? "briefing" : "scheduled job";
+}
 /** Shorter than the API's limit so the approval card shows all of it. */
 export const MAX_TOOL_PROMPT_LENGTH = 3_000;
 const MAX_LISTED_MODELS = 20;
@@ -165,7 +184,18 @@ export function createJobTools(options: JobToolsOptions): JobTools {
       case "watch_notify_invalid":
         return `notifyPerDay must be a whole number from 0 to ${MAX_WATCH_NOTIFY_PER_DAY}`;
       case "not_a_watch":
-        return "that job is not a watch; change it with schedule_job";
+        return "that job is not a watch; change it with the tool that made it";
+      case "not_a_briefing":
+        return "that job is not a briefing; change it with the tool that made it";
+      case "briefing_invalid":
+      case "briefing_sections_invalid":
+        return `sections must be a non-empty list of distinct ${BRIEFING_SECTIONS.map((section) => `"${section}"`).join(", ")}`;
+      case "briefing_topics_invalid":
+        return `topics must be at most ${MAX_BRIEFING_TOPICS} short phrases (up to 80 characters each)`;
+      case "briefing_length_invalid":
+        return `maxWords must be a whole number from ${MIN_BRIEFING_WORDS} to ${MAX_BRIEFING_WORDS}`;
+      case "job_kind_conflict":
+        return "a job is a watch or a briefing, not both";
       default:
         return code;
     }
@@ -203,32 +233,50 @@ export function createJobTools(options: JobToolsOptions): JobTools {
   };
 
   const describeJob = (fields: JobFields, at: number): string[] =>
-    fields.watch
+    fields.briefing
       ? [
           `Name: ${fields.name}`,
-          `Page: ${fields.watch.url}`,
-          `Part of the page: ${fields.watch.selector ? `elements matching "${fields.watch.selector}"` : "its main text (or a feed's items)"}`,
-          `Checks: ${describeSchedule(fields.schedule)}, without a model; a model is asked only when it changed`,
-          `Tells you: ${describeNotifyCap(fields.watch.notifyPerDay)}`,
+          `Arrives: ${describeSchedule(fields.schedule)}`,
+          `Sections: ${describeBriefingSections(fields.briefing.sections)}`,
+          ...(fields.briefing.sections.includes("news")
+            ? [
+                `News topics: ${fields.briefing.topics.length > 0 ? fields.briefing.topics.join(", ") : "none yet"}`,
+              ]
+            : []),
+          `Length: about ${fields.briefing.maxWords} words, every item with a source link`,
           fields.enabled
-            ? `First check: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
-            : "Paused: it will not check until it is turned on",
+            ? `First briefing: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+            : "Paused: it will not arrive until it is turned on",
           `Project: ${projectName(fields.projectId)}`,
-          "What matters:",
+          "Your notes:",
           fields.prompt,
         ]
-      : [
-          `Name: ${fields.name}`,
-          `Project: ${projectName(fields.projectId)}`,
-          `Schedule: ${describeSchedule(fields.schedule)}`,
-          fields.enabled
-            ? `First run: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
-            : "Paused: it will not run until it is turned on",
-          `Approvals: ${describeApprovalMode(fields.approvalMode)}`,
-          `Model: ${fields.model ?? "the project's default"}${fields.reasoningEffort ? `, reasoning ${fields.reasoningEffort}` : ""}`,
-          "Prompt for each run:",
-          fields.prompt,
-        ];
+      : fields.watch
+        ? [
+            `Name: ${fields.name}`,
+            `Page: ${fields.watch.url}`,
+            `Part of the page: ${fields.watch.selector ? `elements matching "${fields.watch.selector}"` : "its main text (or a feed's items)"}`,
+            `Checks: ${describeSchedule(fields.schedule)}, without a model; a model is asked only when it changed`,
+            `Tells you: ${describeNotifyCap(fields.watch.notifyPerDay)}`,
+            fields.enabled
+              ? `First check: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+              : "Paused: it will not check until it is turned on",
+            `Project: ${projectName(fields.projectId)}`,
+            "What matters:",
+            fields.prompt,
+          ]
+        : [
+            `Name: ${fields.name}`,
+            `Project: ${projectName(fields.projectId)}`,
+            `Schedule: ${describeSchedule(fields.schedule)}`,
+            fields.enabled
+              ? `First run: ${formatInstant(firstRun(fields.schedule, at), timeZoneOf(fields.schedule, options.defaultTimeZone))}`
+              : "Paused: it will not run until it is turned on",
+            `Approvals: ${describeApprovalMode(fields.approvalMode)}`,
+            `Model: ${fields.model ?? "the project's default"}${fields.reasoningEffort ? `, reasoning ${fields.reasoningEffort}` : ""}`,
+            "Prompt for each run:",
+            fields.prompt,
+          ];
 
   const describeChanges = (
     current: JobDefinition,
@@ -295,11 +343,30 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         describeNotifyCap(patch.watch.notifyPerDay),
       );
     }
+    if (patch.briefing !== undefined && current.briefing) {
+      change(
+        "Sections",
+        describeBriefingSections(current.briefing.sections),
+        describeBriefingSections(patch.briefing.sections),
+      );
+      change(
+        "News topics",
+        current.briefing.topics.join(", ") || "none",
+        patch.briefing.topics.join(", ") || "none",
+      );
+      change(
+        "Length",
+        `about ${current.briefing.maxWords} words`,
+        `about ${patch.briefing.maxWords} words`,
+      );
+    }
     if (patch.prompt !== undefined && patch.prompt !== current.prompt) {
       lines.push(
         current.watch
           ? "New note on what matters:"
-          : "New prompt for each run:",
+          : current.briefing
+            ? "New notes:"
+            : "New prompt for each run:",
         patch.prompt,
       );
     }
@@ -343,7 +410,11 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         };
       }
       const { jobId, ...body } =
-        toolName === "watch_page" ? watchInput(input) : input;
+        toolName === "watch_page"
+          ? watchInput(input)
+          : toolName === "schedule_briefing"
+            ? briefingInput(input)
+            : input;
       if (jobId !== undefined) {
         const current = requireJob(jobId);
         const patch = parseJobFields(body, {
@@ -353,7 +424,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         assertRunnable(merged(current, patch));
         const changes = describeChanges(current, patch, at);
         if (changes.length === 0) throw new JobInputError("nothing_to_change");
-        const noun = current.watch ? "watch" : "scheduled job";
+        const noun = jobNoun(current);
         const display: JobChangeDisplay = {
           kind: JOB_CHANGE_DISPLAY_KIND,
           action: "update",
@@ -387,7 +458,11 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         action: "create",
         jobName: fields.name,
         text: [
-          fields.watch ? "Watch a page:" : "Create a scheduled job:",
+          fields.watch
+            ? "Watch a page:"
+            : fields.briefing
+              ? "Schedule a briefing:"
+              : "Create a scheduled job:",
           "",
           ...describeJob(fields, at),
         ].join("\n"),
@@ -396,7 +471,9 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         decision: "require_user",
         summary: fields.watch
           ? `Watch "${fields.name}": ${fields.watch.url}?`
-          : `Schedule "${fields.name}": ${describeSchedule(fields.schedule)}?`,
+          : fields.briefing
+            ? `Brief you "${fields.name}": ${describeSchedule(fields.schedule)}?`
+            : `Schedule "${fields.name}": ${describeSchedule(fields.schedule)}?`,
         displayContent: display,
         preparedInput: preparedInput({ action: "create", fields }),
       };
@@ -475,7 +552,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
 
   const applied = (job: JobDefinition, verb: string): HostToolResult => ({
     modelContent: [
-      `${verb} the ${job.watch ? "watch" : "scheduled job"} "${job.name}" (jobId ${job.id}).`,
+      `${verb} the ${jobNoun(job)} "${job.name}" (jobId ${job.id}).`,
       `${job.watch ? "Checks" : "Schedule"}: ${describeSchedule(job.schedule)}.`,
       job.enabled
         ? job.nextRunAt !== undefined
@@ -484,10 +561,81 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         : "It is paused.",
       job.watch
         ? "The first check only remembers the page. After that, a change that matters goes to the owner's Inbox (up to the daily limit); others wait for the next briefing."
-        : "Each run is a new chat in its project; the owner sees results in the Inbox.",
+        : job.briefing
+          ? "Each briefing is a new chat in its project and arrives in the owner's Inbox."
+          : "Each run is a new chat in its project; the owner sees results in the Inbox.",
     ].join("\n"),
     displayContent: { jobId: job.id, action: verb.toLowerCase() },
   });
+
+  /** `schedule_briefing` input as job fields (a change merges the spec). */
+  const briefingInput = (
+    input: Readonly<Record<string, unknown>>,
+  ): Record<string, unknown> => {
+    const {
+      jobId,
+      time,
+      days,
+      timeZone,
+      sections,
+      topics,
+      maxWords,
+      notes,
+      ...rest
+    } = input;
+    const current = jobId !== undefined ? requireJob(jobId) : undefined;
+    if (current && !current.briefing) {
+      throw new JobInputError("not_a_briefing");
+    }
+    const body: Record<string, unknown> = { ...rest };
+    if (jobId !== undefined) body.jobId = jobId;
+    if (notes !== undefined) body.prompt = notes;
+    if (
+      !current ||
+      time !== undefined ||
+      days !== undefined ||
+      timeZone !== undefined
+    ) {
+      const previous = current?.schedule;
+      const previousTime =
+        previous && previous.kind !== "interval" ? previous.time : undefined;
+      const previousZone =
+        previous && previous.kind !== "interval"
+          ? previous.timeZone
+          : undefined;
+      const previousDays =
+        previous?.kind === "weekly" ? previous.days : undefined;
+      const nextDays = days ?? previousDays;
+      body.schedule = {
+        kind: nextDays ? "weekly" : "daily",
+        time: time ?? previousTime ?? DEFAULT_BRIEFING_TIME,
+        ...(nextDays ? { days: nextDays } : {}),
+        ...((timeZone ?? previousZone)
+          ? { timeZone: timeZone ?? previousZone }
+          : {}),
+      };
+    }
+    if (
+      !current ||
+      sections !== undefined ||
+      topics !== undefined ||
+      maxWords !== undefined
+    ) {
+      const previous: Partial<BriefingSpec> = current?.briefing ?? {};
+      body.briefing = {
+        sections: sections ?? previous.sections ?? [...BRIEFING_SECTIONS],
+        topics: topics ?? previous.topics ?? [],
+        maxWords: maxWords ?? previous.maxWords ?? DEFAULT_BRIEFING_WORDS,
+      };
+    }
+    if (!current) {
+      body.name ??= DEFAULT_BRIEFING_NAME;
+      body.prompt ??= DEFAULT_BRIEFING_NOTES;
+      // A briefing only reads; anything more asks the owner.
+      body.approvalMode = "ask";
+    }
+    return body;
+  };
 
   /** `watch_page` input as job fields (a change merges the watch target). */
   const watchInput = (
@@ -562,7 +710,12 @@ export function createJobTools(options: JobToolsOptions): JobTools {
             const last = store.runs(job.id)[0];
             const zone = timeZoneOf(job.schedule, options.defaultTimeZone);
             return [
-              `- ${job.name} (jobId ${job.id})${job.watch ? " [watch]" : ""}`,
+              `- ${job.name} (jobId ${job.id})${job.watch ? " [watch]" : job.briefing ? " [briefing]" : ""}`,
+              ...(job.briefing
+                ? [
+                    `  Briefing: ${describeBriefingSections(job.briefing.sections)}; topics: ${job.briefing.topics.join(", ") || "none"}; about ${job.briefing.maxWords} words`,
+                  ]
+                : []),
               ...(job.watch
                 ? [
                     `  Watches: ${job.watch.url}${job.watch.selector ? ` (${job.watch.selector})` : ""}; tells you ${describeNotifyCap(job.watch.notifyPerDay)}`,
@@ -579,7 +732,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
                   ]
                 : []),
               `  Approvals: ${job.approvalMode}; model: ${job.model ?? "project default"}`,
-              `  ${job.watch ? "What matters" : "Prompt"}: ${oneLine(job.prompt, 300)}`,
+              `  ${job.watch ? "What matters" : job.briefing ? "Notes" : "Prompt"}: ${oneLine(job.prompt, 300)}`,
             ].join("\n");
           })
           .join("\n"),
@@ -728,6 +881,80 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     handler: async (input) => applyPrepared(input),
   });
 
+  const scheduleBriefing = defineTool({
+    name: "schedule_briefing",
+    description: `Schedule a regular briefing for the owner ("brief me every morning", "a daily roundup of games and tech news"), or change one by passing its jobId (from list_jobs) with only the fields to change. Each briefing is a short chat at the set time that pulls together the sections asked for: changes the owner's watches found since the last briefing, news on the topics (with web search), calendar and email (once connected), and things waiting for the owner in the Assistant. Every item carries a source link, and it lands in the Inbox. Defaults: every day at ${DEFAULT_BRIEFING_TIME} in the owner's time zone, every section, about ${DEFAULT_BRIEFING_WORDS} words. The owner approves the exact briefing first, so propose it directly.`,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        jobId: {
+          type: "string",
+          description: "Change this briefing; omit to create a new one",
+        },
+        name: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_JOB_NAME_LENGTH,
+          description: `Short name (default "${DEFAULT_BRIEFING_NAME}")`,
+        },
+        time: {
+          type: "string",
+          description: `24-hour "HH:MM" it arrives (default ${DEFAULT_BRIEFING_TIME})`,
+        },
+        days: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string", enum: [...WEEKDAYS] },
+          description: "Only on these days; omit for every day",
+        },
+        timeZone: {
+          type: "string",
+          description: `IANA time zone; omit for the owner's (${options.defaultTimeZone})`,
+        },
+        sections: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string", enum: [...BRIEFING_SECTIONS] },
+          description: "Sections in order (default all)",
+        },
+        topics: {
+          type: "array",
+          maxItems: MAX_BRIEFING_TOPICS,
+          items: { type: "string", minLength: 1, maxLength: 80 },
+          description: "News topics, in the owner's words",
+        },
+        maxWords: {
+          type: "integer",
+          minimum: MIN_BRIEFING_WORDS,
+          maximum: MAX_BRIEFING_WORDS,
+          description: `Length budget (default ${DEFAULT_BRIEFING_WORDS})`,
+        },
+        notes: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_TOOL_PROMPT_LENGTH,
+          description:
+            "Anything else the owner wants in it or left out, in their words",
+        },
+        projectId: {
+          type: "string",
+          description: `Project its chats go in (default: this chat's, ${options.projectId}); news needs one on the Open web preset`,
+        },
+        enabled: {
+          type: "boolean",
+          description: "false pauses the briefing (default true for a new one)",
+        },
+      },
+    },
+    // Shown on the chat's tool card (inputs come from the model, no secrets).
+    displayInput: (input) => input,
+    effect: "write",
+    authorization: "required",
+    presentation: { title: "Schedule a briefing" },
+    handler: async (input) => applyPrepared(input),
+  });
+
   const deleteJob = defineTool({
     name: "delete_job",
     description:
@@ -757,7 +984,12 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     return await apply(change);
   };
 
-  const approvalTools: HostTool[] = [scheduleJob, watchPage, deleteJob];
+  const approvalTools: HostTool[] = [
+    scheduleJob,
+    watchPage,
+    scheduleBriefing,
+    deleteJob,
+  ];
   return {
     readTools: () => [listJobs],
     approvalTools: {
