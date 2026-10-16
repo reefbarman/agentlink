@@ -72,6 +72,15 @@ export function patchFromForm(
   };
 }
 
+/** This device's IANA time zone, if the browser says. */
+export function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Time zones the browser knows, with the current one first if missing. */
 function timeZoneOptions(current: string): string[] {
   const supported = (
@@ -105,6 +114,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  const deviceZone = deviceTimeZone();
   const update = (patch: Partial<FormState>) =>
     setForm((current) => (current ? { ...current, ...patch } : current));
 
@@ -195,6 +205,18 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 </option>
               ))}
             </select>
+            {deviceZone && deviceZone !== form.timeZone && (
+              <small>
+                This device is on {deviceZone}.{" "}
+                <button
+                  type="button"
+                  class="link-button"
+                  onClick={() => update({ timeZone: deviceZone })}
+                >
+                  Use it
+                </button>
+              </small>
+            )}
           </label>
           <fieldset>
             <legend>Quiet hours</legend>

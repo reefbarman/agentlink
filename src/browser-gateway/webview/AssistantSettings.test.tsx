@@ -83,6 +83,22 @@ describe("SettingsPanel", () => {
     ]);
   });
 
+  it("offers this device's time zone when it differs", async () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
+      timeZone: "Australia/Perth",
+    } as Intl.ResolvedDateTimeFormatOptions);
+    const sent = stubFetch({ status: 200, body: { settings: SETTINGS } });
+    render(<SettingsPanel onClose={() => undefined} />);
+    await screen.findByText(/This device is on Australia\/Perth/u);
+    fireEvent.click(screen.getByRole("button", { name: "Use it" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(sent).toEqual([
+        expect.objectContaining({ timeZone: "Australia/Perth" }),
+      ]),
+    );
+  });
+
   it("says plainly when the settings changed elsewhere", async () => {
     stubFetch({ status: 409, body: { error: "settings_changed" } });
     render(<SettingsPanel onClose={() => undefined} />);
