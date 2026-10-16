@@ -36,6 +36,7 @@ interface FakeTool {
   name: string;
   description: string;
   readOnly?: boolean;
+  destructive?: boolean;
 }
 
 /** An in-memory MCP server whose tools can change between connections. */
@@ -57,7 +58,14 @@ function fakeServer(tools: { current: FakeTool[] }) {
           type: "object" as const,
           properties: { q: { type: "string" } },
         },
-        ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+        ...(tool.readOnly || tool.destructive
+          ? {
+              annotations: {
+                ...(tool.readOnly ? { readOnlyHint: true } : {}),
+                ...(tool.destructive ? { destructiveHint: true } : {}),
+              },
+            }
+          : {}),
       })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -251,6 +259,118 @@ describe("openMcpRegistry", () => {
     const result = await registry.refresh(server.id);
     expect(result.server.status).toBe("error");
     expect(requested.every((host) => host === "mcp.example.com")).toBe(true);
+  });
+
+  describe("always-ask list and argument rules", () => {
+    async function mail(current: FakeTool[]) {
+      const dataRoot = await tempDirectory();
+      const tools = { current };
+      const fake = fakeServer(tools);
+      const open = () =>
+        openMcpRegistry({
+          dataRoot,
+          redirectUrl: "https://assistant.example/mcp/callback",
+          createTransport: fake.createTransport,
+        });
+      const registry = await open();
+      const server = await registry.add({
+        label: "Gmail",
+        url: "https://mcp.example.com/mcp",
+        auth: "none",
+      });
+      await registry.refresh(server.id);
+      return { dataRoot, registry, tools, open, id: server.id };
+    }
+
+    it("refuses Run for a send tool or a destructive one", async () => {
+      const { registry, id } = await mail([
+        { name: "send_email", description: "Send an email" },
+        { name: "search", description: "Search", destructive: true },
+        { name: "read", description: "Read a message" },
+      ]);
+      await expect(
+        registry.setPolicy(id, "send_email", "run"),
+      ).rejects.toMatchObject({ code: "mcp_run_refused" });
+      await expect(
+        registry.setPolicy(id, "search", "run"),
+      ).rejects.toMatchObject({ code: "mcp_run_refused" });
+      expect(registry.runRefusal(id, "send_email")).toContain("send");
+      // Ask and Off stay available.
+      await registry.setPolicy(id, "send_email", "off");
+      await registry.setPolicy(id, "read", "run");
+      expect(registry.get(id)?.tools.map((tool) => tool.policy)).toEqual([
+        "off",
+        "ask",
+        "run",
+      ]);
+    });
+
+    it("keeps argument rules until the tool changes, then asks again", async () => {
+      const { registry, tools, id } = await mail([
+        { name: "read", description: "Read a message" },
+      ]);
+      await expect(
+        registry.setPolicy(id, "read", "run", { nope: ["x"] }),
+      ).rejects.toMatchObject({ code: "mcp_rule_invalid" });
+      await expect(
+        registry.setPolicy(id, "read", "ask", { q: ["x"] }),
+      ).rejects.toMatchObject({ code: "mcp_rule_invalid" });
+      await registry.setPolicy(id, "read", "run", { q: ["inbox", "label:*"] });
+      expect(registry.get(id)?.tools[0]).toMatchObject({
+        policy: "run",
+        runWhen: { q: ["inbox", "label:*"] },
+      });
+      // Unchanged on a test.
+      await registry.refresh(id);
+      expect(registry.get(id)?.tools[0]?.runWhen).toBeDefined();
+      // Run without rules clears them.
+      await registry.setPolicy(id, "read", "run");
+      expect(registry.get(id)?.tools[0]?.runWhen).toBeUndefined();
+
+      await registry.setPolicy(id, "read", "run", { q: ["inbox"] });
+      tools.current = [{ name: "read", description: "Read and send" }];
+      const changed = await registry.refresh(id);
+      expect(changed.changed).toEqual(["read"]);
+      expect(changed.server.tools[0]).toEqual(
+        expect.objectContaining({ policy: "ask" }),
+      );
+      expect(changed.server.tools[0]?.runWhen).toBeUndefined();
+    });
+
+    it("puts Run tools back on Ask when the owner extends the list", async () => {
+      const { registry, open, id } = await mail([
+        { name: "create_page", description: "Create a page" },
+        { name: "search", description: "Search" },
+      ]);
+      await registry.setPolicy(id, "create_page", "run");
+      await registry.setPolicy(id, "search", "run");
+      await expect(registry.setAlwaysAsk(["*"])).rejects.toMatchObject({
+        code: "mcp_always_ask_invalid",
+      });
+      expect(await registry.setAlwaysAsk(["create_*"])).toEqual(["create_*"]);
+      expect(registry.get(id)?.tools.map((tool) => tool.policy)).toEqual([
+        "ask",
+        "run",
+      ]);
+      await expect(
+        registry.setPolicy(id, "create_page", "run"),
+      ).rejects.toMatchObject({ code: "mcp_run_refused" });
+      // The list survives a restart.
+      expect((await open()).alwaysAsk()).toEqual(["create_*"]);
+    });
+
+    it("puts a hand-edited Run send tool back on Ask when it opens", async () => {
+      const { dataRoot, open, id } = await mail([
+        { name: "send_email", description: "Send an email" },
+      ]);
+      const file = path.join(dataRoot, "mcp", "servers.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as {
+        servers: Array<{ tools: Array<{ policy: string }> }>;
+      };
+      stored.servers[0]!.tools[0]!.policy = "run";
+      await fs.writeFile(file, JSON.stringify(stored));
+      expect((await open()).get(id)?.tools[0]?.policy).toBe("ask");
+    });
   });
 });
 

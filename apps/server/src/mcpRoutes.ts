@@ -11,17 +11,22 @@ import {
   type McpServerRecord,
   type McpToolPolicy,
 } from "./mcpRegistry.js";
+import { alwaysAskReason, BUILT_IN_ALWAYS_ASK } from "./mcpToolGuard.js";
 
 /**
  * Owner-only MCP servers. Secrets go in and never come back out.
  *
- * - `GET /api/mcp`: every server with its status and tools (no secrets)
+ * - `GET /api/mcp`: every server with its status and tools (no secrets),
+ *   and the always-ask list (built in, and the owner's extra patterns)
+ * - `PUT /api/mcp` (`{ alwaysAsk: string[] }`): the owner's extra patterns
  * - `POST /api/mcp` (`{ label, url, auth: "none" | "header" | "oauth",
  *   headerName?, headerValue? }`): add one, then test it
  * - `POST /api/mcp/:id/test`: connect and list its tools again
  * - `PATCH /api/mcp/:id` (`{ enabled?, label? }`)
  * - `DELETE /api/mcp/:id`: also forgets its secrets
- * - `PUT /api/mcp/:id/tools/:tool` (`{ policy: "ask" | "run" | "off" }`)
+ * - `PUT /api/mcp/:id/tools/:tool` (`{ policy: "ask" | "run" | "off",
+ *   runWhen?: { [argument]: string[] } }`): Run is refused (409) for a
+ *   tool on the always-ask list
  * - `POST /api/mcp/:id/sign-in`: the address to open for OAuth
  * - `GET /api/mcp/oauth/callback?state&code`: where sign-in finishes. The
  *   provider sends the browser to the public `/mcp/callback` page first,
@@ -41,6 +46,7 @@ const ERROR_STATUS: Readonly<Record<string, number>> = {
   mcp_server_not_found: 404,
   mcp_tool_not_found: 404,
   mcp_server_limit: 409,
+  mcp_run_refused: 409,
   mcp_not_oauth: 409,
   mcp_oauth_expired: 410,
 };
@@ -66,6 +72,7 @@ export interface McpRoutes {
 export function mcpServerView(
   server: McpServerRecord,
   hasCredentials: boolean,
+  alwaysAsk: readonly string[] = [],
 ) {
   return {
     id: server.id,
@@ -80,21 +87,40 @@ export function mcpServerView(
     origin: server.origin,
     ...(server.purpose ? { purpose: server.purpose } : {}),
     hasCredentials,
-    tools: server.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      ...(tool.readOnlyHint !== undefined
-        ? { readOnlyHint: tool.readOnlyHint }
-        : {}),
-      policy: tool.policy,
-    })),
+    tools: server.tools.map((tool) => {
+      const alwaysAsks = alwaysAskReason(server.id, tool, alwaysAsk);
+      const properties = tool.inputSchema.properties;
+      return {
+        name: tool.name,
+        description: tool.description,
+        ...(tool.readOnlyHint !== undefined
+          ? { readOnlyHint: tool.readOnlyHint }
+          : {}),
+        policy: tool.policy,
+        ...(tool.runWhen ? { runWhen: tool.runWhen } : {}),
+        ...(alwaysAsks ? { alwaysAsks } : {}),
+        // Argument names, for a Run rule.
+        arguments:
+          properties && typeof properties === "object"
+            ? Object.keys(properties).slice(0, 50)
+            : [],
+      };
+    }),
   };
 }
 
 export function createMcpRoutes(options: McpRoutesOptions): McpRoutes {
   const { registry } = options;
   const view = (server: McpServerRecord) =>
-    mcpServerView(server, registry.hasCredentials(server.id));
+    mcpServerView(
+      server,
+      registry.hasCredentials(server.id),
+      registry.alwaysAsk(),
+    );
+  const alwaysAskView = () => ({
+    builtIn: [...BUILT_IN_ALWAYS_ASK],
+    extra: [...registry.alwaysAsk()],
+  });
   const changed = () => options.onChanged?.();
 
   const route = async (
@@ -107,7 +133,20 @@ export function createMcpRoutes(options: McpRoutesOptions): McpRoutes {
     const pathname = url.pathname;
     if (pathname === "/api/mcp") {
       if (method === "GET") {
-        sendJson(response, 200, { servers: registry.list().map(view) });
+        sendJson(response, 200, {
+          servers: registry.list().map(view),
+          alwaysAsk: alwaysAskView(),
+        });
+        return true;
+      }
+      if (method === "PUT") {
+        const body = await readJsonBody(request, MAX_BODY_BYTES, auth.signal);
+        await registry.setAlwaysAsk(body.alwaysAsk as string[]);
+        changed();
+        sendJson(response, 200, {
+          servers: registry.list().map(view),
+          alwaysAsk: alwaysAskView(),
+        });
         return true;
       }
       if (method !== "POST") throw new HttpError(405, "method_not_allowed");
@@ -180,6 +219,9 @@ export function createMcpRoutes(options: McpRoutesOptions): McpRoutes {
         id,
         toolName,
         policy as McpToolPolicy,
+        body.runWhen === undefined || body.runWhen === null
+          ? undefined
+          : (body.runWhen as Record<string, string[]>),
       );
       changed();
       sendJson(response, 200, { server: view(server) });

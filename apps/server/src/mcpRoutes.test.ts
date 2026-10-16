@@ -183,6 +183,50 @@ describe("MCP routes", () => {
     expect(changes()).toBeGreaterThan(0);
   });
 
+  it("keep the always-ask list, refuse Run for tools on it, and check Run rules", async () => {
+    const { call } = await setup();
+    await call("POST", "/api/mcp", {
+      label: "Tracker",
+      url: "https://mcp.tracker.example/mcp",
+      auth: "none",
+    });
+    const listed = await call("GET", "/api/mcp");
+    expect(listed.body.alwaysAsk.builtIn.length).toBeGreaterThan(0);
+    expect(listed.body.alwaysAsk.extra).toEqual([]);
+    expect(listed.body.servers[0].tools[0]).toMatchObject({
+      name: "search",
+      arguments: [],
+    });
+
+    // No such argument for a rule.
+    await expect(
+      call("PUT", "/api/mcp/tracker/tools/search", {
+        policy: "run",
+        runWhen: { q: ["x"] },
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "mcp_rule_invalid" },
+    });
+
+    await call("PUT", "/api/mcp/tracker/tools/search", { policy: "run" });
+    const extended = await call("PUT", "/api/mcp", { alwaysAsk: ["search"] });
+    expect(extended.body.alwaysAsk.extra).toEqual(["search"]);
+    expect(extended.body.servers[0].tools[0]).toMatchObject({
+      policy: "ask",
+      alwaysAsks: expect.stringContaining("search"),
+    });
+    await expect(
+      call("PUT", "/api/mcp/tracker/tools/search", { policy: "run" }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "mcp_run_refused" },
+    });
+    await expect(
+      call("PUT", "/api/mcp", { alwaysAsk: ["*"] }),
+    ).resolves.toMatchObject({ status: 400 });
+  });
+
   it("explains a refused address in plain words", async () => {
     const { call } = await setup();
     await expect(

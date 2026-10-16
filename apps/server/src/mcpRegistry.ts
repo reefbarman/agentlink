@@ -22,6 +22,13 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { writeFileAtomic } from "./atomicFile.js";
+import {
+  alwaysAskReason,
+  GuardError,
+  normaliseAlwaysAskPatterns,
+  normaliseArgumentRules,
+  type McpArgumentRules,
+} from "./mcpToolGuard.js";
 
 /**
  * The owner's remote MCP servers (streamable HTTP over HTTPS), kept by the
@@ -31,7 +38,10 @@ import { writeFileAtomic } from "./atomicFile.js";
  *
  * - `<dataRoot>/mcp/servers.json`: each server's address, how it signs in,
  *   status, and its tools with their schema hash and the owner's policy
- *   (`ask`, the default for every new or changed tool; `run`; `off`).
+ *   (`ask`, the default for every new or changed tool; `run`, optionally
+ *   only for some argument values; `off`), and the owner's extra
+ *   always-ask patterns. Tools on the always-ask list (`mcpToolGuard.ts`)
+ *   can never be on Run.
  * - `<dataRoot>/credentials/mcp/secrets.json`: header secrets and OAuth
  *   clients and tokens, AES-256-GCM under `credentials/mcp/key`.
  *
@@ -56,10 +66,14 @@ export interface McpToolRecord {
   readonly description: string;
   /** The server's hint only: never used to skip asking. */
   readonly readOnlyHint?: boolean;
+  /** The server's hint: puts the tool on the always-ask list. */
+  readonly destructiveHint?: boolean;
   readonly inputSchema: Readonly<Record<string, unknown>>;
   /** SHA-256 of the description, input schema and annotations. */
   readonly schemaHash: string;
   readonly policy: McpToolPolicy;
+  /** With `run`: only calls whose named arguments match run; others ask. */
+  readonly runWhen?: McpArgumentRules;
 }
 
 export interface McpServerRecord {
@@ -119,11 +133,22 @@ export interface McpRegistry {
     id: string,
     patch: { readonly enabled?: boolean; readonly label?: string },
   ): Promise<McpServerRecord>;
+  /**
+   * Set a tool's policy. `runWhen` (with `run` only) limits Run to calls
+   * whose named arguments match; without it Run covers every call.
+   */
   setPolicy(
     id: string,
     tool: string,
     policy: McpToolPolicy,
+    runWhen?: McpArgumentRules,
   ): Promise<McpServerRecord>;
+  /** The owner's extra always-ask patterns. */
+  alwaysAsk(): readonly string[];
+  /** Replace them; tools they now cover go back to Ask. */
+  setAlwaysAsk(patterns: readonly string[]): Promise<readonly string[]>;
+  /** Why a tool can never be on Run, or `undefined`. */
+  runRefusal(id: string, tool: string): string | undefined;
   /** Connect, list the tools, and record status and schema changes. */
   refresh(id: string): Promise<McpRefreshResult>;
   /** Start OAuth: the address to open, or signed in already. */
@@ -181,13 +206,36 @@ export async function openMcpRegistry(options: {
   const secretsDirectory = path.join(options.dataRoot, "credentials", "mcp");
   const secretsFile = path.join(secretsDirectory, "secrets.json");
   const key = await readOrCreateKey(path.join(secretsDirectory, "key"));
-  let servers = await readServers(serversFile);
+  const stored = await readServers(serversFile);
+  let alwaysAsk: readonly string[] = stored.alwaysAsk;
+  // A tool the always-ask list now covers (a newer list, or a hand edit)
+  // goes back to Ask before anything can call it.
+  const guarded = (server: McpServerRecord): McpServerRecord => {
+    if (
+      !server.tools.some(
+        (tool) =>
+          tool.policy === "run" &&
+          alwaysAskReason(server.id, tool, alwaysAsk) !== undefined,
+      )
+    ) {
+      return server;
+    }
+    return {
+      ...server,
+      tools: server.tools.map((tool) =>
+        tool.policy === "run" && alwaysAskReason(server.id, tool, alwaysAsk)
+          ? onAsk(tool)
+          : tool,
+      ),
+    };
+  };
+  let servers = stored.servers.map(guarded);
   let secrets = await readSecrets(secretsFile, key);
   const pending = new Map<string, PendingSignIn>();
   let writes: Promise<void> = Promise.resolve();
 
   const persist = () => {
-    const snapshot = JSON.stringify({ schemaVersion: 1, servers });
+    const snapshot = JSON.stringify({ schemaVersion: 1, servers, alwaysAsk });
     const sealed = seal(key, JSON.stringify(secrets));
     const next = writes.then(async () => {
       await fs.mkdir(path.dirname(serversFile), {
@@ -207,7 +255,8 @@ export async function openMcpRegistry(options: {
     if (!server) throw new McpError("mcp_server_not_found", "No such server");
     return server;
   };
-  const replace = async (next: McpServerRecord) => {
+  const replace = async (candidate: McpServerRecord) => {
+    const next = guarded(candidate);
     servers = servers.map((server) => (server.id === next.id ? next : server));
     await persist();
     return next;
@@ -365,6 +414,24 @@ export async function openMcpRegistry(options: {
     get: (id) => servers.find((server) => server.id === id),
     hasCredentials: (id) =>
       Boolean(secrets.headers[id] || secrets.oauth[id]?.tokens),
+    alwaysAsk: () => alwaysAsk,
+    runRefusal(id, toolName) {
+      const tool = registry
+        .get(id)
+        ?.tools.find((candidate) => candidate.name === toolName);
+      return tool ? alwaysAskReason(id, tool, alwaysAsk) : undefined;
+    },
+
+    async setAlwaysAsk(patterns) {
+      try {
+        alwaysAsk = normaliseAlwaysAskPatterns(patterns);
+      } catch (error) {
+        throw guardProblem(error, "mcp_always_ask_invalid");
+      }
+      servers = servers.map(guarded);
+      await persist();
+      return alwaysAsk;
+    },
 
     async add(input, at = now()) {
       if (servers.length >= MAX_SERVERS) {
@@ -450,19 +517,43 @@ export async function openMcpRegistry(options: {
       });
     },
 
-    async setPolicy(id, toolName, policy) {
+    async setPolicy(id, toolName, policy, runWhen) {
       const server = require(id);
       if (!["ask", "run", "off"].includes(policy)) {
         throw new McpError("mcp_policy_invalid", "Ask, Run or Off");
       }
-      if (!server.tools.some((tool) => tool.name === toolName)) {
-        throw new McpError("mcp_tool_not_found", "No such tool");
+      const target = server.tools.find((tool) => tool.name === toolName);
+      if (!target) throw new McpError("mcp_tool_not_found", "No such tool");
+      if (policy === "run") {
+        const refused = alwaysAskReason(server.id, target, alwaysAsk);
+        if (refused) {
+          throw new McpError(
+            "mcp_run_refused",
+            `"${toolName}" always asks, because ${refused}`,
+          );
+        }
+      }
+      if (runWhen !== undefined && policy !== "run") {
+        throw new McpError(
+          "mcp_rule_invalid",
+          "Argument rules only apply to Run",
+        );
+      }
+      let rules: Record<string, string[]> | undefined;
+      if (runWhen !== undefined) {
+        try {
+          rules = normaliseArgumentRules(target.inputSchema, runWhen);
+        } catch (error) {
+          throw guardProblem(error, "mcp_rule_invalid");
+        }
       }
       return await replace({
         ...server,
-        tools: server.tools.map((tool) =>
-          tool.name === toolName ? { ...tool, policy } : tool,
-        ),
+        tools: server.tools.map((tool) => {
+          if (tool.name !== toolName) return tool;
+          const { runWhen: _previous, ...rest } = tool;
+          return { ...rest, policy, ...(rules ? { runWhen: rules } : {}) };
+        }),
       });
     },
 
@@ -499,22 +590,30 @@ export async function openMcpRegistry(options: {
           annotations: tool.annotations ?? null,
         });
         const before = previous.get(tool.name);
-        // New and changed tools ask; Off stays off.
+        // New and changed tools ask, without argument rules; Off stays off.
         let policy: McpToolPolicy = "ask";
+        let runWhen: McpArgumentRules | undefined;
         if (!before) added.push(tool.name);
         else if (before.schemaHash !== schemaHash) {
           changed.push(tool.name);
           policy = before.policy === "off" ? "off" : "ask";
-        } else policy = before.policy;
+        } else {
+          policy = before.policy;
+          runWhen = before.runWhen;
+        }
         return {
           name: tool.name,
           description,
           ...(tool.annotations?.readOnlyHint !== undefined
             ? { readOnlyHint: tool.annotations.readOnlyHint }
             : {}),
+          ...(tool.annotations?.destructiveHint !== undefined
+            ? { destructiveHint: tool.annotations.destructiveHint }
+            : {}),
           inputSchema,
           schemaHash,
           policy,
+          ...(runWhen ? { runWhen } : {}),
         };
       });
       const names = new Set(tools.map((tool) => tool.name));
@@ -738,20 +837,56 @@ async function readSecrets(file: string, key: Buffer): Promise<SecretState> {
   return { headers: parsed.headers ?? {}, oauth: parsed.oauth ?? {} };
 }
 
-async function readServers(file: string): Promise<McpServerRecord[]> {
+/** A tool back on Ask, without argument rules. */
+function onAsk(tool: McpToolRecord): McpToolRecord {
+  const { runWhen: _rules, ...rest } = tool;
+  return { ...rest, policy: "ask" };
+}
+
+function guardProblem(error: unknown, code: string): unknown {
+  return error instanceof GuardError
+    ? new McpError(code, error.message)
+    : error;
+}
+
+async function readServers(file: string): Promise<{
+  servers: McpServerRecord[];
+  alwaysAsk: string[];
+}> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as {
       schemaVersion?: number;
       servers?: McpServerRecord[];
+      alwaysAsk?: unknown;
     };
     if (parsed.schemaVersion === 1 && Array.isArray(parsed.servers)) {
-      return parsed.servers.filter((server) =>
-        MCP_SERVER_ID_PATTERN.test(server.id),
-      );
+      let alwaysAsk: string[] = [];
+      try {
+        alwaysAsk = normaliseAlwaysAskPatterns(parsed.alwaysAsk ?? []);
+      } catch {
+        // A hand-edited list that does not parse keeps its valid entries.
+        alwaysAsk = Array.isArray(parsed.alwaysAsk)
+          ? parsed.alwaysAsk.filter((item): item is string => {
+              try {
+                return normaliseAlwaysAskPatterns([item]).length === 1;
+              } catch {
+                return false;
+              }
+            })
+          : [];
+      }
+      return {
+        servers: parsed.servers.filter((server) =>
+          MCP_SERVER_ID_PATTERN.test(server.id),
+        ),
+        alwaysAsk,
+      };
     }
-    return [];
+    return { servers: [], alwaysAsk: [] };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { servers: [], alwaysAsk: [] };
+    }
     throw error;
   }
 }

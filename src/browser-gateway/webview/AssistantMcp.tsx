@@ -6,7 +6,10 @@ import { useEffect, useState } from "preact/hooks";
  * such as Notion or Linear): add one by its HTTPS address, test it, sign
  * in, and choose per tool whether a call runs straight away (**Run**),
  * asks first (**Ask**, the default for every new or changed tool) or is
- * never offered (**Off**). Secrets go to the server and never come back.
+ * never offered (**Off**). Run can be limited to some argument values
+ * (for example `calendarId` = `primary`); tools that send, delete or
+ * change email and calendar items always ask, and the owner can add to
+ * that list. Secrets go to the server and never come back.
  */
 
 export type McpToolPolicy = "ask" | "run" | "off";
@@ -16,6 +19,35 @@ export interface McpTool {
   description: string;
   readOnlyHint?: boolean;
   policy: McpToolPolicy;
+  /** With Run: only calls whose arguments match these values run. */
+  runWhen?: Record<string, string[]>;
+  /** Why it can never be on Run. */
+  alwaysAsks?: string;
+  /** The tool's argument names. */
+  arguments?: string[];
+}
+
+export interface McpAlwaysAsk {
+  builtIn: string[];
+  extra: string[];
+}
+
+/** `calendarId is primary; entity_id starts with sensor.` */
+export function runRuleText(rules: Record<string, string[]>): string {
+  return Object.entries(rules)
+    .map(([name, values]) => {
+      const exact = values.filter((value) => !value.endsWith("*"));
+      const prefixes = values
+        .filter((value) => value.endsWith("*"))
+        .map((value) => value.slice(0, -1));
+      return `${name} ${[
+        ...(exact.length > 0 ? [`is ${exact.join(" or ")}`] : []),
+        ...(prefixes.length > 0
+          ? [`starts with ${prefixes.join(" or ")}`]
+          : []),
+      ].join(" or ")}`;
+    })
+    .join("; ");
 }
 
 export interface McpServer {
@@ -89,12 +121,19 @@ export function McpPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
+  const [alwaysAsk, setAlwaysAsk] = useState<McpAlwaysAsk | null>(null);
+  const [editingAlwaysAsk, setEditingAlwaysAsk] = useState(false);
+  const [limiting, setLimiting] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    requestJson<{ servers: McpServer[] }>("/api/mcp").then(
+    requestJson<{ servers: McpServer[]; alwaysAsk?: McpAlwaysAsk }>(
+      "/api/mcp",
+    ).then(
       (body) => {
-        if (!cancelled) setServers(body.servers);
+        if (cancelled) return;
+        setServers(body.servers);
+        setAlwaysAsk(body.alwaysAsk ?? null);
       },
       (caught: unknown) => {
         if (!cancelled) setError(mcpErrorText(caught));
@@ -156,12 +195,18 @@ export function McpPanel({
       }
     });
 
-  const setPolicy = (server: McpServer, tool: McpTool, policy: McpToolPolicy) =>
+  const setPolicy = (
+    server: McpServer,
+    tool: McpTool,
+    policy: McpToolPolicy,
+    runWhen?: Record<string, string[]>,
+  ) =>
     act(`policy:${server.id}:${tool.name}`, async () => {
       await requestJson(
         path(server, `/tools/${encodeURIComponent(tool.name)}`),
-        { method: "PUT", body: { policy } },
+        { method: "PUT", body: { policy, ...(runWhen ? { runWhen } : {}) } },
       );
+      setLimiting(null);
     });
 
   if (adding) {
@@ -318,6 +363,44 @@ export function McpPanel({
                               ? " (the server says it only reads)"
                               : ""}
                           </span>
+                          {tool.alwaysAsks && (
+                            <span class="assistant-job-meta">
+                              Always asks: {tool.alwaysAsks}.
+                            </span>
+                          )}
+                          {tool.policy === "run" && (
+                            <span class="assistant-job-meta">
+                              {tool.runWhen
+                                ? `Runs only when ${runRuleText(tool.runWhen)}; other calls ask.`
+                                : "Runs for every call."}{" "}
+                              {(tool.arguments?.length ?? 0) > 0 && (
+                                <button
+                                  type="button"
+                                  class="assistant-link-button"
+                                  disabled={busy !== null}
+                                  onClick={() =>
+                                    setLimiting(
+                                      limiting === `${server.id}:${tool.name}`
+                                        ? null
+                                        : `${server.id}:${tool.name}`,
+                                    )
+                                  }
+                                >
+                                  {tool.runWhen ? "Change limit" : "Limit"}
+                                </button>
+                              )}
+                            </span>
+                          )}
+                          {limiting === `${server.id}:${tool.name}` && (
+                            <RunLimitForm
+                              tool={tool}
+                              busy={busy !== null}
+                              onSave={(runWhen) =>
+                                void setPolicy(server, tool, "run", runWhen)
+                              }
+                              onCancel={() => setLimiting(null)}
+                            />
+                          )}
                         </div>
                         <select
                           aria-label={`When ${tool.name} is called`}
@@ -332,7 +415,9 @@ export function McpPanel({
                           }
                         >
                           <option value="ask">Ask</option>
-                          <option value="run">Run</option>
+                          <option value="run" disabled={!!tool.alwaysAsks}>
+                            Run
+                          </option>
                           <option value="off">Off</option>
                         </select>
                       </li>
@@ -344,7 +429,166 @@ export function McpPanel({
           })}
         </ul>
       )}
+      {alwaysAsk && (
+        <section class="assistant-mcp-always-ask" aria-label="Always ask">
+          <p class="assistant-project-hint">
+            <strong>Always ask.</strong> These tools can never be set to Run:{" "}
+            {alwaysAsk.builtIn.join("; ")}
+            {alwaysAsk.extra.length > 0
+              ? `; and your entries: ${alwaysAsk.extra.join(", ")}`
+              : ""}
+            .{" "}
+            <button
+              type="button"
+              class="assistant-link-button"
+              disabled={busy !== null}
+              onClick={() => setEditingAlwaysAsk(!editingAlwaysAsk)}
+            >
+              {editingAlwaysAsk ? "Close" : "Add to the list"}
+            </button>
+          </p>
+          {editingAlwaysAsk && (
+            <AlwaysAskForm
+              extra={alwaysAsk.extra}
+              busy={busy !== null}
+              onSave={(patterns) =>
+                void act("always-ask", async () => {
+                  await requestJson("/api/mcp", {
+                    method: "PUT",
+                    body: { alwaysAsk: patterns },
+                  });
+                  setEditingAlwaysAsk(false);
+                })
+              }
+            />
+          )}
+        </section>
+      )}
     </Dialog>
+  );
+}
+
+/** Limit Run to some values of one argument (the rest ask). */
+function RunLimitForm({
+  tool,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  tool: McpTool;
+  busy: boolean;
+  onSave: (runWhen?: Record<string, string[]>) => void;
+  onCancel: () => void;
+}) {
+  const names = tool.arguments ?? [];
+  const current = Object.entries(tool.runWhen ?? {})[0];
+  const [argument, setArgument] = useState(current?.[0] ?? names[0] ?? "");
+  const [values, setValues] = useState(current?.[1].join(", ") ?? "");
+  const list = values
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return (
+    <form
+      class="assistant-project-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (argument && list.length > 0) onSave({ [argument]: list });
+      }}
+    >
+      <div class="assistant-project-row">
+        <label>
+          <span>Run only when</span>
+          <select
+            value={argument}
+            onChange={(event) => setArgument(event.currentTarget.value)}
+          >
+            {names.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>is one of</span>
+          <input
+            value={values}
+            spellcheck={false}
+            placeholder="primary, sensor.*"
+            onInput={(event) => setValues(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <p class="assistant-project-hint">
+        Separate values with commas; end one with * to allow anything starting
+        with it. Other calls ask you.
+      </p>
+      <footer>
+        {tool.runWhen && (
+          <button type="button" disabled={busy} onClick={() => onSave()}>
+            Remove limit
+          </button>
+        )}
+        <button type="button" disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          class="primary"
+          type="submit"
+          disabled={busy || !argument || list.length === 0}
+        >
+          Save limit
+        </button>
+      </footer>
+    </form>
+  );
+}
+
+/** The owner's extra always-ask entries, one per line. */
+function AlwaysAskForm({
+  extra,
+  busy,
+  onSave,
+}: {
+  extra: string[];
+  busy: boolean;
+  onSave: (patterns: string[]) => void;
+}) {
+  const [text, setText] = useState(extra.join("\n"));
+  return (
+    <form
+      class="assistant-project-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(
+          text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean),
+        );
+      }}
+    >
+      <label>
+        <span>Your always-ask entries</span>
+        <textarea
+          rows={4}
+          value={text}
+          spellcheck={false}
+          placeholder={"create_*\nlinear/update_issue"}
+          onInput={(event) => setText(event.currentTarget.value)}
+        />
+      </label>
+      <p class="assistant-project-hint">
+        One tool name per line; * matches anything, and server/tool limits it to
+        one server. Tools these match go back to Ask.
+      </p>
+      <footer>
+        <button class="primary" type="submit" disabled={busy}>
+          Save
+        </button>
+      </footer>
+    </form>
   );
 }
 

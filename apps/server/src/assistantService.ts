@@ -110,6 +110,7 @@ import {
 } from "./inboxStore.js";
 import { unusualUsage } from "./jobUsage.js";
 import { briefingOpenItems, createBriefings } from "./briefings.js";
+import { personalConnection } from "./personalConnections.js";
 import { createWatcher, type Watcher } from "./watches.js";
 import { openWatchStore } from "./watchStore.js";
 import { createPushRoutes } from "./pushRoutes.js";
@@ -1895,6 +1896,11 @@ export async function startAssistantService(
         projectNetworkPolicy(catalog.get(projectId)).preset === "open" &&
         (Boolean(config.web?.searxngUrl) || codex !== undefined),
       timeZone: () => persona.get().timeZone,
+      // Calendar and email: the owner's MCP read tools on Run, if any.
+      personal: (area) =>
+        personalConnection(mcpRegistry.list(), area, (serverId, tool) =>
+          mcpRegistry.runRefusal(serverId, tool),
+        ),
     });
     // Each run is a new chat in its project, acting for the owner.
     const jobs = createJobRunner({

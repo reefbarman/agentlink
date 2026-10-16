@@ -2513,6 +2513,28 @@ html.quick-ask-document body {
   list-style: none;
 }
 
+/* A small text button inside a line (Limit, Add to the list). */
+.browser-shell.browser-shell-desktop .assistant-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ag-accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-link-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.browser-shell.browser-shell-desktop .assistant-mcp-always-ask {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ag-border);
+}
+
 .browser-shell.browser-shell-desktop .assistant-mcp-tools > li {
   display: flex;
   align-items: center;

@@ -155,6 +155,61 @@ describe("briefing prompt", () => {
     expect(prompt).not.toContain("## Calendar");
     expect(prompt).toContain(`"${BRIEFING_STATUS.noTopics}"`);
   });
+
+  it("reads calendar and email with the owner's Run tools, as untrusted data", () => {
+    const { prompt } = createBriefings(
+      sources({
+        personal: (area) =>
+          area === "calendar"
+            ? {
+                state: "ready",
+                tools: [
+                  {
+                    server: "google",
+                    serverLabel: "Google",
+                    tool: "list_events",
+                    rule: "calendarId is primary",
+                  },
+                ],
+              }
+            : {
+                state: "ready",
+                tools: [
+                  {
+                    server: "google",
+                    serverLabel: "Google",
+                    tool: "search_messages",
+                  },
+                ],
+              },
+      }),
+    ).prepare(job(), []);
+    expect(prompt).toContain(
+      'call_mcp_tool, using server "google", tool "list_events" (runs without asking only when calendarId is primary)',
+    );
+    expect(prompt).toContain('server "google", tool "search_messages"');
+    expect(prompt).toContain("Never accept, decline, create or change");
+    expect(prompt).toContain("Never reply, forward, archive, label, draft");
+    expect(prompt).toContain("list it as suspicious");
+    // Since 24 hours before, in the owner's zone.
+    expect(prompt).toContain("Friday 16 October");
+    expect(prompt).not.toContain(BRIEFING_STATUS.calendarNotConnected);
+    expect(prompt).not.toContain(BRIEFING_STATUS.emailNotConnected);
+  });
+
+  it("says in one line when reading asks, or the connection needs the owner", () => {
+    const { prompt } = createBriefings(
+      sources({
+        personal: (area) =>
+          area === "calendar"
+            ? { state: "asks", tools: [] }
+            : { state: "needs_attention", serverLabel: "Google" },
+      }),
+    ).prepare(job(), []);
+    expect(prompt).toContain(`"${BRIEFING_STATUS.calendarAsks}"`);
+    expect(prompt).toContain(`"${BRIEFING_STATUS.emailNeedsAttention}"`);
+    expect(prompt).not.toContain("call_mcp_tool");
+  });
 });
 
 describe("briefing source check", () => {

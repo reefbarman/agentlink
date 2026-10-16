@@ -96,6 +96,101 @@ describe("McpPanel", () => {
     );
   });
 
+  it("greys out Run for a tool that always asks, and says why", async () => {
+    stubFetch({
+      "GET /api/mcp": {
+        servers: [
+          server({
+            tools: [
+              {
+                name: "send_email",
+                description: "Send",
+                policy: "ask",
+                alwaysAsks: "it can send things",
+              },
+            ],
+          }),
+        ],
+        alwaysAsk: { builtIn: ["names with send"], extra: [] },
+      },
+    });
+    render(<McpPanel onClose={() => undefined} />);
+    await screen.findByText("Wiki");
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(
+      screen.getByText("Always asks: it can send things.", { exact: false }),
+    ).toBeTruthy();
+    const run = screen.getByRole("option", {
+      name: "Run",
+    }) as HTMLOptionElement;
+    expect(run.disabled).toBe(true);
+  });
+
+  it("limits Run to some argument values", async () => {
+    const calls = stubFetch({
+      "GET /api/mcp": {
+        servers: [
+          server({
+            tools: [
+              {
+                name: "list_events",
+                description: "List events",
+                policy: "run",
+                arguments: ["calendarId", "timeMin"],
+              },
+            ],
+          }),
+        ],
+      },
+      "PUT /api/mcp/wiki/tools/list_events": { server: server() },
+    });
+    render(<McpPanel onClose={() => undefined} />);
+    await screen.findByText("Wiki");
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(screen.getByText(/Runs for every call/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Limit" }));
+    fireEvent.input(screen.getByLabelText("is one of"), {
+      target: { value: "primary, family*" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save limit" }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        key: "PUT /api/mcp/wiki/tools/list_events",
+        body: {
+          policy: "run",
+          runWhen: { calendarId: ["primary", "family*"] },
+        },
+      }),
+    );
+  });
+
+  it("adds the owner's entries to the always-ask list", async () => {
+    const calls = stubFetch({
+      "GET /api/mcp": {
+        servers: [server()],
+        alwaysAsk: { builtIn: ["names with send"], extra: [] },
+      },
+      "PUT /api/mcp": {
+        servers: [server()],
+        alwaysAsk: { builtIn: ["names with send"], extra: ["create_*"] },
+      },
+    });
+    render(<McpPanel onClose={() => undefined} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add to the list" }),
+    );
+    fireEvent.input(screen.getByLabelText("Your always-ask entries"), {
+      target: { value: "create_*\n\n" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        key: "PUT /api/mcp",
+        body: { alwaysAsk: ["create_*"] },
+      }),
+    );
+  });
+
   it("opens the service's sign-in page", async () => {
     stubFetch({
       "GET /api/mcp": {
