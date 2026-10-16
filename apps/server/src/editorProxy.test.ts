@@ -18,12 +18,16 @@ const OTHER = "ba9876543210";
 /** A stand-in for code-server: echoes what it got, over HTTP and WS. */
 async function startUpstream() {
   const seen: Array<{ method?: string; url?: string; cookie?: string }> = [];
+  const forwarded: Array<string | undefined> = [];
   const server = http.createServer((request, response) => {
     seen.push({
       method: request.method,
       url: request.url,
       cookie: request.headers.cookie,
     });
+    forwarded.push(
+      `${request.headers["x-forwarded-host"]} ${request.headers["x-forwarded-for"]}`,
+    );
     response.writeHead(200, { "content-type": "text/plain" });
     response.end(`upstream ${request.url}`);
   });
@@ -35,6 +39,9 @@ async function startUpstream() {
         url: request.url,
         cookie: request.headers.cookie,
       });
+      forwarded.push(
+        `${request.headers["x-forwarded-host"]} ${request.headers["x-forwarded-for"]}`,
+      );
       socket.write(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
       );
@@ -45,6 +52,7 @@ async function startUpstream() {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     seen,
+    forwarded,
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     close: () =>
       new Promise<void>((resolve) => {
@@ -211,10 +219,15 @@ describe("editor proxy", () => {
       path: `/t/${TASK}/static/app.js?x=1`,
       headers: {
         cookie: `${SESSION_COOKIE_NAME}=app-session; ${EDITOR_COOKIE_PREFIX}${TASK}=good-session; code-server-session=k`,
+        "x-forwarded-host": "evil.example",
+        "x-forwarded-for": "10.0.0.1",
       },
     });
     expect(proxied.status).toBe(200);
     expect(proxied.body).toBe("upstream /static/app.js?x=1");
+    // code-server sees the public host it checks Origins against, never
+    // a client's forwarding headers.
+    expect(upstream!.forwarded).toEqual([`127.0.0.1:${port} undefined`]);
     expect(upstream!.seen).toEqual([
       {
         method: "GET",

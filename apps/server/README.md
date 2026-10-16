@@ -566,8 +566,9 @@ With [session runners](#session-runners) and the `compose.editor.yaml` overlay, 
 ```sh
 # In the deploy directory, once (with compose.runners.yaml already set up)
 # .env: COMPOSE_FILE=...:compose.runners.yaml:compose.editor.yaml
-# server.json: "editor": { "port": 8444 }
 # upgrade.sh builds agentlink-editor:local along with the other images.
+# Then, after the upgrade (an older server refuses keys it does not know):
+# server.json: "editor": { "port": 8444 }
 docker compose up -d
 ```
 

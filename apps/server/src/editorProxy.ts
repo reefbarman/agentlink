@@ -36,6 +36,12 @@ const HOP_BY_HOP = new Set([
   "upgrade",
   "host",
   "cookie",
+  // Only this listener says where a request came from.
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-port",
 ]);
 
 export interface EditorProxy {
@@ -173,6 +179,10 @@ export async function startEditorProxy(options: {
     const cookies = editorUpstreamCookies(singleHeader(request.headers.cookie));
     if (cookies) headers.cookie = cookies;
     headers.host = upstream.host;
+    // code-server checks a WebSocket's Origin against the public host (the
+    // Host was checked in `route`).
+    headers["x-forwarded-host"] = singleHeader(request.headers.host) ?? "";
+    headers["x-forwarded-proto"] = options.insecure ? "http" : "https";
     return headers;
   };
 
