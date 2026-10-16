@@ -1,0 +1,71 @@
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 87-99,105-120,123
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 98-101,500,503,536-548
+  s_61410a219f2efc::t_152a7107dce9e7 96-97,502,504
+CHANGELOG.md
+  h_e08a86bb3a33a2 31
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 239-253
+apps/server/src/editorModels.ts
+  h_e08a86bb3a33a2 1-709
+apps/server/.dockerignore
+  h_e08a86bb3a33a2 1-2,5
+apps/server/deploy/container/compose.editor.yaml
+  h_e08a86bb3a33a2 13-19,23-24
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 126-127
+  s_12c5129ba433ee::t_88a7274037b2df 124-125,128
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 124-125,136,140-141,158-159,190-201
+  s_12c5129ba433ee::t_d715804c0d6ee7 202
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 50-53,1751-1755,1965-1966,1969-1977,2123,2269-2275
+  s_12c5129ba433ee::t_4c6606bc9cbbc5 49,2276
+apps/server/src/runnerManager.ts
+  h_e08a86bb3a33a2 41-48,385-411,419,443,446-447,572-573
+  s_12c5129ba433ee::t_342cae38824db8 448
+apps/server/src/taskEditors.test.ts
+  h_e08a86bb3a33a2 34-35,37-38,90-120
+apps/server/README.md
+  h_e08a86bb3a33a2 563
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 95-99,601,623-633,635
+  s_12c5129ba433ee::t_34e9da8ce1439d 634
+apps/server/src/taskEditors.ts
+  h_e08a86bb3a33a2 33-34,50-51,72-78,142-143,150-151,158,186-190
+  s_12c5129ba433ee::t_77bd8be49f9639 191
+apps/server/src/editorModels.test.ts
+  h_e08a86bb3a33a2 1-357
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aae6f3328b608c4ab18ac37a13395d4ecab97a07",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_12c5129ba433ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37f19ffa-a7e8-4fa4-8eba-3cbc391c3b0e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_61410a219f2efc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f8a712e5-2a8e-46cc-8b0f-03a97dc39153",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
