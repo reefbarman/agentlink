@@ -544,6 +544,32 @@ describe("assistant workspace routes", () => {
       "write_file",
     );
     const pending = body.session.pendingInteraction!;
+    // In-process readers (scheduled runs after a restart) see it too.
+    const reader: AssistantServerAuth = {
+      principal: {
+        tenantId: "agentlink-server",
+        subjectId: harness.server.store.ownerId!,
+      },
+      session: {
+        ownerId: harness.server.store.ownerId!,
+        sessionId: "s",
+        deviceId: owner.deviceId,
+        deviceLabel: "Laptop",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => reader,
+    };
+    await expect(
+      harness.routes.operations.readSession(reader, "home", sessionId),
+    ).resolves.toMatchObject({
+      pendingApproval: {
+        interactionId: pending.request.interactionId,
+        interactionRevision: pending.interactionRevision,
+      },
+    });
     const decision = {
       interactionId: pending.request.interactionId,
       interactionRevision: pending.interactionRevision,

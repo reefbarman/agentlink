@@ -47,7 +47,11 @@ const FIELDS: JobFields = {
 
 type TurnStatus = "completed" | "suspended" | "failed" | "cancelled";
 
-function createFakeOperations(events: SessionEventHub) {
+function createFakeOperations(
+  events: SessionEventHub,
+  /** Sessions whose turn is suspended on an approval. */
+  pending: ReadonlySet<string> = new Set(),
+) {
   let next = 0;
   const turns: Array<{
     readonly sessionId: string;
@@ -112,6 +116,31 @@ function createFakeOperations(events: SessionEventHub) {
         await requireValid(auth);
       },
     ),
+    readSession: vi.fn(
+      async (
+        auth: AssistantServerAuth,
+        _projectId: string,
+        sessionId: string,
+      ) => {
+        await requireValid(auth);
+        return {
+          messages: [],
+          model: DEFAULT_MODEL,
+          reasoningEffort: undefined,
+          approvalMode: "ask",
+          createdAt: START,
+          updatedAt: START,
+          ...(pending.has(sessionId)
+            ? {
+                pendingApproval: {
+                  interactionId: `i-${sessionId}`,
+                  interactionRevision: "1",
+                },
+              }
+            : {}),
+        };
+      },
+    ),
   };
   /** End the session's current task the way the routes publish it. */
   const endTurn = (
@@ -167,6 +196,7 @@ async function setup(
       sessionId: string,
     ) => string | undefined;
     readonly paused?: () => boolean;
+    readonly pending?: readonly string[];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "job-runner-"));
@@ -174,7 +204,7 @@ async function setup(
   const store = await openJobStore({ directory: path.join(root, "jobs") });
   await options.prepare?.(store);
   const events = new SessionEventHub();
-  const fake = createFakeOperations(events);
+  const fake = createFakeOperations(events, new Set(options.pending ?? []));
   const changes: JobRun[] = [];
   let owner: string | undefined = "owner";
   const runner: JobRunner = createJobRunner({
@@ -251,6 +281,125 @@ describe("job runner while draining", () => {
       error: "upgrade",
     });
     expect(harness.runner.activeRuns()).toEqual([]);
+  });
+
+  it("leaves a run waiting for an approval waiting, and does not wait on it", async () => {
+    const harness = await setup();
+    const job = await createJob(harness);
+    await harness.runner.runNow(job.id);
+    await vi.waitFor(() => expect(harness.fake.turns).toHaveLength(1));
+    harness.fake.endTurn(harness.fake.turns[0]!.sessionId, "suspended");
+    await harness.waitForRun(job.id, "awaiting_approval");
+    // Nothing of it is running, so the drain need not wait for it.
+    expect(harness.runner.activeRuns()).toEqual([]);
+    await expect(harness.runner.interruptRuns("upgrade")).resolves.toEqual([]);
+    expect(harness.latestRun(job.id)!.status).toBe("awaiting_approval");
+  });
+});
+
+describe("job runner across restarts", () => {
+  const waiting = (jobId: string, updatedAt: number): JobRun => ({
+    runId: "waiting",
+    jobId,
+    projectId: "home",
+    trigger: "schedule",
+    status: "awaiting_approval",
+    sessionId: "parked",
+    title: "Morning brief · 10 Oct, 00:00",
+    createdAt: START - 2 * HOUR,
+    startedAt: START - 2 * HOUR,
+    updatedAt,
+  });
+
+  it("keeps a run waiting for an approval when the server stops", async () => {
+    const harness = await setup();
+    const job = await createJob(harness);
+    await harness.runner.runNow(job.id);
+    await vi.waitFor(() => expect(harness.fake.turns).toHaveLength(1));
+    harness.fake.endTurn(harness.fake.turns[0]!.sessionId, "suspended");
+    await harness.waitForRun(job.id, "awaiting_approval");
+    await harness.runner.close();
+    const run = harness.latestRun(job.id)!;
+    expect(run.status).toBe("awaiting_approval");
+    expect(run.finishedAt).toBeUndefined();
+    expect(run.error).toBeUndefined();
+    // Its suspended turn is left for the owner, not cancelled.
+    expect(harness.fake.calls.cancel).not.toHaveBeenCalled();
+  });
+
+  it("follows it again on start, and the owner's answer finishes it", async () => {
+    let jobId = "";
+    const harness = await setup({
+      start: false,
+      pending: ["parked"],
+      prepare: async (store) => {
+        const job = await store.create(FIELDS, START - 3 * HOUR);
+        jobId = job.id;
+        await store.saveRun(waiting(job.id, START - HOUR));
+      },
+    });
+    await harness.runner.start();
+    expect(harness.store.run("waiting")).toMatchObject({
+      status: "awaiting_approval",
+      sessionId: "parked",
+    });
+    // Reported as still waiting (its chat and approval show again), not
+    // as interrupted, and its turn is not run again.
+    expect(harness.changes).toContainEqual(
+      expect.objectContaining({
+        runId: "waiting",
+        status: "awaiting_approval",
+      }),
+    );
+    expect(harness.changes).not.toContainEqual(
+      expect.objectContaining({ runId: "waiting", status: "interrupted" }),
+    );
+    expect(harness.fake.turns).toHaveLength(0);
+    // Its job is busy meanwhile.
+    await expect(harness.runner.runNow(jobId)).rejects.toThrow(
+      new JobInputError("job_busy"),
+    );
+
+    harness.fake.resume("parked");
+    await harness.waitForRun(jobId, "running");
+    harness.fake.endTurn("parked", "completed", { text: "Published" });
+    await harness.waitForRun(jobId, "completed");
+    expect(harness.store.run("waiting")).toMatchObject({
+      summary: "Published",
+    });
+  });
+
+  it("expires it when the rest of its approval time runs out", async () => {
+    let jobId = "";
+    const harness = await setup({
+      start: false,
+      pending: ["parked"],
+      prepare: async (store) => {
+        const job = await store.create(FIELDS, START - 12 * HOUR);
+        jobId = job.id;
+        // Waiting 11 hours of the 12 already.
+        await store.saveRun(waiting(job.id, START - 11 * HOUR));
+      },
+    });
+    await harness.runner.start();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    await harness.waitForRun(jobId, "cancelled");
+    expect(harness.store.run("waiting")!.error).toBe("approval_expired");
+  });
+
+  it("records it interrupted when its turn no longer waits", async () => {
+    const harness = await setup({
+      start: false,
+      prepare: async (store) => {
+        const job = await store.create(FIELDS, START - 3 * HOUR);
+        await store.saveRun(waiting(job.id, START - HOUR));
+      },
+    });
+    await harness.runner.start();
+    expect(harness.store.run("waiting")).toMatchObject({
+      status: "interrupted",
+      error: "server_restarted",
+    });
   });
 });
 

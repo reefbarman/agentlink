@@ -26,6 +26,10 @@ import type { AssistantSessionOperations } from "./workspaceRoutes.js";
  * the job as its device), then follows the session's events to record the
  * outcome. Runs need no browser and never widen authority: a pending
  * approval waits for the owner and expires; nothing is auto-approved.
+ *
+ * A run waiting for an approval is not working: its turn is suspended
+ * durably by the engine. A restart or an upgrade leaves it waiting, and the
+ * next start follows it again, so the owner can still answer it.
  */
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
@@ -100,12 +104,15 @@ export interface JobRunner {
   runNow(jobId: string): Promise<JobRun>;
   /** After a pause: start queued runs and catch up on schedules. */
   wake(): void;
-  /** Runs that have started and not finished. */
+  /** Runs that are working (started, not finished, not waiting for you). */
   activeRuns(): ReadonlyArray<{
     readonly run: JobRun;
     readonly job: JobDefinition;
   }>;
-  /** Stop every started run, recorded `interrupted` with `reason`. */
+  /**
+   * Stop every working run, recorded `interrupted` with `reason`. Runs
+   * waiting for an approval are left waiting.
+   */
   interruptRuns(reason: string): Promise<JobRun[]>;
   close(): Promise<void>;
 }
@@ -283,38 +290,67 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     }
   };
 
-  const execute = async (entry: LiveRun): Promise<void> => {
+  /**
+   * Run a queued entry, or follow `resumed`: a run a previous process left
+   * waiting for an approval, whose turn is still suspended.
+   */
+  const execute = async (
+    entry: LiveRun,
+    resumed?: { readonly sessionId: string; readonly waitedMs: number },
+  ): Promise<void> => {
     const { job, auth } = entry;
     let unsubscribe: () => void = () => undefined;
     let expiry: ReturnType<typeof setTimeout> | undefined;
+    const armExpiry = (ms: number) => {
+      if (expiry) clearTimeout(expiry);
+      expiry = setTimeout(
+        () => {
+          void stop(entry, "approval_expired", "cancelled");
+        },
+        Math.max(0, ms),
+      );
+      expiry.unref?.();
+    };
     let final: Outcome;
     try {
       if (!options.ownerId()) throw new HttpError(409, "owner_missing");
-      await save(entry, {
-        status: "running",
-        startedAt: now(),
-        title: runTitle(job, now()),
-      });
-      const model = job.model
-        ? options.resolveModel(job.model)
-        : options.projectDefaults?.(job.projectId).model;
-      if (job.model && !model) throw new HttpError(400, "model_not_available");
-      const reasoningEffort =
-        job.reasoningEffort ??
-        (job.model
-          ? undefined
-          : options.projectDefaults?.(job.projectId).reasoningEffort);
-      assertNotStopping(entry);
-      const { sessionId } = await operations.createSession(
-        auth,
-        job.projectId,
-        model,
-        reasoningEffort,
-      );
-      await save(entry, { sessionId });
-      // A new chat starts autonomous; never wider than the job asks.
-      if (job.approvalMode === "ask") {
-        await operations.setApprovalMode(auth, job.projectId, sessionId, "ask");
+      let sessionId: string;
+      if (resumed) {
+        sessionId = resumed.sessionId;
+      } else {
+        await save(entry, {
+          status: "running",
+          startedAt: now(),
+          title: runTitle(job, now()),
+        });
+        const model = job.model
+          ? options.resolveModel(job.model)
+          : options.projectDefaults?.(job.projectId).model;
+        if (job.model && !model) {
+          throw new HttpError(400, "model_not_available");
+        }
+        const reasoningEffort =
+          job.reasoningEffort ??
+          (job.model
+            ? undefined
+            : options.projectDefaults?.(job.projectId).reasoningEffort);
+        assertNotStopping(entry);
+        ({ sessionId } = await operations.createSession(
+          auth,
+          job.projectId,
+          model,
+          reasoningEffort,
+        ));
+        await save(entry, { sessionId });
+        // A new chat starts autonomous; never wider than the job asks.
+        if (job.approvalMode === "ask") {
+          await operations.setApprovalMode(
+            auth,
+            job.projectId,
+            sessionId,
+            "ask",
+          );
+        }
       }
       assertNotStopping(entry);
 
@@ -351,11 +387,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
               return;
             case "suspended":
               void save(entry, { status: "awaiting_approval" });
-              if (expiry) clearTimeout(expiry);
-              expiry = setTimeout(() => {
-                void stop(entry, "approval_expired", "cancelled");
-              }, approvalTimeoutMs);
-              expiry.unref?.();
+              armExpiry(approvalTimeoutMs);
               return;
             case "cancelled":
               entry.finish({ status: "cancelled", error: "cancelled" });
@@ -367,12 +399,19 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         },
       );
       unsubscribe = () => subscription.unsubscribe();
-      await operations.startTurn(auth, job.projectId, sessionId, job.prompt);
-      // Stopped while the turn was starting: its cancel came too early.
-      if (entry.stopping && entry.stopping.reason !== "server_stopped") {
-        await operations
-          .cancel(auth, job.projectId, sessionId)
-          .catch(() => undefined);
+      if (resumed) {
+        // Still waiting for the owner, for what is left of its time; the
+        // save shows its chat (and approval) again.
+        armExpiry(approvalTimeoutMs - resumed.waitedMs);
+        await save(entry, {});
+      } else {
+        await operations.startTurn(auth, job.projectId, sessionId, job.prompt);
+        // Stopped while the turn was starting: its cancel came too early.
+        if (entry.stopping && entry.stopping.reason !== "server_stopped") {
+          await operations
+            .cancel(auth, job.projectId, sessionId)
+            .catch(() => undefined);
+        }
       }
       final = await entry.outcome;
     } catch (error) {
@@ -382,6 +421,14 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     } finally {
       unsubscribe();
       if (expiry) clearTimeout(expiry);
+    }
+    // Left waiting for its approval (the server is stopping): its record
+    // stays `awaiting_approval` for the next start to follow.
+    if (entry.stopping?.status === "awaiting_approval") {
+      if (live.get(job.id) === entry) live.delete(job.id);
+      entry.controller.abort(new Error("job_run_parked"));
+      log(`Job "${job.name}" run still waits for your approval`);
+      return;
     }
     // Stopping wins over whatever the session reported meanwhile.
     if (entry.stopping) {
@@ -436,6 +483,58 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       entry.finish({ status, error: reason });
     }
     await entry.done;
+  };
+
+  /** Started and suspended on an approval: nothing of it is running. */
+  const isWaiting = (entry: LiveRun) =>
+    !queue.includes(entry) && entry.run.status === "awaiting_approval";
+
+  /** Stop following a waiting run without ending it. */
+  const park = (entry: LiveRun) =>
+    stop(entry, "server_stopped", "awaiting_approval");
+
+  /**
+   * Follow a run a previous process left waiting for an approval, if its
+   * turn is still suspended on one; otherwise it was interrupted.
+   */
+  const resumeWaiting = async (
+    run: JobRun,
+    job: JobDefinition,
+  ): Promise<boolean> => {
+    const ownerId = options.ownerId();
+    if (!ownerId || !run.sessionId || live.has(job.id)) return false;
+    const controller = new AbortController();
+    const auth = jobAuth(job, run.runId, ownerId, controller);
+    const read = await operations
+      .readSession(auth, job.projectId, run.sessionId)
+      .catch(() => undefined);
+    if (!read?.pendingApproval) return false;
+    let finish!: (outcome: Outcome) => void;
+    const outcome = new Promise<Outcome>((resolve) => {
+      finish = resolve;
+    });
+    const entry: LiveRun = {
+      run,
+      job,
+      controller,
+      auth,
+      stopping: undefined,
+      finish,
+      outcome,
+      done: undefined,
+    };
+    live.set(job.id, entry);
+    running += 1;
+    entry.done = execute(entry, {
+      sessionId: run.sessionId,
+      waitedMs: Math.max(0, now() - run.updatedAt),
+    }).finally(() => {
+      running -= 1;
+      if (live.get(entry.job.id) === entry) live.delete(entry.job.id);
+      pump();
+    });
+    log(`Job "${job.name}" run waits for your approval again`);
+    return true;
   };
 
   const assertNotStopping = (entry: LiveRun) => {
@@ -519,6 +618,13 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       for (const job of store.list()) {
         for (const run of store.runs(job.id)) {
           if (!isActiveRun(run)) continue;
+          if (
+            run.status === "awaiting_approval" &&
+            job.enabled &&
+            (await resumeWaiting(run, job))
+          ) {
+            continue;
+          }
           // Its chat is kept; it is never re-run automatically.
           const interrupted: JobRun = {
             ...run,
@@ -568,12 +674,15 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     },
     activeRuns() {
       return [...live.values()]
-        .filter((entry) => !queue.includes(entry) && !entry.stopping)
+        .filter(
+          (entry) =>
+            !queue.includes(entry) && !entry.stopping && !isWaiting(entry),
+        )
         .map((entry) => ({ run: entry.run, job: entry.job }));
     },
     async interruptRuns(reason) {
       const started = [...live.values()].filter(
-        (entry) => !queue.includes(entry),
+        (entry) => !queue.includes(entry) && !isWaiting(entry),
       );
       await Promise.all(
         started.map((entry) => stop(entry, reason, "interrupted")),
@@ -586,7 +695,9 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       await ticking;
       await Promise.all(
         [...live.values()].map((entry) =>
-          stop(entry, "server_stopped", "interrupted"),
+          isWaiting(entry)
+            ? park(entry)
+            : stop(entry, "server_stopped", "interrupted"),
         ),
       );
       await store.flush();

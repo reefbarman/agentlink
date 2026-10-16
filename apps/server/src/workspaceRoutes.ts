@@ -173,6 +173,14 @@ export interface AssistantSessionOperations {
     readonly approvalMode: SessionApprovalMode;
     readonly createdAt: number;
     readonly updatedAt: number;
+    /**
+     * The approval its turn is suspended on, if any. It is durable: the
+     * turn resumes from it after a restart once the owner answers.
+     */
+    readonly pendingApproval?: {
+      readonly interactionId: string;
+      readonly interactionRevision: string;
+    };
   }>;
   /** Whether the session works on its own or asks before every change. */
   setApprovalMode(
@@ -621,7 +629,10 @@ export function createAssistantWorkspaceRoutes(
     async readSession(auth, projectId, sessionId) {
       assertSessionId(sessionId);
       const mount = await authorize(auth, projectId, "read");
-      const { record } = await readSnapshot(mount, sessionId);
+      const { record, pendingInteraction } = await readSnapshot(
+        mount,
+        sessionId,
+      );
       return {
         messages: record.messages,
         model: effectiveModel(record.selectedModel),
@@ -629,6 +640,14 @@ export function createAssistantWorkspaceRoutes(
         approvalMode: approvalMode(projectId, sessionId),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
+        ...(pendingInteraction
+          ? {
+              pendingApproval: {
+                interactionId: pendingInteraction.request.interactionId,
+                interactionRevision: pendingInteraction.interactionRevision,
+              },
+            }
+          : {}),
       };
     },
     async setApprovalMode(auth, projectId, sessionId, mode) {
