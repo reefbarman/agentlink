@@ -1,0 +1,100 @@
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 38-41,481-527
+  s_0b044fac63169f::t_1b9e5033d067e6 37,528-529
+CHANGELOG.md
+  h_e08a86bb3a33a2 26
+apps/server/README.md
+  h_e08a86bb3a33a2 302-365
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 3-4,520-561
+  s_00af2a4914c52c::t_bcea90f530e6f6 562-564
+apps/server/src/backupAgent.ts
+  h_e08a86bb3a33a2 1-291
+apps/server/src/backupClient.ts
+  h_e08a86bb3a33a2 1-128
+apps/server/deploy/container/Dockerfile
+  h_e08a86bb3a33a2 10-11,63-78
+  s_00af2a4914c52c::t_e75159f18bde64 79
+apps/server/deploy/container/compose.backup.yaml
+  h_e08a86bb3a33a2 1-115
+apps/server/deploy/container/witness/compose.yaml
+  h_e08a86bb3a33a2 1-53
+apps/server/src/backupRoutes.test.ts
+  h_e08a86bb3a33a2 1-159
+src/browser-gateway/webview/AssistantBackups.test.tsx
+  h_e08a86bb3a33a2 1-148
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 403-475
+apps/server/src/backupAgent.test.ts
+  h_e08a86bb3a33a2 1-219
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 10-17,82-88,208-209,232-236,266-268,297,314-424,426-478
+  s_49396b3de6c755::t_2c9e5f14ef1ba7 237,425,479-480
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 76-77,122-126,272-273,523-546,819-823,1336-1389,1856-1857,1861-1862,1886,1904,1949-1969,1971-1973
+  s_622365b95c3d98::t_8db77f88967d0a 824-825,1858-1860,1863
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 109-134
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 2,104-105,161-162,1257
+  s_0b044fac63169f::t_6a6ad031e4286f 103
+apps/server/src/backup.test.ts
+  h_e08a86bb3a33a2 1-339
+apps/server/src/backupRoutes.ts
+  h_e08a86bb3a33a2 1-90
+apps/server/src/backup.ts
+  h_e08a86bb3a33a2 1-471
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 164-165
+src/browser-gateway/webview/AssistantBackups.tsx
+  h_e08a86bb3a33a2 1-159
+apps/server/src/serverConfig.ts
+  h_e08a86bb3a33a2 76-81,404,566-568
+resources/builtin-skills/documentation/references/release-notes.md
+  s_622365b95c3d98::t_b6436141e40fb9 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78fe3f57c754f5496269b1c778a68a72e1068469",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_00af2a4914c52c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a33c6c0c-7523-462f-ba37-39be71fa9712",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0b044fac63169f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "55c93a71-1203-4436-a08b-df0da2135d43",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_49396b3de6c755": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f92c275e-302b-4b20-9a71-cc770e8e5dfb",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_622365b95c3d98": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a9d8f945-29fa-4827-9a32-f8c0310ce4d3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
