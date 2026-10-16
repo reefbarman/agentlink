@@ -1,0 +1,16 @@
+apps/server/src/storageRoutes.ts
+  h_e08a86bb3a33a2 75
+apps/server/README.md
+  h_e08a86bb3a33a2 718
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b7989e029fbf313815615a6c7ad4e575c868cf31",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
