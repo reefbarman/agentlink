@@ -3,6 +3,7 @@ import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isBrowserGatewayAskAgentSessionId } from "@agentlink/protocol/browser-gateway-ask-agent-identity";
 
 import { isJobChangeDisplay } from "./jobChangeDisplay.js";
+import { isPersonaChangeDisplay } from "./persona.js";
 import { isTaskStartDisplay } from "./taskStartDisplay.js";
 import { isMcpCallDisplay } from "./assistantMcpTools.js";
 import type {
@@ -1161,6 +1162,7 @@ export async function createAskAgentBridge(
     // where, and with which instructions.
     if (
       isJobChangeDisplay(interaction.displayContent) ||
+      isPersonaChangeDisplay(interaction.displayContent) ||
       isTaskStartDisplay(interaction.displayContent) ||
       isMcpCallDisplay(interaction.displayContent)
     ) {

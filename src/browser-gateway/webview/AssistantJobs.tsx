@@ -2,6 +2,7 @@ import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { BackupSettings } from "./AssistantBackups";
 import { GitHubPanel } from "./AssistantGitHub";
 import { McpPanel, signInReturnNotice } from "./AssistantMcp";
+import { SettingsPanel } from "./AssistantSettings";
 import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
   NotificationSettings,
@@ -443,7 +444,7 @@ export function AssistantHub({
   const notice = maintenanceNotice(maintenance);
   // Back from an MCP server's sign-in page: show how it went.
   const [view, setView] = useState<
-    "jobs" | "inbox" | "github" | "tasks" | "mcp" | null
+    "jobs" | "inbox" | "github" | "tasks" | "mcp" | "settings" | null
   >(() => (signInReturnNotice(window.location.search) ? "mcp" : null));
   const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const openChat = async (projectId: string, sessionId: string) => {
@@ -545,6 +546,16 @@ export function AssistantHub({
           <i class="codicon codicon-plug" aria-hidden="true" />
           <span>MCP</span>
         </button>
+        <button
+          type="button"
+          class="assistant-hub-button"
+          aria-haspopup="dialog"
+          title="Settings (name, persona, time zone and quiet hours)"
+          onClick={() => setView("settings")}
+        >
+          <i class="codicon codicon-settings-gear" aria-hidden="true" />
+          <span>Settings</span>
+        </button>
       </nav>
       {notice && (
         <p class="assistant-maintenance" role="status">
@@ -579,6 +590,7 @@ export function AssistantHub({
         />
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
+      {view === "settings" && <SettingsPanel onClose={() => setView(null)} />}
       {view === "mcp" && (
         <McpPanel
           onClose={() => {

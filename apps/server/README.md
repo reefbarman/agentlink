@@ -672,4 +672,22 @@ Each new [Inbox](#scheduled-jobs) entry is also sent as a Web Push notification 
 
 Only the owner can use these routes.
 
+### Persona, time zone and quiet hours
+
+**Settings** in the web app sets how the Assistant sounds and when it notifies you. None of it changes what the Assistant may do: permissions, approvals and tools stay as they are.
+
+- **Name and persona.** The Assistant is called AgentLink Assistant until you rename it. Its persona (up to 2,000 characters) is added to the instructions of your chats, scheduled runs and their background agents, after AgentLink's own identity; **Use the default** restores the built-in one. Coding task and review chats get only the name, the time zone and today's date, so commits and pull requests keep the repository's voice.
+- **What it calls you.** Optional; otherwise it says "the owner".
+- **Time zone.** Used for dates and times in chats and as the default for new [scheduled jobs](#scheduled-jobs). Until you set it, it is the server's time zone.
+- **Quiet hours.** 22:00 to 07:00 in your time zone by default. Inbox entries are still recorded, but their notifications wait until the quiet hours end; then what is still unread is sent, one as itself or several as one summary. Approval requests still notify unless you untick that. Waiting notifications are kept in memory, so a restart during quiet hours drops them (never the Inbox entries).
+- **From a chat.** Ask a chat to change any of these ("be more formal", "I'm in Perth this week") and it proposes the change with `propose_persona_change`. The approval card shows each change as `before → after`, appears even in an autonomous chat, and is refused if the settings changed while it waited. Changes apply from the next message.
+- **Storage.** `<dataRoot>/settings/persona.json`. A file the server cannot read stops it from starting rather than silently dropping your settings; `--check` prints the current name, time zone and quiet hours.
+
+| Route                         | Body                                                                                                      | Result                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `GET /api/settings/persona`   |                                                                                                           | `{ settings, defaultPersona }`                  |
+| `PATCH /api/settings/persona` | Fields to change (`name`, `persona`, `ownerName`, `timeZone`, `quietHours`), optional `expectedUpdatedAt` | `{ settings }`; `409 settings_changed` if stale |
+
+`null` resets the persona to the default, clears `ownerName`, or turns quiet hours off. Only the owner can use these routes.
+
 Not yet provided: passkeys and an installer.

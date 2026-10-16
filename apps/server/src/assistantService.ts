@@ -83,6 +83,14 @@ import {
 } from "./jobStore.js";
 import { createInboxRoutes } from "./inboxRoutes.js";
 import {
+  describeQuietHours,
+  openPersonaStore,
+  personaInstructions,
+} from "./persona.js";
+import { createPersonaRoutes } from "./personaRoutes.js";
+import { createPersonaTools } from "./personaTools.js";
+import { createQuietPush } from "./quietPush.js";
+import {
   inboxEntryForBackupProblem,
   inboxEntryForCheckpointProblem,
   inboxEntryForInterruptedChat,
@@ -223,6 +231,11 @@ export function serverEventLogDirectory(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "events");
 }
 
+/** The Assistant's persona, time zone and quiet hours. */
+export function serverPersonaFile(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "settings", "persona.json");
+}
+
 /** Per-session approval modes (which sessions ask for everything). */
 export function serverApprovalModesFile(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "settings", "approval-modes.json");
@@ -309,6 +322,8 @@ export type AssistantServicePreflight = (
   readonly runners?: string;
   /** Present when a backup sidecar is configured. */
   readonly backup?: string;
+  /** The persona settings, read-only. */
+  readonly persona?: string;
 };
 
 /**
@@ -582,6 +597,17 @@ export async function preflightAssistantService(
     }
     result = { ...result, backup: backupStatus };
   }
+  // Read-only: an unreadable persona file stops the server, so report it.
+  const persona = (
+    await openPersonaStore({
+      file: serverPersonaFile(config),
+      defaultTimeZone: serverTimeZone(),
+    })
+  ).get();
+  result = {
+    ...result,
+    persona: `Persona: ${persona.name}${persona.updatedAt === 0 ? " (defaults)" : ""}; time zone ${persona.timeZone}; quiet hours ${describeQuietHours(persona.quietHours)}`,
+  };
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
     // signed in afterwards without a restart.
@@ -811,6 +837,18 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // The Assistant's name and voice, the owner's time zone, quiet hours.
+  const persona = await openPersonaStore({
+    file: serverPersonaFile(config),
+    defaultTimeZone: serverTimeZone(),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  /** The persona block for a chat, read each turn. */
+  const personaBlock = (kind: "owner" | "task") =>
+    personaInstructions(persona.get(), kind, Date.now());
   // Started once backups are known (checkpoints go to the backup store).
   let checkpointer: AuditCheckpointer | undefined;
   // Opened before the tasks, so every change to them is on record.
@@ -963,6 +1001,17 @@ export async function startAssistantService(
     await eventLog.close();
     await certificates?.stop();
     throw error;
+  });
+  // Pushes wait out the owner's quiet hours; Inbox entries never do.
+  const quietPush = createQuietPush({
+    settings: () => persona.get(),
+    isUnread: (entryId) =>
+      inbox.list().some((entry) => entry.id === entryId && !entry.read),
+    send: (notification) => {
+      push.notifyAll(notification).catch((error: unknown) => {
+        log(`Push: could not send a notification: ${message(error)}`);
+      });
+    },
   });
   const recovery = createSessionRecovery(log);
   let runnerPool: SessionRunnerPool | undefined;
@@ -1124,10 +1173,21 @@ export async function startAssistantService(
         projectIds: () => [...bridges.keys()],
         projectLabel: (projectId) => catalog.get(projectId)?.label,
         models: configuredModels(config),
-        defaultTimeZone: serverTimeZone(),
+        // The owner's, as set in Settings.
+        get defaultTimeZone() {
+          return persona.get().timeZone;
+        },
         onChanged: () => assistantChanged(),
       });
       const mcpTools = mcpToolsFor(project.id);
+      // Chats can propose persona changes; the owner approves each one.
+      const personaTools = createPersonaTools({
+        store: persona,
+        onChanged: () => {
+          quietPush.reschedule();
+          assistantChanged();
+        },
+      });
       const host = await createWorkspaceHost({
         projectRoot: project.root,
         dataRoot: path.join(config.dataRoot, "workspace"),
@@ -1141,10 +1201,11 @@ export async function startAssistantService(
         // The todo list, for Auto Continue; no ask_user (approval cards and
         // messages are how a chat reaches the owner).
         sessionInteractions: {},
-        instructions:
+        // Read each turn, so a persona change applies without a restart.
+        instructions: () =>
           kind === "project"
-            ? `${routingInstructions}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`
-            : AUTO_CONTINUE_INSTRUCTIONS,
+            ? `${personaBlock("owner")}\n\n${routingInstructions}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`
+            : `${personaBlock("task")}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`,
         ...commandOptions,
         ...(commandOptions.commands && project.commandRoot
           ? {
@@ -1167,6 +1228,7 @@ export async function startAssistantService(
           kind === "project"
             ? combineApprovalHostTools([
                 jobTools.approvalTools,
+                personaTools,
                 // Tasks remember this project's chat that started them.
                 ...(taskTools ? [taskTools.approvalToolsFor(project.id)] : []),
                 mcpTools.approvalTools,
@@ -1407,17 +1469,15 @@ export async function startAssistantService(
     /** Add an inbox entry and notify about it; never throws. */
     const addToInbox = async (entry: NewInboxEntry | undefined) => {
       const added = entry ? await inbox.add(entry, Date.now()) : undefined;
-      // Best effort, never awaited: the inbox entry is the record.
+      // Best effort, never awaited: the inbox entry is the record. Pushes
+      // wait out quiet hours.
       if (added) {
-        push
-          .notifyAll(
-            pushMessageForEntry(added, {
-              includeSummary: config.notifications?.includeSummary === true,
-            }),
-          )
-          .catch((error: unknown) => {
-            log(`Push: could not send a notification: ${message(error)}`);
-          });
+        quietPush.deliver(
+          added,
+          pushMessageForEntry(added, {
+            includeSummary: config.notifications?.includeSummary === true,
+          }),
+        );
       }
     };
     mcpInbox = (entry) => addToInbox(entry);
@@ -1830,7 +1890,11 @@ export async function startAssistantService(
                         ),
                       }
                     : {}),
-                  instructions: AUTO_CONTINUE_INSTRUCTIONS,
+                  // Read when the runner starts: the name, time zone and
+                  // date as they are then.
+                  get instructions() {
+                    return `${personaBlock("task")}\n\n${AUTO_CONTINUE_INSTRUCTIONS}`;
+                  },
                   // The task's network preset, signed into the proxy URL as
                   // for its commands on the worker.
                   commandEnvironment: commandWorkerEnvironment(
@@ -2025,7 +2089,20 @@ export async function startAssistantService(
         auth.principal.subjectId === server.store.ownerId,
       hasProject: (projectId) => bridges.has(projectId),
       models: configuredModels(config),
-      defaultTimeZone: serverTimeZone(),
+      // The owner's, as set in Settings.
+      get defaultTimeZone() {
+        return persona.get().timeZone;
+      },
+    });
+    const personaRoutes = createPersonaRoutes({
+      store: persona,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      onChanged: () => {
+        quietPush.reschedule();
+        assistantChanged();
+      },
     });
     const inboxRoutes = createInboxRoutes({
       store: inbox,
@@ -2101,6 +2178,7 @@ export async function startAssistantService(
         (await jobRoutes.handleRequest(request, response, auth)) ||
         (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
+        (await personaRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||
         (await backupRoutes.handleRequest(request, response, auth)) ||
@@ -2134,6 +2212,7 @@ export async function startAssistantService(
         if (backupTimer) clearInterval(backupTimer);
         stopWatching();
         await inbox.flush();
+        quietPush.close();
         await push.close();
         await chat.close();
         await routes.close();

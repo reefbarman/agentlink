@@ -137,6 +137,46 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("reads function instructions afresh on every turn", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-instructions-"),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const prompts: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        prompts.push(
+          body.messages.find((message) => message.role === "system")!.content,
+        );
+        return completion("ok");
+      });
+    let voice = "Speak like a sailor.";
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "instructions-owner",
+      instructions: () => voice,
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await host.runTurn(sessionId, "First");
+      voice = "Speak like a librarian.";
+      await host.runTurn(sessionId, "Second");
+      expect(prompts[0]).toContain("Speak like a sailor.");
+      expect(prompts[1]).toContain("Speak like a librarian.");
+      expect(prompts[1]).not.toContain("sailor");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("composes JSON profiles for the default and current selected request models", async () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-profiles-"),

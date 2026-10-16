@@ -2377,6 +2377,22 @@ html.quick-ask-document body {
   margin: 0;
 }
 
+.browser-shell.browser-shell-desktop .assistant-panel-notice {
+  margin: 6px 0 0;
+  color: var(--ag-accent-text);
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ag-accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .browser-shell.browser-shell-desktop .assistant-project-error pre {
   max-height: 160px;
   overflow: auto;

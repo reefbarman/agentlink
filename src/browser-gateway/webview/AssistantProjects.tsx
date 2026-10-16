@@ -139,6 +139,16 @@ const ERROR_TEXT: Record<string, string> = {
   push_subscription_invalid: "This browser gave an unusable subscription.",
   push_subscription_limit: "Too many devices have notifications on.",
   push_not_subscribed: "Notifications are off on this device.",
+  // Persona settings.
+  persona_name_invalid: "Give the Assistant a name of up to 40 characters.",
+  persona_text_invalid: "The persona can be up to 2,000 characters.",
+  persona_owner_name_invalid: "Your name can be up to 60 characters.",
+  persona_time_zone_invalid: "That time zone is not recognised.",
+  persona_quiet_hours_invalid:
+    "Quiet hours need a start and an end time that differ.",
+  settings_changed:
+    "These settings changed somewhere else. Close and open Settings again.",
+  settings_forbidden: "Only the Assistant's owner can change its settings.",
 };
 
 export type AssistantNetworkPreset = "open" | "dependencies" | "off";

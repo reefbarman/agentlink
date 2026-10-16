@@ -119,7 +119,11 @@ export interface CreateWorkspaceHostOptions {
    * apply, which suit short tasks only.
    */
   readonly turnLimits?: TurnExecutionLimits;
-  readonly instructions?: string;
+  /**
+   * Host instructions appended to every prompt. A function is read for
+   * each turn, so a host's settings apply without reopening the project.
+   */
+  readonly instructions?: string | (() => string | undefined);
   /**
    * Optional assistant identity. When set, prompts lead with
    * `You are AgentLink, <role>.` for foreground and background sessions.
@@ -1071,7 +1075,9 @@ export async function createWorkspaceHost(
               }`
           : "Background writers are not enabled.",
         artifactInstructions,
-        options.instructions,
+        typeof options.instructions === "function"
+          ? options.instructions()
+          : options.instructions,
       ]
         .filter(Boolean)
         .join("\n\n");
