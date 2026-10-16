@@ -116,6 +116,10 @@ async function setup(
 describe("runner manager editors", () => {
   it("starts code-server on the task folder only, read-only or not, with nothing but the proxy", async () => {
     const test = await setup();
+    // A file and an old AgentLink state folder and a symlink beside the repo.
+    await fs.writeFile(path.join(test.folder, "notes.txt"), "x");
+    await fs.mkdir(path.join(test.folder, ".agentlink"));
+    await fs.symlink("/etc", path.join(test.folder, "escape"));
     const started = await test.client().startEditor({
       id: "task-t1",
       folder: test.folder,
@@ -142,9 +146,29 @@ describe("runner manager editors", () => {
     expect(body.User).toBe("1000:1000");
     expect(body.Cmd).toContain("none");
     expect(body.Cmd.at(-1)).toBe(test.folder);
-    // Only the task folder, on the host's path, and read-only.
-    expect(body.HostConfig.Binds).toEqual([
-      `/home/owner/assistant/projects/.tasks/t1:${test.folder}:ro`,
+    // Only the task folder's entries, on the host's path, and read-only,
+    // over a scratch folder where AgentLink keeps its own chats; no
+    // symlinks and no old state.
+    const host = "/home/owner/assistant/projects/.tasks/t1";
+    expect(body.HostConfig.Binds).toBeUndefined();
+    expect(body.HostConfig.Mounts).toEqual([
+      {
+        Type: "tmpfs",
+        Target: test.folder,
+        TmpfsOptions: { SizeBytes: 256 * 1024 * 1024, Mode: 0o1777 },
+      },
+      {
+        Type: "bind",
+        Source: `${host}/notes.txt`,
+        Target: path.join(test.folder, "notes.txt"),
+        ReadOnly: true,
+      },
+      {
+        Type: "bind",
+        Source: `${host}/repo`,
+        Target: path.join(test.folder, "repo"),
+        ReadOnly: true,
+      },
     ]);
     expect(body.HostConfig).toMatchObject({
       NetworkMode: "agentlink-editors",
@@ -166,8 +190,13 @@ describe("runner manager editors", () => {
     });
     const second = test.docker.calls.filter((call) =>
       call.path.endsWith("/create"),
-    )[1]!.body as { HostConfig: { Binds: string[] }; Env: string[] };
-    expect(second.HostConfig.Binds[0]).toMatch(/:rw$/u);
+    )[1]!.body as {
+      HostConfig: { Binds: string[]; Mounts?: unknown };
+      Env: string[];
+    };
+    // Taken over: the whole task folder, writable.
+    expect(second.HostConfig.Binds).toEqual([`${host}:${test.folder}:rw`]);
+    expect(second.HostConfig.Mounts).toBeUndefined();
     expect(second.Env).toEqual(["HOME=/tmp/home"]);
     await expect(test.client().stopAllEditors()).resolves.toEqual({
       stopped: 1,

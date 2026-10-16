@@ -46,6 +46,49 @@ const HOST_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/u;
  * the editor's settings, then runs code-server with the arguments.
  */
 export const EDITOR_ENTRYPOINT = "/usr/local/bin/agentlink-editor";
+/** AgentLink's own state folder in the editor's workspace (the task folder). */
+const EDITOR_STATE_FOLDER = ".agentlink";
+const MAX_READ_ONLY_ENTRIES = 64;
+const READ_ONLY_SCRATCH_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Docker mounts for a read-only editor. AgentLink keeps its chats in
+ * `<workspace>/.agentlink`, and Docker cannot create a mount point inside a
+ * read-only bind, so the task folder itself is a small scratch tmpfs with
+ * each of its entries bound read-only beneath it: the editor can write its
+ * own state (lost when it stops) but nothing of the task's. Symlinks and
+ * any existing `.agentlink` are left out.
+ */
+async function readOnlyEditorMounts(
+  folder: string,
+  hostFolder: string,
+): Promise<Array<Record<string, unknown>>> {
+  const entries = await fs.readdir(folder, { withFileTypes: true });
+  const kept = entries.filter(
+    (entry) =>
+      entry.name !== EDITOR_STATE_FOLDER &&
+      (entry.isDirectory() || entry.isFile()),
+  );
+  if (kept.length > MAX_READ_ONLY_ENTRIES) {
+    throw new HttpError(400, "folder_too_many_entries");
+  }
+  return [
+    {
+      Type: "tmpfs",
+      Target: folder,
+      TmpfsOptions: { SizeBytes: READ_ONLY_SCRATCH_BYTES, Mode: 0o1777 },
+    },
+    ...kept
+      .map((entry) => entry.name)
+      .sort()
+      .map((name) => ({
+        Type: "bind",
+        Source: path.join(hostFolder, name),
+        Target: path.join(folder, name),
+        ReadOnly: true,
+      })),
+  ];
+}
 
 export interface RunnerLimits {
   /** Bytes. */
@@ -409,6 +452,11 @@ export async function startRunnerManager(
     ) {
       throw new HttpError(400, "editor_no_proxy_invalid");
     }
+    const hostFolder = onHost(folder, projectsRoot, hostPaths.projects);
+    const mounts =
+      body.mode === "ro"
+        ? { Mounts: await readOnlyEditorMounts(folder, hostFolder) }
+        : { Binds: [`${hostFolder}:${folder}:rw`] };
     const name = editorContainerName(id);
     await removeEditor(id);
     const created = await docker(
@@ -450,9 +498,7 @@ export async function startRunnerManager(
         Labels: { [EDITOR_LABEL]: id },
         ExposedPorts: { [`${EDITOR_PORT}/tcp`]: {} },
         HostConfig: {
-          Binds: [
-            `${onHost(folder, projectsRoot, hostPaths.projects)}:${folder}:${body.mode}`,
-          ],
+          ...mounts,
           NetworkMode: editor.network,
           ReadonlyRootfs: true,
           Tmpfs: { "/tmp": "size=1g,mode=1777" },
