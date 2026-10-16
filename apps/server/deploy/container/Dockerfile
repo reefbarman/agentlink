@@ -132,18 +132,22 @@ ENTRYPOINT ["/usr/local/bin/agentlink-editor"]
 # pinned: bump the version deliberately.
 FROM node:22-bookworm-slim AS browser
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx -y playwright@1.64.1 install --with-deps --only-shell chromium \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat \
+    && npx -y playwright@1.64.1 install --with-deps --only-shell chromium \
     && shell="$(find /ms-playwright -type f \( -name headless_shell -o -name chrome-headless-shell \) | head -n 1)" \
     && test -n "$shell" \
     && ln -s "$shell" /usr/local/bin/headless-shell \
     && rm -rf /root/.npm /root/.cache /var/lib/apt/lists/* /tmp/*
-# Fixed flags: DevTools on the browsers' network for the assistant, no
-# sandbox inside the container (it is the sandbox), nothing that phones
-# home, and the proxy (from the runner manager) for every request,
-# loopback included.
+# Fixed flags: no sandbox inside the container (it is the sandbox),
+# nothing that phones home, and the proxy (from the runner manager) for
+# every request, loopback included. Chromium only serves DevTools on
+# loopback (whatever address it is given), so socat forwards the
+# browsers' network port 9222 to it for the assistant.
 RUN printf '%s\n' '#!/bin/sh' 'set -eu' \
     'mkdir -p /tmp/home /tmp/profile' \
-    'exec /usr/local/bin/headless-shell --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-sync --disable-extensions --disable-breakpad --mute-audio --hide-scrollbars --user-data-dir=/tmp/profile --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 "--proxy-bypass-list=<-loopback>" "$@" about:blank' \
+    '/usr/local/bin/headless-shell --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-sync --disable-extensions --disable-breakpad --mute-audio --hide-scrollbars --user-data-dir=/tmp/profile --remote-debugging-port=9221 "--proxy-bypass-list=<-loopback>" "$@" about:blank &' \
+    'exec socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9221' \
     > /usr/local/bin/agentlink-browser \
     && chmod 0755 /usr/local/bin/agentlink-browser
 USER 1000

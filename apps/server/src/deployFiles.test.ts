@@ -538,6 +538,12 @@ describe("deployment files", () => {
     expect(dockerfile).toContain(
       'ENTRYPOINT ["/usr/local/bin/agentlink-browser"]',
     );
+    // Chromium serves DevTools on loopback only; socat exposes it on 9222.
+    expect(dockerfile).toContain("--remote-debugging-port=9221");
+    expect(dockerfile).toContain(
+      "exec socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9221",
+    );
+    expect(dockerfile).not.toContain("--remote-debugging-address");
     const upgrade = await fs.readFile(path.join(deploy, "upgrade.sh"), "utf8");
     expect(upgrade).toContain('OPTIONAL_TARGETS="editor browser"');
     expect(upgrade).toContain("compose\\.browser\\.yaml");

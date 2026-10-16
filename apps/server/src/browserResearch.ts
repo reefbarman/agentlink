@@ -247,6 +247,9 @@ export function createBrowserPool(options: BrowserPoolOptions): BrowserPool {
     try {
       connection = await options.connect(where.host, where.port);
     } catch (error) {
+      options.log(
+        `Browser ${id} did not answer on DevTools: ${error instanceof Error ? error.message : String(error)}`,
+      );
       await options.stop(id).catch(() => undefined);
       throw error;
     }

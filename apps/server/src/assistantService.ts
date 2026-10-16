@@ -2103,6 +2103,13 @@ export async function startAssistantService(
       await manager.stopAllBrowsers().catch((error: unknown) => {
         log(`Could not stop leftover browsers: ${message(error)}`);
       });
+      log(
+        "Browser research: one throwaway browser per chat, through the egress gateway",
+      );
+    } else if (config.browser) {
+      log(
+        "Browser research is off: it needs session runners and the egress gateway (commandWorker.egressProxy)",
+      );
     }
     // A chat's browser stops when its turn ends.
     const stopBrowsersOnTurnEnd = routes.events.observe((key, { event }) => {
