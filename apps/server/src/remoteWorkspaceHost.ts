@@ -143,13 +143,15 @@ export function createRemoteWorkspaceHost(
     })();
   };
 
-  const ready = async () => {
+  /** `reason`: the call that needs the runner, for the log. */
+  const ready = async (reason: string) => {
     if (closed) {
       throw Object.assign(new Error("runner_closed"), {
         code: "runner_closed",
       });
     }
     running ??= (async () => {
+      log(`Starting the runner for ${reason}`);
       await options.start();
       events?.abort();
       events = new AbortController();
@@ -239,14 +241,14 @@ export function createRemoteWorkspaceHost(
 
   const call = <T>(method: string, args: readonly unknown[]): Promise<T> =>
     use(async () => {
-      await ready();
+      await ready(method);
       try {
         return await client.call<T>("/call", { method, args });
       } catch (error) {
         if (!(error instanceof RunnerUnreachableError)) throw error;
         lost();
         if (!RETRYABLE.has(method)) throw error;
-        await ready();
+        await ready(method);
         return await client.call<T>("/call", { method, args });
       }
     });
@@ -262,7 +264,7 @@ export function createRemoteWorkspaceHost(
     },
   ): Promise<AgentTurnResult> =>
     use(async () => {
-      await ready();
+      await ready(path === "/turns/run" ? "a turn" : "an approval");
       const { signal, onEvent, takeInterjections } = options_;
       // Stop asks the runner to cancel, so the turn still reports its
       // cancelled result; dropping the connection is the last resort.
