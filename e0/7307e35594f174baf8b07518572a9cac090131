@@ -1,0 +1,146 @@
+apps/server/src/commandWorkerProtocol.ts
+  h_e08a86bb3a33a2 3,57-60
+  s_014460321de767::t_d7d1827f6527f0 55-56
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 614-616,9150-9151
+  s_8dff6141b7e716::t_f5a78b579631c1 612-613,617
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 103,149-154,195-203,343-346,352,1161,1194,1222,1231,1258-1273
+  s_014460321de767::t_65e9b722b2e57c 347-348,350-351,353-355,1274
+apps/server/esbuild.mjs
+  h_e08a86bb3a33a2 5,8,237-262,273-274
+  s_014460321de767::t_84a64f7315c52c 272,275
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 1-274
+apps/server/src/dataVersion.test.ts
+  h_e08a86bb3a33a2 1-97
+apps/server/src/backupClient.ts
+  h_e08a86bb3a33a2 22
+apps/server/src/jobRoutes.test.ts
+  h_e08a86bb3a33a2 65-67
+apps/server/src/backupAgent.test.ts
+  h_e08a86bb3a33a2 86-87
+  s_07dc1c52554b56::t_cbebbde7a9d120 85,88
+apps/server/src/taskRoutes.test.ts
+  h_e08a86bb3a33a2 78-80
+apps/server/src/backup.ts
+  h_e08a86bb3a33a2 369-370,383,458,460-465,496
+apps/server/src/commandWorkerClient.ts
+  h_e08a86bb3a33a2 15,227-230,239-248
+  s_014460321de767::t_240bda2ac6f53b 231-232
+apps/server/src/serverBuild.ts
+  h_e08a86bb3a33a2 1-101
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 335,422,453-490
+  s_07dc1c52554b56::t_8bbb7d821ab72d 491
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 92-93,236,634-680
+  s_07dc1c52554b56::t_88a15dbee26ca4 681-682
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 239-244
+  s_014460321de767::t_a478be4d0987ec 237-238
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 582-609
+apps/server/src/publisher.test.ts
+  h_e08a86bb3a33a2 953-954
+  s_07dc1c52554b56::t_b24ea0d3717a53 951-952,955
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 143-148,312-318,713-715,1384-1393
+  s_07dc1c52554b56::t_3b95c118c521e4 1394
+apps/server/src/jobRunner.ts
+  h_e08a86bb3a33a2 82-86,101-109,267-268,272,457-459,493,558,564-581
+  s_014460321de767::t_c6d36dfbd38e7e 270-271,273-275,582
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 408-420,424-425,431-432,436,531-535,549,1194,1202-1203,1285-1287
+apps/server/src/serviceVersions.ts
+  h_e08a86bb3a33a2 1-151
+apps/server/src/jobRunner.test.ts
+  h_e08a86bb3a33a2 169,196,225-255
+  s_07dc1c52554b56::t_6a5a01b6d13a43 256
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 190-193,196-199,1347,2747-2748
+  s_014460321de767::t_18dbafa021e28c 195
+apps/server/src/maintenance.test.ts
+  h_e08a86bb3a33a2 1-200
+apps/server/src/backup.test.ts
+  h_e08a86bb3a33a2 251-253,302-316
+  s_07dc1c52554b56::t_6feb02ac9ddc90 317-318
+apps/server/src/commandWorker.test.ts
+  h_e08a86bb3a33a2 165,168-169
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2525-2536
+apps/server/src/publisher.ts
+  h_e08a86bb3a33a2 9,283
+apps/server/README.md
+  h_e08a86bb3a33a2 366-382
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 19-20,22-29,95-97,103,152-162,236-238,270-271,280-290,308-317,350-356,499,528,542-713,715-719,722-723
+  s_014460321de767::t_cb1f1aad5676ed 21,714,720-721,724-725
+apps/server/src/runnerProtocol.ts
+  h_e08a86bb3a33a2 7,19-24,127-128
+apps/server/src/maintenance.ts
+  h_e08a86bb3a33a2 1-405
+apps/server/src/publisherClient.ts
+  h_e08a86bb3a33a2 42-43
+apps/server/src/commandWorker.ts
+  h_e08a86bb3a33a2 14,148-149
+  s_014460321de767::t_db2af54e7069f8 146-147,150
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 514-515,521-534,540
+  s_014460321de767::t_2773c4c45b2b4d 512-513,516
+apps/server/src/serverBuild.test.ts
+  h_e08a86bb3a33a2 1-77
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 563-576
+CHANGELOG.md
+  h_e08a86bb3a33a2 27
+apps/server/src/backupAgent.ts
+  h_e08a86bb3a33a2 17,220-221
+  s_014460321de767::t_486819dd747058 219,222
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 128-135,702-709,906-908,1161-1163,1241-1243,1246-1250,1595,1791,1927,1978-2041,2043-2053
+  s_07dc1c52554b56::t_6e84464ed22171 127,1244-1245
+apps/server/src/dataVersion.ts
+  h_e08a86bb3a33a2 1-118
+apps/server/src/deployFiles.test.ts
+  h_e08a86bb3a33a2 476-505
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e07307e35594f174baf8b07518572a9cac090131",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_014460321de767": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75dc4391-e203-4c15-849a-575935f7a5b5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_07dc1c52554b56": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2e1db93-b3b9-46e7-b6af-874e7e67b57a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_8dff6141b7e716": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cd00c97-1cd2-47b5-9a68-97ba9bca4fd3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
