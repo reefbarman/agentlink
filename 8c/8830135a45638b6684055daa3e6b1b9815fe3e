@@ -1,0 +1,14 @@
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 3532-3551
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c8830135a45638b6684055daa3e6b1b9815fe3e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
