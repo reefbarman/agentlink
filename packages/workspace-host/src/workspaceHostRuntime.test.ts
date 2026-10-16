@@ -224,6 +224,52 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("tells the model about MCP tools the host provides", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-mcp-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const prompts: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        prompts.push(
+          body.messages.find((message) => message.role === "system")!.content,
+        );
+        return completion("ok");
+      });
+    const call = defineTool({
+      name: "call_mcp_tool",
+      description: "Call an MCP tool.",
+      inputSchema: { type: "object", properties: {} },
+      effect: "external",
+      authorization: "required",
+      handler: async () => ({ modelContent: "", displayContent: {} }),
+    });
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "mcp-owner",
+      approvalHostTools: {
+        toolNames: ["call_mcp_tool"],
+        resolveTools: () => [call],
+        prepare: () => ({ decision: "deny", reason: "no" }),
+      },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await host.runTurn(sessionId, "hello");
+      expect(prompts[0]).not.toContain("MCP tools are not enabled.");
+      expect(prompts[0]).toContain("find_mcp_tools");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it.each(["inherited", "explicit"] as const)(
     "composes the %s native child's own model profile without granting delegation",
     async (selection) => {

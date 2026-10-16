@@ -1055,7 +1055,9 @@ export async function createWorkspaceHost(
           : "Instruction and skill artifacts are not enabled.",
         options.mcp || options.sharedMcp
           ? "MCP servers are unsandboxed external capabilities. Discovery requires foreground launch or destination trust, and MCP tool calls follow host authorization and configured policy."
-          : "MCP tools are not enabled.",
+          : approvalToolNames.has("call_mcp_tool")
+            ? "The host provides the owner's MCP servers: list their tools with find_mcp_tools, then call one with call_mcp_tool. Each call follows the owner's per-tool policy and may wait for the owner's approval."
+            : "MCP tools are not enabled.",
         options.languageIntelligence
           ? "Optional TypeScript/JavaScript diagnostics, symbols, definition, references, and hover are available through an explicitly installed unsandboxed language server. Treat unavailable, warming, stale, and failed states as incomplete analysis, never as zero findings."
           : "Managed TypeScript/JavaScript intelligence is not enabled.",
