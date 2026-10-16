@@ -242,6 +242,17 @@ export interface AssistantSessionOperations {
     sessionId: string,
     interjection: { readonly id: string; readonly text: string },
   ): Promise<{ readonly queued: boolean }>;
+  /**
+   * Take back a message handed to the running turn with `interject`, if the
+   * turn has not taken it in yet. `withdrawn: false` when it already has (or
+   * no turn holds it): the turn reports it with `user.interjected` if so.
+   */
+  withdrawInterjection(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+    interjectionId: string,
+  ): Promise<{ readonly withdrawn: boolean }>;
   cancel(
     auth: AssistantServerAuth,
     projectId: string,
@@ -784,6 +795,17 @@ export function createAssistantWorkspaceRoutes(
       if (!task || task.controller.signal.aborted) return { queued: false };
       task.interjections.push({ id: interjection.id, text });
       return { queued: true };
+    },
+    async withdrawInterjection(auth, projectId, sessionId, interjectionId) {
+      assertSessionId(sessionId);
+      await authorize(auth, projectId, "write");
+      const task = tasks.get(sessionKey(projectId, sessionId));
+      const index =
+        task?.interjections.findIndex((item) => item.id === interjectionId) ??
+        -1;
+      if (!task || index < 0) return { withdrawn: false };
+      task.interjections.splice(index, 1);
+      return { withdrawn: true };
     },
     async answerInteraction(auth, projectId, sessionId, answer) {
       assertSessionId(sessionId);

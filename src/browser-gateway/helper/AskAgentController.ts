@@ -300,6 +300,19 @@ export class AskAgentController {
     });
   }
 
+  /**
+   * Stop holding an approval without answering it: the host shows and
+   * answers it elsewhere (for example in its own chat once the turn there
+   * carries on without the controller). Its waiter is rejected.
+   */
+  releaseApproval(id: string): ApprovalRequest | null {
+    const pending = this.pendingApproval;
+    if (!pending || pending.request.id !== id) return null;
+    this.pendingApproval = null;
+    pending.reject(new Error("ask_agent_approval_released"));
+    return pending.request;
+  }
+
   submitApproval(decision: DecisionMessage): ApprovalRequest | null {
     const pending = this.pendingApproval;
     if (!pending || pending.request.id !== decision.id) return null;

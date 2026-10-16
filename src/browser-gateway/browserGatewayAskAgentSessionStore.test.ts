@@ -157,6 +157,37 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     });
   });
 
+  it("keeps the open chat streaming when a reply in another chat finishes", () => {
+    const store = createStore();
+    const streaming = () =>
+      store.getOrCreate({
+        now: 300,
+        theme,
+        modelCredentialStatus: { state: "not_required", providerId: "test" },
+      }).snapshot.session.foreground.streaming;
+    store.createSession(100);
+    store.appendUserMessage({ text: "long job", now: 110 });
+    const background = store.startAssistantMessage({ now: 120 });
+    store.createSession(200);
+    store.appendUserMessage({ text: "quick question", now: 210 });
+    const open = store.startAssistantMessage({ now: 220 });
+    expect(streaming()).toBe(true);
+
+    // The other chat's reply ends: this chat is still answering.
+    store.finishAssistantMessage(background.id, "done");
+    expect(streaming()).toBe(true);
+    store.finishAssistantErrorMessage({
+      messageId: background.id,
+      text: "Stopped.",
+      code: "model_stopped",
+      retryable: false,
+    });
+    expect(streaming()).toBe(true);
+    // Its own reply ending does stop it.
+    store.finishAssistantMessage(open.id, "answer");
+    expect(streaming()).toBe(false);
+  });
+
   it("upserts a host-projected session without switching chats", () => {
     const store = createStore();
     store.createSession(100);

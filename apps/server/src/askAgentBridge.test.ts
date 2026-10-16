@@ -169,6 +169,16 @@ function createFakeOperations(events: SessionEventHub) {
         return { queued: true };
       },
     ),
+    withdrawInterjection: vi.fn(
+      async (_auth, _projectId, sessionId: string, interjectionId: string) => {
+        const index = interjections.findIndex(
+          (item) => item.sessionId === sessionId && item.id === interjectionId,
+        );
+        if (index < 0) return { withdrawn: false };
+        interjections.splice(index, 1);
+        return { withdrawn: true };
+      },
+    ),
     cancel: vi.fn(async () => undefined),
     deleteSession: vi.fn(async (_auth, _projectId, sessionId: string) => {
       if (!sessions.delete(sessionId)) {
@@ -1702,6 +1712,205 @@ describe("Ask Agent bridge", () => {
     await call("/api/ask-agent/approval", { id: "int-9", decision: "accept" });
     await expect(asking).resolves.toMatchObject({ status: 200 });
     expect((await activityOf())[first]).not.toBe("needs-you");
+  });
+
+  it("starts a new chat while another waits for an approval, whose card stays in its own chat", async () => {
+    const { fake, call } = await startBridge();
+    const activityOf = async () => {
+      const { body } = await call("/api/ask-agent/sessions");
+      return Object.fromEntries(
+        (body.sessions as Array<{ id: string; activity?: string }>).map(
+          (session) => [session.id, session.activity],
+        ),
+      );
+    };
+    // The first chat's turn asks for an approval; every other turn (and
+    // its resume) just answers.
+    let asking: string | undefined;
+    fake.setScript((sessionId, taskId) => {
+      if (!asking) {
+        asking = sessionId;
+        fake.turn(sessionId, {
+          type: "interaction.required",
+          interaction: {
+            interactionId: "int-1",
+            toolName: "schedule_job",
+            summary: 'Schedule "Gate canary"?',
+            displayInput: {},
+          },
+          interactionRevision: "rev-1",
+        });
+        fake.publish(sessionId, {
+          kind: "task",
+          state: "finished",
+          taskId,
+          status: "suspended",
+        });
+        return;
+      }
+      const text = sessionId === asking ? "Scheduled." : "Hello there.";
+      fake.turn(sessionId, { type: "text.delta", text });
+      fake.turn(sessionId, { type: "turn.completed", result: { text } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    const first = snapshotOf(
+      await call("/api/ask-agent/session").then((r) => r.body),
+    ).session.foreground.sessionId;
+    const waiting = call("/api/ask-agent/send", { text: "schedule a canary" });
+    await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      expect(snapshotOf(body).ui.approval).toMatchObject({ id: "int-1" });
+    });
+
+    // A new chat does not show the other chat's card.
+    const created = await call("/api/ask-agent/session/new", {});
+    const second = snapshotOf(created.body).session.foreground.sessionId;
+    expect(snapshotOf(created.body).ui.approval).toBeNull();
+
+    // Its message runs as its own turn straight away, never offered to the
+    // waiting chat.
+    const answered = await call("/api/ask-agent/send", {
+      sessionId: second,
+      text: "say hello",
+    });
+    expect(answered.status).toBe(200);
+    expect(
+      snapshotOf(answered.body).session.foreground.projectedMessages.at(-1),
+    ).toMatchObject({ role: "assistant", content: "Hello there." });
+    expect(snapshotOf(answered.body).ui.approval).toBeNull();
+    expect(fake.interjections).toEqual([]);
+    await expect(waiting).resolves.toMatchObject({ status: 200 });
+    expect(await activityOf()).toMatchObject({ [first]: "needs-you" });
+
+    // The waiting chat still shows its card, and answering it there
+    // finishes its turn in that chat.
+    const back = await call("/api/ask-agent/session/load", {
+      sessionId: first,
+    });
+    const card = snapshotOf(back.body).ui.approval;
+    expect(card?.id).toBe(`run:${asking}:int-1`);
+    await expect(
+      call("/api/ask-agent/approval", { id: card!.id, decision: "accept" }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(fake.operations.answerInteraction).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      asking,
+      {
+        interactionId: "int-1",
+        interactionRevision: "rev-1",
+        decision: "allow",
+      },
+    );
+    await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      const snapshot = snapshotOf(body);
+      expect(snapshot.ui.approval).toBeNull();
+      expect(
+        snapshot.session.foreground.projectedMessages.at(-1),
+      ).toMatchObject({ role: "assistant", content: "Scheduled." });
+    });
+    expect((await activityOf())[first]).toBeUndefined();
+  });
+
+  it("removes or edits a queued message before it runs", async () => {
+    const { fake, call } = await startBridge();
+    // A turn that runs until the test finishes it; later turns answer.
+    let running: { sessionId: string; taskId: string } | undefined;
+    fake.setScript((sessionId, taskId) => {
+      if (!running) {
+        running = { sessionId, taskId };
+        fake.turn(sessionId, { type: "text.delta", text: "working" });
+        return;
+      }
+      fake.turn(sessionId, { type: "turn.completed", result: { text: "ok" } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    const queueOf = async () => {
+      const { body } = await call("/api/ask-agent/session");
+      const foreground = (
+        body.snapshot as {
+          session: { foreground: { messageQueue?: Array<{ id: string }> } };
+        }
+      ).session.foreground;
+      return (foreground.messageQueue ?? []).map((queued) => queued.id);
+    };
+    const longJob = call("/api/ask-agent/send", { text: "long job" });
+    await vi.waitFor(() => expect(running).toBeDefined());
+
+    // Queued while it works, and offered to that turn.
+    const removed = call("/api/ask-agent/send", {
+      id: "queued-1",
+      text: "also do this",
+    });
+    await vi.waitFor(() =>
+      expect(fake.interjections.map((item) => item.id)).toEqual(["queued-1"]),
+    );
+    expect(await queueOf()).toEqual(["queued-1"]);
+    // Remove: taken back from the turn, out of the queue.
+    await expect(
+      call("/api/ask-agent/queue", { action: "remove", id: "queued-1" }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(fake.interjections).toEqual([]);
+    expect(await queueOf()).toEqual([]);
+    await expect(
+      call("/api/ask-agent/queue", { action: "remove", id: "queued-1" }),
+    ).resolves.toMatchObject({ status: 404 });
+
+    // Edit: the turn gets the new text; a message it already took cannot
+    // change.
+    const edited = call("/api/ask-agent/send", {
+      id: "queued-2",
+      text: "draft wording",
+    });
+    await vi.waitFor(() =>
+      expect(fake.interjections.map((item) => item.id)).toEqual(["queued-2"]),
+    );
+    await expect(
+      call("/api/ask-agent/queue", {
+        action: "update",
+        id: "queued-2",
+        text: "final wording",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(() =>
+      expect(fake.interjections).toEqual([
+        expect.objectContaining({ id: "queued-2", text: "final wording" }),
+      ]),
+    );
+    fake.interjections.splice(0);
+    await expect(
+      call("/api/ask-agent/queue", { action: "remove", id: "queued-2" }),
+    ).resolves.toMatchObject({ status: 409 });
+
+    // The long job ends without taking either message.
+    fake.turn(running!.sessionId, {
+      type: "turn.completed",
+      result: { text: "done" },
+    });
+    fake.publish(running!.sessionId, {
+      kind: "task",
+      state: "finished",
+      taskId: running!.taskId,
+      status: "completed",
+    });
+    await expect(longJob).resolves.toMatchObject({ status: 200 });
+    await expect(removed).resolves.toMatchObject({ status: 200 });
+    await expect(edited).resolves.toMatchObject({ status: 200 });
+    // The removed message never ran; the edited one ran with its new text.
+    expect(fake.operations.startTurn.mock.calls.map((args) => args[3])).toEqual(
+      ["long job", "final wording"],
+    );
   });
 
   it("switches the session model, and lists, renames and hides sessions", async () => {

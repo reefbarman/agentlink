@@ -1422,7 +1422,7 @@ export class BrowserGatewayAskAgentSessionStore {
       message.content = fallbackText;
       this.setAssistantFallbackTextBlock(message, fallbackText);
     }
-    this.streaming = false;
+    this.stopStreamingFor(messageId);
   }
 
   finishAssistantErrorMessage(params: {
@@ -1454,7 +1454,21 @@ export class BrowserGatewayAskAgentSessionStore {
         ...(params.actions ? { actions: params.actions } : {}),
       };
     }
-    this.streaming = false;
+    this.stopStreamingFor(params.messageId);
+  }
+
+  /**
+   * A finished message ends the open chat's streaming state, unless it
+   * belongs to another chat (a turn still writing to the chat it started
+   * in while the viewer works in this one).
+   */
+  private stopStreamingFor(messageId: string): void {
+    const inOtherSession = this.sessions.some(
+      (session) =>
+        session.id !== this.activeSessionId &&
+        session.messages.some((candidate) => candidate.id === messageId),
+    );
+    if (!inOtherSession) this.streaming = false;
   }
 
   appendAssistantMessage(params: { text: string; now: number }): ChatMessage {

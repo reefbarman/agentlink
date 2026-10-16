@@ -938,6 +938,62 @@ describe("assistant workspace routes", () => {
     ).resolves.toEqual({ queued: false });
   });
 
+  it("takes back a message the running turn has not taken in yet", async () => {
+    const harness = await startHarness();
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    const auth: AssistantServerAuth = {
+      principal: {
+        tenantId: "agentlink-server",
+        subjectId: harness.server.store.ownerId!,
+      },
+      session: {
+        ownerId: harness.server.store.ownerId!,
+        sessionId: "s",
+        deviceId: harness.owner.deviceId,
+        deviceLabel: "Laptop",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => auth,
+    };
+    const { operations } = harness.routes;
+    const message = { id: "queued-2", text: "actually, never mind" };
+    let release!: () => void;
+    harness.fetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(completion("Done with the page."));
+        }),
+    );
+    await harness.request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: harness.owner,
+      body: { text: "update the page" },
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    await expect(
+      operations.interject(auth, "home", sessionId, message),
+    ).resolves.toEqual({ queued: true });
+    await expect(
+      operations.withdrawInterjection(auth, "home", sessionId, "queued-2"),
+    ).resolves.toEqual({ withdrawn: true });
+    // Already gone, and an unknown one: nothing to take back.
+    await expect(
+      operations.withdrawInterjection(auth, "home", sessionId, "queued-2"),
+    ).resolves.toEqual({ withdrawn: false });
+    release();
+    await harness.routes.whenIdle("home", sessionId);
+
+    // The turn never saw it: one model call, and it is not in the chat.
+    expect(harness.fetch).toHaveBeenCalledTimes(1);
+    const read = await harness.request({ path: base, session: harness.owner });
+    expect(JSON.stringify(read.body)).not.toContain("never mind");
+  });
+
   it("routes sessions to the selected model or role", async () => {
     const harness = await startHarness();
     const { owner, request } = harness;
