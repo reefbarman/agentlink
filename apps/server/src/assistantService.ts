@@ -1,8 +1,9 @@
-import type { HostToolResolver } from "@agentlink/core";
+import type { AgentModelReference, HostToolResolver } from "@agentlink/core";
 import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 import {
   createLocalWorkspaceExecutionBackend,
   createWorkspaceHost,
+  createWorkspaceModelBackend,
   type CreateWorkspaceHostOptions,
   type WorkspaceHost,
 } from "@agentlink/workspace-host";
@@ -38,6 +39,12 @@ import {
   acquireFileLock,
   releaseFileLock,
 } from "./fileLock.js";
+import type { RemoteWorkspaceHost } from "./remoteWorkspaceHost.js";
+import { createRunnerManagerClient } from "./runnerManager.js";
+import {
+  startSessionRunnerPool,
+  type SessionRunnerPool,
+} from "./sessionRunners.js";
 import {
   ensureLocalServerCertificate,
   localTlsHostsFromOrigins,
@@ -243,6 +250,8 @@ export type AssistantServicePreflight = (
   readonly commandWorker?: string;
   /** Present when a publisher is configured. */
   readonly publisher?: string;
+  /** Present when session runners are configured. */
+  readonly runners?: string;
 };
 
 /**
@@ -470,6 +479,28 @@ export async function preflightAssistantService(
     }
     result = { ...result, publisher: publisherStatus };
   }
+  if (config.runners) {
+    const { host, port } = config.runners.manager;
+    const manager = createRunnerManagerClient({
+      host,
+      port,
+      readToken: await prepareSecret(
+        config.runners.manager.token,
+        "runners.manager.token",
+        env,
+      ),
+    });
+    let runnersStatus: string;
+    try {
+      await manager.ping();
+      runnersStatus = config.projectsRoot
+        ? `Session runners: manager reachable at ${host}:${port}; each coding task runs in its own container`
+        : `Session runners: manager reachable at ${host}:${port}, but unused without projectsRoot`;
+    } catch (error) {
+      runnersStatus = `Session runners: manager not reachable at ${host}:${port} (${error instanceof Error ? error.message : String(error)}); coding tasks cannot start until it is`;
+    }
+    result = { ...result, runners: runnersStatus };
+  }
   if (hasCodexProvider(config)) {
     // A missing sign-in is reported, not fatal: the server can start and be
     // signed in afterwards without a restart.
@@ -627,6 +658,7 @@ export async function startAssistantService(
     : undefined;
   if (preflight.codexSignIn) log(preflight.codexSignIn);
   if (preflight.commandWorker) log(preflight.commandWorker);
+  if (preflight.runners) log(preflight.runners);
   const worker = await commandWorkerClient(config, env);
   const policyKey = config.commandWorker?.egressPolicyKey
     ? parseNetworkPolicyKey(
@@ -763,6 +795,7 @@ export async function startAssistantService(
     throw error;
   });
   const recovery = createSessionRecovery(log);
+  let runnerPool: SessionRunnerPool | undefined;
   /** Chat bridges by project, closed by the server once it exists. */
   const bridges = new Map<string, AskAgentBridge>();
   /** Changes when the inbox or a job's runs change; open apps refetch. */
@@ -1418,6 +1451,47 @@ export async function startAssistantService(
     // Coding tasks: each one is a fresh clone under `<projectsRoot>/.tasks`,
     // mounted as its own hidden project while it exists.
     const taskHosts = new Map<string, WorkspaceHost>();
+    // With session runners, each task's session runs in its own container
+    // instead of in this process.
+    const runnerHosts = new Map<string, RemoteWorkspaceHost>();
+    if (config.runners && config.projectsRoot) {
+      const runnersConfig = config.runners;
+      const runnerManager = createRunnerManagerClient({
+        host: runnersConfig.manager.host,
+        port: runnersConfig.manager.port,
+        readToken: await prepareSecret(
+          runnersConfig.manager.token,
+          "runners.manager.token",
+          env,
+        ),
+      });
+      runnerPool = await startSessionRunnerPool({
+        manager: runnerManager,
+        backends: providers.map((provider) =>
+          createWorkspaceModelBackend(provider),
+        ),
+        hostTools: (projectId) =>
+          projectWebTools(config, {
+            policy: () => projectNetworkPolicy(catalog.get(projectId)),
+            key: policyKey,
+            ...(codex ? { codex: codex.provider } : {}),
+          }),
+        listen: { host: "0.0.0.0", port: runnersConfig.port },
+        controlUrl: `http://${runnersConfig.controlHost}:${runnersConfig.port}`,
+        dataRoot: path.join(config.dataRoot, "runners"),
+        approvalMode: (projectId, sessionId) =>
+          approvalModes.get(projectId, sessionId),
+        onAgentApproval: (request) =>
+          agentNotifier?.notifyAgentApproval(request),
+        onAgentChanged: (change) => agentNotifier?.notifyAgentChange(change),
+        onTurnFailure: (projectId, sessionId, detail) => {
+          turnFailures.record(projectId, sessionId, detail);
+          log(`Turn failed in project "${projectId}": ${detail}`);
+        },
+        idleMs: runnersConfig.idleMinutes * 60_000,
+        log,
+      });
+    }
     const tasks = config.projectsRoot
       ? await (async () => {
           await fs.mkdir(config.projectsRoot!, { recursive: true });
@@ -1434,6 +1508,50 @@ export async function startAssistantService(
           });
           const openTaskProject = async (task: TaskRun) => {
             if (taskHosts.has(task.projectId)) return;
+            if (runnerHosts.has(task.projectId)) return;
+            if (runnerPool) {
+              const proxy = config.commandWorker?.egressProxy;
+              const host = runnerPool.open(
+                {
+                  projectId: task.projectId,
+                  projectRoot: path.dirname(task.workspace),
+                  commandRoot: task.workspace,
+                  shell: config.commandWorker?.shell ?? "/bin/bash",
+                  defaultModel: config.defaultModel,
+                  ...(config.modelRoles
+                    ? {
+                        modelRoles: Object.fromEntries(
+                          Object.entries(config.modelRoles).filter(
+                            (entry): entry is [string, AgentModelReference] =>
+                              entry[1] !== undefined,
+                          ),
+                        ),
+                      }
+                    : {}),
+                  instructions: AUTO_CONTINUE_INSTRUCTIONS,
+                  // The task's network preset, signed into the proxy URL as
+                  // for its commands on the worker.
+                  commandEnvironment: commandWorkerEnvironment(
+                    proxy
+                      ? egressProxyUrl(
+                          proxy,
+                          policyKey,
+                          projectNetworkPolicy(catalog.get(task.projectId)),
+                        )
+                      : undefined,
+                  ),
+                },
+                path.dirname(task.workspace),
+              );
+              runnerHosts.set(task.projectId, host);
+              routes.addProject({
+                projectId: task.projectId,
+                label: `Task: ${task.objective.replace(/\s+/gu, " ").slice(0, 60)}`,
+                host,
+                hidden: true,
+              });
+              return;
+            }
             // The task folder: the clone plus read-only references under
             // refs/. Commands still run only in the clone.
             const host = await openHost(
@@ -1460,6 +1578,13 @@ export async function startAssistantService(
             projects: {
               open: openTaskProject,
               async close(task) {
+                const remote = runnerHosts.get(task.projectId);
+                if (remote) {
+                  runnerHosts.delete(task.projectId);
+                  routes.removeProject(task.projectId);
+                  await remote.close();
+                  return;
+                }
                 const host = taskHosts.get(task.projectId);
                 if (!host) return;
                 taskHosts.delete(task.projectId);
@@ -1695,6 +1820,7 @@ export async function startAssistantService(
           await started.close();
           await recovery.settled();
           await closeHosts();
+          await runnerPool?.close();
           // Last: stopping turns and children publishes their final events.
           routes.events.close();
           await eventLog.close();
@@ -1713,6 +1839,7 @@ export async function startAssistantService(
     }
     await recovery.settled();
     await closeHosts();
+    await runnerPool?.close().catch(() => undefined);
     await eventLog.close();
     await certificates?.stop();
     throw error;

@@ -59,6 +59,53 @@ const withChange = (change: (config: Record<string, unknown>) => void) => {
 };
 
 describe("parseAssistantServerConfig", () => {
+  it("parses session runners with defaults, and refuses public hosts", () => {
+    const config = parseAssistantServerConfig(
+      withChange((value) => {
+        value.runners = {
+          manager: {
+            host: "runner-manager",
+            port: 7700,
+            token: { file: "/run/secrets/runner-manager-token" },
+          },
+        };
+      }),
+      "/etc/agentlink",
+    );
+    expect(config.runners).toMatchObject({
+      manager: { host: "runner-manager", port: 7700 },
+      port: 7500,
+      controlHost: "assistant",
+      idleMinutes: 10,
+    });
+    for (const runners of [
+      {
+        manager: { host: "example.com", port: 7700, token: { env: "T" } },
+      },
+      {
+        manager: { host: "runner-manager", port: 7700, token: { env: "T" } },
+        controlHost: "assistant.example.com",
+      },
+      {
+        manager: { host: "runner-manager", port: 7700, token: { env: "T" } },
+        idleMinutes: 0,
+      },
+      {
+        manager: { host: "runner-manager", port: 7700, token: { env: "T" } },
+        image: "anything",
+      },
+    ]) {
+      expect(() =>
+        parseAssistantServerConfig(
+          withChange((value) => {
+            value.runners = runners;
+          }),
+          "/etc/agentlink",
+        ),
+      ).toThrow(/runners/u);
+    }
+  });
+
   it("parses a review model role and lists configured models", () => {
     const config = parseAssistantServerConfig(
       withChange((value) => {

@@ -58,7 +58,9 @@ const MODEL_ROLE_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u;
 
 /**
  * The workspace host operations the server uses. The host acts as its own
- * project principal; the server principal never reaches it.
+ * project principal; the server principal never reaches it. A host in
+ * another process (a session runner) answers `listBackgroundAgents`
+ * asynchronously.
  */
 export type AssistantWorkspaceHost = Pick<
   WorkspaceHost,
@@ -71,12 +73,17 @@ export type AssistantWorkspaceHost = Pick<
   | "resumeInteraction"
   | "cancel"
   | "isBackgroundSession"
-  | "listBackgroundAgents"
   | "readBackgroundAgentSession"
   | "steerBackgroundAgent"
   | "stopBackgroundAgent"
   | "respondToBackgroundApproval"
->;
+> & {
+  listBackgroundAgents(
+    parentSessionId: string,
+  ):
+    | ReturnType<WorkspaceHost["listBackgroundAgents"]>
+    | Promise<ReturnType<WorkspaceHost["listBackgroundAgents"]>>;
+};
 
 export interface AssistantProjectMount {
   /** Stable URL identifier: lowercase letters, digits, and dashes. */

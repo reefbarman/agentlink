@@ -202,6 +202,48 @@ describe("deployment files", () => {
     }
   });
 
+  it("gives only the runner manager the Docker socket, and runners an internal network", async () => {
+    const container = path.join(deploy, "container");
+    const files = (await fs.readdir(container)).filter((file) =>
+      file.startsWith("compose"),
+    );
+    // No other service, in any compose file, mounts the Docker socket.
+    for (const file of files) {
+      const text = await fs.readFile(path.join(container, file), "utf8");
+      const mentions = text.match(/docker\.sock:/gu) ?? [];
+      expect(mentions.length, file).toBe(
+        file === "compose.runners.yaml" ? 1 : 0,
+      );
+    }
+    const overlay = await fs.readFile(
+      path.join(container, "compose.runners.yaml"),
+      "utf8",
+    );
+    const manager = overlay.slice(
+      overlay.indexOf("\n  runner-manager:\n"),
+      overlay.indexOf("\nnetworks:\n"),
+    );
+    expect(manager).toContain("- /var/run/docker.sock:/var/run/docker.sock");
+    expect(manager).toMatch(/^ {4}cap_drop:\n {6}- ALL$/mu);
+    expect(manager).toMatch(/^ {4}cap_add:\n {6}- DAC_READ_SEARCH$/mu);
+    expect(manager).toContain("- no-new-privileges:true");
+    expect(manager).toContain("read_only: true");
+    expect(manager).toContain("- ./projects:/srv/agentlink/projects:ro");
+    expect(manager).toContain("- ./data/runners:/var/lib/agentlink/runners:ro");
+    expect(manager).not.toMatch(/^\s+ports:/mu);
+    expect(manager).toMatch(/^ {4}networks:\n {6}- runner-manager\n/mu);
+    // The assistant reaches the manager and the runners, never the socket.
+    const assistant = overlay.slice(
+      overlay.indexOf("\n  assistant:\n"),
+      overlay.indexOf("\n  egress-gateway:\n"),
+    );
+    expect(assistant).not.toContain("docker.sock");
+    expect(overlay).toMatch(
+      /^ {2}runners:\n {4}name: agentlink-runners\n {4}internal: true\n/mu,
+    );
+    expect(overlay).toMatch(/^ {2}runner-manager:\n {4}internal: true\n/mu);
+  });
+
   it("runs SearXNG unpublished and hardened, with JSON results", async () => {
     const container = path.join(deploy, "container");
     const overlay = await fs.readFile(

@@ -1,0 +1,227 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  createRunnerManagerClient,
+  startRunnerManager,
+  type DockerApi,
+} from "./runnerManager.js";
+
+const cleanup: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const step of cleanup.splice(0).reverse()) await step();
+});
+
+interface DockerCall {
+  readonly method: string;
+  readonly path: string;
+  readonly body: unknown;
+}
+
+/**
+ * The Docker Engine API, in memory, recording what it is asked. The
+ * manager's own container has the projects and runners' data mounted.
+ */
+function fakeDocker(mounts: { projects: string; data: string }) {
+  const calls: DockerCall[] = [];
+  const containers = new Map<string, { Labels: Record<string, string> }>();
+  const api: DockerApi = async (method, requestPath, body) => {
+    const url = new URL(requestPath, "http://docker");
+    calls.push({ method, path: url.pathname, body });
+    const name = /\/containers\/([^/]+)/u.exec(url.pathname)?.[1];
+    if (method === "GET" && name === os.hostname()) {
+      return {
+        status: 200,
+        body: {
+          Mounts: [
+            {
+              Source: "/home/owner/assistant/projects",
+              Destination: mounts.projects,
+            },
+            {
+              Source: "/home/owner/assistant/data/runners",
+              Destination: mounts.data,
+            },
+          ],
+        },
+      };
+    }
+    if (method === "POST" && url.pathname.endsWith("/create")) {
+      containers.set(url.searchParams.get("name")!, {
+        Labels: (body as { Labels: Record<string, string> }).Labels,
+      });
+      return { status: 201, body: { Id: "abc" } };
+    }
+    if (method === "POST" && url.pathname.endsWith("/start")) {
+      return { status: 204, body: undefined };
+    }
+    if (method === "DELETE" && name) {
+      return {
+        status: containers.delete(name) ? 204 : 404,
+        body: undefined,
+      };
+    }
+    if (method === "GET" && url.pathname.endsWith("/containers/json")) {
+      return { status: 200, body: [...containers.values()] };
+    }
+    return { status: 404, body: { message: "no such thing" } };
+  };
+  return { api, calls, containers };
+}
+
+async function setup() {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "runner-manager-")),
+  );
+  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  const projects = path.join(root, "projects");
+  const data = path.join(root, "runners");
+  const folder = path.join(projects, ".tasks", "t1");
+  const dataFolder = path.join(data, "task-t1");
+  await fs.mkdir(path.join(folder, "repo"), { recursive: true });
+  await fs.mkdir(dataFolder, { recursive: true });
+  await fs.mkdir(path.join(projects, "home"), { recursive: true });
+  const docker = fakeDocker({ projects, data });
+  const manager = await startRunnerManager({
+    host: "127.0.0.1",
+    port: 0,
+    token: "manager-token",
+    dockerSocket: "/var/run/docker.sock",
+    dockerApi: docker.api,
+    image: "agentlink-command-worker:local",
+    network: "agentlink-runners",
+    projectsRoot: projects,
+    dataRoot: data,
+    user: "1000:1000",
+    limits: { memory: 2 * 1024 ** 3, cpus: 2, pids: 512 },
+    log: () => undefined,
+  });
+  cleanup.push(() => manager.close());
+  const client = (token = "manager-token") =>
+    createRunnerManagerClient({
+      host: "127.0.0.1",
+      port: manager.port,
+      readToken: async () => token,
+    });
+  return { root, projects, folder, dataFolder, docker, client };
+}
+
+const env = {
+  AGENTLINK_RUNNER_TOKEN: "runner-token",
+  AGENTLINK_RUNNER_CONTROL_URL: "http://assistant:7500",
+  AGENTLINK_RUNNER_SPEC: "{}",
+};
+
+describe("runner manager", () => {
+  it("starts a locked-down runner with only the task's folder and its data mounted", async () => {
+    const harness = await setup();
+    await expect(
+      harness.client().start({
+        id: "task-t1",
+        folder: harness.folder,
+        dataFolder: harness.dataFolder,
+        env,
+      }),
+    ).resolves.toEqual({ url: "http://agentlink-runner-task-t1:7600" });
+    const created = harness.docker.calls.find((call) =>
+      call.path.endsWith("/containers/create"),
+    )!.body as {
+      Image: string;
+      User: string;
+      Env: string[];
+      HostConfig: Record<string, unknown> & { Binds: string[] };
+    };
+    expect(created.Image).toBe("agentlink-command-worker:local");
+    expect(created.User).toBe("1000:1000");
+    expect(created.HostConfig.Binds).toEqual([
+      `/home/owner/assistant/projects/.tasks/t1:${harness.folder}:rw`,
+      "/home/owner/assistant/data/runners/task-t1:/var/lib/agentlink-runner:rw",
+    ]);
+    // Nothing else: no Docker socket, no other project, no server data.
+    expect(JSON.stringify(created)).not.toContain("docker.sock");
+    expect(created.HostConfig).toMatchObject({
+      NetworkMode: "agentlink-runners",
+      ReadonlyRootfs: true,
+      CapDrop: ["ALL"],
+      SecurityOpt: ["no-new-privileges:true"],
+      Memory: 2 * 1024 ** 3,
+      NanoCpus: 2e9,
+      PidsLimit: 512,
+    });
+    expect(created.HostConfig.Privileged).toBeUndefined();
+    expect(created.Env.sort()).toEqual([
+      "AGENTLINK_RUNNER_CONTROL_URL=http://assistant:7500",
+      "AGENTLINK_RUNNER_SPEC={}",
+      "AGENTLINK_RUNNER_TOKEN=runner-token",
+    ]);
+  });
+
+  it("refuses other folders, extra environment and the wrong token", async () => {
+    const harness = await setup();
+    const start = (overrides: Record<string, unknown>) =>
+      harness.client().start({
+        id: "task-t1",
+        folder: harness.folder,
+        dataFolder: harness.dataFolder,
+        env,
+        ...overrides,
+      } as never);
+    // A project that is not a task, the tasks root itself, outside paths.
+    for (const folder of [
+      path.join(harness.projects, "home"),
+      path.join(harness.projects, ".tasks"),
+      path.join(harness.projects, ".tasks", "t1", "..", "..", "home"),
+      "/etc",
+    ]) {
+      await expect(start({ folder })).rejects.toMatchObject({
+        code: "folder_invalid",
+      });
+    }
+    // A symlink inside the tasks root that points elsewhere.
+    const link = path.join(harness.projects, ".tasks", "sneaky");
+    await fs.symlink(path.join(harness.projects, "home"), link);
+    await expect(start({ folder: link })).rejects.toMatchObject({
+      code: "folder_invalid",
+    });
+    await expect(start({ dataFolder: harness.folder })).rejects.toMatchObject({
+      code: "data_folder_invalid",
+    });
+    await expect(
+      start({ env: { ...env, LD_PRELOAD: "/tmp/x.so" } }),
+    ).rejects.toMatchObject({ code: "env_invalid" });
+    await expect(start({ id: "../../etc" })).rejects.toMatchObject({
+      code: "runner_id_invalid",
+    });
+    await expect(
+      harness.client("wrong").start({
+        id: "task-t1",
+        folder: harness.folder,
+        dataFolder: harness.dataFolder,
+        env,
+      }),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    expect(
+      harness.docker.calls.some((call) => call.path.endsWith("/create")),
+    ).toBe(false);
+  });
+
+  it("replaces a runner on start, and stops one or all of them", async () => {
+    const harness = await setup();
+    const request = {
+      id: "task-t1",
+      folder: harness.folder,
+      dataFolder: harness.dataFolder,
+      env,
+    };
+    await harness.client().start(request);
+    await harness.client().start(request);
+    expect(harness.docker.containers.size).toBe(1);
+    await harness.client().stop("task-t1");
+    expect(harness.docker.containers.size).toBe(0);
+    await harness.client().start(request);
+    await expect(harness.client().stopAll()).resolves.toEqual({ stopped: 1 });
+    expect(harness.docker.containers.size).toBe(0);
+  });
+});

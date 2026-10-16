@@ -66,6 +66,24 @@ export interface AssistantServerConfig {
    * `ready` and GitHub cannot be connected.
    */
   readonly publisher?: AssistantServerPublisherConfig;
+  /**
+   * Session runners: each coding task's session runs in its own container,
+   * started by the runner manager (`agentlink-server runner-manager`). Needs
+   * `projectsRoot` and `commandWorker`. Without it task sessions run in this
+   * process and their commands on the shared command worker.
+   */
+  readonly runners?: AssistantServerRunnersConfig;
+}
+
+export interface AssistantServerRunnersConfig {
+  /** The runner manager: a sibling container's name and its token. */
+  readonly manager: AssistantServerPublisherConfig;
+  /** Port this server answers runners' model and tool calls on. */
+  readonly port: number;
+  /** This server's name on the runners' network. */
+  readonly controlHost: string;
+  /** Minutes a runner may be idle before it is stopped. */
+  readonly idleMinutes: number;
 }
 
 export interface AssistantServerPublisherConfig {
@@ -376,6 +394,7 @@ export function parseAssistantServerConfig(
     "web",
     "notifications",
     "publisher",
+    "runners",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -534,14 +553,54 @@ export function parseAssistantServerConfig(
     ...(config.publisher === undefined
       ? {}
       : { publisher: parsePublisher(config.publisher, baseDirectory) }),
+    ...(config.runners === undefined
+      ? {}
+      : { runners: parseRunners(config.runners, baseDirectory) }),
   };
+}
+
+function parseRunners(
+  value: unknown,
+  baseDirectory: string,
+): AssistantServerRunnersConfig {
+  const label = "runners";
+  const item = record(value, label);
+  allowKeys(item, label, ["manager", "port", "controlHost", "idleMinutes"]);
+  const manager = parsePublisher(
+    item.manager,
+    baseDirectory,
+    "runners.manager",
+  );
+  const port = item.port ?? 7500;
+  if (!Number.isSafeInteger(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error(`${label}.port must be an integer from 1 to 65535`);
+  }
+  const controlHost =
+    item.controlHost === undefined
+      ? "assistant"
+      : text(item.controlHost, `${label}.controlHost`);
+  if (!isPrivateServiceHost(controlHost)) {
+    throw new Error(
+      `${label}.controlHost must be loopback or a container name on a private network`,
+    );
+  }
+  const idleMinutes = item.idleMinutes ?? 10;
+  if (
+    typeof idleMinutes !== "number" ||
+    !Number.isFinite(idleMinutes) ||
+    idleMinutes < 1 ||
+    idleMinutes > 24 * 60
+  ) {
+    throw new Error(`${label}.idleMinutes must be from 1 to 1440`);
+  }
+  return { manager, port: Number(port), controlHost, idleMinutes };
 }
 
 function parsePublisher(
   value: unknown,
   baseDirectory: string,
+  label = "publisher",
 ): AssistantServerPublisherConfig {
-  const label = "publisher";
   const item = record(value, label);
   allowKeys(item, label, ["host", "port", "token"]);
   const host = text(item.host, `${label}.host`);

@@ -28,6 +28,14 @@ import {
 import { encode } from "uqr";
 import { parseVaultKey } from "./publisherVault.js";
 import { startPublisher } from "./publisher.js";
+import { RUNNER_MANAGER_PORT, startRunnerManager } from "./runnerManager.js";
+import {
+  RUNNER_DATA_ROOT,
+  RUNNER_ENV,
+  RUNNER_PORT,
+  startSessionRunner,
+  type SessionRunnerSpec,
+} from "./sessionRunner.js";
 
 import { pairingLink } from "./accessPages.js";
 import {
@@ -69,6 +77,15 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server publisher --token-file <file> --key-file <file>
                                   --tasks-root <dir> --data <dir>
                                   [--client-id <id>] [--listen <host:port>]
+       agentlink-server runner-manager --token-file <file> --image <name>
+                                       --network <name> --projects-root <dir>
+                                       --data-root <dir> [--listen <host:port>]
+                                       [--user <uid:gid>] [--memory <size>]
+                                       [--cpus <n>] [--pids <n>]
+                                       [--docker-socket <path>]
+                                       [--projects-host-root <dir>]
+                                       [--data-host-root <dir>]
+       agentlink-server session-runner [--data <dir>] [--listen <host:port>]
 
 Runs the AgentLink assistant server over HTTPS.
 
@@ -138,6 +155,26 @@ Commands:
                    AGENTLINK_GITHUB_CLIENT_ID) is your GitHub App's client
                    ID for "Connect GitHub"; without it only pasted tokens
                    work. --listen defaults to 0.0.0.0:7400.
+  runner-manager   Start and stop session runners (one container per coding
+                   task's session) for a server whose configuration has
+                   "runners". The only AgentLink process with the Docker
+                   socket. It accepts start and stop from the server's token
+                   (--token-file) and decides the rest: --image (the
+                   command worker image), --network (an internal network),
+                   --user (default 1000:1000), --memory (default 2g),
+                   --cpus (default 2) and --pids (default 512) per runner,
+                   a read-only root filesystem and no capabilities. Only
+                   the task's folder (under --projects-root/.tasks) and its
+                   data folder (under --data-root) are mounted; both must be
+                   mounted here at the same paths as in the server, and
+                   their host paths are read from this container's mounts
+                   unless --projects-host-root and --data-host-root are
+                   given. --listen defaults to 0.0.0.0:7700.
+  session-runner   Run one coding task's session (started by the runner
+                   manager, which sets AGENTLINK_RUNNER_TOKEN,
+                   AGENTLINK_RUNNER_CONTROL_URL and AGENTLINK_RUNNER_SPEC).
+                   --data defaults to /var/lib/agentlink-runner and --listen
+                   to 0.0.0.0:7600.
 `;
 
 const DEFAULT_COMMAND_WORKER_LISTEN = "0.0.0.0:7300";
@@ -159,6 +196,12 @@ export async function runAssistantServerCli(
   }
   if (argv[0] === "publisher") {
     return await runPublisher(argv.slice(1), io);
+  }
+  if (argv[0] === "runner-manager") {
+    return await runRunnerManager(argv.slice(1), io);
+  }
+  if (argv[0] === "session-runner") {
+    return await runSessionRunner(argv.slice(1), io);
   }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : undefined;
   let configPath: string | undefined;
@@ -214,6 +257,7 @@ export async function runAssistantServerCli(
       `${preflight.commandWorker ?? "Commands: disabled (no commandWorker configured)"}\n`,
     );
     if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
+    if (preflight.runners) io.stdout(`${preflight.runners}\n`);
     return 0;
   }
 
@@ -611,6 +655,186 @@ export function terminalQrCode(text: string): string {
     lines.push(`  ${line}\x1b[0m`);
   }
   return lines.join("\n");
+}
+
+/** Parse `--flag value` pairs, allowing only `known`. */
+function parseFlags(
+  argv: readonly string[],
+  known: readonly string[],
+  values: Record<string, string | undefined>,
+): { readonly help: true } | { readonly error: string } | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === "--help" || argument === "-h") return { help: true };
+    if (!known.includes(argument)) {
+      return { error: `Unknown argument: ${argument}` };
+    }
+    const value = argv[index + 1];
+    if (!value) return { error: `${argument} needs a value` };
+    values[argument] = value;
+    index += 1;
+  }
+  return undefined;
+}
+
+/** `2g`, `512m`, `1024k` or bytes. */
+function parseByteSize(value: string): number | undefined {
+  const match = /^(\d+)([kmg]?)$/iu.exec(value.trim());
+  if (!match) return undefined;
+  const scale = { "": 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 }[
+    match[2]!.toLowerCase() as "" | "k" | "m" | "g"
+  ];
+  return Number(match[1]) * scale;
+}
+
+async function runRunnerManager(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const values: Record<string, string | undefined> = {
+    "--listen": `0.0.0.0:${RUNNER_MANAGER_PORT}`,
+    "--docker-socket": "/var/run/docker.sock",
+    "--user": "1000:1000",
+    "--memory": "2g",
+    "--cpus": "2",
+    "--pids": "512",
+  };
+  const parsed = parseFlags(
+    argv,
+    [
+      "--listen",
+      "--token-file",
+      "--image",
+      "--network",
+      "--projects-root",
+      "--data-root",
+      "--docker-socket",
+      "--user",
+      "--memory",
+      "--cpus",
+      "--pids",
+      "--projects-host-root",
+      "--data-host-root",
+    ],
+    values,
+  );
+  if (parsed && "help" in parsed) {
+    io.stdout(ASSISTANT_SERVER_USAGE);
+    return 0;
+  }
+  if (parsed) return usageError(io, parsed.error);
+  for (const required of [
+    "--token-file",
+    "--image",
+    "--network",
+    "--projects-root",
+    "--data-root",
+  ]) {
+    if (!values[required]) return usageError(io, `${required} is required`);
+  }
+  const address = parseListen(values["--listen"]!);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  if (!/^\d{1,10}:\d{1,10}$/u.test(values["--user"]!)) {
+    return usageError(io, "--user must be <uid>:<gid>");
+  }
+  const memory = parseByteSize(values["--memory"]!);
+  const cpus = Number(values["--cpus"]);
+  const pids = Number(values["--pids"]);
+  if (!memory || memory < 64 * 1024 ** 2) {
+    return usageError(io, "--memory must be at least 64m");
+  }
+  if (!Number.isFinite(cpus) || cpus <= 0 || cpus > 256) {
+    return usageError(io, "--cpus must be a positive number");
+  }
+  if (!Number.isSafeInteger(pids) || pids < 16) {
+    return usageError(io, "--pids must be an integer of at least 16");
+  }
+  const projectsHost = values["--projects-host-root"];
+  const dataHost = values["--data-host-root"];
+  if ((projectsHost === undefined) !== (dataHost === undefined)) {
+    return usageError(
+      io,
+      "--projects-host-root and --data-host-root go together",
+    );
+  }
+  const token = await (
+    await prepareSecret(
+      { file: values["--token-file"]! },
+      "--token-file",
+      io.env,
+    )
+  )();
+  const manager = await startRunnerManager({
+    host: address.host,
+    port: address.port,
+    token,
+    dockerSocket: values["--docker-socket"]!,
+    image: values["--image"]!,
+    network: values["--network"]!,
+    projectsRoot: values["--projects-root"]!,
+    dataRoot: values["--data-root"]!,
+    ...(projectsHost && dataHost
+      ? { hostPaths: { projects: projectsHost, data: dataHost } }
+      : {}),
+    user: values["--user"]!,
+    limits: { memory, cpus, pids },
+    log: io.log,
+  });
+  io.log(
+    `AgentLink runner manager listening on ${address.host}:${manager.port}; runners use ${values["--image"]} on ${values["--network"]}`,
+  );
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; stopping the runner manager`);
+  await manager.close();
+  return 0;
+}
+
+async function runSessionRunner(
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const values: Record<string, string | undefined> = {
+    "--listen": `0.0.0.0:${RUNNER_PORT}`,
+    "--data": RUNNER_DATA_ROOT,
+  };
+  const parsed = parseFlags(argv, ["--listen", "--data"], values);
+  if (parsed && "help" in parsed) {
+    io.stdout(ASSISTANT_SERVER_USAGE);
+    return 0;
+  }
+  if (parsed) return usageError(io, parsed.error);
+  const address = parseListen(values["--listen"]!);
+  if (!address) return usageError(io, "--listen must be <host>:<port>");
+  const token = io.env[RUNNER_ENV.token];
+  const controlUrl = io.env[RUNNER_ENV.controlUrl];
+  const rawSpec = io.env[RUNNER_ENV.spec];
+  if (!token || !controlUrl || !rawSpec) {
+    return usageError(
+      io,
+      `${RUNNER_ENV.token}, ${RUNNER_ENV.controlUrl} and ${RUNNER_ENV.spec} must be set`,
+    );
+  }
+  // Not inherited by anything this process starts.
+  delete io.env[RUNNER_ENV.token];
+  let spec: SessionRunnerSpec;
+  try {
+    spec = JSON.parse(rawSpec) as SessionRunnerSpec;
+  } catch {
+    return usageError(io, `${RUNNER_ENV.spec} is not JSON`);
+  }
+  const runner = await startSessionRunner({
+    spec,
+    token,
+    controlUrl,
+    dataRoot: values["--data"]!,
+    host: address.host,
+    port: address.port,
+    log: io.log,
+  });
+  const signal = await io.waitForShutdown();
+  io.log(`Received ${signal}; stopping the session runner`);
+  await runner.close();
+  return 0;
 }
 
 function parseListen(
