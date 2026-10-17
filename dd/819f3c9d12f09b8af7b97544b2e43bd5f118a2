@@ -1,0 +1,24 @@
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 97
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 110
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 8631-8693,8696,8707,8709-8710,8712-8721,8724,8734,8738-8741,8743-8771,8773-8783,8786,8790-8791
+  h_e08a86bb3a33a2 8708,8725
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 207
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 3641,3688,3712-3722,3726-3732,3756-3757,3809-3811,3850-3852,3997-4002
+  h_e08a86bb3a33a2 3723-3724,3807-3808,3812
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
