@@ -1,0 +1,56 @@
+scripts/package-assistant-release.test.mjs
+  h_e08a86bb3a33a2 1-197
+scripts/release-plan.mjs
+  h_e08a86bb3a33a2 41-47,52,87,89-93,96-97,111-115,120
+  h_e08a86bb3a33a2 116
+apps/server/src/guidedInstall.test.ts
+  h_e08a86bb3a33a2 1-409
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+.release/README.md
+  h_e08a86bb3a33a2 3,6,10-11,13
+  h_e08a86bb3a33a2 5,7-9
+scripts/package-assistant-release.mjs
+  h_e08a86bb3a33a2 1-109
+  h_e08a86bb3a33a2 110-127
+package.json
+  h_e08a86bb3a33a2 1250
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 21-22
+.github/workflows/release-coordinator.yml
+  h_e08a86bb3a33a2 3,50,214-225
+.github/workflows/assistant-release.yml
+  h_e08a86bb3a33a2 1-327
+apps/server/src/releasedUpgrade.test.ts
+  h_e08a86bb3a33a2 1-237
+scripts/release-plan.test.mjs
+  h_e08a86bb3a33a2 17-19,29-32,38,46,55-69,92
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 34-41
+.release/intents/assistant.json
+  h_e08a86bb3a33a2 1-4
+apps/server/README.md
+  h_e08a86bb3a33a2 3,7-42
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 6,34,58-61,82-87,108-109,112,131-202,228,239,293-301,318-335,380,404-413,425-430,440-452
+  h_e08a86bb3a33a2 110-111,203,414-415
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 442-455
+.release/assistant-bootstrap.json
+  h_e08a86bb3a33a2 1-7
+apps/server/deploy/install.sh
+  h_e08a86bb3a33a2 1-245
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
