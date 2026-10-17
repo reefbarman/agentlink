@@ -1,15 +1,16 @@
 # Release automation
 
-AgentLink ships four independently versioned release streams from `main`:
+AgentLink ships five independently versioned release streams from `main`:
 
-| Unit      | Tag              | Version source                                       | Release                               |
-| --------- | ---------------- | ---------------------------------------------------- | ------------------------------------- |
-| `vscode`  | `vX.Y.Z`         | `package.json`                                       | Latest, 8 target VSIXs                |
-| `desktop` | `desktop-vX.Y.Z` | `apps/desktop/package.json`                          | Prerelease, mac arm64/x64 DMG and ZIP |
-| `cli`     | `cli-vX.Y.Z`     | `apps/cli/package.json`                              | Prerelease, mac arm64 archive         |
-| `sdk`     | `sdk-vX.Y.Z`     | every `packages/*/package.json`, one matched version | Prerelease, protocol/core/node-host   |
+| Unit        | Tag                | Version source                                       | Release                                           |
+| ----------- | ------------------ | ---------------------------------------------------- | ------------------------------------------------- |
+| `vscode`    | `vX.Y.Z`           | `package.json`                                       | Latest, 8 target VSIXs                            |
+| `desktop`   | `desktop-vX.Y.Z`   | `apps/desktop/package.json`                          | Prerelease, mac arm64/x64 DMG and ZIP             |
+| `cli`       | `cli-vX.Y.Z`       | `apps/cli/package.json`                              | Prerelease, mac arm64 archive                     |
+| `sdk`       | `sdk-vX.Y.Z`       | every `packages/*/package.json`, one matched version | Prerelease, protocol/core/node-host               |
+| `assistant` | `assistant-vX.Y.Z` | `apps/server/package.json`                           | Prerelease, six GHCR images and deployment assets |
 
-Unit membership by path lives in `scripts/release-plan.mjs` (`RELEASE_UNITS`, `unitsForPath`).
+Unit membership by path lives in `scripts/release-plan.mjs` (`RELEASE_UNITS`, `unitsForPath`). Assistant server changes release only Assistant; shared SDK package changes include Assistant as well as the other consumers.
 
 ## How a release is planned
 

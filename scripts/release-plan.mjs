@@ -38,10 +38,18 @@ export const RELEASE_UNITS = {
     prerelease: true,
     makeLatest: false,
   },
+  assistant: {
+    title: "AgentLink Assistant",
+    tagPrefix: "assistant-v",
+    manifests: ["apps/server/package.json"],
+    prerelease: true,
+    makeLatest: false,
+  },
 };
 
 export const UNIT_IDS = Object.keys(RELEASE_UNITS);
 const APPS = ["vscode", "desktop", "cli"];
+const PRODUCTS = [...APPS, "assistant"];
 
 // Release bookkeeping, tests, CI, and contributor-only material never release
 // a product by themselves.
@@ -76,12 +84,17 @@ const PATH_RULES = [
   [/^apps\/desktop\//, ["desktop"]],
   [/^apps\/cli\//, ["cli"]],
   [/^packages\/[^/]+\/README\.md$/, ["sdk"]],
-  [/^packages\//, ["sdk", ...APPS]],
+  [/^packages\//, ["sdk", ...PRODUCTS]],
   [/^src\/updates\//, APPS],
-  [/^(src|resources|media)\//, ["vscode", "desktop"]],
+  // The Assistant embeds the shared chat renderer and reuses standalone
+  // provider/web logic. Changes to those inputs must rebuild its images too.
+  [/^src\/(shared|agent\/webview|core)\//, ["vscode", "desktop", "assistant"]],
+  [/^(resources|media)\//, ["vscode", "desktop", "assistant"]],
+  [/^src\//, ["vscode", "desktop"]],
   [/^esbuild\.mjs$/, ["vscode", "desktop"]],
   [/^(\.vscodeignore|README\.md|LICENSE)$/, ["vscode"]],
-  [/^package(-lock)?\.json$/, APPS],
+  [/^package(-lock)?\.json$/, PRODUCTS],
+  [/package-assistant-release/, ["assistant"]],
   [PACKAGING_SCRIPTS, APPS],
   [/^scripts\//, []],
   [/^tsconfig[^/]*\.json$/, APPS],
@@ -95,10 +108,16 @@ export function unitsForPath(path) {
   if (IGNORED_PATHS.some((pattern) => pattern.test(path))) {
     return { units: [], unknown: false };
   }
+  if (path.startsWith("apps/server/")) {
+    return { units: ["assistant"], unknown: false };
+  }
+  if (path.startsWith("src/browser-gateway/")) {
+    return { units: ["vscode", "desktop", "assistant"], unknown: false };
+  }
   for (const [pattern, units] of PATH_RULES) {
     if (pattern.test(path)) return { units: [...units], unknown: false };
   }
-  return { units: [...APPS], unknown: true };
+  return { units: [...PRODUCTS], unknown: true };
 }
 
 const DEPENDENCY_FIELDS = [

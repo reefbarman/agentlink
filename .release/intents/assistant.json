@@ -1,0 +1,4 @@
+{
+  "version": "0.1.0",
+  "note": "Initial experimental Assistant release: prebuilt images and explicit-version installation/updates. Publication remains behind the coordinator's CI and publish gates; public GHCR visibility and fresh-host qualification must be verified before recommending the installer."
+}

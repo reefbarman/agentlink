@@ -1,8 +1,44 @@
 # @agentlink/server
 
-Standalone AgentLink assistant server. Private and experimental: this package contains the access layer, the authenticated workspace-session routes, the shared Ask Agent web app, and a runnable service with a container image (the supported deployment) plus systemd and launchd definitions. Jobs and notifications come in later slices.
+Standalone AgentLink Assistant. Experimental: authenticated browser chats, coding tasks, scheduled jobs, notifications and personal assistance, using the shared agent runtime. Docker Compose is the reference deployment; systemd and launchd definitions are also provided. The guided release installer below is a preview until images are published and fresh-machine drills pass.
 
 Supported hosts: Linux (Ubuntu) and macOS. The package uses only portable Node.js APIs (Node 22.19+), and its test suite runs on both.
+
+## Guided release installation (preview)
+
+The release-backed installer is under development. The workflow and installer are in the repository, but **no Assistant GHCR release or clean-machine installation has been verified yet**. Do not treat the example below as an available published download until an `assistant-v*` release exists and its packages are publicly pullable.
+
+For an available release, download its `install.sh` asset, review it, then run it as your normal user:
+
+```sh
+VERSION=0.1.0 # replace with an actually published assistant-v* version
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  "https://github.com/reefbarman/agentlink/releases/download/assistant-v${VERSION}/install.sh" \
+  -o /tmp/agentlink-assistant-install.sh
+bash /tmp/agentlink-assistant-install.sh install --version "$VERSION" \
+  --origin https://assistant.local:8443
+```
+
+- Requires Docker Engine **28+** and Compose v2 on Linux, or a running Docker Desktop on macOS; supports amd64 and arm64. `curl` and `openssl` are also needed. Missing prerequisites produce instructions, not automatic `sudo` commands. No source checkout, Node, npm or local builds are required.
+- The installer explains the deployment location, port 8443 exposure, root-equivalent runner-manager Docker socket access, certificate trust and same-host backup limitations before asking for confirmation. `--yes` explicitly skips that confirmation for reviewed automation; non-interactive installation also needs `--origin`.
+- The standard stack includes the Assistant, command worker, egress gateway, publisher, runner manager, backup sidecar and a separate append-only witness. It creates private configuration, data and secret directories in `~/agentlink-assistant` and a witness in `~/agentlink-assistant-witness`. Use `--deploy /absolute/path` to choose another location. Existing directories, Assistant containers or local images are refused rather than overwritten. It does not convert the Framework's existing source-built deployment.
+- The chosen HTTPS hostname/IP must already resolve to the machine. The installer does not change DNS/mDNS, firewall/router rules or certificate trust stores. The printed next steps explain exporting/trusting the local CA, signing in to ChatGPT and pairing the first browser. Copy the generated backup password to an off-machine password manager. Same-host backups do not protect against losing the host or disk.
+- GitHub can initially connect with a fine-grained token in the app; GitHub App device sign-in still needs an operator-supplied client ID. Optional editor, browser research, Meridian and SearXNG are not silently configured by this first installer slice.
+
+After installation, use the script kept in the deployment directory:
+
+```sh
+bash ~/agentlink-assistant/install.sh status
+bash ~/agentlink-assistant/install.sh pair
+bash ~/agentlink-assistant/install.sh update --version X.Y.Z
+bash ~/agentlink-assistant/install.sh rollback
+```
+
+Updates fetch an explicit release manifest with immutable GHCR image digests, validate it as data (never source it as shell), ask before interrupting work, and reuse the existing drain/backup/health-check/rollback flow. An update failure at service startup or health checking attempts rollback. Installed configuration and secrets are preserved. Downgrades use rollback, not `update`. No automatic background updating is enabled.
+
+**Current scope:** this first slice updates images, not deployment templates or the installed management scripts. Read release notes before updating; releases requiring new configuration/template migrations need operator intervention. Automatic version discovery, browser update controls/progress, transactional template updates, first-run browser onboarding and fresh Linux/macOS qualification are still to come. A failed first install keeps its directory and logs for inspection rather than silently removing data. Docker Desktop's login/startup and host sleep behaviour still need real-machine qualification.
+
+For operators, `upgrade.sh --deploy DIR --release-manifest FILE` uses the same released-image path directly. `--validate-release` validates a manifest without Docker or an existing deployment. Omitting `--release-manifest` retains the source-build workflow below.
 
 ## Running the server
 

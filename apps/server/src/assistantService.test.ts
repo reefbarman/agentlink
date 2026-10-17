@@ -439,6 +439,20 @@ describe("assistant service notifications", () => {
     });
     const cookie = sessionCookieFrom(paired);
     const deviceId = (paired.body as { deviceId: string }).deviceId;
+    // This test exercises delivery and revocation, not quiet-hour holding.
+    // Defaults start quiet hours at 22:00, so leaving them on makes the test
+    // depend on the host's clock. Quiet-hour behaviour has separate coverage.
+    const persona = await request({ path: "/api/settings/persona", cookie });
+    const updatedAt = (persona.body as { settings: { updatedAt: number } })
+      .settings.updatedAt;
+    await expect(
+      request({
+        method: "PATCH",
+        path: "/api/settings/persona",
+        cookie,
+        body: { expectedUpdatedAt: updatedAt, quietHours: null },
+      }),
+    ).resolves.toMatchObject({ status: 200 });
     const phone = createTestPushSubscriber();
     await expect(
       request({

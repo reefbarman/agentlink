@@ -14,6 +14,9 @@ import test from "node:test";
 
 test("maps shipped paths to the surfaces that package them", () => {
   assert.deepEqual(unitsForPath("apps/cli/src/main.ts").units, ["cli"]);
+  assert.deepEqual(unitsForPath("apps/server/src/main.ts").units, [
+    "assistant",
+  ]);
   assert.deepEqual(unitsForPath("src/agent/AgentSession.ts").units, [
     "vscode",
     "desktop",
@@ -23,11 +26,16 @@ test("maps shipped paths to the surfaces that package them", () => {
     "desktop",
     "cli",
   ]);
+  assert.deepEqual(
+    unitsForPath("src/browser-gateway/BrowserGatewayService.ts").units,
+    ["vscode", "desktop", "assistant"],
+  );
   assert.deepEqual(unitsForPath("packages/core/src/agentEngine.ts").units, [
     "sdk",
     "vscode",
     "desktop",
     "cli",
+    "assistant",
   ]);
   assert.deepEqual(unitsForPath("packages/core/README.md").units, ["sdk"]);
   assert.deepEqual(unitsForPath("README.md").units, ["vscode"]);
@@ -35,12 +43,28 @@ test("maps shipped paths to the surfaces that package them", () => {
     "vscode",
     "desktop",
     "cli",
+    "assistant",
   ]);
   assert.deepEqual(unitsForPath("scripts/package-vsix.mjs").units, [
     "vscode",
     "desktop",
     "cli",
   ]);
+});
+
+test("releases Assistant when shared renderer, provider or bundled assets change", () => {
+  for (const file of [
+    "src/shared/chatProjection.ts",
+    "src/agent/webview/components/TranscriptMessageList.tsx",
+    "src/core/model/providers/codex/standaloneWeb.ts",
+    "media/agentlink.svg",
+    "resources/builtin-skills/documentation/references/capabilities.md",
+  ])
+    assert.ok(unitsForPath(file).units.includes("assistant"), file);
+  assert.deepEqual(
+    unitsForPath("scripts/package-assistant-release.mjs").units,
+    ["assistant"],
+  );
 });
 
 test("ignores tests, CI, release bookkeeping, and dev tooling", () => {
@@ -65,7 +89,7 @@ test("ignores tests, CI, release bookkeeping, and dev tooling", () => {
 
 test("conservatively attributes unknown production paths to every app", () => {
   assert.deepEqual(unitsForPath("new-runtime/thing.js"), {
-    units: ["vscode", "desktop", "cli"],
+    units: ["vscode", "desktop", "cli", "assistant"],
     unknown: true,
   });
 });

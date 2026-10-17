@@ -3,6 +3,7 @@
 # last upgrade back. Docker on Ubuntu and Docker Desktop on macOS (bash 3.2).
 #
 #   upgrade.sh [options] [<git ref>]   build, drain, back up, switch, check
+#   upgrade.sh --deploy DIR --release-manifest FILE  install a published release
 #   upgrade.sh rollback [options]      previous images and pre-upgrade records
 #
 # An upgrade:
@@ -30,6 +31,7 @@
 #                       this script is in)
 #   --deploy <dir>      deploy directory (default: $AGENTLINK_DEPLOY, else
 #                       ~/agentlink-assistant)
+#   --release-manifest <file>  install the immutable images in a release manifest
 #   --wait <minutes>    how long running work may take to finish (default 15)
 #   --no-backup         upgrade without a backup; a rollback then restores
 #                       the images only
@@ -53,6 +55,10 @@ use_backup=1
 simulate_failure=0
 mode=upgrade
 ref=""
+release_manifest=""
+release_mode=0
+release_upgrade=0
+validate_release=0
 
 say() { printf '==> %s\n' "$*"; }
 fail() {
@@ -73,6 +79,12 @@ while [ $# -gt 0 ]; do
       deploy_dir="$2"
       shift
       ;;
+    --release-manifest)
+      [ $# -ge 2 ] || fail "--release-manifest needs a file"
+      release_manifest="$2"
+      shift
+      ;;
+    --validate-release) validate_release=1 ;;
     --wait)
       [ $# -ge 2 ] || fail "--wait needs minutes"
       wait_minutes="$2"
@@ -93,10 +105,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-[ -d "$deploy_dir" ] || fail "no deploy directory at $deploy_dir"
-deploy_dir="$(cd "$deploy_dir" && pwd -P)"
-[ -f "$deploy_dir/compose.yaml" ] || fail "$deploy_dir has no compose.yaml"
-command -v docker > /dev/null || fail "docker is not installed"
+if [ "$validate_release" = 0 ]; then
+  [ -d "$deploy_dir" ] || fail "no deploy directory at $deploy_dir"
+  deploy_dir="$(cd "$deploy_dir" && pwd -P)"
+  [ -f "$deploy_dir/compose.yaml" ] || fail "$deploy_dir has no compose.yaml"
+fi
 state_file="$deploy_dir/.upgrade-state"
 witness_network="agentlink-witness"
 
@@ -114,6 +127,79 @@ if grep -Eq '^COMPOSE_FILE=.*compose\.browser\.yaml' "$deploy_dir/.env" 2> /dev/
   TARGETS="$TARGETS browser"
 fi
 is_optional() { case " $OPTIONAL_TARGETS " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# Parse the release file as data, never shell code. The target list is derived
+# from this deployment's compose configuration before validating image keys.
+if [ "$validate_release" = 1 ] && [ -z "$release_manifest" ]; then
+  fail "--validate-release requires --release-manifest"
+fi
+if [ -n "$release_manifest" ]; then
+  release_mode=1
+  [ -f "$release_manifest" ] || fail "release manifest not found: $release_manifest"
+  release_version=""
+  release_commit=""
+  release_assistant=""
+  release_command_worker=""
+  release_publisher=""
+  release_backup=""
+  release_editor=""
+  release_browser=""
+  seen_keys="|"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *=*) ;; *) fail "invalid release manifest line" ;; esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    [ -n "$value" ] || fail "empty value for $key in release manifest"
+    case "$seen_keys" in *"|$key|"*) fail "duplicate release manifest key: $key" ;; esac
+    seen_keys="${seen_keys}${key}|"
+    case "$key" in
+      RELEASE_VERSION) release_version="$value" ;;
+      RELEASE_COMMIT) release_commit="$value" ;;
+      ASSISTANT_IMAGE) release_assistant="$value" ;;
+      COMMAND_WORKER_IMAGE) release_command_worker="$value" ;;
+      PUBLISHER_IMAGE) release_publisher="$value" ;;
+      BACKUP_IMAGE) release_backup="$value" ;;
+      EDITOR_IMAGE) release_editor="$value" ;;
+      BROWSER_IMAGE) release_browser="$value" ;;
+      *) fail "unknown release manifest key: $key" ;;
+    esac
+  done < "$release_manifest"
+  [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail "invalid RELEASE_VERSION"
+  [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || fail "invalid RELEASE_COMMIT"
+  for target in $TARGETS; do
+    case "$target" in
+      assistant) key=ASSISTANT_IMAGE; value="$release_assistant" ;;
+      command-worker) key=COMMAND_WORKER_IMAGE; value="$release_command_worker" ;;
+      publisher) key=PUBLISHER_IMAGE; value="$release_publisher" ;;
+      backup) key=BACKUP_IMAGE; value="$release_backup" ;;
+      editor) key=EDITOR_IMAGE; value="$release_editor" ;;
+      browser) key=BROWSER_IMAGE; value="$release_browser" ;;
+    esac
+    case "$seen_keys" in *"|$key|"*) ;; *) fail "missing release manifest key: $key" ;; esac
+    [[ "$value" =~ ^ghcr\.io/reefbarman/agentlink-${target}@sha256:[0-9a-f]{64}$ ]] || fail "invalid $key reference"
+  done
+  for target in $OPTIONAL_TARGETS; do
+    case "$target" in
+      editor) key=EDITOR_IMAGE; value="$release_editor" ;;
+      browser) key=BROWSER_IMAGE; value="$release_browser" ;;
+    esac
+    case "$seen_keys" in
+      *"|$key|"*) [[ "$value" =~ ^ghcr\.io/reefbarman/agentlink-${target}@sha256:[0-9a-f]{64}$ ]] || fail "invalid $key reference" ;;
+    esac
+  done
+fi
+if [ "$validate_release" = 1 ]; then
+  say "Release manifest is valid for this deployment"
+  exit 0
+fi
+lock_dir="$deploy_dir/.upgrade-lock"
+if ! mkdir "$lock_dir" 2> /dev/null; then
+  printf 'Lock: %s\n' "$lock_dir" >&2
+  printf 'If a previous updater was killed or the host rebooted, first verify no upgrade/rollback process is running, then remove the empty lock with: rmdir %q\n' "$lock_dir" >&2
+  fail "another upgrade or rollback is running, or an interrupted update left its lock; never remove a live updater's lock"
+fi
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+command -v docker > /dev/null || fail "docker is not installed"
 
 # Wait for the smoke check to pass, for up to 3 minutes.
 smoke_check() {
@@ -139,6 +225,7 @@ write_state() {
     printf 'started=%s\n' "${started:-}"
     printf 'commit=%s\n' "${commit:-}"
     printf 'snapshot=%s\n' "${snapshot:-}"
+    printf 'release=%s\n' "${release_upgrade:-0}"
   } > "$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -149,6 +236,7 @@ read_state() {
   started="$(sed -n 's/^started=//p' "$state_file")"
   commit="$(sed -n 's/^commit=//p' "$state_file")"
   snapshot="$(sed -n 's/^snapshot=//p' "$state_file")"
+  release_upgrade="$(sed -n 's/^release=//p' "$state_file")"
 }
 
 rollback() {
@@ -202,6 +290,15 @@ rollback() {
   # A restore starts undrained (schedules paused); without one, lift the
   # drain the upgrade left.
   [ -n "$snapshot" ] || server resume
+  if [ "${release_upgrade:-0}" = 1 ] && [ -f "$deploy_dir/.release-previous-present" ]; then
+    if [ "$(cat "$deploy_dir/.release-previous-present")" = yes ]; then
+      cp "$deploy_dir/.release-previous.env" "$deploy_dir/release.env.tmp"
+      mv "$deploy_dir/release.env.tmp" "$deploy_dir/release.env"
+    else
+      rm -f "$deploy_dir/release.env"
+    fi
+    rm -f "$deploy_dir/.release-previous-present" "$deploy_dir/.release-previous.env"
+  fi
   write_state rolled-back
   say "Rolled back. Scheduled jobs are paused until you turn them on in Jobs."
 }
@@ -218,6 +315,24 @@ if [ "$use_backup" = 1 ] && ! grep -q '"backup"' "$deploy_dir/server.json"; then
   fail "backups are not configured (see Backups in apps/server/README.md); set them up, or pass --no-backup"
 fi
 
+if [ "$release_mode" = 1 ]; then
+  release_upgrade=1
+  commit="$release_commit"
+  say "Pulling immutable release images for $release_version"
+  for target in $TARGETS; do
+    case "$target" in
+      assistant) image_ref="$release_assistant" ;;
+      command-worker) image_ref="$release_command_worker" ;;
+      publisher) image_ref="$release_publisher" ;;
+      backup) image_ref="$release_backup" ;;
+      editor) image_ref="$release_editor" ;;
+      browser) image_ref="$release_browser" ;;
+    esac
+    docker pull "$image_ref"
+    docker tag "$image_ref" "$(image_of "$target"):candidate"
+  done
+else
+[ ! -f "$deploy_dir/release.env" ] || fail "this deployment uses released images; use --release-manifest (automatic conversion to a source build is not supported)"
 if [ -n "$ref" ]; then
   say "Checking out $ref in $source_dir"
   git -C "$source_dir" fetch --quiet
@@ -262,6 +377,7 @@ say "Building ${commit:-the source} (the Assistant keeps working meanwhile)"
       -f apps/server/deploy/container/Dockerfile apps/server > /dev/null
   done
 )
+fi
 
 say "Draining: new work waits; running work has $wait_minutes minute(s)"
 if ! server drain --wait "$wait_minutes" --reason upgrade; then
@@ -285,6 +401,18 @@ if [ "$use_backup" = 1 ]; then
   }
 fi
 
+if [ "$release_mode" = 1 ]; then
+  if [ -f "$deploy_dir/release.env" ]; then
+    cp "$deploy_dir/release.env" "$deploy_dir/.release-previous.env.tmp"
+    mv "$deploy_dir/.release-previous.env.tmp" "$deploy_dir/.release-previous.env"
+    printf 'yes\n' > "$deploy_dir/.release-previous-present.tmp"
+  else
+    rm -f "$deploy_dir/.release-previous.env"
+    printf 'no\n' > "$deploy_dir/.release-previous-present.tmp"
+  fi
+  mv "$deploy_dir/.release-previous-present.tmp" "$deploy_dir/.release-previous-present"
+fi
+
 say "Switching to the new images"
 for target in $TARGETS; do
   image="$(image_of "$target")"
@@ -294,7 +422,12 @@ for target in $TARGETS; do
   docker tag "$image:candidate" "$image:local"
 done
 write_state in-progress
-dc up -d
+if ! dc up -d; then
+  say "The new services failed to start: rolling back"
+  write_state failed
+  rollback
+  fail "the new services failed to start; the previous deployment was restored"
+fi
 
 say "Checking the new version"
 if ! smoke_check; then
@@ -304,6 +437,19 @@ if ! smoke_check; then
   exit 1
 fi
 
+if [ "$release_mode" = 1 ]; then
+  {
+    printf 'RELEASE_VERSION=%s\n' "$release_version"
+    printf 'RELEASE_COMMIT=%s\n' "$release_commit"
+    printf 'ASSISTANT_IMAGE=%s\n' "$release_assistant"
+    printf 'COMMAND_WORKER_IMAGE=%s\n' "$release_command_worker"
+    printf 'PUBLISHER_IMAGE=%s\n' "$release_publisher"
+    printf 'BACKUP_IMAGE=%s\n' "$release_backup"
+    case "$seen_keys" in *"|EDITOR_IMAGE|"*) printf 'EDITOR_IMAGE=%s\n' "$release_editor" ;; esac
+    case "$seen_keys" in *"|BROWSER_IMAGE|"*) printf 'BROWSER_IMAGE=%s\n' "$release_browser" ;; esac
+  } > "$deploy_dir/release.env.tmp"
+  mv "$deploy_dir/release.env.tmp" "$deploy_dir/release.env"
+fi
 server resume
 write_state done
 say "Upgraded to ${commit:-the new version}. Roll back with: $0 rollback"

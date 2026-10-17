@@ -18,6 +18,8 @@ const SUMMARY_LIMIT = 300;
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
 const UNIT_CONTRACTS = {
+  assistant:
+    "Standalone AgentLink assistant server (0.x). Operators rely on its HTTP/API behaviour, deployment images, configuration, and data compatibility.",
   vscode:
     "VS Code extension (1.x). Users rely on commands, settings, views, tools, and documented behaviour.",
   desktop:

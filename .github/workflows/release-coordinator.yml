@@ -1,6 +1,6 @@
 name: Release Coordinator
 
-# Plans independent VS Code, Desktop, CLI and SDK releases after CI passes on
+# Plans independent VS Code, Desktop, CLI, SDK and Assistant releases after CI passes on
 # main. Publication is off unless the repository variable RELEASE_AUTOMATION
 # is "publish" or a manual run selects mode=publish; otherwise the run only
 # writes the plan to the job summary.
@@ -47,6 +47,7 @@ jobs:
       desktop_version: ${{ steps.plan.outputs.desktop_version }}
       cli_version: ${{ steps.plan.outputs.cli_version }}
       sdk_version: ${{ steps.plan.outputs.sdk_version }}
+      assistant_version: ${{ steps.plan.outputs.assistant_version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -209,4 +210,16 @@ jobs:
     with:
       ref: ${{ needs.prepare.outputs.sha }}
       version: ${{ needs.plan.outputs.sdk_version }}
+      publish: true
+
+  assistant:
+    needs: [plan, prepare]
+    if: contains(format(',{0},', needs.plan.outputs.units), ',assistant,')
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/assistant-release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.plan.outputs.assistant_version }}
       publish: true

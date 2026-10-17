@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- AgentLink Assistant installation/update foundation: an independent `assistant-v*` release pipeline for prebuilt GHCR images and deployment assets, a guided Linux/macOS installer without a host source build, and explicit-version image updates using the existing backup/health-check/rollback flow. The installer refuses existing deployments and leaves certificate trust, model sign-in and pairing to the owner. Publication, fresh-host qualification, automatic update discovery, browser controls and deployment-template migrations are not yet complete.
+
 - AgentLink Assistant: polish the management panels with persistent headers, keyboard focus containment, responsive spacing and consistent controls. Settings groups persona, schedule and storage into readable sections with change-aware saving; Tasks gains search and state filters, Jobs gains search, and Memory has clearer search and empty states. MCP tool permissions now have structured rows instead of an unstyled nested list.
 
 - AgentLink Assistant server: scheduled jobs. A job sends a prompt to a new chat every N minutes (15 or more), daily, or on chosen weekdays at a local time in an IANA time zone, with no browser open, through the owner-only `/api/jobs` routes. Runs never approve anything themselves: one that needs an approval waits up to 12 hours, then is cancelled. Runs missed while the server was down become one catch-up run if recent, a run interrupted by a restart is recorded as interrupted and never re-run, and finished runs appear unread in the project's chat list.
