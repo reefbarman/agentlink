@@ -30,15 +30,38 @@ After installation, use the script kept in the deployment directory:
 ```sh
 bash ~/agentlink-assistant/install.sh status
 bash ~/agentlink-assistant/install.sh pair
+# Legacy releases only (managed releases use Settings → Updates):
 bash ~/agentlink-assistant/install.sh update --version X.Y.Z
 bash ~/agentlink-assistant/install.sh rollback
 ```
 
 Updates fetch an explicit release manifest with immutable GHCR image digests, validate it as data (never source it as shell), ask before interrupting work, and reuse the existing drain/backup/health-check/rollback flow. An update failure at service startup or health checking attempts rollback. Installed configuration and secrets are preserved. Downgrades use rollback, not `update`. No automatic background updating is enabled.
 
-**Current scope:** this first slice updates images, not deployment templates or the installed management scripts. Read release notes before updating; releases requiring new configuration/template migrations need operator intervention. Automatic version discovery, browser update controls/progress, transactional template updates, first-run browser onboarding and fresh Linux/macOS qualification are still to come. A failed first install keeps its directory and logs for inspection rather than silently removing data. Docker Desktop's login/startup and host sleep behaviour still need real-machine qualification.
+### Browser updates for managed releases
 
-For operators, `upgrade.sh --deploy DIR --release-manifest FILE` uses the same released-image path directly. `--validate-release` validates a manifest without Docker or an existing deployment. Omitting `--release-manifest` retains the source-build workflow below.
+**Settings → Updates** shows the installed version/commit, compatible newer releases and release notes. Checks use the shared GitHub release cache, with bounded daily background checks, manual refresh, stable-by-default discovery and an explicit preview preference. Preferences, cached notes and check failures persist across supervisor restarts. Discovery never applies an update and does not send update notifications.
+
+Only the signed-in owner can confirm an update or rollback. Confirmation explains interruption and backup/restore consequences. Progress is durable outside Assistant app data, so closing the browser or restarting the Assistant does not abandon the operation. Reopen Settings after a disconnect and reload the app when the operation finishes. Do not retry an interrupted operation without inspecting deployment status.
+
+A separate `agentlink-updater` Compose project uses an immutable updater image and fixed job commands, paths and networks. It has root-equivalent Docker socket access and mounts only the exact deployment and updater directories. The main Assistant gets a private token-authenticated connection, not Docker access or updater state. `/api/updates` is owner-only deployment management, not an agent tool or remote shell. Requests cannot select commands, URLs, images or filesystem paths.
+
+Managed releases carry `assistant-deployment.json` with schema/protocol and hashes for canonical management assets. The updater rejects unknown or locally modified templates before mutations, downloads and verifies exact-release assets, then updates scripts/Compose files transactionally with the immutable images. Configuration and credentials are preserved. Existing drain, backup, health-check and rollback safeguards apply. Rollback also restores previous management assets and pre-update data, retaining later data aside and pausing scheduled jobs. The standalone supervisor is restarted last, after reconnecting progress is durable.
+
+Existing source-built or legacy deployments remain command-line-only, with no automatic conversion. Managed installs refuse direct `install.sh update`/`rollback` and require Settings so images, data and the separate supervisor's management files stay in one transaction. A general managed command-line frontend is deferred; do not bypass this guard with a raw image-only upgrade. A failed first install keeps its directory and logs for inspection rather than silently removing data. **Still unqualified:** published image availability/public pulls, first-run browser onboarding, fresh Linux/macOS drills, Docker Desktop login/startup and host sleep behaviour.
+
+#### Interrupted managed update recovery
+
+While a shell command is active, graceful job shutdown forwards termination to the upgrade script and allows recovery to finish. Termination between commands, power loss, forced kill or a Docker shutdown deadline can still leave a partial transaction. Such operations are reported as interrupted and are never automatically replayed. If release metadata is temporarily inconsistent, update controls remain unavailable rather than guessing the installed state.
+
+Operator checklist:
+
+- Inspect the persisted `DEPLOY-updater/current-operation.json`, its `operations/<id>.json`, the matching `agentlink-updater-job-<id>` container/logs, and `DEPLOY/.upgrade-state`. Do not source state files as shell.
+- Do not remove locks or start recovery while an update/rollback job or upgrade process is still running. Stop new Assistant work and retain a copy of the deployment, updater state and backups before repairing anything.
+- Once every writer is confirmed stopped, an empty stale `DEPLOY/.upgrade-lock` can be removed deliberately with `rmdir`. Inspect the recorded backup and `.upgrade-assets-previous`/`.release-previous.env` before using the installed `upgrade.sh rollback --deploy DEPLOY` as an operator recovery action. Unlike the browser, this raw script does not restore the standalone supervisor.
+- If `.upgrade-updater-previous` exists for that same transaction, its `compose.yaml` and `.env` are the paired supervisor recovery files. Restore them to the updater directory while preserving original ownership/modes, retain `updater-token` and operation history, and restart the separate updater project. Do not mix versions from different transactions or regenerate secrets. If the backup or pairing cannot be established, stop and recover from the retained backup rather than forcing another update.
+- Verify the restored version, smoke check and backup status before resuming work. A successful data rollback pauses scheduled jobs; review them before re-enabling.
+
+For legacy operators, `upgrade.sh --deploy DIR --release-manifest FILE` retains the image-only released-image path. `--validate-release` validates a manifest without Docker or an existing deployment. Omitting `--release-manifest` retains the source-build workflow below. Do not use this image-only path to bypass managed update transactions.
 
 ## Running the server
 

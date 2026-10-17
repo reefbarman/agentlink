@@ -26,6 +26,7 @@ import {
   type ResticRunner,
 } from "./backup.js";
 import { startBackupAgent } from "./backupAgent.js";
+import { startAssistantUpdater, runUpdaterJob } from "./assistantUpdater.js";
 import { BackupRequestError, createBackupClient } from "./backupClient.js";
 import { startCommandWorker } from "./commandWorker.js";
 import { canExecuteOnCommandWorker } from "./commandWorkerClient.js";
@@ -124,6 +125,9 @@ export const ASSISTANT_SERVER_USAGE = `Usage: agentlink-server --config <file> [
        agentlink-server publisher --token-file <file> --key-file <file>
                                   --tasks-root <dir> --data <dir>
                                   [--client-id <id>] [--listen <host:port>]
+       agentlink-server updater --token-file <file> --deploy-root <dir> --updater-root <dir>
+                                [--host <host>] [--port 7900] [--job-image <image>]
+       agentlink-server updater-job --deploy-root <dir> --updater-root <dir> --operation <UUID>
        agentlink-server runner-manager --token-file <file> --image <name>
                                        --network <name> --projects-root <dir>
                                        --data-root <dir> [--listen <host:port>]
@@ -227,10 +231,16 @@ Commands:
                    AGENTLINK_GITHUB_CLIENT_ID) is your GitHub App's client
                    ID for "Connect GitHub"; without it only pasted tokens
                    work. --listen defaults to 0.0.0.0:7400.
+  updater          Private, token-authenticated release update supervisor.
+                   Accepts only owner-confirmed official Assistant versions;
+                   starts fixed one-shot jobs, never arbitrary host commands.
+                   Keep it in its own Compose project so updates survive app restarts.
+  updater-job      Internal one-shot worker for a persisted update operation.
+                   Fixed paths and operation ID are supplied by the supervisor.
   runner-manager   Start and stop session runners (one container per coding
                    task's session) for a server whose configuration has
-                   "runners". The only AgentLink process with the Docker
-                   socket. It accepts start and stop from the server's token
+                   "runners". It holds the Docker socket, as does the
+                   separate update supervisor. It accepts start and stop from the server's token
                    (--token-file) and decides the rest: --image (the
                    command worker image), --network (an internal network),
                    --user (default 1000:1000), --memory (default 2g),
@@ -289,6 +299,9 @@ export async function runAssistantServerCli(
   }
   if (argv[0] === "backup-agent") {
     return await runBackupAgent(argv.slice(1), io);
+  }
+  if (argv[0] === "updater" || argv[0] === "updater-job") {
+    return await runHostUpdater(argv[0], argv.slice(1), io);
   }
   if (argv[0] === "restore") {
     return await runRestore(argv.slice(1), io);
@@ -406,6 +419,7 @@ export async function runAssistantServerCli(
     if (preflight.publisher) io.stdout(`${preflight.publisher}\n`);
     if (preflight.runners) io.stdout(`${preflight.runners}\n`);
     if (preflight.backup) io.stdout(`${preflight.backup}\n`);
+    if (preflight.updater) io.stdout(`${preflight.updater}\n`);
     if (preflight.persona) io.stdout(`${preflight.persona}\n`);
     if (preflight.memory) io.stdout(`${preflight.memory}\n`);
     if (config.backup) io.stdout(`${await describeCheckpoints(config)}\n`);
@@ -1439,6 +1453,89 @@ async function runRunnerManager(
   const signal = await io.waitForShutdown();
   io.log(`Received ${signal}; stopping the runner manager`);
   await manager.close();
+  return 0;
+}
+
+async function runHostUpdater(
+  command: "updater" | "updater-job",
+  argv: readonly string[],
+  io: AssistantServerCliIo,
+): Promise<number> {
+  const values: Record<string, string | undefined> = {
+    "--host": "0.0.0.0",
+    "--port": "7900",
+    "--docker-socket": "/var/run/docker.sock",
+    "--job-image": "agentlink-updater:local",
+  };
+  const parsed = parseFlags(
+    argv,
+    [
+      "--host",
+      "--port",
+      "--deploy-root",
+      "--updater-root",
+      "--token-file",
+      "--job-image",
+      "--docker-socket",
+      "--operation",
+    ],
+    values,
+  );
+  if (parsed && "help" in parsed) {
+    io.stdout(ASSISTANT_SERVER_USAGE);
+    return 0;
+  }
+  if (parsed) return usageError(io, parsed.error);
+  for (const name of [
+    "--deploy-root",
+    "--updater-root",
+    command === "updater" ? "--token-file" : "--operation",
+  ]) {
+    if (!values[name]) return usageError(io, `${name} is required`);
+  }
+  if (command === "updater-job") {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+        values["--operation"]!,
+      )
+    )
+      return usageError(io, "--operation must be a UUID");
+    try {
+      await runUpdaterJob({
+        deployDirectory: values["--deploy-root"]!,
+        updaterDirectory: values["--updater-root"]!,
+        operation: values["--operation"]!,
+      });
+      return 0;
+    } catch {
+      io.log("Updater job failed; inspect its persisted operation status.");
+      return 1;
+    }
+  }
+  const port = Number(values["--port"]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    return usageError(io, "--port must be between 1 and 65535");
+  const token = await (
+    await prepareSecret(
+      { file: values["--token-file"]! },
+      "updater.token",
+      io.env,
+    )
+  )();
+  const updater = await startAssistantUpdater({
+    host: values["--host"]!,
+    port,
+    token,
+    deployDirectory: values["--deploy-root"]!,
+    updaterDirectory: values["--updater-root"]!,
+    jobImage: values["--job-image"]!,
+    dockerSocket: values["--docker-socket"]!,
+  });
+  io.log(
+    `AgentLink updater listening on ${values["--host"]}:${updater.address.port}; only owner-confirmed release updates are accepted`,
+  );
+  await io.waitForShutdown();
+  await updater.close();
   return 0;
 }
 

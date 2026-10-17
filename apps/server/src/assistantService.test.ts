@@ -21,6 +21,27 @@ import {
 } from "./testSupport.js";
 import { readUsageSources } from "./usageReport.js";
 
+const updateStatus = {
+  configured: true,
+  managed: true,
+  installedVersion: "1.2.3",
+  installedCommit: null,
+  updaterProtocol: 1 as const,
+  canRollback: false,
+  rollbackVersion: null,
+  discovery: {
+    status: "idle" as const,
+    automaticChecks: true,
+    includePreviews: false,
+    checkedAt: null,
+    lastAttemptAt: null,
+    retryAt: null,
+    stale: false,
+    releases: [],
+  },
+  operation: null,
+};
+
 const DAY = 24 * 60 * 60 * 1000;
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -139,6 +160,195 @@ describe("assistant service local certificates", () => {
     expect(
       log.filter((line) => line.startsWith("Issued server certificate")),
     ).toHaveLength(2);
+  }, 30_000);
+});
+
+describe("assistant service updater wiring", () => {
+  it("forwards owner update confirmations to the fixed updater and blocks unsafe calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-updates-"));
+    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    const certificate = createTestCertificate();
+    await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+    await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+      mode: 0o600,
+    });
+    const upstreamRequests: Array<{
+      path: string | undefined;
+      authorization: string | undefined;
+      body: unknown;
+    }> = [];
+    let unavailable = false;
+    const updater = http.createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+      request.on("end", () => {
+        upstreamRequests.push({
+          path: request.url,
+          authorization: request.headers.authorization,
+          body: raw ? JSON.parse(raw) : undefined,
+        });
+        response.writeHead(unavailable ? 503 : 200, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(
+            unavailable
+              ? { error: "update_unavailable" }
+              : { status: updateStatus },
+          ),
+        );
+      });
+    });
+    await new Promise<void>((resolve) =>
+      updater.listen(0, "127.0.0.1", resolve),
+    );
+    cleanup.push(
+      () => new Promise<void>((resolve) => updater.close(() => resolve())),
+    );
+    const updaterPort = (updater.address() as { port: number }).port;
+    const port = await freePort();
+    const origin = `https://localhost:${port}`;
+    const token = "private-updater-test-token";
+    await fs.writeFile(path.join(root, "updater-token"), token, {
+      mode: 0o600,
+    });
+    const config = parseAssistantServerConfig(
+      {
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [origin],
+        tls: { certFile: "server.crt", keyFile: "server.key" },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: "http://127.0.0.1:9/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", root: "projects/home" }],
+        updater: {
+          host: "127.0.0.1",
+          port: updaterPort,
+          token: { file: "updater-token" },
+        },
+      },
+      root,
+    );
+    const service = await startAssistantService({
+      config,
+
+      log: () => undefined,
+    });
+    cleanup.push(() => service.close());
+    const { code } = service.server.store.createPairing();
+    const paired = await httpsRequest({
+      port,
+      ca: certificate.cert,
+      method: "POST",
+      path: "/api/auth/pairings/redeem",
+      headers: { origin },
+      body: { code, deviceLabel: "Owner" },
+    });
+    const cookie = sessionCookieFrom(paired);
+    const request = (input: {
+      path: string;
+      method?: string;
+      body?: unknown;
+      origin?: string;
+      cookie?: string;
+    }) =>
+      httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: input.method,
+        path: input.path,
+        body: input.body,
+        headers: {
+          ...(input.method && input.method !== "GET"
+            ? { origin: input.origin ?? origin }
+            : {}),
+          ...(input.cookie === undefined
+            ? { cookie }
+            : { cookie: input.cookie }),
+        },
+      });
+    // Startup preflight also reads status; the assertions below cover browser requests.
+    upstreamRequests.length = 0;
+    const confirmation = {
+      version: "1.3.0",
+      expectedInstalledVersion: "1.2.3",
+      confirmed: true,
+    } as const;
+    await expect(request({ path: "/api/updates" })).resolves.toMatchObject({
+      status: 200,
+      body: { status: { installedVersion: "1.2.3" } },
+    });
+    await expect(
+      request({
+        path: "/api/updates/preferences",
+        method: "POST",
+        body: { automaticChecks: false, includePreviews: true },
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      request({
+        path: "/api/updates/apply",
+        method: "POST",
+        body: confirmation,
+      }),
+    ).resolves.toMatchObject({ status: 202 });
+    expect(upstreamRequests).toEqual([
+      {
+        path: "/v1/updates",
+        authorization: `Bearer ${token}`,
+        body: undefined,
+      },
+      {
+        path: "/v1/updates/preferences",
+        authorization: `Bearer ${token}`,
+        body: { automaticChecks: false, includePreviews: true },
+      },
+      {
+        path: "/v1/updates/apply",
+        authorization: `Bearer ${token}`,
+        body: confirmation,
+      },
+    ]);
+    const beforeRejectedRequests = upstreamRequests.length;
+    await expect(
+      request({
+        path: "/api/updates/apply",
+        method: "POST",
+        origin: "https://attacker.example",
+        body: confirmation,
+      }),
+    ).resolves.toMatchObject({ status: 403 });
+    await expect(
+      request({
+        path: "/api/updates/apply",
+        method: "POST",
+        cookie: "",
+        body: confirmation,
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    expect(upstreamRequests).toHaveLength(beforeRejectedRequests);
+    unavailable = true;
+    await expect(request({ path: "/api/updates" })).resolves.toMatchObject({
+      status: 200,
+      body: { configured: true, error: "update_unavailable" },
+    });
   }, 30_000);
 });
 

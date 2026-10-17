@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+
 import {
   copyFileSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
-import path from "node:path";
+
 import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { writeAssistantDeploymentMetadata } from "./assistant-deployment-assets.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIGEST_TARGETS = {
@@ -17,6 +20,7 @@ const DIGEST_TARGETS = {
   backup: ["BACKUP_IMAGE", "agentlink-backup"],
   editor: ["EDITOR_IMAGE", "agentlink-editor"],
   browser: ["BROWSER_IMAGE", "agentlink-browser"],
+  updater: ["UPDATER_IMAGE", "agentlink-updater"],
 };
 const DEPLOY = "apps/server/deploy";
 const CONTAINER = `${DEPLOY}/container`;
@@ -26,7 +30,11 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
     const value = argv[index + 1];
-    if (!["--version", "--commit", "--digests", "--out"].includes(key)) {
+    if (
+      !["--version", "--commit", "--digests", "--out", "--channel"].includes(
+        key,
+      )
+    ) {
       throw new Error(`Unexpected argument: ${key}`);
     }
     if (!value || value.startsWith("--"))
@@ -41,7 +49,10 @@ function parseArgs(argv) {
 }
 
 function validate({ version, commit, digests }) {
-  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+  if (
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+    !version.split(".").map(Number).every(Number.isSafeInteger)
+  ) {
     throw new Error(`Invalid release version: ${version}`);
   }
   if (!/^[0-9a-f]{40}$/.test(commit)) {
@@ -72,9 +83,13 @@ export function packageAssistantRelease({
   commit,
   digests,
   out,
+  channel = "preview",
   root = ROOT,
 }) {
   validate({ version, commit, digests });
+  if (channel !== "stable" && channel !== "preview") {
+    throw new Error(`Invalid release channel: ${channel}`);
+  }
   const output = path.resolve(root, out);
   const lines = [`RELEASE_VERSION=${version}`, `RELEASE_COMMIT=${commit}`];
   for (const [target, [key, image]] of Object.entries(DIGEST_TARGETS)) {
@@ -103,6 +118,26 @@ export function packageAssistantRelease({
   for (const name of ["install.sh", "upgrade.sh"]) {
     copyFileSync(path.join(root, DEPLOY, name), path.join(output, name));
   }
+  writeAssistantDeploymentMetadata({ out: output, version, commit });
+  writeFileSync(
+    path.join(output, "agentlink-update.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        product: "assistant",
+        version,
+        tag: `assistant-v${version}`,
+        channel,
+        targets: {
+          "linux-x64": "assistant-release.env",
+          "linux-arm64": "assistant-release.env",
+        },
+        engines: {},
+      },
+      null,
+      2,
+    )}\n`,
+  );
   return output;
 }
 
@@ -118,6 +153,7 @@ if (
       commit: args["--commit"],
       digests,
       out: args["--out"],
+      channel: args["--channel"] ?? "preview",
     });
     console.log(`Packaged Assistant release assets in ${output}`);
   } catch (error) {

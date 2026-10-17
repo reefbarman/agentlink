@@ -1,6 +1,8 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { useEffect, useState } from "preact/hooks";
 
+import { AssistantUpdates } from "./AssistantUpdates";
+
 /**
  * The Assistant's persona settings: its name and voice, what it calls the
  * owner, the owner's time zone, and quiet hours for notifications. They
@@ -406,6 +408,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <p>{error}</p>
         </div>
       )}
+      <AssistantUpdates />
       <StorageSection />
     </Dialog>
   );

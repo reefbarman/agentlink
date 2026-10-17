@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- AgentLink Assistant installation/update foundation: an independent `assistant-v*` release pipeline for prebuilt GHCR images and deployment assets, a guided Linux/macOS installer without a host source build, and explicit-version image updates using the existing backup/health-check/rollback flow. The installer refuses existing deployments and leaves certificate trust, model sign-in and pairing to the owner. Publication, fresh-host qualification, automatic update discovery, browser controls and deployment-template migrations are not yet complete.
+- AgentLink Assistant: managed release installations gain Settings update checks, cached release notes, stable/preview preferences, explicit update/rollback confirmation and reconnecting progress. A separate narrow supervisor runs fixed, digest-pinned update jobs and transactionally updates management assets with images using the existing drain, backup, health-check and rollback flow. Configuration and credentials are retained; modified templates and source/legacy deployments fail closed. No unattended application or update notifications are enabled. Images have not been published and real-host upgrade/rollback qualification remains outstanding.
+
+- AgentLink Assistant installation/update foundation: an independent `assistant-v*` release pipeline for prebuilt GHCR images and deployment assets, a guided Linux/macOS installer without a host source build, and explicit-version image updates using the existing backup/health-check/rollback flow. The installer refuses existing deployments and leaves certificate trust, model sign-in and pairing to the owner. Publication and fresh-host qualification are not yet complete.
 
 - AgentLink Assistant: polish the management panels with persistent headers, keyboard focus containment, responsive spacing and consistent controls. Settings groups persona, schedule and storage into readable sections with change-aware saving; Tasks gains search and state filters, Jobs gains search, and Memory has clearer search and empty states. MCP tool permissions now have structured rows instead of an unstyled nested list.
 

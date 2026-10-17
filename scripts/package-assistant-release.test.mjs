@@ -21,6 +21,7 @@ const targets = [
   "backup",
   "editor",
   "browser",
+  "updater",
 ];
 const digests = Object.fromEntries(
   targets.map((target, index) => [
@@ -35,7 +36,7 @@ function fixture() {
   mkdirSync(path.join(container, "witness"), { recursive: true });
   for (const file of [
     "compose.yaml",
-    "compose.worker.yaml",
+    "compose.runners.yaml",
     "server.example.json",
     "searxng.settings.example.yml",
     "witness/compose.yaml",
@@ -48,10 +49,10 @@ function fixture() {
   return root;
 }
 
-test("writes strict digest-pinned manifest and individual deployment release assets", () => {
+test("writes strict digest-pinned manifest and individual deployment release assets", async () => {
   const root = fixture();
   try {
-    const output = packageAssistantRelease({
+    const output = await packageAssistantRelease({
       version: "0.2.3",
       commit: "a".repeat(40),
       digests,
@@ -75,15 +76,60 @@ test("writes strict digest-pinned manifest and individual deployment release ass
       );
     }
     assert.deepEqual(readdirSync(output).sort(), [
+      "agentlink-update.json",
+      "assistant-deployment.json",
       "assistant-release.env",
+      "compose.runners.yaml",
       "compose.witness.yaml",
-      "compose.worker.yaml",
       "compose.yaml",
       "install.sh",
       "searxng.settings.example.yml",
       "server.example.json",
       "upgrade.sh",
     ]);
+    const update = JSON.parse(
+      readFileSync(path.join(output, "agentlink-update.json"), "utf8"),
+    );
+    assert.deepEqual(update, {
+      schemaVersion: 1,
+      product: "assistant",
+      version: "0.2.3",
+      tag: "assistant-v0.2.3",
+      channel: "preview",
+      targets: {
+        "linux-x64": "assistant-release.env",
+        "linux-arm64": "assistant-release.env",
+      },
+      engines: {},
+    });
+    const deployment = JSON.parse(
+      readFileSync(path.join(output, "assistant-deployment.json"), "utf8"),
+    );
+    assert.equal(deployment.version, "0.2.3");
+    assert.equal(deployment.commit, "a".repeat(40));
+    assert.equal(deployment.updaterProtocol, 1);
+    assert.match(deployment.assets["compose.yaml"], /^[0-9a-f]{64}$/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("supports explicit stable discovery metadata", () => {
+  const root = fixture();
+  try {
+    const output = packageAssistantRelease({
+      version: "1.2.3",
+      commit: "b".repeat(40),
+      digests,
+      out: "release-assets",
+      root,
+      channel: "stable",
+    });
+    const metadata = JSON.parse(
+      readFileSync(path.join(output, "agentlink-update.json"), "utf8"),
+    );
+    assert.equal(metadata.channel, "stable");
+    assert.equal(metadata.tag, "assistant-v1.2.3");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -178,8 +224,20 @@ test("rejects malformed version, commit, missing/extra target and malformed dige
     for (const [override, pattern] of [
       [{ version: "v0.2.3" }, /version/u],
       [{ version: "01.2.3" }, /version/u],
+      [{ version: "0.2.3-rc.1" }, /version/u],
+      [{ version: "9007199254740992.2.3" }, /version/u],
+      [{ channel: "nightly" }, /channel/u],
       [{ commit: "b".repeat(39) }, /commit/u],
       [{ digests: { ...digests, browser: undefined } }, /browser/u],
+      [
+        {
+          digests: Object.fromEntries(
+            Object.entries(digests).filter(([key]) => key !== "updater"),
+          ),
+        },
+        /exactly/u,
+      ],
+      [{ digests: { ...digests, updater: "latest" } }, /updater/u],
       [
         { digests: { ...digests, extra: `sha256:${"a".repeat(64)}` } },
         /exactly/u,

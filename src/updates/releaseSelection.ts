@@ -11,6 +11,7 @@ const tagPrefixes: Record<ReleaseProduct, string> = {
   vscode: "v",
   desktop: "desktop-v",
   cli: "cli-v",
+  assistant: "assistant-v",
 };
 const targets = new Set([
   "darwin-arm64",
@@ -62,6 +63,12 @@ export function expectedReleaseAsset(
   if (product === "cli" && target === "darwin-arm64") {
     return `agentlink-cli-darwin-arm64-v${version}.tar.gz`;
   }
+  if (
+    product === "assistant" &&
+    (target === "linux-x64" || target === "linux-arm64")
+  ) {
+    return "assistant-release.env";
+  }
 }
 
 export function parseReleaseUpdateMetadata(
@@ -98,7 +105,8 @@ export function parseReleaseUpdateMetadata(
     entries.some(
       ([target, asset]) =>
         expectedReleaseAsset(product, version, target) !== asset,
-    )
+    ) ||
+    (product === "assistant" && entries.length > 2)
   )
     return;
   return {
@@ -165,6 +173,7 @@ export interface ValidatedReleaseRecord {
   metadata: ReleaseUpdateMetadata;
   assets: string[];
   prerelease: boolean;
+  notes?: string;
 }
 
 export function compatibleRelease(
@@ -176,6 +185,12 @@ export function compatibleRelease(
     metadata.product !== identity.product ||
     !metadata.targets[identity.target] ||
     !record.assets.includes(metadata.targets[identity.target])
+  )
+    return false;
+  if (
+    identity.product === "assistant" &&
+    record.prerelease &&
+    !identity.includePreviews
   )
     return false;
   if (identity.product === "vscode") {
@@ -214,6 +229,7 @@ export function selectReleaseUpdate(
     target: identity.target,
     releaseUrl: `${RELEASE_REPOSITORY_URL}/releases/tag/${selected.metadata.tag}`,
     instructionsUrl: releaseInstructionsUrl(identity.product),
+    ...(selected.notes !== undefined ? { notes: selected.notes } : {}),
   };
 }
 

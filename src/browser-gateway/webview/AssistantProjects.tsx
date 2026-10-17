@@ -200,11 +200,12 @@ export function parseAllowList(text: string): string[] {
 
 export async function requestJson<T>(
   url: string,
-  init?: { method?: string; body?: unknown },
+  init?: { method?: string; body?: unknown; signal?: AbortSignal },
 ): Promise<T> {
   const response = await fetch(url, {
     method: init?.method ?? "GET",
     credentials: "same-origin",
+    ...(init?.signal ? { signal: init.signal } : {}),
     headers:
       init?.body === undefined
         ? undefined

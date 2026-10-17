@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -45,6 +46,7 @@ function fixture() {
         "backup",
         "editor",
         "browser",
+        "updater",
       ].map(
         (target) =>
           `${target.toUpperCase().replaceAll("-", "_")}_IMAGE=ghcr.io/reefbarman/agentlink-${target}@sha256:${"b".repeat(64)}`,
@@ -53,16 +55,43 @@ function fixture() {
   writeFileSync(join(assets, "assistant-release.env"), manifest);
   copyFileSync(upgrade, join(assets, "upgrade.sh"));
   copyFileSync(installer, join(assets, "install.sh"));
-  for (const name of [
+  const releaseAssets = [
     "compose.yaml",
+    "compose.update-client.yaml",
+    "compose.updater.yaml",
     "compose.publisher.yaml",
     "compose.runners.yaml",
     "compose.backup.yaml",
-  ])
+    "server.example.json",
+  ];
+  for (const name of releaseAssets)
     copyFileSync(join(container, name), join(assets, name));
   copyFileSync(
     join(container, "witness/compose.yaml"),
     join(assets, "compose.witness.yaml"),
+  );
+  const deploymentMetadata = {
+    schemaVersion: 1,
+    updaterProtocol: 1,
+    version,
+    commit: "a".repeat(40),
+    ...Object.fromEntries(
+      [
+        "install.sh",
+        "upgrade.sh",
+        "compose.witness.yaml",
+        ...releaseAssets,
+      ].map((name) => [
+        name,
+        createHash("sha256")
+          .update(readFileSync(join(assets, name)))
+          .digest("hex"),
+      ]),
+    ),
+  };
+  writeFileSync(
+    join(assets, "assistant-deployment.json"),
+    `${JSON.stringify(deploymentMetadata, null, 2)}\n`,
   );
   const mock = `#!${process.execPath}
 const fs=require('node:fs'), path=require('node:path');
@@ -111,7 +140,9 @@ else if(tool==='curl'){
   return { root, assets, deploy, log, version, run, calls };
 }
 
-describe("guided release installer", () => {
+// Each scenario launches multiple real shell subprocesses for hash validation.
+// Keep the test budget above the fixture's bounded installer process timeout.
+describe("guided release installer", { timeout: 20_000 }, () => {
   it("explains prerequisites without making changes for help", () => {
     const f = fixture();
     const result = f.run(["help"]);
@@ -215,8 +246,37 @@ describe("guided release installer", () => {
       "PUBLIC CERTIFICATE",
     );
     expect(existsSync(`${f.deploy}-witness/compose.yaml`)).toBe(true);
+    expect(existsSync(`${f.deploy}-updater/compose.yaml`)).toBe(true);
+    const updaterEnv = readFileSync(`${f.deploy}-updater/.env`, "utf8");
+    expect(updaterEnv).toContain(
+      `UPDATER_IMAGE=ghcr.io/reefbarman/agentlink-updater@sha256:${"b".repeat(64)}`,
+    );
+    expect(updaterEnv).toContain(`AGENTLINK_DEPLOY_DIRECTORY='${f.deploy}'`);
+    expect(updaterEnv).toContain(
+      `AGENTLINK_UPDATER_DIRECTORY='${f.deploy}-updater'`,
+    );
+    expect(readFileSync(join(f.deploy, ".env"), "utf8")).toContain(
+      "compose.update-client.yaml",
+    );
+    const updaterToken = readFileSync(
+      join(f.deploy, "secrets/updater-token"),
+      "utf8",
+    );
+    expect(updaterToken.trim()).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(`${f.deploy}-updater/updater-token`, "utf8")).toBe(
+      updaterToken,
+    );
+    expect(config).toHaveProperty("updater.host", "updater");
+    expect(config).toHaveProperty("updater.port", 7900);
+    expect(config).toHaveProperty(
+      "updater.token.file",
+      "/run/secrets/updater-token",
+    );
+    expect(
+      readFileSync(join(f.deploy, "compose.update-client.yaml"), "utf8"),
+    ).not.toContain("/var/run/docker.sock");
     const docker = f.calls().filter((call) => call.tool === "docker");
-    expect(docker.filter((call) => call.args[0] === "pull")).toHaveLength(4);
+    expect(docker.filter((call) => call.args[0] === "pull")).toHaveLength(5);
     expect(
       docker
         .filter((call) => call.args[0] === "pull")
@@ -257,7 +317,7 @@ describe("guided release installer", () => {
       "https://assistant.local:8443",
       "--yes",
     ]);
-    expect(wrong.stderr).toContain("does not match requested version");
+    expect(wrong.stderr).toContain("does not match requested release");
     const invalid = f.run([
       "install",
       "--version",
@@ -287,6 +347,84 @@ describe("guided release installer", () => {
       false,
     );
     expect(f.calls().some((call) => call.args[0] === "pull")).toBe(false);
+  });
+
+  it("rejects a corrupted release asset before pulling images or creating install state", () => {
+    const f = fixture();
+    writeFileSync(join(f.assets, "compose.updater.yaml"), "services: {}\n");
+    const result = f.run([
+      "install",
+      "--version",
+      f.version,
+      "--origin",
+      "https://assistant.local:8443",
+      "--yes",
+    ]);
+    expect(result.stderr).toContain(
+      "release asset hash mismatch: compose.updater.yaml",
+    );
+    expect(existsSync(f.deploy)).toBe(false);
+    expect(f.calls().some((call) => call.args[0] === "pull")).toBe(false);
+  });
+
+  it("refuses managed CLI updates before mutation and preserves deployment files", () => {
+    const f = fixture();
+    mkdirSync(f.deploy);
+    writeFileSync(join(f.deploy, "server.json"), '{"ownerSetting": true}');
+    writeFileSync(join(f.deploy, "compose.yaml"), "services: {}\n");
+    writeFileSync(
+      join(f.deploy, "assistant-deployment.json"),
+      "managed metadata\n",
+    );
+    writeFileSync(join(f.deploy, "release.env"), "RELEASE_VERSION=1.0.0\n");
+    copyFileSync(upgrade, join(f.deploy, "upgrade.sh"));
+    const result = f.run(["update", "--version", f.version, "--yes"]);
+    expect(result.stderr).toContain(
+      "managed releases require Settings > Updates",
+    );
+    expect(readFileSync(join(f.deploy, "server.json"), "utf8")).toBe(
+      '{"ownerSetting": true}',
+    );
+    expect(readFileSync(join(f.deploy, "release.env"), "utf8")).toBe(
+      "RELEASE_VERSION=1.0.0\n",
+    );
+    expect(f.calls().some((call) => call.args[0] === "pull")).toBe(false);
+    expect(f.calls().some((call) => call.args[0] === "tag")).toBe(false);
+    expect(
+      f
+        .calls()
+        .some(
+          (call) => call.args[0] === "compose" && call.args[1] !== "version",
+        ),
+    ).toBe(false);
+  });
+
+  it("refuses managed CLI rollback before mutation and preserves deployment files", () => {
+    const f = fixture();
+    mkdirSync(f.deploy);
+    writeFileSync(join(f.deploy, "server.json"), '{"ownerSetting": true}');
+    writeFileSync(join(f.deploy, "compose.yaml"), "services: {}\n");
+    writeFileSync(
+      join(f.deploy, "assistant-deployment.json"),
+      "managed metadata\n",
+    );
+    copyFileSync(upgrade, join(f.deploy, "upgrade.sh"));
+    const result = f.run(["rollback", "--yes"]);
+    expect(result.stderr).toContain(
+      "managed releases require Settings > Updates",
+    );
+    expect(readFileSync(join(f.deploy, "server.json"), "utf8")).toBe(
+      '{"ownerSetting": true}',
+    );
+    expect(
+      f
+        .calls()
+        .some(
+          (call) => call.args[0] === "compose" && call.args[1] !== "version",
+        ),
+    ).toBe(false);
+    expect(f.calls().some((call) => call.args[0] === "pull")).toBe(false);
+    expect(f.calls().some((call) => call.args[0] === "tag")).toBe(false);
   });
 
   it("refuses a downgrade and preserves the installed release metadata", () => {
@@ -372,7 +510,7 @@ describe("guided release installer", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("first backup did not finish");
     expect(result.stdout).toContain("Sign in to ChatGPT");
-    expect(f.calls().filter((call) => call.args[0] === "pull")).toHaveLength(4);
+    expect(f.calls().filter((call) => call.args[0] === "pull")).toHaveLength(5);
   });
 
   it("keeps a failed startup and prints exact recovery commands instead of overwriting it", () => {

@@ -3661,6 +3661,74 @@ html.quick-ask-document body {
   }
 }
 
+.browser-shell.browser-shell-desktop .assistant-update-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--ag-text);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-update-choice input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0;
+  accent-color: var(--ag-accent);
+}
+
+.browser-shell.browser-shell-desktop .assistant-update-version {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-update-version select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+  font: inherit;
+}
+
+.browser-shell.browser-shell-desktop .assistant-update-notes summary {
+  cursor: pointer;
+  color: var(--ag-accent-text);
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-update-notes > div {
+  max-height: 240px;
+  margin: 10px 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--ag-border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop
+  :is(.assistant-update-confirm, .assistant-update-progress) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--ag-accent-a35);
+  border-radius: 10px;
+  background: var(--ag-accent-a12);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop .assistant-updates :is(p, h4) {
+  margin: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .browser-shell.browser-shell-desktop .assistant-switch span,
   .browser-shell.browser-shell-desktop .assistant-switch span::after {

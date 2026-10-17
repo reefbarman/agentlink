@@ -21,7 +21,8 @@ usage() {
     '  bash install.sh rollback|status|pair [--deploy DIR] [--yes]' \
     'Run as your normal user, with Docker Engine 28+ / Docker Desktop and Compose available.' \
     'Choose an explicit assistant-vX.Y.Z release. No images have to be built locally.' \
-    'Updates preserve config and secrets and use the existing backup/rollback flow.'
+    'Updates preserve config and secrets and use the existing backup/rollback flow.' \
+    'Managed releases use Settings > Updates; CLI update/rollback are for legacy releases only.'
 }
 case "$mode" in help | --help | -h) usage; exit 0 ;; install | update | rollback | status | pair) ;; *) fail "unknown command: $mode" ;; esac
 while [ "$#" -gt 0 ]; do
@@ -37,7 +38,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$deploy" in /*) ;; *) fail "--deploy must be an absolute path" ;; esac
-case "$deploy" in *$'\n'* | *:*) fail "the deployment path cannot contain a newline or colon" ;; esac
+case "$deploy" in *$'\n'* | *$'\r'* | *:* | *"'"*) fail "the deployment path cannot contain a newline, colon or single quote" ;; esac
+case "$deploy/" in *//* | */./* | */../*) fail "--deploy must be a normalised absolute path without a trailing slash" ;; esac
 if [ "$mode" = install ] || [ "$mode" = update ]; then
   [[ "$version" =~ ^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail "choose a released version with --version X.Y.Z (see https://github.com/reefbarman/agentlink/releases)"
 fi
@@ -78,6 +80,7 @@ fi
 if [ "$mode" = pair ]; then installed; dc exec assistant agentlink-server pair; exit 0; fi
 if [ "$mode" = rollback ]; then
   installed
+  [ ! -f "$deploy/assistant-deployment.json" ] || fail "managed releases require Settings > Updates > Roll back so supervisor assets and data are restored together"
   [ -f "$deploy/upgrade.sh" ] || fail "this deployment has no installed updater; use the upgrade.sh from its source checkout"
   say 'Rollback restores the previous images and pre-update data; later changes will be kept aside and scheduled jobs will be paused.'
   confirm
@@ -106,38 +109,69 @@ fetch() {
     "$RELEASE_ROOT/assistant-v$version/$1" --output "$work/$1"
 }
 fetch assistant-release.env
-# The official script validates the manifest as data, never as shell code.
-if [ "$mode" = install ]; then
-  fetch upgrade.sh
-  validator="$work/upgrade.sh"
-else
+if [ "$mode" = update ]; then
   installed
+  [ ! -f "$deploy/assistant-deployment.json" ] || fail "managed releases require Settings > Updates so supervisor assets and images are updated together"
   [ -f "$deploy/release.env" ] || fail "this is a source-built deployment; use its existing upgrade.sh workflow (automatic conversion is not supported)"
   [ -f "$deploy/upgrade.sh" ] || fail "the installed updater is missing; restore upgrade.sh from this installation's exact release before updating"
   validator="$deploy/upgrade.sh"
-fi
-bash "$validator" --deploy "$deploy" --release-manifest "$work/assistant-release.env" --validate-release
-release_version=$(sed -n 's/^RELEASE_VERSION=//p' "$work/assistant-release.env")
-[ "$release_version" = "$version" ] || fail "the release manifest does not match requested version $version"
-if [ "$mode" = update ]; then
-  [ -f "$deploy/release.env" ] || fail "this is a source-built deployment; use its existing upgrade.sh workflow (automatic conversion is not supported)"
+  bash "$validator" --deploy "$deploy" --release-manifest "$work/assistant-release.env" --validate-release
+  release_version=$(sed -n 's/^RELEASE_VERSION=//p' "$work/assistant-release.env")
+  [ "$release_version" = "$version" ] || fail "the release manifest does not match requested version $version"
   current=$(sed -n 's/^RELEASE_VERSION=//p' "$deploy/release.env")
   [[ "$current" =~ ^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail "installed release metadata is invalid"
   if [ "$current" = "$version" ]; then say "Already on $version"; exit 0; fi
   awk -v old="$current" -v next_version="$version" 'BEGIN { split(old,a,"."); split(next_version,b,"."); for(i=1;i<=3;i++) { if(b[i]+0>a[i]+0) exit 0; if(b[i]+0<a[i]+0) exit 1 } exit 1 }' || fail "use rollback, not update, to return to an older version"
-  say "Update $current -> $version at $deploy. Images are pulled first, then work drains, a backup is taken and the new version is health-checked. Configuration and secrets are preserved."
-  say 'This preview updates images only; deployment-template or installer migrations are not automatic yet. Read the target release notes before continuing.'
+  say "Update legacy release $current -> $version at $deploy. Images pull before drain, backup and health checks; config and secrets are preserved."
+  say 'Legacy CLI updates change images only, not management templates, and do not enable browser updates. Read the target release notes before continuing.'
   confirm
   bash "$validator" --deploy "$deploy" --release-manifest "$work/assistant-release.env"
   exit 0
 fi
+fetch assistant-deployment.json
+metadata_schema=$(sed -n 's/^[[:space:]]*"schemaVersion": \([0-9][0-9]*\),$/\1/p' "$work/assistant-deployment.json")
+metadata_protocol=$(sed -n 's/^[[:space:]]*"updaterProtocol": \([0-9][0-9]*\),$/\1/p' "$work/assistant-deployment.json")
+metadata_version=$(sed -n 's/^[[:space:]]*"version": "\([0-9.]*\)",$/\1/p' "$work/assistant-deployment.json")
+metadata_commit=$(sed -n 's/^[[:space:]]*"commit": "\([0-9a-f]*\)",$/\1/p' "$work/assistant-deployment.json")
+release_version=$(sed -n 's/^RELEASE_VERSION=//p' "$work/assistant-release.env")
+release_commit=$(sed -n 's/^RELEASE_COMMIT=//p' "$work/assistant-release.env")
+[ "$metadata_schema" = 1 ] && [ "$metadata_protocol" = 1 ] && [ "$metadata_version" = "$version" ] && [ "$metadata_commit" = "$release_commit" ] && [ "$release_version" = "$version" ] || fail "deployment metadata does not match requested release $version"
+updater_image=$(sed -n 's/^UPDATER_IMAGE=//p' "$work/assistant-release.env")
+[[ "$updater_image" =~ ^ghcr[.]io/reefbarman/agentlink-updater@sha256:[0-9a-f]{64}$ ]] || fail "release has no digest-pinned updater image"
+asset_hash() {
+  awk -v key="\"$1\":" '$1 == key { gsub(/[",]/, "", $2); print $2 }' "$work/assistant-deployment.json"
+}
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$1"); else actual=$(shasum -a 256 "$1"); fi
+  printf '%s\n' "${actual%% *}"
+}
+verify_asset() {
+  expected=$(asset_hash "$1")
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || fail "deployment metadata is missing a valid hash for $1"
+  [ "$(sha256_file "$work/$1")" = "$expected" ] || fail "release asset hash mismatch: $1"
+}
+# The official script validates the manifest as data, never as shell code.
+fetch upgrade.sh
+verify_asset upgrade.sh
+validator="$work/upgrade.sh"
+bash "$validator" --deploy "$deploy" --release-manifest "$work/assistant-release.env" --validate-release
+release_version=$(sed -n 's/^RELEASE_VERSION=//p' "$work/assistant-release.env")
+[ "$release_version" = "$version" ] || fail "the release manifest does not match requested version $version"
+updater_image=$(sed -n 's/^UPDATER_IMAGE=//p' "$work/assistant-release.env")
+[[ "$updater_image" =~ ^ghcr[.]io/reefbarman/agentlink-updater@sha256:[0-9a-f]{64}$ ]] || fail "release has no digest-pinned updater image"
+
+
+
 
 [ ! -e "$deploy" ] && [ ! -L "$deploy" ] || fail "fresh installation requires a new directory; $deploy already exists (nothing overwritten)"
 witness="$deploy-witness"
 [ ! -e "$witness" ] && [ ! -L "$witness" ] || fail "witness directory already exists at $witness (nothing overwritten)"
+updater="$deploy-updater"
+[ ! -e "$updater" ] && [ ! -L "$updater" ] || fail "updater directory already exists at $updater (nothing overwritten)"
 command -v openssl >/dev/null || fail "openssl is required to generate service secrets"
 [ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-assistant)" ] || fail "an Assistant Compose deployment already exists on this Docker host; use its update workflow"
 [ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-witness)" ] || fail "a witness Compose deployment already exists on this Docker host; do not replace its backup store"
+[ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-updater)" ] || fail "an update supervisor already exists on this Docker host; do not replace its state"
 if docker image inspect agentlink-assistant:local >/dev/null 2>&1; then
   fail "local Assistant images already exist; use the existing deployment's update workflow rather than replacing its image tags"
 fi
@@ -154,7 +188,7 @@ fi
 say "Install Assistant $version at $deploy, with backups in $witness."
 say "The browser address will be $origin. It must resolve to this machine; the installer does not configure DNS or mDNS."
 say 'Port 8443 will listen on all host interfaces. No firewall or router changes are made; do not forward it from the internet.'
-say 'The runner manager has root-equivalent Docker socket access. Containers restart with Docker; Docker Desktop usually starts after login on macOS.'
+  say 'The runner manager has root-equivalent Docker socket access. The separate update supervisor also needs root-equivalent Docker socket access to apply owner-approved updates. Containers restart with Docker; Docker Desktop usually starts after login on macOS.'
 say 'A local CA will be created. You must explicitly trust its certificate on each client device; no trust stores are changed automatically.'
 say 'Backups on this same disk do not protect against losing the machine. Keep the generated backup password in your password manager.'
 confirm
@@ -165,31 +199,47 @@ mkdir -m 700 "$lock_path" 2>/dev/null || fail "another install is running, or an
 install_lock="$lock_path"
 [ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-assistant)" ] || fail "an Assistant deployment appeared while setup was awaiting confirmation"
 [ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-witness)" ] || fail "a witness deployment appeared while setup was awaiting confirmation"
+[ -z "$(docker ps -aq --filter label=com.docker.compose.project=agentlink-updater)" ] || fail "an update supervisor appeared while setup was awaiting confirmation"
 
-for asset in install.sh compose.yaml compose.publisher.yaml compose.runners.yaml compose.backup.yaml compose.witness.yaml; do fetch "$asset"; done
+for asset in install.sh upgrade.sh compose.yaml compose.update-client.yaml compose.updater.yaml compose.publisher.yaml compose.runners.yaml compose.backup.yaml compose.witness.yaml server.example.json; do
+  fetch "$asset"
+  verify_asset "$asset"
+done
+
+
 # Pull all immutable images before generating any deployment state or changing
 # local tags. A network/registry failure is then safe to retry from scratch.
 while IFS='=' read -r key image || [ -n "$key" ]; do
-  case "$key" in ASSISTANT_IMAGE | COMMAND_WORKER_IMAGE | PUBLISHER_IMAGE | BACKUP_IMAGE) docker pull "$image" ;; esac
+  case "$key" in ASSISTANT_IMAGE | COMMAND_WORKER_IMAGE | PUBLISHER_IMAGE | BACKUP_IMAGE | UPDATER_IMAGE) docker pull "$image" ;; esac
 done < "$work/assistant-release.env"
 # mkdir is deliberately exclusive: a concurrent installation cannot be overwritten.
 mkdir -p "$(dirname "$deploy")"
 mkdir -m 700 "$deploy"
 created_install=1
-mkdir -m 700 "$witness"
+mkdir -m 700 "$witness" "$updater"
 mkdir -m 700 "$deploy/data" "$deploy/secrets" "$deploy/publisher"
+
 mkdir -p "$deploy/projects/home" "$deploy/projects/.tasks" "$deploy/data/runners"
+cp "$work/server.example.json" "$deploy/server.example.json"
 cp "$work/compose.witness.yaml" "$witness/compose.yaml"
-for asset in install.sh upgrade.sh compose.yaml compose.publisher.yaml compose.runners.yaml compose.backup.yaml; do cp "$work/$asset" "$deploy/$asset"; done
+for asset in install.sh upgrade.sh compose.yaml compose.update-client.yaml compose.publisher.yaml compose.runners.yaml compose.backup.yaml; do cp "$work/$asset" "$deploy/$asset"; done
 cp "$work/assistant-release.env" "$deploy/release.env"
+cp "$work/assistant-deployment.json" "$deploy/assistant-deployment.json"
+cp "$work/compose.updater.yaml" "$updater/compose.yaml"
 chmod 700 "$deploy/install.sh" "$deploy/upgrade.sh"
-for secret in command-worker-token egress-policy-key publisher-token publisher-key runner-manager-token backup-token backup-password; do
+
+for secret in command-worker-token egress-policy-key publisher-token publisher-key runner-manager-token backup-token backup-password updater-token; do
   openssl rand -hex 32 > "$deploy/secrets/$secret"
 done
+cp "$deploy/secrets/updater-token" "$updater/updater-token"
 printf '%s\n' 'rest:http://witness:8000/agentlink/' > "$deploy/secrets/backup-repository"
 printf '%s\n' \
-  'COMPOSE_FILE=compose.yaml:compose.publisher.yaml:compose.runners.yaml:compose.backup.yaml' \
+  'COMPOSE_FILE=compose.yaml:compose.publisher.yaml:compose.runners.yaml:compose.backup.yaml:compose.update-client.yaml' \
   "AGENTLINK_UID=$(id -u)" "AGENTLINK_GID=$(id -g)" > "$deploy/.env"
+printf '%s\n' \
+  "UPDATER_IMAGE=$updater_image" \
+  "AGENTLINK_DEPLOY_DIRECTORY='$deploy'" \
+  "AGENTLINK_UPDATER_DIRECTORY='$updater'" > "$updater/.env"
 # origin is restricted above, so it cannot inject JSON or configuration keys.
 cat > "$deploy/server.json" <<JSON
 {
@@ -206,7 +256,8 @@ cat > "$deploy/server.json" <<JSON
   "commandWorker": {"host": "command-worker", "port": 7300, "token": {"file": "/run/secrets/command-worker-token"}, "egressProxy": "http://egress-gateway:3128", "egressPolicyKey": {"file": "/run/secrets/egress-policy-key"}},
   "publisher": {"host": "publisher", "port": 7400, "token": {"file": "/run/secrets/publisher-token"}},
   "runners": {"manager": {"host": "runner-manager", "port": 7700, "token": {"file": "/run/secrets/runner-manager-token"}}},
-  "backup": {"host": "backup", "port": 7800, "token": {"file": "/run/secrets/backup-token"}}
+  "backup": {"host": "backup", "port": 7800, "token": {"file": "/run/secrets/backup-token"}},
+  "updater": {"host": "updater", "port": 7900, "token": {"file": "/run/secrets/updater-token"}}
 }
 JSON
 # Read only known values from the already validated manifest. Never source it.
@@ -222,6 +273,7 @@ while IFS='=' read -r key image || [ -n "$key" ]; do
 done < "$deploy/release.env"
 dc config --quiet
 (cd "$witness" && docker compose up -d)
+(cd "$updater" && docker compose config --quiet && docker compose up -d)
 dc up -d
 ready=0
 deadline=$(($(date +%s) + 180))
@@ -241,5 +293,4 @@ printf '     Certificate instructions: https://github.com/reefbarman/agentlink/b
 printf '  3. Sign in to ChatGPT: cd %q && docker compose exec assistant agentlink-server codex-login\n' "$deploy"
 printf '  4. Pair your browser: bash %q pair --deploy %q\n' "$deploy/install.sh" "$deploy"
 printf '  5. Open %s. Settings, GitHub and MCP connections are in the app.\n' "$origin"
-printf 'Updates: bash %q update --version X.Y.Z --deploy %q\n' "$deploy/install.sh" "$deploy"
-printf 'Rollback: bash %q rollback --deploy %q\n' "$deploy/install.sh" "$deploy"
+printf 'Updates and rollback: open Settings > Updates in the paired browser; confirmation includes backup and interruption details.\n'

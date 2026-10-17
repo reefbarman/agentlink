@@ -168,6 +168,8 @@ import { takeRestoredMarker } from "./backup.js";
 import type { BackupStatus } from "./backupAgent.js";
 import { backupProblem, createBackupClient } from "./backupClient.js";
 import { createBackupRoutes } from "./backupRoutes.js";
+import { createUpdaterClient } from "./updaterClient.js";
+import { createUpdateRoutes } from "./updateRoutes.js";
 import { createAssistantMcpTools } from "./assistantMcpTools.js";
 import { openMcpRegistry } from "./mcpRegistry.js";
 import { MCP_OAUTH_RETURN_PATH, createMcpRoutes } from "./mcpRoutes.js";
@@ -354,6 +356,7 @@ export type AssistantServicePreflight = (
   readonly runners?: string;
   /** Present when a backup sidecar is configured. */
   readonly backup?: string;
+  readonly updater?: string;
   /** The persona settings, read-only. */
   readonly persona?: string;
   /** How many memories there are. */
@@ -642,6 +645,28 @@ export async function preflightAssistantService(
       backupStatus = `Backups: not reachable at ${host}:${port} (${error instanceof Error ? error.message : String(error)})`;
     }
     result = { ...result, backup: backupStatus };
+  }
+  if (config.updater) {
+    const client = createUpdaterClient({
+      host: config.updater.host,
+      port: config.updater.port,
+      token: await prepareSecret(config.updater.token, "updater.token", env),
+    });
+    try {
+      const status = await client.status();
+      result = {
+        ...result,
+        updater: status.managed
+          ? `Updates: managed release ${status.installedVersion ?? "unknown"}`
+          : "Updates: source/legacy deployment; browser updates disabled",
+      };
+    } catch {
+      result = {
+        ...result,
+        updater:
+          "Updates: supervisor unavailable; existing Assistant work is unaffected",
+      };
+    }
   }
   // Read-only: an unreadable persona file stops the server, so report it.
   const persona = (
@@ -990,6 +1015,13 @@ export async function startAssistantService(
           "publisher.token",
           env,
         ),
+      })
+    : undefined;
+  const updaterClient = config.updater
+    ? createUpdaterClient({
+        host: config.updater.host,
+        port: config.updater.port,
+        token: await prepareSecret(config.updater.token, "updater.token", env),
       })
     : undefined;
   const backupClient = config.backup
@@ -2467,6 +2499,12 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
     });
+    const updateRoutes = createUpdateRoutes({
+      client: updaterClient,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
     const backupRoutes = createBackupRoutes({
       client: backupClient,
       checkpoints: () => checkpointer?.status(),
@@ -2507,6 +2545,7 @@ export async function startAssistantService(
         (await personaRoutes.handleRequest(request, response, auth)) ||
         (await storageRoutes.handleRequest(request, response, auth)) ||
         (await memoryRoutes.handleRequest(request, response, auth)) ||
+        (await updateRoutes.handleRequest(request, response, auth)) ||
         (await pushRoutes.handleRequest(request, response, auth)) ||
         (await githubRoutes.handleRequest(request, response, auth)) ||
         (await backupRoutes.handleRequest(request, response, auth)) ||

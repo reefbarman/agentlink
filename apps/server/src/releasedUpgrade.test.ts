@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -24,7 +25,12 @@ function manifest(version = "1.2.3"): string {
 }
 
 async function fixture(
-  options: { startFails?: boolean; smokeFails?: boolean } = {},
+  options: {
+    startFails?: boolean;
+    smokeFails?: boolean;
+    restoreFails?: boolean;
+    resumeFails?: boolean;
+  } = {},
 ) {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "agentlink-release-upgrade-"),
@@ -52,10 +58,12 @@ fi
 if [ "$1" = compose ]; then
   case "$2" in
     up)
-      ${options.startFails ? "exit 1" : "exit 0"}
+      ${options.startFails ? 'if [ ! -f "$ROLLBACK_MARKER" ]; then exit 1; fi' : "exit 0"}
       ;;
     exec)
       case "$*" in
+        *"agentlink-server backup"*) printf 'Backup abcd1234 done.\\n'; exit 0 ;;
+        *"agentlink-server resume"*) ${options.resumeFails ? "exit 1" : "exit 0"} ;;
         *smoke-check*)
           count=0
           [ -f "$SMOKE_COUNT" ] && count=$(cat "$SMOKE_COUNT")
@@ -66,6 +74,21 @@ if [ "$1" = compose ]; then
           ;;
       esac
       exit 0
+      ;;
+  esac
+fi
+if [ "$1" = run ]; then
+  case "$*" in
+    *" restore "*)
+      ${options.restoreFails ? "exit 1" : ""}
+      for arg in "$@"; do
+        case "$arg" in *:/restore)
+          target="\${arg%:/restore}"
+          mkdir -p "$target/data"
+          printf 'restored' > "$target/data/value"
+          ;;
+        esac
+      done
       ;;
   esac
 fi
@@ -112,7 +135,226 @@ async function run(
   });
 }
 
+async function stageAssets(fx: Awaited<ReturnType<typeof fixture>>) {
+  const stage = path.join(fx.root, "assets");
+  await fs.mkdir(stage);
+  const files: Record<string, string> = {
+    "compose.yaml": "services: {new: {image: candidate}}\n",
+    "compose.update-client.yaml":
+      "services: {assistant: {networks: [updater-control]}}\n",
+    "install.sh": "#!/bin/sh\n# new installer\n",
+    "upgrade.sh": "#!/bin/sh\n# new upgrade\n",
+    "assistant-deployment.json": '{"schemaVersion":1}\n',
+  };
+  let list = "";
+  for (const [name, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(stage, name), content);
+    list += `${createHash("sha256").update(content).digest("hex")} ${name}\n`;
+  }
+  await fs.writeFile(path.join(stage, ".asset-list"), list);
+  await fs.writeFile(path.join(fx.deploy, "server.json"), '{"backup":{}}\n');
+  await fs.mkdir(path.join(fx.deploy, "data"));
+  await fs.writeFile(path.join(fx.deploy, "data/value"), "failed-new-data");
+  return stage;
+}
+
 describe("released-image upgrade", () => {
+  it("never moves live data when automatic EXIT-trap rollback cannot restore a backup", async () => {
+    const fx = await fixture({ restoreFails: true, resumeFails: true });
+    try {
+      const stage = await stageAssets(fx);
+      const before = await fs.readFile(
+        path.join(fx.deploy, "compose.yaml"),
+        "utf8",
+      );
+      await expect(
+        run(fx, [
+          "--release-manifest",
+          fx.manifestPath,
+          "--release-assets",
+          stage,
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(
+        await fs.readFile(path.join(fx.deploy, "data/value"), "utf8"),
+      ).toBe("failed-new-data");
+      expect(
+        await fs.readFile(path.join(fx.deploy, "compose.yaml"), "utf8"),
+      ).toBe(before);
+      await expect(
+        fs.access(path.join(fx.deploy, ".upgrade-failed")),
+      ).rejects.toThrow();
+      const calls = await fs.readFile(fx.calls, "utf8");
+      expect(calls.match(/compose up -d/g)).toHaveLength(1);
+      expect(
+        await fs.readFile(path.join(fx.deploy, ".upgrade-state"), "utf8"),
+      ).not.toContain("status=rolled-back");
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only exact digest-pinned updater images, optional unless configured", async () => {
+    const fx = await fixture();
+    try {
+      await fs.writeFile(
+        fx.manifestPath,
+        manifest() +
+          `UPDATER_IMAGE=ghcr.io/reefbarman/agentlink-updater@sha256:${"e".repeat(64)}\n`,
+      );
+      await run(fx, [
+        "--release-manifest",
+        fx.manifestPath,
+        "--validate-release",
+      ]);
+      await fs.writeFile(
+        path.join(fx.deploy, ".env"),
+        "COMPOSE_FILE=compose.yaml:compose.updater.yaml\n",
+      );
+      await run(fx, ["--release-manifest", fx.manifestPath, "--no-backup"]);
+      expect(await fs.readFile(fx.calls, "utf8")).toContain(
+        "pull ghcr.io/reefbarman/agentlink-updater@sha256:",
+      );
+      await fs.writeFile(
+        fx.manifestPath,
+        manifest() + "UPDATER_IMAGE=ghcr.io/other/updater:latest\n",
+      );
+      await expect(
+        run(fx, ["--release-manifest", fx.manifestPath, "--validate-release"]),
+      ).rejects.toMatchObject({ code: 1 });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("backs up before template replacement and restores templates, images and data on failed startup", async () => {
+    const fx = await fixture({ startFails: true });
+    try {
+      const stage = await stageAssets(fx);
+      const oldCompose = await fs.readFile(
+        path.join(fx.deploy, "compose.yaml"),
+        "utf8",
+      );
+      const oldScript = "#!/bin/sh\n# old script\n";
+      await fs.writeFile(path.join(fx.deploy, "upgrade.sh"), oldScript, {
+        mode: 0o750,
+      });
+      const scriptStat = await fs.stat(path.join(fx.deploy, "upgrade.sh"));
+      await fs.writeFile(
+        path.join(fx.deploy, ".env"),
+        "PRIVATE=do-not-change\n",
+      );
+      await expect(
+        run(fx, [
+          "--release-manifest",
+          fx.manifestPath,
+          "--release-assets",
+          stage,
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(
+        await fs.readFile(path.join(fx.deploy, "compose.yaml"), "utf8"),
+      ).toBe(oldCompose);
+      expect(
+        await fs.readFile(path.join(fx.deploy, "upgrade.sh"), "utf8"),
+      ).toBe(oldScript);
+      const restoredStat = await fs.stat(path.join(fx.deploy, "upgrade.sh"));
+      expect([restoredStat.mode, restoredStat.uid, restoredStat.gid]).toEqual([
+        scriptStat.mode,
+        scriptStat.uid,
+        scriptStat.gid,
+      ]);
+      await expect(
+        fs.access(path.join(fx.deploy, "install.sh")),
+      ).rejects.toThrow();
+      expect(await fs.readFile(path.join(fx.deploy, ".env"), "utf8")).toBe(
+        "PRIVATE=do-not-change\n",
+      );
+      expect(
+        await fs.readFile(path.join(fx.deploy, "data/value"), "utf8"),
+      ).toBe("restored");
+      const calls = await fs.readFile(fx.calls, "utf8");
+      expect(calls.indexOf("agentlink-server backup")).toBeLessThan(
+        calls.indexOf("tag agentlink-assistant:candidate"),
+      );
+      expect(calls).toContain(
+        "tag agentlink-assistant:previous agentlink-assistant:local",
+      );
+      expect(calls).toContain(`${fx.deploy}/.upgrade-rollback.`);
+      expect(calls).not.toContain(`${fx.root}/.agentlink-rollback.`);
+      expect(
+        await fs.readdir(path.join(fx.deploy, ".upgrade-failed")),
+      ).toHaveLength(1);
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves existing asset ownership/modes, adds private files and never replaces config", async () => {
+    const fx = await fixture();
+    try {
+      const stage = await stageAssets(fx);
+      await fs.chmod(path.join(fx.deploy, "compose.yaml"), 0o640);
+      const before = await fs.stat(path.join(fx.deploy, "compose.yaml"));
+      const config = await fs.readFile(path.join(fx.deploy, "server.json"));
+      await run(fx, [
+        "--release-manifest",
+        fx.manifestPath,
+        "--release-assets",
+        stage,
+      ]);
+      const after = await fs.stat(path.join(fx.deploy, "compose.yaml"));
+      expect([after.mode, after.uid, after.gid]).toEqual([
+        before.mode,
+        before.uid,
+        before.gid,
+      ]);
+      expect(
+        (await fs.stat(path.join(fx.deploy, "install.sh"))).mode & 0o777,
+      ).toBe(0o700);
+      expect(
+        (await fs.stat(path.join(fx.deploy, "assistant-deployment.json")))
+          .mode & 0o777,
+      ).toBe(0o600);
+      expect(await fs.readFile(path.join(fx.deploy, "server.json"))).toEqual(
+        config,
+      );
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown staged assets or hash changes before Docker", async () => {
+    const fx = await fixture();
+    try {
+      const stage = await stageAssets(fx);
+      await fs.appendFile(path.join(stage, "compose.yaml"), "tampered");
+      await expect(
+        run(fx, [
+          "--release-manifest",
+          fx.manifestPath,
+          "--release-assets",
+          stage,
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      await expect(fs.access(fx.calls)).rejects.toThrow();
+      await fs.writeFile(
+        path.join(stage, ".asset-list"),
+        `${"a".repeat(64)} server.json\n`,
+      );
+      await expect(
+        run(fx, [
+          "--release-manifest",
+          fx.manifestPath,
+          "--release-assets",
+          stage,
+        ]),
+      ).rejects.toMatchObject({ code: 1 });
+      await expect(fs.access(fx.calls)).rejects.toThrow();
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
   it("validates strictly and refuses invalid manifests before Docker", async () => {
     const fx = await fixture();
     const original = manifest().replace(

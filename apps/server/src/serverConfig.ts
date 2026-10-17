@@ -92,6 +92,8 @@ export interface AssistantServerConfig {
    * status, asks for a backup now, and tells the owner when one fails.
    */
   readonly backup?: AssistantServerPublisherConfig;
+  /** Narrow private host update supervisor; never exposed as an agent tool. */
+  readonly updater?: AssistantServerPublisherConfig;
 }
 
 export interface AssistantServerBrowserConfig {
@@ -434,6 +436,7 @@ export function parseAssistantServerConfig(
     "editor",
     "browser",
     "backup",
+    "updater",
   ]);
   const resolvePath = (input: unknown, label: string) =>
     path.resolve(baseDirectory, text(input, label));
@@ -604,6 +607,9 @@ export function parseAssistantServerConfig(
     ...(config.backup === undefined
       ? {}
       : { backup: parsePublisher(config.backup, baseDirectory, "backup") }),
+    ...(config.updater === undefined
+      ? {}
+      : { updater: parsePublisher(config.updater, baseDirectory, "updater") }),
   };
 }
 

@@ -29,6 +29,26 @@ function unitSection(unit: string, section: string): Map<string, string[]> {
 }
 
 describe("deployment files", () => {
+  it("mounts the supervisor token at its command's exact secret path", async () => {
+    const text = await fs.readFile(
+      path.join(deploy, "container", "compose.updater.yaml"),
+      "utf8",
+    );
+    const flagPath = /- --token-file\s*\n\s*- (\S+)/u.exec(text)?.[1];
+    const secretTarget = /- source: updater_token\s*\n\s*target: (\S+)/u.exec(
+      text,
+    )?.[1];
+    expect(secretTarget).toBe("updater-token");
+    expect(flagPath).toBe(`/run/secrets/${secretTarget}`);
+    expect(text).toContain("name: agentlink-updater");
+    const client = await fs.readFile(
+      path.join(deploy, "container", "compose.update-client.yaml"),
+      "utf8",
+    );
+    expect(client).not.toContain("docker.sock");
+    expect(client).not.toContain("AGENTLINK_UPDATER_DIRECTORY");
+  });
+
   it("ships a hardened systemd unit for a dedicated service user", async () => {
     const unit = await fs.readFile(
       path.join(deploy, "systemd", "agentlink-server.service"),
@@ -207,17 +227,17 @@ describe("deployment files", () => {
     }
   });
 
-  it("gives only the runner manager the Docker socket, and runners an internal network", async () => {
+  it("limits Docker sockets to the runner manager and separate updater, and keeps runners internal", async () => {
     const container = path.join(deploy, "container");
     const files = (await fs.readdir(container)).filter((file) =>
       file.startsWith("compose"),
     );
-    // No other service, in any compose file, mounts the Docker socket.
+    // The updater is a separate fixed management project, never an app overlay.
     for (const file of files) {
       const text = await fs.readFile(path.join(container, file), "utf8");
       const mentions = text.match(/docker\.sock:/gu) ?? [];
       expect(mentions.length, file).toBe(
-        file === "compose.runners.yaml" ? 1 : 0,
+        ["compose.runners.yaml", "compose.updater.yaml"].includes(file) ? 1 : 0,
       );
     }
     const overlay = await fs.readFile(
@@ -500,7 +520,10 @@ describe("deployment files", () => {
     // Everything but the helper stages, so no image is left behind.
     expect([...targets].sort()).toEqual(
       stages
-        .filter((stage) => stage !== "bundle" && stage !== "editor-extension")
+        .filter(
+          (stage) =>
+            !["bundle", "editor-extension", "updater-docker"].includes(stage),
+        )
         .sort(),
     );
     for (const step of [
@@ -545,7 +568,7 @@ describe("deployment files", () => {
     );
     expect(dockerfile).not.toContain("--remote-debugging-address");
     const upgrade = await fs.readFile(path.join(deploy, "upgrade.sh"), "utf8");
-    expect(upgrade).toContain('OPTIONAL_TARGETS="editor browser"');
+    expect(upgrade).toContain('OPTIONAL_TARGETS="editor browser updater"');
     expect(upgrade).toContain("compose\\.browser\\.yaml");
   });
 

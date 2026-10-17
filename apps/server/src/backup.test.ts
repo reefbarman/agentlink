@@ -117,6 +117,9 @@ describe("backupArguments", () => {
       "agentlink",
     ]);
     expect(args).toContain("/srv/agentlink/deploy/data");
+    // Includes .upgrade-rollback.*, .upgrade-failed/, staged releases and
+    // previous template/updater copies, all confined to the deploy bind mount.
+    expect(args).toContain("/srv/agentlink/deploy/.upgrade-*");
     expect(args).toContain("/srv/agentlink/deploy/projects/**/node_modules");
     expect(args.slice(-2)).toEqual([
       "/srv/agentlink/deploy",

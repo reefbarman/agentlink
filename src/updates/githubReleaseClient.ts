@@ -15,6 +15,7 @@ import {
 export interface ReleaseDiscovery {
   records: ValidatedReleaseRecord[];
   unverifiedVersions: string[];
+  unverifiedPreviewVersions?: string[];
   complete: boolean;
 }
 
@@ -29,6 +30,7 @@ interface GithubRelease {
   draft: boolean;
   prerelease: boolean;
   published_at: string | null;
+  body?: string | null;
   assets: { name: string; browser_download_url: string }[];
 }
 
@@ -48,6 +50,7 @@ export class GithubReleaseClient {
   >();
   constructor(
     private readonly request: typeof globalThis.fetch = globalThis.fetch,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async discover(
@@ -58,6 +61,11 @@ export class GithubReleaseClient {
       records: [],
       unverifiedVersions: [],
       complete: false,
+    };
+    const unverified = (version: string, prerelease: boolean) => {
+      result.unverifiedVersions.push(version);
+      if (identity.product === "assistant" && prerelease)
+        (result.unverifiedPreviewVersions ??= []).push(version);
     };
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
     let requests = 0;
@@ -85,7 +93,10 @@ export class GithubReleaseClient {
               !release.draft &&
               release.published_at &&
               releaseVersionFromTag(release.tag_name, identity.product) &&
-              (identity.product !== "vscode" || !release.prerelease)
+              (identity.product !== "vscode" || !release.prerelease) &&
+              (identity.product !== "assistant" ||
+                identity.includePreviews ||
+                !release.prerelease)
             );
           })
           .sort((left, right) =>
@@ -100,6 +111,7 @@ export class GithubReleaseClient {
             identity.product,
           )!;
           if (
+            identity.product !== "assistant" &&
             compatibleVersion &&
             compareReleaseVersions(version, compatibleVersion) <= 0
           )
@@ -108,13 +120,13 @@ export class GithubReleaseClient {
             (asset) => asset.name === RELEASE_UPDATE_METADATA_NAME,
           );
           if (!metadataAsset) {
-            result.unverifiedVersions.push(version);
+            unverified(version, release.prerelease);
             continue;
           }
           if (requests >= 10) return result;
           const expected = `${RELEASE_REPOSITORY_URL}/releases/download/${release.tag_name}/${RELEASE_UPDATE_METADATA_NAME}`;
           if (metadataAsset.browser_download_url !== expected) {
-            result.unverifiedVersions.push(version);
+            unverified(version, release.prerelease);
             continue;
           }
           const metadata = parseReleaseUpdateMetadata(
@@ -126,7 +138,7 @@ export class GithubReleaseClient {
             !metadata ||
             metadata.channel !== (release.prerelease ? "preview" : "stable")
           ) {
-            result.unverifiedVersions.push(version);
+            unverified(version, release.prerelease);
             continue;
           }
           const assets = release.assets
@@ -136,10 +148,30 @@ export class GithubReleaseClient {
                 `${RELEASE_REPOSITORY_URL}/releases/download/${release.tag_name}/${asset.name}`,
             )
             .map((asset) => asset.name);
-          const record = { metadata, assets, prerelease: release.prerelease };
-          result.records.push(record);
-          if (compatibleRelease(record, identity)) compatibleVersion = version;
-          if (selectReleaseUpdate(result.records, identity)) return result;
+          const record = {
+            metadata,
+            assets,
+            prerelease: release.prerelease,
+            ...(identity.product === "assistant"
+              ? { notes: (release.body ?? "").slice(0, 32_000) }
+              : {}),
+          };
+          if (identity.product === "assistant") {
+            if (!compatibleRelease(record, identity)) {
+              unverified(version, release.prerelease);
+              continue;
+            }
+            result.records.push(record);
+            if (result.records.length >= 8) {
+              result.complete = true;
+              return result;
+            }
+          } else {
+            result.records.push(record);
+            if (compatibleRelease(record, identity))
+              compatibleVersion = version;
+            if (selectReleaseUpdate(result.records, identity)) return result;
+          }
         }
         if (listing.length < 100) {
           result.complete = true;
@@ -202,14 +234,17 @@ export class GithubReleaseClient {
             response.headers.has("retry-after")))
       ) {
         await response.body?.cancel();
-        const retryAfter = Number(response.headers.get("retry-after"));
+        const retryHeader = response.headers.get("retry-after");
+        const retrySeconds = Number(retryHeader);
+        const retryAt =
+          retrySeconds > 0 && Number.isFinite(retrySeconds)
+            ? this.now() + retrySeconds * 1000
+            : Date.parse(retryHeader ?? "");
         const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
         throw new ReleaseRateLimitError(
           Math.max(
-            Date.now() +
-              (Number.isFinite(retryAfter) && retryAfter > 0
-                ? retryAfter * 1000
-                : 60_000),
+            this.now() + 60_000,
+            Number.isFinite(retryAt) ? retryAt : 0,
             Number.isFinite(reset) ? reset : 0,
           ),
         );
@@ -262,6 +297,9 @@ function isGithubRelease(value: unknown): value is GithubRelease {
     typeof release.tag_name === "string" &&
     typeof release.draft === "boolean" &&
     typeof release.prerelease === "boolean" &&
+    (release.body === undefined ||
+      release.body === null ||
+      typeof release.body === "string") &&
     (release.published_at === null ||
       typeof release.published_at === "string") &&
     Array.isArray(release.assets) &&

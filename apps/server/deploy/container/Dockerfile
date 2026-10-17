@@ -154,6 +154,22 @@ USER 1000
 EXPOSE 9222
 ENTRYPOINT ["/usr/local/bin/agentlink-browser"]
 
+# Update supervisor and one-shot update jobs, separate from the Assistant.
+# Only this narrow management service and runner-manager hold the Docker
+# socket. One-shot jobs survive replacing the supervisor or app containers.
+FROM docker:28-cli AS updater-docker
+FROM node:22-bookworm-slim AS updater
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=updater-docker /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=updater-docker /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+COPY --chmod=0755 dist/agentlink-server.js /usr/local/bin/agentlink-server
+ENV NODE_ENV=production
+USER 0
+ENTRYPOINT ["agentlink-server"]
+CMD ["updater", "--help"]
+
 # Assistant server (default target): distroless, so there is no shell, no
 # package manager, and nothing but Node to run. Commands, ripgrep, and git
 # run on the command worker.

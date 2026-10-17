@@ -259,6 +259,10 @@ export function backupArguments(
     "agentlink",
     "--exclude",
     path.posix.join(deployRoot, DATA_FOLDER),
+    // Updater scratch, failed data and template recovery stay within the deploy
+    // bind mount, but must never recursively enter subsequent backups.
+    "--exclude",
+    path.posix.join(deployRoot, ".upgrade-*"),
     ...PROJECT_EXCLUDES.flatMap((name) => [
       "--exclude",
       `${projects}/**/${name}`,

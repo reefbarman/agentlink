@@ -5,6 +5,7 @@ import {
 } from "./githubReleaseClient.js";
 import {
   compareReleaseVersions,
+  compatibleRelease,
   expectedReleaseAsset,
   parseReleaseVersion,
   selectReleaseUpdate,
@@ -13,9 +14,10 @@ import {
   ReleaseUpdateStore,
   type ReleaseUpdateCache,
 } from "./releaseUpdateStore.js";
-import type {
-  ReleaseUpdateIdentity,
-  ReleaseUpdateState,
+import {
+  releaseInstructionsUrl,
+  type ReleaseUpdateIdentity,
+  type ReleaseUpdateState,
 } from "./releaseUpdateTypes.js";
 
 const DAY = 24 * 60 * 60_000;
@@ -48,7 +50,8 @@ export class ReleaseUpdateService {
 
   constructor(private readonly options: ReleaseUpdateServiceOptions) {
     this.now = options.now ?? Date.now;
-    this.client = options.client ?? new GithubReleaseClient();
+    this.client =
+      options.client ?? new GithubReleaseClient(undefined, this.now);
     this.store =
       options.store ??
       new ReleaseUpdateStore(options.storageDirectory, options.identity);
@@ -116,11 +119,15 @@ export class ReleaseUpdateService {
     return this.state;
   }
 
-  async setAutomaticChecks(value: boolean): Promise<void> {
+  async setAutomaticChecks(value: boolean, checkDue = true): Promise<void> {
     await this.options.saveAutomaticChecks?.(value);
     this.publish({ ...this.state, automaticChecks: value });
     if (!value && this.automaticRequest) this.controller?.abort();
-    if (value) this.checkDue();
+    if (value && checkDue) this.checkDue();
+  }
+
+  async reproject(): Promise<void> {
+    await this.reload();
   }
 
   dispose(): void {
@@ -145,8 +152,15 @@ export class ReleaseUpdateService {
   }
 
   private projectCache(cache: ReleaseUpdateCache): Partial<ReleaseUpdateState> {
-    if (!parseReleaseVersion(this.options.identity.version))
-      return { status: "unsupported", candidate: null };
+    if (
+      !parseReleaseVersion(this.options.identity.version) ||
+      !expectedReleaseAsset(
+        this.options.identity.product,
+        this.options.identity.version,
+        this.options.identity.target,
+      )
+    )
+      return { status: "unsupported", candidate: null, history: [] };
     const candidate = selectReleaseUpdate(
       cache.discovery.records,
       this.options.identity,
@@ -155,13 +169,17 @@ export class ReleaseUpdateService {
       (version) =>
         compareReleaseVersions(version, this.options.identity.version) > 0,
     );
-    const status = candidate
-      ? "available"
-      : unverifiedNewer
-        ? "metadata_unavailable"
-        : cache.discovery.complete
-          ? "current"
-          : "unavailable";
+    const status = cache.error
+      ? cache.retryAt && this.now() < cache.retryAt
+        ? "rate_limited"
+        : "unavailable"
+      : candidate
+        ? "available"
+        : unverifiedNewer
+          ? "metadata_unavailable"
+          : cache.discovery.complete
+            ? "current"
+            : "unavailable";
     return {
       candidate,
       status,
@@ -169,9 +187,41 @@ export class ReleaseUpdateService {
       checkedAt: cache.checkedAt,
       retryAt: cache.retryAt,
       stale:
+        Boolean(cache.error) ||
         cache.checkedAt === null ||
         cache.lastAttemptAt > cache.checkedAt ||
-        this.now() - cache.checkedAt >= DAY,
+        this.now() - cache.checkedAt >= DAY ||
+        (this.options.identity.product === "assistant" &&
+          Boolean(cache.includePreviews) !==
+            Boolean(this.options.identity.includePreviews)),
+      error:
+        cache.error ??
+        (status === "metadata_unavailable"
+          ? "release_metadata_unavailable"
+          : undefined),
+      ...(this.options.identity.product === "assistant"
+        ? {
+            history: cache.discovery.records
+              .filter((record) =>
+                compatibleRelease(record, this.options.identity),
+              )
+              .sort((a, b) =>
+                compareReleaseVersions(b.metadata.version, a.metadata.version),
+              )
+              .slice(0, 8)
+              .map((record) => ({
+                version: record.metadata.version,
+                tag: record.metadata.tag,
+                channel: record.metadata.channel,
+                target: this.options.identity.target,
+                releaseUrl: `https://github.com/reefbarman/agentlink/releases/tag/${record.metadata.tag}`,
+                instructionsUrl: releaseInstructionsUrl(
+                  this.options.identity.product,
+                ),
+                notes: record.notes ?? "",
+              })),
+          }
+        : {}),
     };
   }
 
@@ -184,7 +234,12 @@ export class ReleaseUpdateService {
         this.options.identity.target,
       )
     ) {
-      this.publish({ ...this.state, status: "unsupported" });
+      this.publish({
+        ...this.state,
+        status: "unsupported",
+        candidate: null,
+        history: [],
+      });
       return this.state;
     }
     await this.reload();
@@ -247,13 +302,21 @@ export class ReleaseUpdateService {
       checkedAt: this.cache?.checkedAt ?? null,
       retryAt: null,
       discovery: previous,
+      ...(this.options.identity.product === "assistant"
+        ? { includePreviews: Boolean(this.options.identity.includePreviews) }
+        : {}),
     };
     this.cache = attempted;
     await this.persist(attempted);
-    this.publish({ ...this.state, status: "checking", lastAttemptAt: now });
+    this.publish({
+      ...this.state,
+      status: "checking",
+      lastAttemptAt: now,
+      error: undefined,
+    });
     try {
       const discovery = await this.client.discover(
-        this.options.identity,
+        { ...this.options.identity },
         this.controller.signal,
       );
       if (!this.disposed && !this.controller.signal.aborted) {
@@ -272,7 +335,14 @@ export class ReleaseUpdateService {
       if (!this.disposed) {
         const retryAt =
           error instanceof ReleaseRateLimitError ? error.retryAt : null;
-        const failed = { ...attempted, retryAt };
+        const checkError = retryAt
+          ? "release_rate_limited"
+          : this.controller.signal.aborted
+            ? "release_check_cancelled"
+            : error instanceof Error && error.name === "TimeoutError"
+              ? "release_check_timeout"
+              : "release_check_failed";
+        const failed = { ...attempted, retryAt, error: checkError };
         this.cache = failed;
         await this.persist(failed);
         this.publish({
