@@ -3638,6 +3638,7 @@ async function dispatchToolCallWithTrackedApprovals(
       };
     };
     let guardianApproval: ReturnType<typeof createOneShotActionApproval>;
+    let guardianApprovalReason: string | undefined;
     const initialMcpAction = !isAutoApproved
       ? buildMcpReviewInput()
       : undefined;
@@ -3684,14 +3685,7 @@ async function dispatchToolCallWithTrackedApprovals(
         ) {
           if (mcpDenialKey)
             ctx.retainedCommandReviewDenials?.retain(sessionId, mcpDenialKey);
-          return errorResult(
-            `Guardian denied MCP tool execution: ${outcome.result.rationale}`,
-            {
-              status: "rejected",
-              reason: "guardian_denied",
-              tool: toolName,
-            },
-          );
+          guardianApprovalReason = `Guardian declined automatic approval: ${outcome.result.rationale}`;
         }
         if (
           outcome &&
@@ -3715,7 +3709,27 @@ async function dispatchToolCallWithTrackedApprovals(
       });
     }
 
+    // A parallel review can withdraw automatic authority while we wait. This
+    // also needs a human decision, not an automatic retry of the denied call.
+    if (
+      guardianApproval &&
+      ((mcpDenialKey &&
+        ctx.retainedCommandReviewDenials?.has(sessionId, mcpDenialKey)) ||
+        ctx.commandReviewTurnCircuit?.interrupted)
+    ) {
+      guardianApproval = undefined;
+      guardianApprovalReason =
+        "Automatic MCP approval was interrupted by a Guardian denial. Human approval is required.";
+    }
+
     if (!isAutoApproved && !guardianApproval) {
+      const approvalContext =
+        guardianApprovalReason ??
+        (retainedMcpDenial
+          ? "Guardian previously denied this exact call. Human approval is required to override that denial."
+          : ctx.commandReviewTurnCircuit?.interrupted
+            ? "Automatic Guardian review is paused after repeated denials. Human approval is required."
+            : undefined);
       const inputJson = JSON.stringify(input, null, 2) ?? "";
       // Inline approval cards render the detail in a scrollable box, so send
       // the full input; cap only pathological payloads (e.g. base64 blobs).
@@ -3739,8 +3753,8 @@ async function dispatchToolCallWithTrackedApprovals(
           {
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
-            detail: retainedMcpDenial
-              ? `Guardian previously denied this exact call. Human approval is required to override that denial.\n\n${inputDetail}`
+            detail: approvalContext
+              ? `${approvalContext}\n\n${inputDetail}`
               : inputDetail,
             mcpServerName: serverName,
             mcpToolName: bareToolName,
@@ -3790,7 +3804,12 @@ async function dispatchToolCallWithTrackedApprovals(
           `Allow all ${serverName} tools for this session` as const;
         const vsChoice = await vscode.window.showWarningMessage(
           `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
-          { modal: true, detail: inputPreview },
+          {
+            modal: true,
+            detail: approvalContext
+              ? `${approvalContext}\n\n${inputPreview}`
+              : inputPreview,
+          },
           "Allow once",
           allowServerForSession,
           "Always allow this tool",
@@ -3828,6 +3847,9 @@ async function dispatchToolCallWithTrackedApprovals(
               text: JSON.stringify({
                 status: "rejected_by_user",
                 error: "User denied MCP tool execution",
+                ...(guardianApprovalReason && {
+                  guardian_rationale: guardianApprovalReason,
+                }),
                 ...(rejectionReason && { reason: rejectionReason }),
                 ...(approvalFollowUp && { follow_up: approvalFollowUp }),
               }),
@@ -3972,18 +3994,13 @@ async function dispatchToolCallWithTrackedApprovals(
       }
     }
 
+    if (toolAbortSignal?.aborted) {
+      return errorResult("MCP tool execution was cancelled.", {
+        status: "cancelled",
+        tool: toolName,
+      });
+    }
     if (guardianApproval) {
-      // Another parallel review may have denied this action while we waited.
-      if (
-        (mcpDenialKey &&
-          ctx.retainedCommandReviewDenials?.has(sessionId, mcpDenialKey)) ||
-        ctx.commandReviewTurnCircuit?.interrupted
-      ) {
-        return errorResult(
-          "Automatic MCP approval was interrupted by a retained Guardian denial. Retry through human approval.",
-          { status: "rejected", reason: "guardian_denied", tool: toolName },
-        );
-      }
       const current = buildMcpReviewInput();
       if (
         toolAbortSignal?.aborted ||

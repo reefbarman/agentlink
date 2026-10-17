@@ -8628,25 +8628,67 @@ describe("dispatchToolCall", () => {
       expect(onApprovalRequest).not.toHaveBeenCalled();
     });
 
-    it("does not turn a Guardian denial into a human approval prompt", async () => {
-      const { ctx, review, callTool, onApprovalRequest } = setup();
-      const original = review.getMockImplementation()!;
-      review.mockImplementation(async (...args) => {
-        const outcome = await original(...args);
-        return {
-          ...outcome,
-          result: {
-            ...outcome.result,
-            outcome: "deny",
-            rationale: "Not authorized",
-          },
-        };
-      });
-      const result = await dispatchToolCall("linear__list_issues", {}, ctx);
-      expect(JSON.stringify(result)).toContain("guardian_denied");
-      expect(callTool).not.toHaveBeenCalled();
-      expect(onApprovalRequest).not.toHaveBeenCalled();
-    });
+    it.each(["allow-once", "deny"])(
+      "escalates a Guardian denial and waits for the human to %s",
+      async (decision) => {
+        const { ctx, review, callTool, onApprovalRequest, approveMcpTool } =
+          setup();
+        const original = review.getMockImplementation()!;
+        review.mockImplementation(async (...args) => {
+          const outcome = await original(...args);
+          return {
+            ...outcome,
+            result: {
+              ...outcome.result,
+              outcome: "deny",
+              rationale: "Not authorized",
+            },
+          };
+        });
+        let decide!: (decision: string) => void;
+        onApprovalRequest.mockReturnValue(
+          new Promise<string>((resolve) => {
+            decide = resolve;
+          }),
+        );
+        const resultPromise = dispatchToolCall(
+          "call_mcp_tool",
+          { server: "linear", tool: "list_issues", input: { query: "bug" } },
+          ctx,
+        );
+        await vi.waitFor(() =>
+          expect(onApprovalRequest).toHaveBeenCalledOnce(),
+        );
+        expect(callTool).not.toHaveBeenCalled();
+        expect(onApprovalRequest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "mcp",
+            detail: expect.stringContaining(
+              "Guardian declined automatic approval: Not authorized",
+            ),
+          }),
+          "test-session",
+        );
+        expect(onApprovalRequest.mock.calls[0]?.[0].detail).toContain(
+          '"query": "bug"',
+        );
+        decide(decision);
+        const result = await resultPromise;
+        expect(approveMcpTool).not.toHaveBeenCalled();
+        if (decision === "allow-once") {
+          expect(callTool).toHaveBeenCalledWith(
+            "linear__list_issues",
+            { query: "bug" },
+            { signal: undefined, authorizedByCaller: true },
+          );
+        } else {
+          expect(callTool).not.toHaveBeenCalled();
+          expect(JSON.stringify(result)).toContain("rejected_by_user");
+          expect(JSON.stringify(result)).toContain("guardian_rationale");
+          expect(JSON.stringify(result)).toContain("Not authorized");
+        }
+      },
+    );
 
     it("does not let Jev overturn a retained Guardian denial on retry", async () => {
       const { ctx, review, callTool, onApprovalRequest } = setup();
@@ -8662,8 +8704,8 @@ describe("dispatchToolCall", () => {
           },
         };
       });
-      await dispatchToolCall("linear__list_issues", {}, ctx);
       onApprovalRequest.mockResolvedValue("deny");
+      await dispatchToolCall("linear__list_issues", {}, ctx);
       await dispatchToolCall("linear__list_issues", {}, ctx);
       expect(review).toHaveBeenCalledOnce();
       expect(callTool).not.toHaveBeenCalled();
@@ -8677,6 +8719,76 @@ describe("dispatchToolCall", () => {
       await dispatchToolCall("linear__list_issues", {}, ctx);
       expect(review).toHaveBeenCalledTimes(2);
       expect(callTool).toHaveBeenCalledOnce();
+    });
+
+    it("includes the Guardian explanation in the VS Code modal fallback", async () => {
+      const { ctx, review, callTool } = setup();
+      const original = review.getMockImplementation()!;
+      review.mockImplementationOnce(async (...args) => {
+        const outcome = await original(...args);
+        return {
+          ...outcome,
+          result: {
+            ...outcome.result,
+            outcome: "deny",
+            rationale: "Needs explicit consent",
+          },
+        };
+      });
+      ctx.onApprovalRequest = undefined;
+      const showWarningMessage = vi
+        .spyOn(vscode.window, "showWarningMessage")
+        .mockResolvedValueOnce("Allow once" as any);
+      await dispatchToolCall("linear__list_issues", {}, ctx);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          detail: expect.stringContaining("Needs explicit consent"),
+        }),
+        "Allow once",
+        expect.any(String),
+        "Always allow this tool",
+        expect.any(String),
+        "Deny",
+      );
+      expect(callTool).toHaveBeenCalledOnce();
+      showWarningMessage.mockRestore();
+    });
+
+    it("does not invoke after cancellation while the human card is open", async () => {
+      const { ctx, review, callTool, onApprovalRequest } = setup();
+      const controller = new AbortController();
+      ctx.toolAbortSignal = controller.signal;
+      const original = review.getMockImplementation()!;
+      review.mockImplementationOnce(async (...args) => {
+        const outcome = await original(...args);
+        return { ...outcome, result: { ...outcome.result, outcome: "deny" } };
+      });
+      onApprovalRequest.mockImplementationOnce(async () => {
+        controller.abort();
+        return "allow-once";
+      });
+      const result = await dispatchToolCall("linear__list_issues", {}, ctx);
+      expect(callTool).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).toContain("cancelled");
+    });
+
+    it("escalates a concurrent retained denial instead of returning an error", async () => {
+      const { ctx, callTool, onApprovalRequest } = setup();
+      ctx.retainedCommandReviewDenials!.has = vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValue(true);
+      onApprovalRequest.mockResolvedValue("deny");
+      const result = await dispatchToolCall("linear__list_issues", {}, ctx);
+      expect(onApprovalRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detail: expect.stringContaining("interrupted by a Guardian denial"),
+        }),
+        "test-session",
+      );
+      expect(callTool).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).toContain("rejected_by_user");
     });
 
     it.each(["high", "critical"] as const)(

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Guardian MCP denials now immediately request human approval with the reason and call arguments visible, instead of returning an outright rejection. Human rejection, cancellation and hard access restrictions still stop execution, and the agent receives the Guardian explanation if the human declines.
+
 ## 1.37.0
 
 - Approve for Me now reviews unmatched public sandbox destinations through Guardian, optionally Jev first, instead of requiring a human card for every new site. Bounded task-authorized destinations receive an exact one-socket allow; high/critical risk, unknown or unavailable reviews still ask the user. Explicit network Prompt/Forbidden rules, private-address blocking and separate redirect/socket checks remain unchanged. Automated decisions never save destination rules.
