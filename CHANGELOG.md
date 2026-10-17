@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.37.1
+
 - Guardian MCP denials now immediately request human approval with the reason and call arguments visible, instead of returning an outright rejection. Human rejection, cancellation and hard access restrictions still stop execution, and the agent receives the Guardian explanation if the human declines.
 
 ## 1.37.0

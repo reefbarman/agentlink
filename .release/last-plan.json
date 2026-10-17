@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
-  "createdAt": "2026-10-16T12:12:13.506Z",
+  "sourceSha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
+  "createdAt": "2026-10-17T23:56:34.523Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,76 +10,64 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.36.0",
-      "baselineRef": "v1.36.0",
-      "reserved": "1.36.0",
-      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
+      "published": "1.37.0",
+      "baselineRef": "v1.37.0",
+      "reserved": "1.37.0",
+      "commits": ["dd819f3c9d12f09b8af7b97544b2e43bd5f118a2"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.37.0",
-      "effectiveBump": "minor",
+      "version": "1.37.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.37.0",
+      "tag": "v1.37.1",
       "notes": [
         {
-          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
-          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
-          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+          "sha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
+          "subject": "fix(guardian): request human approval after MCP denials",
+          "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.23.0",
-      "baselineRef": "desktop-v0.23.0",
-      "reserved": "0.23.0",
-      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
+      "published": "0.24.0",
+      "baselineRef": "desktop-v0.24.0",
+      "reserved": "0.24.0",
+      "commits": ["dd819f3c9d12f09b8af7b97544b2e43bd5f118a2"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.24.0",
-      "effectiveBump": "minor",
+      "version": "0.24.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.24.0",
+      "tag": "desktop-v0.24.1",
       "notes": [
         {
-          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
-          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
-          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+          "sha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
+          "subject": "fix(guardian): request human approval after MCP denials",
+          "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.21.0",
-      "baselineRef": "cli-v0.21.0",
-      "reserved": "0.21.0",
-      "commits": ["50fbc610a6459c3b39cb6dcbc1efa1353940f6a7"],
+      "published": "0.22.0",
+      "baselineRef": "cli-v0.22.0",
+      "reserved": "0.22.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.22.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.22.0",
-      "notes": [
-        {
-          "sha": "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7",
-          "subject": "feat(guardian): review MCP and network approvals with Jev first pass",
-          "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
       "published": "0.13.0",
@@ -155,6 +143,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
