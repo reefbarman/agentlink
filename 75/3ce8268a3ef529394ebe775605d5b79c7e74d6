@@ -1,0 +1,31 @@
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 173-203,283-287,343,1240-1246,1250,1254-1256,1267-1272,1287-1318,1656,1697,1938-1971
+  s_e101bb1ceeaf81::t_d00adcb5506ac0 1247-1249,1251-1253,1257-1266,1273-1286,1319
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 89,219-223,10663-10667
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 152
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 749-805
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "753ce8268a3ef529394ebe775605d5b79c7e74d6",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e101bb1ceeaf81": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "76bda8ac-74d9-4494-83df-5856dd179df7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
