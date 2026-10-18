@@ -916,54 +916,57 @@ describe("tool usage telemetry project attribution", () => {
     expect(blocked.isError).toBe(true);
   });
 
-  it("keeps deferred image generation behind the active mode gate", async () => {
-    const { handleGenerateImage } = await import("../tools/generateImage.js");
-    vi.mocked(handleGenerateImage).mockClear();
-    const runtime = createAgentToolRuntime(mockCtx);
-    const target = getAgentTools().find(
-      (tool) => tool.name === "generate_image",
-    )!;
-    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
-    const input = { prompt: "Generate a test image" };
+  it.each(["direct", "bridge"])(
+    "keeps %s deferred image generation behind the active mode gate and approval handler",
+    async (route) => {
+      const { handleGenerateImage } = await import("../tools/generateImage.js");
+      vi.mocked(handleGenerateImage).mockClear();
+      const runtime = createAgentToolRuntime(mockCtx);
+      const target = getAgentTools().find(
+        (tool) => tool.name === "generate_image",
+      )!;
+      const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
+      const input = { prompt: "Generate a test image" };
 
-    const rejected = await runtime.executeTool({
-      name: "call_native_tool",
-      input: { name: "generate_image", input },
-      context: {
-        sessionId: "test-session",
-        mode: "ask",
-        availableToolNames: new Set(["call_native_tool"]),
-        modeAllowedToolNames: new Set(["read_file"]),
-        nativeToolDisclosure,
-      },
-    });
-    expect(rejected).toMatchObject({
-      isError: true,
-      data: { status: "tool_not_in_mode", tool: "generate_image" },
-    });
-    expect(handleGenerateImage).not.toHaveBeenCalled();
+      const rejected = await runtime.executeTool({
+        name: route === "direct" ? "generate_image" : "call_native_tool",
+        input: route === "direct" ? input : { name: "generate_image", input },
+        context: {
+          sessionId: "test-session",
+          mode: "ask",
+          availableToolNames: new Set(["call_native_tool"]),
+          modeAllowedToolNames: new Set(["read_file"]),
+          nativeToolDisclosure,
+        },
+      });
+      expect(rejected).toMatchObject({
+        isError: true,
+        data: { status: "tool_not_in_mode", tool: "generate_image" },
+      });
+      expect(handleGenerateImage).not.toHaveBeenCalled();
 
-    const accepted = await runtime.executeTool({
-      name: "call_native_tool",
-      input: { name: "generate_image", input },
-      context: {
-        sessionId: "test-session",
-        mode: "architect",
-        availableToolNames: new Set(["call_native_tool"]),
-        modeAllowedToolNames: new Set(["generate_image"]),
-        nativeToolDisclosure,
-      },
-    });
-    expect(accepted.isError).not.toBe(true);
-    expect(handleGenerateImage).toHaveBeenCalledOnce();
-    expect(handleGenerateImage).toHaveBeenCalledWith(
-      input,
-      mockCtx.approvalManager,
-      "test-session",
-      mockCtx.onApprovalRequest,
-      mockCtx.getSessionImages,
-    );
-  });
+      const accepted = await runtime.executeTool({
+        name: route === "direct" ? "generate_image" : "call_native_tool",
+        input: route === "direct" ? input : { name: "generate_image", input },
+        context: {
+          sessionId: "test-session",
+          mode: "architect",
+          availableToolNames: new Set(["call_native_tool"]),
+          modeAllowedToolNames: new Set(["generate_image"]),
+          nativeToolDisclosure,
+        },
+      });
+      expect(accepted.isError).not.toBe(true);
+      expect(handleGenerateImage).toHaveBeenCalledOnce();
+      expect(handleGenerateImage).toHaveBeenCalledWith(
+        input,
+        mockCtx.approvalManager,
+        "test-session",
+        mockCtx.onApprovalRequest,
+        mockCtx.getSessionImages,
+      );
+    },
+  );
 
   it("discovers only deferred tools from the frozen request snapshot", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
@@ -1066,50 +1069,137 @@ describe("tool usage telemetry project attribution", () => {
     });
   });
 
-  it("invokes an exact deferred target with canonical validation and telemetry", async () => {
-    const record = vi.fn();
-    const runtime = createAgentToolRuntime({
-      ...mockCtx,
-      toolUsageTelemetry: { record } as any,
-    });
-    const target = getAgentTools().find(
-      (tool) => tool.name === "get_call_hierarchy",
-    )!;
-    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
-    vi.mocked(handleGetCallHierarchy).mockClear();
+  it.each(["direct", "bridge"])(
+    "invokes a %s deferred target with canonical validation and telemetry",
+    async (route) => {
+      const record = vi.fn();
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        toolUsageTelemetry: { record } as any,
+      });
+      const target = getAgentTools().find(
+        (tool) => tool.name === "get_call_hierarchy",
+      )!;
+      const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
+      vi.mocked(handleGetCallHierarchy).mockClear();
 
-    const result = await runtime.executeTool({
-      name: "call_native_tool",
-      input: {
-        name: "get_call_hierarchy",
-        input: {
-          path: "src/file.ts",
-          line: 1,
-          column: 1,
-          direction: "both",
+      const input = {
+        path: "src/file.ts",
+        line: 1,
+        column: 1,
+        direction: "both",
+      };
+      const result = await runtime.executeTool({
+        name: route === "direct" ? "get_call_hierarchy" : "call_native_tool",
+        input:
+          route === "direct" ? input : { name: "get_call_hierarchy", input },
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          availableToolNames: new Set(["call_native_tool"]),
+          modeAllowedToolNames: new Set(["get_call_hierarchy"]),
+          nativeToolDisclosure,
         },
-      },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(handleGetCallHierarchy).toHaveBeenCalledOnce();
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "get_call_hierarchy",
+          params: expect.objectContaining({
+            path: "src/file.ts",
+            direction: "both",
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      input: { path: "src/file.ts", line: 1 },
+      available: ["call_native_tool"],
+      allowed: ["get_call_hierarchy"],
+      snapshot: true,
+      status: "invalid_native_tool_input",
+    },
+    {
+      input: { path: "src/file.ts", line: 1, column: 1, direction: "both" },
+      available: ["call_native_tool"],
+      allowed: [],
+      snapshot: true,
+      status: "tool_not_in_mode",
+    },
+    {
+      input: { path: "src/file.ts", line: 1, column: 1, direction: "both" },
+      available: [],
+      allowed: ["get_call_hierarchy"],
+      snapshot: true,
+      status: "tool_not_available",
+    },
+    {
+      input: { path: "src/file.ts", line: 1, column: 1, direction: "both" },
+      available: ["call_native_tool"],
+      allowed: ["get_call_hierarchy"],
+      snapshot: false,
+      status: "tool_not_available",
+    },
+  ])(
+    "rejects direct deferred calls with $status before dispatch ($snapshot, $available, $allowed)",
+    async ({ input, available, allowed, snapshot, status }) => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      const nativeToolDisclosure = createNativeToolDisclosureSnapshot(
+        snapshot
+          ? [
+              getAgentTools().find(
+                (tool) => tool.name === "get_call_hierarchy",
+              )!,
+            ]
+          : [],
+      );
+      vi.mocked(handleGetCallHierarchy).mockClear();
+      const result = await runtime.executeTool({
+        name: "get_call_hierarchy",
+        input,
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          availableToolNames: new Set(available),
+          modeAllowedToolNames: new Set(allowed),
+          nativeToolDisclosure,
+        },
+      });
+      expect(result).toMatchObject({ isError: true, data: { status } });
+      expect(handleGetCallHierarchy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps directly named deferred tools behind skill restrictions", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure =
+      createNativeToolDisclosureSnapshot(getAgentTools());
+    vi.mocked(handleGetCallHierarchy).mockClear();
+    const result = await runtime.executeTool({
+      name: "get_call_hierarchy",
+      input: { path: "src/file.ts", line: 1, column: 1, direction: "both" },
       context: {
         sessionId: "test-session",
-        mode: "code",
         availableToolNames: new Set(["call_native_tool"]),
-        modeAllowedToolNames: new Set(["get_call_hierarchy"]),
         nativeToolDisclosure,
+        skillAllowedTools: ["read_file"],
+        modeAllowedToolNames: new Set(
+          runtime
+            .listTools({ skillAllowedTools: ["read_file"] })
+            .map((tool) => tool.name),
+        ),
       },
     });
-
-    expect(result.isError).not.toBe(true);
-    expect(handleGetCallHierarchy).toHaveBeenCalledOnce();
-    expect(record).toHaveBeenCalledTimes(1);
-    expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "get_call_hierarchy",
-        params: expect.objectContaining({
-          path: "src/file.ts",
-          direction: "both",
-        }),
-      }),
-    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("by the active skill allowance");
+    expect(JSON.stringify(result)).not.toContain("use switch_mode");
+    expect(handleGetCallHierarchy).not.toHaveBeenCalled();
   });
 
   it("rejects forged pre-resolved native calls outside the frozen snapshot", async () => {

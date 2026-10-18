@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Deferred native tools no longer fail solely because a model calls their known name directly instead of using `call_native_tool`. VS Code-backed sessions and Browser Ask Agent validate and execute authorised direct calls through the same deferred-tool path, preserving argument validation, access restrictions, approvals, and conversation replay.
+
 ## 1.38.0
 
 - Jev now receives up to 32 recorded human answers and restored instructions per review (previously the same 8 as the main Guardian), so in most sessions it sees the full human history instead of counting the review as incomplete. The main Guardian's evidence is unchanged. In long sessions where older input is still left out, each step of a chained command is now judged on its own: harmless helpers such as `cd`, `sleep`, `head` or `cat`, read-only `gh` queries (`gh run list`, `gh pr view`, `gh auth status`) and `git fetch` no longer make an otherwise read-only or local chain ineligible. Pushes, pulls, other `gh` actions, file writes and hidden execution still do. In the 118-command replay, human-history gaps dropped from 43 to 29 commands and eligible Jev answers rose from 71 to 81, with no should-block command approved by the first pass.

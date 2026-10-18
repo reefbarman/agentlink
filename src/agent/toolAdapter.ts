@@ -2314,18 +2314,30 @@ export function resolveAgentToolCall(
         route: "native-deferred",
       };
     }
-    return {
-      providerName: request.name,
-      providerInput: request.input,
-      canonicalName: request.name,
-      canonicalInput: request.input,
-      route: "direct",
-    };
+    if (
+      !request.context.nativeToolDisclosure ||
+      !getDeferredNativeTool(request.context.nativeToolDisclosure, request.name)
+    ) {
+      return {
+        providerName: request.name,
+        providerInput: request.input,
+        canonicalName: request.name,
+        canonicalInput: request.input,
+        route: "direct",
+      };
+    }
   }
 
+  // A model may know a deferred name from the catalog or earlier turns. Accept
+  // that spelling through the same captured-catalog lookup and validator as the
+  // bridge, without changing the provider call retained for replay/telemetry.
   const parsedBridge = z
     .object(schemas.callNativeToolSchema)
-    .safeParse(request.input);
+    .safeParse(
+      request.name === "call_native_tool"
+        ? request.input
+        : { name: request.name, input: request.input },
+    );
   if (!parsedBridge.success) {
     return nativeToolResolutionError(
       request,
@@ -2713,7 +2725,11 @@ export function createAgentToolRuntime(
         }
         if (
           request.context.availableToolNames &&
-          !request.context.availableToolNames.has(providerToolName)
+          !request.context.availableToolNames.has(providerToolName) &&
+          !(
+            resolved.route === "native-deferred" &&
+            request.context.availableToolNames.has("call_native_tool")
+          )
         ) {
           return errorResult(
             `Tool '${providerToolName}' was not available in the provider request that emitted this call`,
@@ -2732,7 +2748,7 @@ export function createAgentToolRuntime(
         ) {
           return errorResult(
             `Tool '${request.name}' is not available in ${request.context.mode ?? "the current"} mode. ${
-              request.context.providerToolName === "call_native_tool"
+              resolved.route === "native-deferred"
                 ? getNativeToolRequestGuidance(
                     request.context.nativeToolDisclosure,
                     request.name,

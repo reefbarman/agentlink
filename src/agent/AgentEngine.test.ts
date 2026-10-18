@@ -4704,6 +4704,79 @@ describe("AgentEngine", () => {
       });
     });
 
+    it.each(["direct", "bridge"])(
+      "executes %s deferred history calls through production dispatch without prior discovery",
+      async (route) => {
+        const streamCalls: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        const input = { query: "routing-regression-needle", role: "user" };
+        const providerCall = {
+          type: "tool_use" as const,
+          id: "history-call-1",
+          name:
+            route === "direct" ? "search_session_history" : "call_native_tool",
+          input:
+            route === "direct"
+              ? input
+              : { name: "search_session_history", input },
+        };
+        provider.stream = async function* (request: StreamRequest) {
+          streamCalls.push(request);
+          if (streamCalls.length === 1) {
+            yield { type: "content_blocks", blocks: [providerCall] };
+            yield { type: "done" };
+            return;
+          }
+          yield* makeProviderStream({ text: "done" });
+        };
+        const session = await makeSession();
+        session.addUserMessage(
+          "Find routing-regression-needle in this conversation",
+        );
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+
+        const events = await collectEvents(engine.run(session));
+        expect(streamCalls.length).toBeGreaterThanOrEqual(2);
+        expect(streamCalls[0].tools?.map((tool) => tool.name)).not.toContain(
+          "search_session_history",
+        );
+        const resultBlocks = streamCalls[1].messages.flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        );
+        const result = resultBlocks.find(
+          (block) =>
+            block.type === "tool_result" &&
+            block.tool_use_id === providerCall.id,
+        );
+        expect(result).toMatchObject({ type: "tool_result" });
+        expect(JSON.stringify(result)).toContain("routing-regression-needle");
+        expect(JSON.stringify(result)).toContain("matches");
+        expect(JSON.stringify(result)).not.toContain("tool_not_available");
+        expect(JSON.stringify(result)).not.toContain("transcript_unavailable");
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "tool_start",
+            toolCallId: providerCall.id,
+            toolName: "search_session_history",
+            input,
+          }),
+        );
+        expect(
+          session
+            .getAllMessages()
+            .flatMap((message) =>
+              Array.isArray(message.content) ? message.content : [],
+            ),
+        ).toContainEqual(providerCall);
+      },
+    );
+
     it("reuses cached provider tools when definitions are structurally unchanged", async () => {
       const streamCalls: StreamRequest[] = [];
       let streamCount = 0;

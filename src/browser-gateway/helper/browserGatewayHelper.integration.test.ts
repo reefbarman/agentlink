@@ -6271,16 +6271,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
         toolCalls: [
           {
             id: "call-manage-memory",
-            name: "call_native_tool",
+            name: "manage_memory",
             input: {
-              name: "manage_memory",
-              input: {
-                operation: "remember",
-                scope: "global",
-                source_evidence: "The browser user stated this preference.",
-                kind: "preference",
-                statement: "Use concise browser answers.",
-              },
+              operation: "remember",
+              scope: "global",
+              source_evidence: "The browser user stated this preference.",
+              kind: "preference",
+              statement: "Use concise browser answers.",
             },
           },
         ],
@@ -6350,6 +6347,27 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
     expect(manage.mock.calls[0]![0].context.sessionId).toBeTruthy();
     expect(body.snapshot.ui.approval).toBeNull();
+    const manageReplayToolUse = completionParams
+      .at(-1)
+      ?.iterationMessages?.flatMap((message) =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .find(
+        (block) =>
+          block.type === "tool_use" && block.id === "call-manage-memory",
+      );
+    expect(manageReplayToolUse).toEqual({
+      type: "tool_use",
+      id: "call-manage-memory",
+      name: "manage_memory",
+      input: {
+        operation: "remember",
+        scope: "global",
+        source_evidence: "The browser user stated this preference.",
+        kind: "preference",
+        statement: "Use concise browser answers.",
+      },
+    });
     const assistant = body.snapshot.session.foreground.projectedMessages.find(
       (message) => message.role === "assistant",
     );
@@ -10587,34 +10605,47 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ).toMatchObject({ name: "find_native_tools", complete: true });
   });
 
-  it("rejects forbidden wrapper targets and forged direct deferred calls", async () => {
+  it("validates deferred direct calls and rejects forbidden direct or bridge targets", async () => {
     const modelClient = makeAskAgentToolLoopClient(
       async ({ iterationMessages }) => {
         const latestUserText = getLatestStringUserMessage(iterationMessages);
-        return latestUserText === "Use a forbidden wrapper"
-          ? {
-              text: "Attempting a forbidden wrapper.",
-              toolCalls: [
-                {
-                  id: "forbidden-native-wrapper",
-                  name: "call_native_tool",
-                  input: {
-                    name: "execute_command",
-                    input: { command: "touch /tmp/should-not-run" },
-                  },
+        if (latestUserText === "Use a forbidden wrapper") {
+          return {
+            text: "Attempting a forbidden wrapper.",
+            toolCalls: [
+              {
+                id: "forbidden-native-wrapper",
+                name: "call_native_tool",
+                input: {
+                  name: "execute_command",
+                  input: { command: "touch /tmp/should-not-run" },
                 },
-              ],
-            }
-          : {
-              text: "Attempting a forged direct call.",
-              toolCalls: [
-                {
-                  id: "forged-direct-memory",
-                  name: "recall_memory",
-                  input: { query: "private memory", scope: "global" },
-                },
-              ],
-            };
+              },
+            ],
+          };
+        }
+        if (latestUserText === "Use invalid direct deferred input") {
+          return {
+            text: "Attempting invalid direct memory input.",
+            toolCalls: [
+              {
+                id: "invalid-direct-memory",
+                name: "recall_memory",
+                input: { query: 42, scope: "global" },
+              },
+            ],
+          };
+        }
+        return {
+          text: "Attempting a forbidden direct call.",
+          toolCalls: [
+            {
+              id: "forbidden-direct-native-tool",
+              name: "execute_command",
+              input: { command: "touch /tmp/should-not-run" },
+            },
+          ],
+        };
       },
     );
     const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
@@ -10636,17 +10667,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
         };
       };
     };
-    const forbidden = await send("Use a forbidden wrapper");
-    const forged = await send("Use direct deferred memory");
-    const forbiddenAssistant =
-      forbidden.snapshot.session.foreground.projectedMessages
+    const forbiddenBridge = await send("Use a forbidden wrapper");
+    const invalidDirect = await send("Use invalid direct deferred input");
+    const forbiddenDirect = await send("Use a forbidden direct target");
+    const latestAssistant = (response: typeof forbiddenBridge) =>
+      response.snapshot.session.foreground.projectedMessages
         .filter((message) => message.role === "assistant")
         .at(-1);
-    const forgedAssistant = forged.snapshot.session.foreground.projectedMessages
-      .filter((message) => message.role === "assistant")
-      .at(-1);
+    const forbiddenBridgeAssistant = latestAssistant(forbiddenBridge);
+    const invalidDirectAssistant = latestAssistant(invalidDirect);
+    const forbiddenDirectAssistant = latestAssistant(forbiddenDirect);
 
-    expect(forbiddenAssistant?.blocks).toEqual(
+    expect(forbiddenBridgeAssistant?.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "tool_call",
@@ -10657,17 +10689,30 @@ describe("BrowserGatewayHelper proxy routing", () => {
         }),
       ]),
     );
-    expect(JSON.stringify(forbiddenAssistant)).not.toContain(
+    expect(JSON.stringify(forbiddenBridgeAssistant)).not.toContain(
       "call_native_tool",
     );
-    expect(forgedAssistant?.blocks).toEqual(
+    expect(invalidDirectAssistant?.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "tool_call",
-          id: "forged-direct-memory",
+          id: "invalid-direct-memory",
           name: "recall_memory",
           complete: true,
-          result: expect.stringContaining("direct_deferred_native_tool_call"),
+          result: expect.stringContaining(
+            "Invalid input for native tool 'recall_memory'",
+          ),
+        }),
+      ]),
+    );
+    expect(forbiddenDirectAssistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "forbidden-direct-native-tool",
+          name: "execute_command",
+          complete: true,
+          result: expect.stringContaining("native_tool_not_available"),
         }),
       ]),
     );
