@@ -20,9 +20,14 @@ import type { TaskEditors } from "./taskEditors.js";
  * - The app's session cookie is never accepted here and never forwarded
  *   (cookies ignore ports, so browsers send it); neither are editor
  *   cookies.
+ * - Each code-server requires its own secret as its session cookie (the
+ *   editors share a network). Only this listener adds it, on the way to
+ *   code-server; a browser's own cookie of that name is dropped.
  */
 
 export const EDITOR_COOKIE_PREFIX = "__Secure-agentlink_editor_";
+/** code-server's session cookie (no `--cookie-suffix`). */
+export const CODE_SERVER_SESSION_COOKIE = "code-server-session";
 const TASK_PATH = /^\/t\/([0-9a-f]{12})(\/.*)?$/u;
 const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
 const HOP_BY_HOP = new Set([
@@ -66,7 +71,8 @@ export function editorUpstreamCookies(
       return (
         name !== "" &&
         name !== SESSION_COOKIE_NAME &&
-        !name.startsWith(EDITOR_COOKIE_PREFIX)
+        !name.startsWith(EDITOR_COOKIE_PREFIX) &&
+        !name.startsWith(CODE_SERVER_SESSION_COOKIE)
       );
     });
   return kept.length > 0 ? kept.join("; ") : undefined;
@@ -134,7 +140,12 @@ export async function startEditorProxy(options: {
     request: IncomingMessage,
     upgrade: boolean,
   ):
-    | { readonly taskId: string; readonly upstream: URL; readonly path: string }
+    | {
+        readonly taskId: string;
+        readonly upstream: URL;
+        readonly secret: string;
+        readonly path: string;
+      }
     | { readonly status: number; readonly text: string }
     | { readonly redirect: string } => {
     const origin = originFor(request);
@@ -165,20 +176,27 @@ export async function startEditorProxy(options: {
     options.editors.touch(taskId);
     return {
       taskId,
-      upstream: new URL(upstream),
+      upstream: new URL(upstream.url),
+      secret: upstream.secret,
       path: `${match[2]}${url.search}`,
     };
   };
 
-  const upstreamHeaders = (request: IncomingMessage, upstream: URL) => {
+  const upstreamHeaders = (
+    request: IncomingMessage,
+    target: { readonly upstream: URL; readonly secret: string },
+  ) => {
     const headers: http.OutgoingHttpHeaders = {};
     for (const [name, value] of Object.entries(request.headers)) {
       if (value === undefined || HOP_BY_HOP.has(name)) continue;
       headers[name] = value;
     }
     const cookies = editorUpstreamCookies(singleHeader(request.headers.cookie));
-    if (cookies) headers.cookie = cookies;
-    headers.host = upstream.host;
+    headers.cookie = [
+      `${CODE_SERVER_SESSION_COOKIE}=${target.secret}`,
+      ...(cookies ? [cookies] : []),
+    ].join("; ");
+    headers.host = target.upstream.host;
     // code-server checks a WebSocket's Origin against the public host (the
     // Host was checked in `route`).
     headers["x-forwarded-host"] = singleHeader(request.headers.host) ?? "";
@@ -228,7 +246,7 @@ export async function startEditorProxy(options: {
         port: target.upstream.port,
         method: request.method,
         path: target.path,
-        headers: upstreamHeaders(request, target.upstream),
+        headers: upstreamHeaders(request, target),
       },
       (upstream) => {
         const headers = { ...upstream.headers };
@@ -268,7 +286,7 @@ export async function startEditorProxy(options: {
       refuse("status" in target ? target.status : 400);
       return;
     }
-    const headers = upstreamHeaders(request, target.upstream);
+    const headers = upstreamHeaders(request, target);
     headers.connection = "Upgrade";
     headers.upgrade = singleHeader(request.headers.upgrade) ?? "websocket";
     const proxied = http.request({

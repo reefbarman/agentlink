@@ -30,11 +30,17 @@ function fakeManager() {
           id: string;
           folder: string;
           mode: "ro" | "rw";
+          secret: string;
           proxy?: string;
           settings?: Record<string, unknown>;
           noProxy?: readonly string[];
         }) => {
-          const { settings: _settings, noProxy: _noProxy, ...shown } = request;
+          const {
+            settings: _settings,
+            noProxy: _noProxy,
+            secret: _secret,
+            ...shown
+          } = request;
           started.push(shown);
           return { url: `http://agentlink-editor-${request.id}:8080` };
         },
@@ -125,11 +131,17 @@ describe("task editors", () => {
     const redeemed = editors.redeem(token);
     expect(redeemed?.taskId).toBe("0123456789ab");
     expect(editors.redeem(token)).toBeUndefined();
-    expect(editors.authorize("0123456789ab", redeemed!.session)).toBe(
-      "http://agentlink-editor-task-0123456789ab:8080",
-    );
+    const secretOf = (index: number) =>
+      fake.manager.startEditor.mock.calls[index]![0].secret;
+    expect(secretOf(0)).toMatch(/^[0-9a-f]{64}$/u);
+    expect(editors.authorize("0123456789ab", redeemed!.session)).toEqual({
+      url: "http://agentlink-editor-task-0123456789ab:8080",
+      secret: secretOf(0),
+    });
     // Not for another task, nor without or with a wrong session.
     await editors.open(task("ba9876543210"), "ro");
+    // Each editor has its own secret.
+    expect(secretOf(1)).not.toBe(secretOf(0));
     expect(
       editors.authorize("ba9876543210", redeemed!.session),
     ).toBeUndefined();

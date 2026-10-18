@@ -30,6 +30,8 @@ interface RunningEditor {
   readonly taskId: string;
   readonly mode: EditorMode;
   readonly upstream: string;
+  /** The editor's own sign-in secret: only the editor proxy sends it. */
+  readonly secret: string;
   /** For AgentLink in the editor: its model calls to the assistant. */
   readonly modelToken: string;
   lastActive: number;
@@ -49,8 +51,14 @@ export interface TaskEditors {
   ): { readonly taskId: string; readonly session: string } | undefined;
   /** The task whose running editor holds this model token, if any. */
   modelAccess(token: string): string | undefined;
-  /** The editor's address when `session` is valid for `taskId`. */
-  authorize(taskId: string, session: string | undefined): string | undefined;
+  /**
+   * The editor's address and sign-in secret when `session` is valid for
+   * `taskId`.
+   */
+  authorize(
+    taskId: string,
+    session: string | undefined,
+  ): { readonly url: string; readonly secret: string } | undefined;
   /** A request or message reached the task's editor. */
   touch(taskId: string): void;
   /** A long-lived connection (WebSocket) opened (+1) or closed (-1). */
@@ -141,11 +149,15 @@ export function createTaskEditors(options: {
         const proxy = options.proxyUrl?.();
         const modelToken = randomBytes(32).toString("base64url");
         const settings = options.settings?.(modelToken);
+        // New for every start: editors share a network, and each one only
+        // lets in requests carrying its own secret.
+        const secret = randomBytes(32).toString("hex");
         const started = await options.manager.startEditor({
           id: runnerId(task.id),
           // The task's folder: its clone and any reference repositories.
           folder: path.dirname(task.workspace),
           mode,
+          secret,
           ...(proxy ? { proxy } : {}),
           ...(settings ? { settings } : {}),
           ...(options.noProxy?.length ? { noProxy: [...options.noProxy] } : {}),
@@ -155,6 +167,7 @@ export function createTaskEditors(options: {
           taskId: task.id,
           mode,
           upstream: started.url,
+          secret,
           modelToken,
           lastActive: now(),
           connections: 0,
@@ -197,7 +210,10 @@ export function createTaskEditors(options: {
           entry.expiresAt > now() &&
           sameToken(token, session)
         ) {
-          return editors.get(taskId)?.upstream;
+          const editor = editors.get(taskId);
+          return editor
+            ? { url: editor.upstream, secret: editor.secret }
+            : undefined;
         }
       }
       return undefined;

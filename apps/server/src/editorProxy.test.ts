@@ -14,6 +14,7 @@ import { SESSION_COOKIE_NAME } from "./requestGuard.js";
 
 const TASK = "0123456789ab";
 const OTHER = "ba9876543210";
+const SECRET = "a".repeat(64);
 
 /** A stand-in for code-server: echoes what it got, over HTTP and WS. */
 async function startUpstream() {
@@ -76,7 +77,7 @@ function fakeEditors(upstream: string) {
       },
       authorize(taskId: string, session: string | undefined) {
         return session && sessions.get(session) === taskId
-          ? upstream
+          ? { url: upstream, secret: SECRET }
           : undefined;
       },
       touch() {},
@@ -181,10 +182,10 @@ describe("editor proxy", () => {
     };
   };
 
-  it("never forwards the app's session cookie or editor cookies", () => {
+  it("never forwards the app's session cookie, editor cookies or a code-server session", () => {
     expect(
       editorUpstreamCookies(
-        `${SESSION_COOKIE_NAME}=app; vscode-tkn=keep; ${EDITOR_COOKIE_PREFIX}${TASK}=s`,
+        `${SESSION_COOKIE_NAME}=app; vscode-tkn=keep; ${EDITOR_COOKIE_PREFIX}${TASK}=s; code-server-session=guess; code-server-session-x=guess`,
       ),
     ).toBe("vscode-tkn=keep");
     expect(editorUpstreamCookies(`${SESSION_COOKIE_NAME}=app`)).toBeUndefined();
@@ -206,7 +207,7 @@ describe("editor proxy", () => {
     );
   });
 
-  it("proxies to the task's editor with the editor cookie, never the app's", async () => {
+  it("proxies to the task's editor with its own secret, never the app's or the browser's cookie", async () => {
     const { port } = await start();
     // The app's session cookie alone gets nothing.
     const refused = await request(port, {
@@ -218,7 +219,7 @@ describe("editor proxy", () => {
     const proxied = await request(port, {
       path: `/t/${TASK}/static/app.js?x=1`,
       headers: {
-        cookie: `${SESSION_COOKIE_NAME}=app-session; ${EDITOR_COOKIE_PREFIX}${TASK}=good-session; code-server-session=k`,
+        cookie: `${SESSION_COOKIE_NAME}=app-session; ${EDITOR_COOKIE_PREFIX}${TASK}=good-session; code-server-session=k; vscode-tkn=keep`,
         "x-forwarded-host": "evil.example",
         "x-forwarded-for": "10.0.0.1",
       },
@@ -232,7 +233,7 @@ describe("editor proxy", () => {
       {
         method: "GET",
         url: "/static/app.js?x=1",
-        cookie: "code-server-session=k",
+        cookie: `code-server-session=${SECRET}; vscode-tkn=keep`,
       },
     ]);
   });
@@ -295,7 +296,7 @@ describe("editor proxy", () => {
     expect(upstream!.seen.at(-1)).toEqual({
       method: "UPGRADE",
       url: "/socket",
-      cookie: undefined,
+      cookie: `code-server-session=${SECRET}`,
     });
     expect(connections).toEqual([1]);
     opened.socket!.destroy();

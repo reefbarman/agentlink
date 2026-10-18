@@ -203,6 +203,8 @@ describe("runner manager browsers", () => {
 });
 
 describe("runner manager editors", () => {
+  const secret = "0123456789abcdef".repeat(4);
+
   it("starts code-server on the task folder only, read-only or not, with nothing but the proxy", async () => {
     const test = await setup();
     // A file and an old AgentLink state folder and a symlink beside the repo.
@@ -213,6 +215,7 @@ describe("runner manager editors", () => {
       id: "task-t1",
       folder: test.folder,
       mode: "ro",
+      secret,
       proxy: "http://u:p@egress-gateway:3128",
       settings: { "agentlink.disabledProviders": ["codex"] },
       noProxy: ["assistant"],
@@ -233,7 +236,9 @@ describe("runner manager editors", () => {
     // The image's start script writes the settings, then runs code-server.
     expect(body.Entrypoint).toEqual(["/usr/local/bin/agentlink-editor"]);
     expect(body.User).toBe("1000:1000");
-    expect(body.Cmd).toContain("none");
+    // Signed in only with the editor's own secret, never open.
+    expect(body.Cmd).not.toContain("none");
+    expect(body.Cmd.slice(body.Cmd.indexOf("--auth"))[1]).toBe("password");
     expect(body.Cmd.at(-1)).toBe(test.folder);
     // Only the task folder's entries, on the host's path, and read-only,
     // over a scratch folder where AgentLink keeps its own chats; no
@@ -266,6 +271,7 @@ describe("runner manager editors", () => {
     });
     expect(body.Env).toEqual([
       "HOME=/tmp/home",
+      `HASHED_PASSWORD=${secret}`,
       "HTTPS_PROXY=http://u:p@egress-gateway:3128",
       "HTTP_PROXY=http://u:p@egress-gateway:3128",
       "NO_PROXY=localhost,127.0.0.1,assistant",
@@ -276,6 +282,7 @@ describe("runner manager editors", () => {
       id: "task-t1",
       folder: test.folder,
       mode: "rw",
+      secret,
     });
     const second = test.docker.calls.filter((call) =>
       call.path.endsWith("/create"),
@@ -286,16 +293,24 @@ describe("runner manager editors", () => {
     // Taken over: the whole task folder, writable.
     expect(second.HostConfig.Binds).toEqual([`${host}:${test.folder}:rw`]);
     expect(second.HostConfig.Mounts).toBeUndefined();
-    expect(second.Env).toEqual(["HOME=/tmp/home"]);
+    expect(second.Env).toEqual(["HOME=/tmp/home", `HASHED_PASSWORD=${secret}`]);
     await expect(test.client().stopAllEditors()).resolves.toEqual({
       stopped: 1,
     });
   });
 
-  it("refuses other folders, bad modes and proxies, and editors when not configured", async () => {
+  it("refuses other folders, bad modes, secrets and proxies, and editors when not configured", async () => {
     const test = await setup();
     const client = test.client();
     for (const request of [
+      { id: "task-t1", folder: test.folder, mode: "ro", secret: undefined },
+      { id: "task-t1", folder: test.folder, mode: "ro", secret: "short" },
+      {
+        id: "task-t1",
+        folder: test.folder,
+        mode: "ro",
+        secret: `${secret.slice(1)}\n`,
+      },
       { id: "task-t1", folder: path.join(test.projects, "home"), mode: "rw" },
       { id: "task-t1", folder: test.dataFolder, mode: "rw" },
       { id: "task-t1", folder: test.folder, mode: "write" },
@@ -319,15 +334,20 @@ describe("runner manager editors", () => {
         noProxy: ["evil host,*"],
       },
     ]) {
-      await expect(client.startEditor(request as never)).rejects.toMatchObject({
+      await expect(
+        client.startEditor({ secret, ...request } as never),
+      ).rejects.toMatchObject({
         status: 400,
       });
     }
     const without = await setup({});
     await expect(
-      without
-        .client()
-        .startEditor({ id: "task-t1", folder: without.folder, mode: "ro" }),
+      without.client().startEditor({
+        id: "task-t1",
+        folder: without.folder,
+        mode: "ro",
+        secret,
+      }),
     ).rejects.toMatchObject({ status: 409 });
   });
 });

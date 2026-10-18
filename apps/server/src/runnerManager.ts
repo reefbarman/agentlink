@@ -38,6 +38,7 @@ const EDITOR_LABEL = "dev.agentlink.editor";
 /** The port code-server listens on inside an editor container. */
 export const EDITOR_PORT = 8080;
 const MAX_PROXY_URL_LENGTH = 4_096;
+const EDITOR_SECRET_PATTERN = /^[0-9a-f]{64}$/u;
 const MAX_EDITOR_SETTINGS_BYTES = 256 * 1024;
 const MAX_NO_PROXY_HOSTS = 8;
 const HOST_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/u;
@@ -433,6 +434,12 @@ export async function startRunnerManager(
     if (body.mode !== "ro" && body.mode !== "rw") {
       throw new HttpError(400, "editor_mode_invalid");
     }
+    // The editor's own secret, known only to the assistant's editor proxy:
+    // editors share a network, so another editor cannot sign in to this one.
+    const secret = body.secret;
+    if (typeof secret !== "string" || !EDITOR_SECRET_PATTERN.test(secret)) {
+      throw new HttpError(400, "editor_secret_invalid");
+    }
     const proxy = body.proxy;
     if (
       proxy !== undefined &&
@@ -485,9 +492,10 @@ export async function startRunnerManager(
         Cmd: [
           "--bind-addr",
           `0.0.0.0:${EDITOR_PORT}`,
-          // The assistant's editor listener signs the owner in.
+          // Only with this editor's secret, which the assistant's editor
+          // listener adds for an owner it signed in.
           "--auth",
-          "none",
+          "password",
           "--disable-telemetry",
           "--disable-update-check",
           "--disable-workspace-trust",
@@ -501,6 +509,9 @@ export async function startRunnerManager(
         WorkingDir: folder,
         Env: [
           "HOME=/tmp/home",
+          // Not argon2, so code-server compares its session cookie with it
+          // directly; code-server removes it from its own environment.
+          `HASHED_PASSWORD=${secret}`,
           ...(typeof proxy === "string"
             ? [
                 `HTTPS_PROXY=${proxy}`,
@@ -731,6 +742,8 @@ export function createRunnerManagerClient(options: {
       readonly id: string;
       readonly folder: string;
       readonly mode: "ro" | "rw";
+      /** 64 hex characters: the editor's session cookie value. */
+      readonly secret: string;
       readonly proxy?: string;
       readonly settings?: Record<string, unknown>;
       readonly noProxy?: readonly string[];
