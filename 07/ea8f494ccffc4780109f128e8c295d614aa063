@@ -1,0 +1,174 @@
+package.json
+  h_e08a86bb3a33a2 5,608,614,622,636,1265-1268,1315-1316
+apps/server/package.json
+  h_e08a86bb3a33a2 17-20
+CHANGELOG.md
+  h_e08a86bb3a33a2 69-98
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 138,140,143,182
+.release/last-plan.json
+  s_06bbc408b7a1e8::t_5a95df535302cf 3-4,13-16,21,26,29-31,37-40,45,50,53-55,61-64,69,74,77-79,88,91-106,110-173,229-244
+apps/cli/package.json
+  s_06bbc408b7a1e8::t_8838224156adbc 3,33-36
+apps/desktop/package.json
+  s_06bbc408b7a1e8::t_a79cb0662289c1 3,17-19
+apps/desktop/src/desktopReleaseInstall.test.ts
+  s_06bbc408b7a1e8::t_ce48535e746306 548-581
+apps/desktop/src/desktopReleaseInstall.ts
+  s_06bbc408b7a1e8::t_53cbb49de6ed27 30-38,359,378-393,573
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_06bbc408b7a1e8::t_618c02d917dc01 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+package-lock.json
+  s_192eaf32789517::t_45258d81b101e9 3,9,17-20,63-64,95,104-107,136,139-141,157-160,14434,14437,14451,14454-14455,14495,14503,14506-14508
+packages/core/CHANGELOG.md
+  s_06bbc408b7a1e8::t_7fdb2a05e91189 5-8
+packages/core/package.json
+  s_06bbc408b7a1e8::t_7baaccfcb270b8 3,442
+packages/node-host/package.json
+  s_06bbc408b7a1e8::t_a37178fb1575aa 3,38-39
+packages/protocol/package.json
+  s_06bbc408b7a1e8::t_3b1f60f853071f 3
+packages/protocol/src/toolResult.test.ts
+  s_06bbc408b7a1e8::t_7c7305ba06017f 8-10,70,76-140
+packages/protocol/src/toolResult.ts
+  s_06bbc408b7a1e8::t_d54c787e661b37 78-209,233
+packages/workspace-host/package.json
+  s_06bbc408b7a1e8::t_8345ce40476754 3,27-29
+resources/builtin-skills/documentation/references/complete-reference.md
+  s_06bbc408b7a1e8::t_ecbed6dae37184 1512
+resources/builtin-skills/documentation/references/mcp.md
+  s_06bbc408b7a1e8::t_993d6df8908e6f 97-99
+resources/builtin-skills/documentation/references/providers.md
+  s_06bbc408b7a1e8::t_364315c6e732d7 7-10
+resources/builtin-skills/documentation/references/settings.md
+  s_06bbc408b7a1e8::t_509c8386ff2ab5 44-45
+resources/builtin-skills/documentation/references/tools.md
+  s_06bbc408b7a1e8::t_00c124e7dd8f0a 51-52,99-100,126-127,211,225-232
+resources/builtin-skills/documentation/references/troubleshooting.md
+  s_06bbc408b7a1e8::t_91151fc8054546 97-98,117
+scripts/jev-replay.mjs
+  s_06bbc408b7a1e8::t_e35b21c69bca7d 472-478,480,497-501,503-504,766-768,925-927
+scripts/report-session-outcomes.mjs
+  s_06bbc408b7a1e8::t_d5d1089122903e 1017,1021-1024,1027-1028,1036,1797-1798
+src/agent/ActivityTraceRecorder.test.ts
+  s_06bbc408b7a1e8::t_eb955ae95f0046 25-114
+src/agent/ActivityTraceRecorder.ts
+  s_06bbc408b7a1e8::t_f871bb1248e6f6 11-14,435-437,897-899
+src/agent/AgentEngine.test.ts
+  s_06bbc408b7a1e8::t_58e7cce204e143 596-772,4884-4956
+src/agent/AgentEngine.ts
+  s_06bbc408b7a1e8::t_1ee29f38934bef 805,3286,3461,3495,4071
+src/agent/AgentSession.ts
+  s_06bbc408b7a1e8::t_4da740e4717642 1230
+src/agent/persistenceContracts.ts
+  s_06bbc408b7a1e8::t_c6ef179d70d5ba 92
+src/agent/toolAdapter.test.ts
+  s_06bbc408b7a1e8::t_c7278c40093212 36-41,919-929,931-946,948-969,1072-1084,1086-1163,1165-1171,1173-1186,1191-1196,1199-1202,1911,4316-4323,8576-9059
+src/agent/toolAdapter.ts
+  s_06bbc408b7a1e8::t_4e92202050905e 67-72,100-101,256,2319-2330,2333-2335,2338-2342,2730-2734,2753,3536-3556,3618,3620-3621,3631-3765,3772-3800,3824-3826,3875-3880,3899-3910,3920-3924,3926-3927,3929,3936-3938,3947-3948,3983,4003,4027,4036,4051,4073,4083-4114,4123-4124
+src/agent/types.ts
+  s_06bbc408b7a1e8::t_6d1f9e41feb906 170
+src/agent/webview/components/InputArea.test.tsx
+  s_06bbc408b7a1e8::t_b062bad8102608 749-805
+src/agent/webview/components/InputArea.tsx
+  s_06bbc408b7a1e8::t_cf2a960f92ee02 173-203,289-293,351,1248-1327,1664,1705,1971-2004
+src/approvals/actionApprovalReview.test.ts
+  s_06bbc408b7a1e8::t_773b1e71d6704d 22,97-223
+src/approvals/actionApprovalReview.ts
+  s_06bbc408b7a1e8::t_18f031e16f2f3d 37,39-40,44,49,215-225,228-229,255,268-270,420-440,457-462,542-548,551-561,597-618
+src/approvals/commandApprovalReview.test.ts
+  s_06bbc408b7a1e8::t_9e02ceefbb4104 838-929
+src/approvals/commandApprovalReview.ts
+  s_06bbc408b7a1e8::t_f193919e2e5d0f 31,82-87,92-96,106-126,816,824-827,829,878-881,894-919,921-936,938-955,971,985,1012-1013,1095-1096,1102-1117,1123,1156-1180,1190-1191,1199,1201,1325-1338
+src/approvals/networkApprovalReview.test.ts
+  s_06bbc408b7a1e8::t_81663680db0554 118-177,193
+src/approvals/networkApprovalReview.ts
+  s_06bbc408b7a1e8::t_4956c136f841c8 31,56,75-77,144,146-165,174,212,227
+src/approvals/typeSafeActionFirstPass.ts
+  s_06bbc408b7a1e8::t_42f5b288bdf7ea 1-246
+src/approvals/typeSafeGuardianShadow.test.ts
+  s_06bbc408b7a1e8::t_7b36e2d2a843b4 977-1086,1732-1791
+src/approvals/typeSafeGuardianShadow.ts
+  s_06bbc408b7a1e8::t_97e54c8dd53865 41,53-73,87-89,318-344,351-352,690-701,706,778,788-789,1018-1024,1033-1038,1209-1210,1212-1214
+src/approvals/typeSafeMcpFirstPass.test.ts
+  s_06bbc408b7a1e8::t_0c7a9cc85f0fe6 1-270
+src/approvals/typeSafeMcpFirstPass.ts
+  s_06bbc408b7a1e8::t_c4393db383b5c0 1-117
+src/approvals/typeSafeNetworkFirstPass.test.ts
+  s_06bbc408b7a1e8::t_2194e922863b71 1-234
+src/approvals/typeSafeNetworkFirstPass.ts
+  s_06bbc408b7a1e8::t_cbbaad747c2314 1-130
+src/browser-gateway/browserGatewayAskAgentSessionStore.test.ts
+  s_06bbc408b7a1e8::t_71cc1b6a441c0f 7,731-806
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  s_06bbc408b7a1e8::t_0cbf397ac05ea6 389,403,659-662,677,943,1179-1180
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  s_06bbc408b7a1e8::t_976a3b85747b3e 6274,6276-6280,6350-6370,10608,10612-10621,10623-10648,10670-10674,10677-10679,10681,10692,10695,10699,10702-10715
+src/browser-gateway/helper/browserGatewayHelper.ts
+  s_06bbc408b7a1e8::t_25b6f1f394c57f 6469-6488,6491-6494,6530
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  s_06bbc408b7a1e8::t_f8717b867d3065 8,820-881,7185-7242
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  s_06bbc408b7a1e8::t_5c1c9da79e42b7 95,241-245,814-892,1872,1877,1883-1884,1886-1892,1894-1897,5886,10955-10959
+src/core/capabilities/editReview.ts
+  s_06bbc408b7a1e8::t_d264dfbfab417f 120-122
+src/core/editDurability.test.ts
+  s_06bbc408b7a1e8::t_2bed9ca3767c37 238-319
+src/core/editDurability.ts
+  s_06bbc408b7a1e8::t_cc8a0b83cc395a 55-57,157-158,166-200,206-209,343-344
+src/core/sessionActivityDiagnostics.ts
+  s_06bbc408b7a1e8::t_5209ed533ab8f7 18
+src/extension.ts
+  s_06bbc408b7a1e8::t_c57e81efa386f3 37-38,3202-3229,3232,3236
+src/integrations/DiffViewProvider.test.ts
+  s_06bbc408b7a1e8::t_95e037b37d882a 946-993
+src/integrations/DiffViewProvider.ts
+  s_06bbc408b7a1e8::t_0ef8d1621ed681 177-179
+src/shared/toolRegistry.ts
+  s_06bbc408b7a1e8::t_bbb054b3eb4cb8 241
+src/shared/toolSchemas.ts
+  s_06bbc408b7a1e8::t_6ae40fbbdfecbb 1310
+src/tools/executeCommand.test.ts
+  s_06bbc408b7a1e8::t_ff301b7b8bc081 6486-6507,6509-6553,6556-6598,6600-6612,6614-6642,6644-6699,6701-6703,6705-6708,6710-6858,6860-6862,9356-9371,9401-9405
+src/tools/executeCommand.ts
+  s_06bbc408b7a1e8::t_2c51491367ac55 1,171-176,1921,1923-1937,1942,1948-1975,1978-1982,1984-2007,2013-2028,2030,2032-2040,2054-2076,2078,2087,2098,2100-2106,2108-2111,2362-2394,2426-2428,2833-2853,5171-5173
+src/tools/getTerminalOutput.test.ts
+  s_06bbc408b7a1e8::t_596968afb87ddd 714-716
+src/tools/writeFile.test.ts
+  s_06bbc408b7a1e8::t_e62c7d823c76f3 12,573-623
+src/tools/writeFile.ts
+  s_06bbc408b7a1e8::t_381a97208201c4 197-199
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12,78-140
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 69-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07ea8f494ccffc4780109f128e8c295d614aa063",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_06bbc408b7a1e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0ac534d-f309-42c4-be44-cb30a4fe660f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_192eaf32789517": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c20642c-7fbd-445c-8b12-375a8148f2ec",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
