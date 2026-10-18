@@ -819,6 +819,30 @@ async function updateDeployment(
   }
 }
 
+async function ensureImage(
+  run: DeploymentExecutor,
+  image: string,
+  cwd: string,
+): Promise<void> {
+  try {
+    await run("docker", ["image", "inspect", image], {
+      cwd,
+      timeoutMs: 60_000,
+    });
+    return;
+  } catch (error) {
+    if (error instanceof Error && error.message === "deployment_terminated")
+      throw error;
+  }
+  try {
+    await run("docker", ["pull", image], { cwd, timeoutMs: 10 * 60_000 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "deployment_terminated")
+      throw error;
+    invalid("deployment_rollback_updater_unavailable");
+  }
+}
+
 export async function runDeploymentRollback(
   options: DeploymentUpdateOptions,
 ): Promise<void> {
@@ -842,6 +866,7 @@ async function rollbackDeployment(
   );
   let previousCompose: Buffer | null = null;
   let previousEnv: Buffer | null = null;
+  const run = options.run ?? execute;
   if (oldUpdaterEnv) {
     previousCompose = await fileBytes(path.join(previous, "compose.yaml"));
     previousEnv = await fileBytes(path.join(previous, ".env"), 64 * 1024);
@@ -863,11 +888,14 @@ async function rollbackDeployment(
         `UPDATER_IMAGE=${previousManifest.updater}`
     )
       invalid("deployment_updater_config_invalid");
+    // The updater's Compose file never pulls (`pull_policy: never`), so its
+    // previous image must be here before the Assistant stops: keep it if it
+    // is, pull it by digest if not, and refuse with nothing stopped otherwise.
+    await ensureImage(run, previousManifest.updater, options.deployDirectory);
   }
   const stage = await fs.mkdtemp(
     path.join(options.deployDirectory, ".upgrade-staging."),
   );
-  const run = options.run ?? execute;
   try {
     const trusted = path.join(stage, "trusted-upgrade.sh");
     await fs.writeFile(

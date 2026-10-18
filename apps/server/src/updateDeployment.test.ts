@@ -709,62 +709,118 @@ describe("deployment worker", () => {
     );
   });
 
+  /** A completed update from 1.1.0 that can be rolled back. */
+  async function rollbackFixture(optional = false) {
+    const fx = await fixture(true, optional);
+    const previous = path.join(fx.deployDirectory, ".upgrade-updater-previous");
+    const assetsPrevious = path.join(
+      fx.deployDirectory,
+      ".upgrade-assets-previous",
+    );
+    await fs.mkdir(previous);
+    await fs.mkdir(assetsPrevious);
+    const priorNames = Object.keys(fx.oldAssets).filter(
+      (name) => name !== "compose.updater.yaml",
+    );
+    for (const name of priorNames)
+      await fs.writeFile(path.join(assetsPrevious, name), fx.oldAssets[name]!);
+    await fs.writeFile(
+      path.join(assetsPrevious, ".files"),
+      [...priorNames, "assistant-deployment.json"].join("\n") + "\n",
+    );
+    await fs.writeFile(
+      path.join(previous, "compose.yaml"),
+      fx.oldAssets["compose.updater.yaml"]!,
+    );
+    await fs.writeFile(path.join(previous, ".env"), fx.oldUpdaterEnv);
+    await fs.writeFile(
+      path.join(assetsPrevious, "assistant-deployment.json"),
+      metadata("1.1.0", fx.oldAssets),
+    );
+    await fs.writeFile(
+      path.join(fx.deployDirectory, ".release-previous.env"),
+      manifest("1.1.0").replace(updaterImage, previousUpdaterImage),
+    );
+    await fs.writeFile(
+      path.join(fx.deployDirectory, ".upgrade-state"),
+      "status=done\n",
+    );
+    fx.operation.kind = "rollback";
+    fx.operation.targetVersion = "1.1.0";
+    return fx;
+  }
+  const previousUpdaterImage = `ghcr.io/reefbarman/agentlink-updater@sha256:${"c".repeat(64)}`;
+  const docker = (fx: Awaited<ReturnType<typeof fixture>>) =>
+    fx.run.mock.calls
+      .filter(([executable]) => executable === "docker")
+      .map(([, args]) => args.join(" "));
+
+  it("checks the previous updater image before anything stops, pulling it by digest if missing", async () => {
+    const fx = await rollbackFixture();
+    fx.run.mockImplementation(async (executable, args) => {
+      if (executable === "docker" && args[0] === "image")
+        throw new Error("No such image");
+    });
+    await runDeploymentRollback(fx);
+    expect(docker(fx).slice(0, 2)).toEqual([
+      `image inspect ${previousUpdaterImage}`,
+      `pull ${previousUpdaterImage}`,
+    ]);
+    const order = fx.run.mock.calls.map(([executable]) => executable);
+    expect(order.indexOf("bash")).toBeGreaterThan(1);
+  });
+
+  it("refuses a rollback whose previous updater image is unavailable, with nothing stopped", async () => {
+    const fx = await rollbackFixture();
+    fx.run.mockImplementation(async (executable) => {
+      if (executable === "docker") throw new Error("pull access denied");
+    });
+    await expect(runDeploymentRollback(fx)).rejects.toThrow(
+      /^deployment_rollback_updater_unavailable$/,
+    );
+    expect(
+      fx.run.mock.calls.some(([executable]) => executable === "bash"),
+    ).toBe(false);
+    expect(docker(fx)).toEqual([
+      `image inspect ${previousUpdaterImage}`,
+      `pull ${previousUpdaterImage}`,
+    ]);
+    expect(fx.phases).toEqual([]);
+  });
+
+  it("offers no rollback once a feature change retired it", async () => {
+    const fx = await rollbackFixture();
+    expect((await readInstalledDeploymentState(fx)).rollbackVersion).toBe(
+      "1.1.0",
+    );
+    await fs.writeFile(
+      path.join(fx.deployDirectory, ".upgrade-state"),
+      "status=retired\n",
+    );
+    expect((await readInstalledDeploymentState(fx)).rollbackVersion).toBeNull();
+    await expect(runDeploymentRollback(fx)).rejects.toThrow(
+      /^deployment_rollback_unavailable$/,
+    );
+    expect(fx.run).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "restores previous standalone updater only after explicit rollback and reconnecting (features on: %s)",
     async (optional) => {
-      const fx = await fixture(true, optional);
+      const fx = await rollbackFixture(optional);
       const env = await fs.readFile(path.join(fx.deployDirectory, ".env"));
-      const previous = path.join(
-        fx.deployDirectory,
-        ".upgrade-updater-previous",
-      );
-      const assetsPrevious = path.join(
-        fx.deployDirectory,
-        ".upgrade-assets-previous",
-      );
-      await fs.mkdir(previous);
-      await fs.mkdir(assetsPrevious);
-      const priorNames = Object.keys(fx.oldAssets).filter(
-        (name) => name !== "compose.updater.yaml",
-      );
-      for (const name of priorNames)
-        await fs.writeFile(
-          path.join(assetsPrevious, name),
-          fx.oldAssets[name]!,
-        );
-      await fs.writeFile(
-        path.join(assetsPrevious, ".files"),
-        [...priorNames, "assistant-deployment.json"].join("\n") + "\n",
-      );
-      await fs.writeFile(
-        path.join(previous, "compose.yaml"),
-        fx.oldAssets["compose.updater.yaml"]!,
-      );
-      await fs.writeFile(path.join(previous, ".env"), fx.oldUpdaterEnv);
-      await fs.writeFile(
-        path.join(assetsPrevious, "assistant-deployment.json"),
-        metadata("1.1.0", fx.oldAssets),
-      );
-      await fs.writeFile(
-        path.join(fx.deployDirectory, ".release-previous.env"),
-        manifest("1.1.0").replace(
-          updaterImage,
-          `ghcr.io/reefbarman/agentlink-updater@sha256:${"c".repeat(64)}`,
-        ),
-      );
-      await fs.writeFile(
-        path.join(fx.deployDirectory, ".upgrade-state"),
-        "status=done\n",
-      );
-      fx.operation.kind = "rollback";
-      fx.operation.targetVersion = "1.1.0";
       expect((await readInstalledDeploymentState(fx)).rollbackVersion).toBe(
         "1.1.0",
       );
       await runDeploymentRollback(fx);
       expect(fx.request).not.toHaveBeenCalled();
       expect(fx.phases).toEqual(["rolling_back", "reconnecting"]);
-      expect(fx.run.mock.calls[0]![1]).toContain("rollback");
+      // The image is already here: checked, not pulled.
+      expect(docker(fx)[0]).toBe(`image inspect ${previousUpdaterImage}`);
+      expect(docker(fx).some((call) => call.startsWith("pull"))).toBe(false);
+      expect(
+        fx.run.mock.calls.find(([executable]) => executable === "bash")![1],
+      ).toContain("rollback");
       expect(fx.run.mock.calls.at(-1)?.[0]).toBe("docker");
       expect(await fs.readFile(path.join(fx.deployDirectory, ".env"))).toEqual(
         env,
