@@ -1620,6 +1620,66 @@ describe("shadowing command reviewer", () => {
       ).toBe(true);
     });
 
+    it("keeps the Guardian audit running when the caller aborts after a first-pass approval", async () => {
+      let auditSignal: AbortSignal | undefined;
+      let resolvePrimary: (value: CommandApprovalReviewResult) => void = () =>
+        undefined;
+      const record = vi.fn();
+      const reviewer = createShadowingCommandApprovalReviewer({
+        primary: {
+          review: vi.fn((input: CommandApprovalReviewInput) => {
+            auditSignal = input.signal;
+            return new Promise<CommandApprovalReviewResult>((resolve) => {
+              resolvePrimary = resolve;
+            });
+          }),
+        },
+        shadow: { review: vi.fn().mockResolvedValue(confident) },
+        record,
+        getFirstPass: () => ({ enabled: true, threshold: 0.9 }),
+      });
+      const caller = new AbortController();
+      const result = await reviewer.review({
+        ...reviewInput("git status"),
+        signal: caller.signal,
+      });
+      expect(result.model).toBe("typesafe/jev-1.14.0");
+      // The command starts and the tool call's signal fires.
+      caller.abort();
+      expect(auditSignal?.aborted).toBe(false);
+      resolvePrimary(guardianAllow);
+      await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+      expect(record.mock.calls[0]![0].primary.status).toBe("reviewed");
+    });
+
+    it("still cancels the Guardian when the caller aborts before a decision", async () => {
+      let auditSignal: AbortSignal | undefined;
+      const reviewer = createShadowingCommandApprovalReviewer({
+        primary: {
+          review: vi.fn((input: CommandApprovalReviewInput) => {
+            auditSignal = input.signal;
+            return new Promise<CommandApprovalReviewResult>((resolve) =>
+              input.signal?.addEventListener("abort", () =>
+                resolve({ ...guardianAllow, status: "cancelled" }),
+              ),
+            );
+          }),
+        },
+        shadow: { review: vi.fn(() => new Promise<never>(() => undefined)) },
+        record: vi.fn(),
+        getFirstPass: () => ({ enabled: true }),
+      });
+      const caller = new AbortController();
+      const pending = reviewer.review({
+        ...reviewInput("git status"),
+        signal: caller.signal,
+      });
+      await vi.waitFor(() => expect(auditSignal).toBeDefined());
+      caller.abort();
+      await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+      expect(auditSignal?.aborted).toBe(true);
+    });
+
     it("waits for the Guardian when Jev does not qualify", async () => {
       const reviewer = createShadowingCommandApprovalReviewer({
         primary: { review: vi.fn().mockResolvedValue(guardianAllow) },

@@ -1014,12 +1014,18 @@ function mergeGuardianComparison(report, record) {
     olderDecisionsWaived: 0,
     firstPassApproved: 0,
     firstPassAuditDenied: 0,
+    firstPassAuditUnfinished: 0,
     fastPathSamples: [],
   });
   cohort.count += 1;
+  // A cancelled or failed Guardian review carries a placeholder deny; only a
+  // completed review is a real decision to compare against.
+  const primaryReviewed =
+    record.primaryStatus === undefined || record.primaryStatus === "reviewed";
   if (record.shadowFirstPassApproved === true) {
     cohort.firstPassApproved += 1;
-    if (record.primaryOutcome === "deny") cohort.firstPassAuditDenied += 1;
+    if (!primaryReviewed) cohort.firstPassAuditUnfinished += 1;
+    else if (record.primaryOutcome === "deny") cohort.firstPassAuditDenied += 1;
   }
   cohort.byOperationalStatus[status] =
     (cohort.byOperationalStatus[status] ?? 0) + 1;
@@ -1027,6 +1033,7 @@ function mergeGuardianComparison(report, record) {
   const primaryOutcome = record.primaryOutcome;
   const shadowOutcome = record.shadowOutcome;
   if (
+    primaryReviewed &&
     ["allow", "deny"].includes(primaryOutcome) &&
     ["allow", "deny"].includes(shadowOutcome)
   ) {
@@ -1787,8 +1794,8 @@ function printSummary(report, inputPath, top) {
             cohort.olderDecisionsWaived ?? 0,
           ],
           [
-            "live first-pass approvals / Guardian audit denied",
-            `${cohort.firstPassApproved ?? 0} / ${cohort.firstPassAuditDenied ?? 0}`,
+            "live first-pass approvals / audit denied / audit unfinished",
+            `${cohort.firstPassApproved ?? 0} / ${cohort.firstPassAuditDenied ?? 0} / ${cohort.firstPassAuditUnfinished ?? 0}`,
           ],
           [
             "shadow decision basis",

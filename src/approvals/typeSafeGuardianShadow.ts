@@ -642,10 +642,23 @@ export function createShadowingCommandApprovalReviewer(
       } catch {
         firstPass = undefined;
       }
+      // With the first pass on, the Guardian gets its own abort signal that
+      // follows the caller's only until a decision is returned. Once Jev has
+      // approved and the command starts, the caller's signal fires, and the
+      // Guardian must keep running as the audit instead of being cancelled.
+      const primaryAbort = firstPass?.enabled ? new AbortController() : null;
+      const forwardAbort = () => primaryAbort?.abort(signal?.reason);
+      if (primaryAbort && signal) {
+        if (signal.aborted) forwardAbort();
+        else signal.addEventListener("abort", forwardAbort, { once: true });
+      }
+      const detachPrimarySignal = () =>
+        signal?.removeEventListener("abort", forwardAbort);
       // Observations are forwarded only for the decision actually returned.
       let primaryObservation: GuardianReviewObservation | undefined;
       const primaryInput = {
         ...snapshot,
+        ...(primaryAbort ? { signal: primaryAbort.signal } : {}),
         observe: (observation: GuardianReviewObservation) => {
           primaryObservation = observation;
         },
@@ -717,6 +730,7 @@ export function createShadowingCommandApprovalReviewer(
           });
 
       if (firstPassApproved) {
+        detachPrimarySignal();
         const { shadow } = await shadowPromise;
         if (shadow.observation) {
           reportGuardianObservation(observe, shadow.observation);
@@ -726,7 +740,8 @@ export function createShadowingCommandApprovalReviewer(
         return firstPassReviewResult(shadow);
       }
 
-      const { primary, primaryDurationMs } = await primaryPromise;
+      const { primary, primaryDurationMs } =
+        await primaryPromise.finally(detachPrimarySignal);
       if (primaryObservation) {
         reportGuardianObservation(observe, primaryObservation);
       }
