@@ -106,6 +106,12 @@ export interface CommandReviewContextEntry {
 interface HumanDecisionBudget {
   maxEntries: number;
   maxLength: number;
+  /**
+   * Also restore every typed instruction except the latest as a decision
+   * entry, including ones still in the recent window, so a reviewer that
+   * reads only decisions plus the latest instruction sees all of them.
+   */
+  restoreAllInstructions?: boolean;
 }
 
 const PRIMARY_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
@@ -116,6 +122,7 @@ const PRIMARY_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
 export const EXTENDED_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
   maxEntries: 32,
   maxLength: 32_000,
+  restoreAllInstructions: true,
 };
 
 const HUMAN_DECISION_OMITTED_CONTENT = JSON.stringify({
@@ -814,8 +821,12 @@ export function buildCommandReviewContextWithMetadata(
     queuedHumanInputs,
     humanDecisionRecord,
   );
+  // A message with only attachments has no text a reviewer could be given,
+  // so it is neither included nor counted as omitted human authority.
+  const hasText = (message: AgentMessage) =>
+    contentText(message.content).trim().length > 0;
   const inputEntries = messages.flatMap((message) =>
-    isDirectUserInstruction(message) && message.humanInputId
+    isDirectUserInstruction(message) && message.humanInputId && hasText(message)
       ? [{ id: message.humanInputId, content: contentText(message.content) }]
       : [],
   );
@@ -864,8 +875,10 @@ export function buildCommandReviewContextWithMetadata(
     inputEntries.length - includedIds.length,
   );
   const authoritySourceCount =
-    messages.filter(isDirectUserInstruction).length +
-    queuedHumanInputs.length +
+    messages.filter(
+      (message) => isDirectUserInstruction(message) && hasText(message),
+    ).length +
+    queuedHumanInputs.filter((input) => input.trim()).length +
     messages.reduce(
       (count, message, index) =>
         count +
@@ -898,23 +911,47 @@ export function buildCommandReviewContextWithMetadata(
     };
   };
   const humanAuthority = authorityCoverage(context);
-  // Only rebuild with the larger budget when the shared one dropped something.
-  const extendedContext = humanAuthority.omittedCount
-    ? buildCommandReviewContext(
-        messages,
-        sessionId,
-        queuedHumanInputs,
-        humanDecisionRecord,
-        EXTENDED_HUMAN_DECISION_BUDGET,
-      )
-    : context;
+  const extendedContext = buildCommandReviewContext(
+    messages,
+    sessionId,
+    queuedHumanInputs,
+    humanDecisionRecord,
+    EXTENDED_HUMAN_DECISION_BUDGET,
+  );
+  // Earlier typed instructions appear both in the recent window and as
+  // restored entries here, so count each human source once: the intact
+  // decision entries, plus the direct entries that are never restored (the
+  // latest typed instruction and queued input). Omission markers do not count.
+  const extendedIncluded =
+    extendedContext.filter(
+      (entry) =>
+        entry.humanDecisionEvidence &&
+        !entry.content.includes("evidenceOmitted"),
+    ).length +
+    extendedContext.filter((entry) => entry.queuedHumanInput).length +
+    (latestTextInstructionIndex(messages) >= 0 &&
+    !queuedHumanInputs.some((input) => input.trim())
+      ? 1
+      : 0);
+  const extendedOmitted = Math.max(0, authoritySourceCount - extendedIncluded);
   return {
     extendedHumanAuthority: {
       context: extendedContext,
-      humanAuthority:
-        extendedContext === context
-          ? humanAuthority
-          : authorityCoverage(extendedContext),
+      humanAuthority: {
+        state:
+          humanDecisionRecord?.incomplete || extendedOmitted > 0
+            ? "partial"
+            : "complete",
+        reasons: [
+          ...(extendedOmitted ? ["projection_budget" as const] : []),
+          ...(humanDecisionRecord?.incomplete
+            ? ["source_unknown" as const]
+            : []),
+        ],
+        sourceCount: authoritySourceCount,
+        includedCount: Math.min(authoritySourceCount, extendedIncluded),
+        omittedCount: extendedOmitted,
+      },
     },
     context,
     metadata: {
@@ -973,6 +1010,7 @@ export function buildCommandReviewContext(
     messages,
     humanDecisionRecord,
     decisionBudget,
+    queuedHumanInputs,
   );
   return [...recent, ...decisions]
     .sort((a, b) => a.index - b.index)
@@ -1055,22 +1093,34 @@ function selectHumanDecisions(
   messages: readonly AgentMessage[],
   record: HumanDecisionRecordSnapshot | undefined,
   budget: HumanDecisionBudget,
+  queuedHumanInputs: readonly string[],
 ): IndexedContextEntry[] {
   const candidates = new Map<string, IndexedContextEntry>();
   transcriptDecisions.forEach((entry, position) => {
     candidates.set(entry.decisionKey ?? `transcript:${position}`, entry);
   });
+  // With restoreAllInstructions, only the latest typed instruction stays a
+  // window-only entry (unless queued input is newer); every other one is
+  // restored as a decision so it is visible alongside recorded answers.
+  const latestIndex = latestTextInstructionIndex(messages);
+  const keepLatestInWindow =
+    latestIndex >= 0 && !queuedHumanInputs.some((input) => input.trim());
+  const latestInputId = keepLatestInWindow
+    ? messages[latestIndex]?.humanInputId
+    : undefined;
+  const inWindow = new Set(
+    recent.flatMap((entry) => (entry.humanInputId ? [entry.humanInputId] : [])),
+  );
+  const skipInstruction = (inputId: string) =>
+    budget.restoreAllInstructions
+      ? inputId === latestInputId
+      : inWindow.has(inputId);
   if (record) {
-    const inWindow = new Set(
-      recent.flatMap((entry) =>
-        entry.humanInputId ? [entry.humanInputId] : [],
-      ),
-    );
     const located = locateRecordSources(messages);
     for (const recorded of record.entries) {
       const unlocated = UNLOCATED_RECORD_INDEX_BASE + recorded.sequence;
       if (recorded.kind === "instruction") {
-        if (inWindow.has(recorded.inputId)) continue;
+        if (skipInstruction(recorded.inputId)) continue;
         const key = `instruction:${recorded.inputId}`;
         const content = safeJson({
           recordSequence: recorded.sequence,
@@ -1102,6 +1152,31 @@ function selectHumanDecisions(
         }
       }
     }
+  }
+  if (budget.restoreAllInstructions) {
+    // Transcript fallback for typed instructions the record does not hold.
+    messages.forEach((message, messageIndex) => {
+      if (!isDirectUserInstruction(message)) return;
+      if (keepLatestInWindow && messageIndex === latestIndex) return;
+      const text = contentText(message.content).trim();
+      if (!text) return;
+      const key = `instruction:${message.humanInputId ?? `transcript:${messageIndex}`}`;
+      if (candidates.has(key)) return;
+      const content = safeJson({ humanInstruction: text });
+      candidates.set(key, {
+        role: "user",
+        content:
+          content.length <= MAX_CONTEXT_ENTRY_LENGTH
+            ? content
+            : safeJson({
+                evidenceOmitted:
+                  "A human instruction exceeded the evidence budget. Earlier restrictions may apply; clarify before relying on its absence.",
+              }),
+        humanDecisionEvidence: true,
+        decisionKey: key,
+        index: messageIndex * 1_000,
+      });
+    });
   }
 
   const ordered = [...candidates.values()].sort((a, b) => b.index - a.index);
@@ -1246,6 +1321,20 @@ export const COMMAND_REVIEW_POLICY_FINGERPRINT = createHash("sha256")
   .update(GUARDIAN_REVIEW_SYSTEM_PROMPT)
   .digest("hex")
   .slice(0, 16);
+
+/** Transcript index of the newest direct user instruction with text, or -1. */
+function latestTextInstructionIndex(messages: readonly AgentMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (
+      isDirectUserInstruction(message) &&
+      contentText(message.content).trim()
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
 
 function contentText(content: AgentMessage["content"]): string {
   if (typeof content === "string") return content;

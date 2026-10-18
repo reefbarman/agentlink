@@ -864,10 +864,67 @@ describe("command review context", () => {
       decision("only", "Go?", true),
       "session",
     );
-    expect(small.extendedHumanAuthority.context).toBe(small.context);
-    expect(small.extendedHumanAuthority.humanAuthority).toBe(
+    expect(small.extendedHumanAuthority.humanAuthority).toEqual(
       small.metadata.humanAuthority,
     );
+  });
+
+  const typed = (
+    text: string,
+    id: string,
+  ): import("../agent/types.js").AgentMessage => ({
+    role: "user",
+    content: text,
+    humanInputId: id,
+    uiHint: { userMessage: { origin: "vscode" } },
+  });
+
+  it("does not count an attachment-only message as omitted human authority", () => {
+    const messages: import("../agent/types.js").AgentMessage[] = [
+      typed("fix the retry loop", "input-1"),
+      { role: "assistant", content: "Looking." },
+      typed("", "input-2"),
+      { role: "assistant", content: "Seen the screenshot." },
+    ];
+    const built = buildCommandReviewContextWithMetadata(messages, "session");
+    expect(built.metadata.humanAuthority).toMatchObject({
+      state: "complete",
+      sourceCount: 1,
+      omittedCount: 0,
+    });
+    expect(built.extendedHumanAuthority.humanAuthority).toMatchObject({
+      state: "complete",
+      sourceCount: 1,
+      includedCount: 1,
+    });
+  });
+
+  it("restores earlier typed instructions into the extended window only", () => {
+    const messages: import("../agent/types.js").AgentMessage[] = [
+      typed("plan only, do not push yet", "input-1"),
+      { role: "assistant", content: "Plan ready." },
+      ...decision("go", "Start?", true),
+      typed("now run the tests", "input-2"),
+    ];
+    const built = buildCommandReviewContextWithMetadata(messages, "session");
+    const restored = built.extendedHumanAuthority.context
+      .filter((entry) => entry.humanDecisionEvidence)
+      .map((entry) => JSON.parse(entry.content));
+    expect(restored[0]).toEqual({
+      humanInstruction: "plan only, do not push yet",
+    });
+    expect(restored.map((entry) => entry.humanInstruction)).not.toContain(
+      "now run the tests",
+    );
+    expect(built.extendedHumanAuthority.humanAuthority).toMatchObject({
+      state: "complete",
+      sourceCount: 3,
+      includedCount: 3,
+    });
+    // The shared context keeps the earlier instruction only in the window.
+    expect(
+      built.context.filter((entry) => entry.humanDecisionEvidence),
+    ).toHaveLength(1);
   });
 
   it("restores earlier typed instructions from the private record without duplicating the window", () => {
