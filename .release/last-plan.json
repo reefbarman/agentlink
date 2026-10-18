@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5d0a1a9639a4a96c03dc812fe57791ed47469a50",
-  "createdAt": "2026-10-18T01:38:57.014Z",
+  "sourceSha": "f197e1422486394963198bea440d3bcda8a121fa",
+  "createdAt": "2026-10-18T05:55:27.181Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,35 +12,47 @@
     "vscode": {
       "published": "1.38.0",
       "baselineRef": "v1.38.0",
-      "reserved": "1.38.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "desktop": {
-      "published": "0.26.0",
-      "baselineRef": "desktop-v0.26.0",
-      "reserved": "0.26.0",
-      "commits": ["5d0a1a9639a4a96c03dc812fe57791ed47469a50"],
+      "reserved": "1.38.1",
+      "commits": ["f197e1422486394963198bea440d3bcda8a121fa"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.26.1",
+      "version": "1.38.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": true,
+      "consumedIntent": false,
+      "tag": "v1.38.1",
+      "notes": [
+        {
+          "sha": "f197e1422486394963198bea440d3bcda8a121fa",
+          "subject": "fix(tools): accept authorised direct calls to deferred native tools",
+          "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+          "breaking": false
+        }
+      ]
+    },
+    "desktop": {
+      "published": "0.26.1",
+      "baselineRef": "desktop-v0.26.1",
+      "reserved": "0.26.1",
+      "commits": ["f197e1422486394963198bea440d3bcda8a121fa"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.26.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.26.1",
+      "tag": "desktop-v0.26.2",
       "notes": [
         {
-          "sha": "5d0a1a9639a4a96c03dc812fe57791ed47469a50",
-          "subject": "fix(desktop): finish update cleanup inside Electron and clear stale applied updates",
-          "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+          "sha": "f197e1422486394963198bea440d3bcda8a121fa",
+          "subject": "fix(tools): accept authorised direct calls to deferred native tools",
+          "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
           "breaking": false
         }
       ]
@@ -71,6 +83,14 @@
     }
   },
   "decisions": {
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
       "bump": "patch",
       "breakingUnits": [],
@@ -175,10 +195,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+    "f197e1422486394963198bea440d3bcda8a121fa": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.38.1
+
 - Deferred native tools no longer fail solely because a model calls their known name directly instead of using `call_native_tool`. VS Code-backed sessions and Browser Ask Agent validate and execute authorised direct calls through the same deferred-tool path, preserving argument validation, access restrictions, approvals, and conversation replay.
 
 ## 1.38.0
