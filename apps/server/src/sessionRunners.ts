@@ -13,9 +13,10 @@ import path from "node:path";
 
 import {
   approvalToolProxyRoutes,
+  createRunnerApprovalBindings,
   createRunnerApprovalGrants,
   hostToolProxyRoutes,
-  type RunnerApprovalCard,
+  type RunnerApprovalBindings,
   type RunnerApprovalGrants,
 } from "./remoteHostTools.js";
 import { modelProxyRoutes } from "./remoteModels.js";
@@ -36,64 +37,88 @@ import {
 import type { SessionApprovalMode } from "./SessionApprovalModes.js";
 import { RUNNER_ENV, type SessionRunnerSpec } from "./sessionRunner.js";
 
-/**
- * The card the owner answered for a session: its pending interaction, but
- * only if it is the exact interaction (and revision) the decision names.
- * Undefined approves nothing.
- */
-async function pendingCard(
-  host: Pick<RemoteWorkspaceHost, "readSession">,
-  sessionId: string,
-  expected:
-    | { readonly interactionId: string; readonly interactionRevision: string }
-    | undefined,
-): Promise<RunnerApprovalCard | undefined> {
-  if (!expected) return undefined;
-  const pending = await host
-    .readSession(sessionId)
-    .then((snapshot) => snapshot.pendingInteraction)
-    .catch(() => undefined);
-  if (
-    !pending ||
-    pending.request.interactionId !== expected.interactionId ||
-    pending.interactionRevision !== expected.interactionRevision
-  ) {
-    return undefined;
-  }
+/** A card from the runner, with the control plane's card in its place. */
+function presented<
+  T extends {
+    readonly interactionId: string;
+    readonly toolName: string;
+    readonly summary: string;
+    readonly displayContent?: unknown;
+  },
+>(bindings: RunnerApprovalBindings, sessionId: string, interaction: T): T {
+  const card = bindings.present(sessionId, interaction);
+  if (!card) return interaction;
+  // Everything the owner reads about the call is the control plane's: the
+  // runner's own display fields are dropped, not merged.
+  const {
+    displayContent: _content,
+    displayInput: _input,
+    presentation: _presentation,
+    ...rest
+  } = interaction as T & {
+    readonly displayInput?: unknown;
+    readonly presentation?: unknown;
+  };
   return {
-    toolName: pending.request.toolName,
-    summary: pending.request.summary,
-    ...(pending.request.displayContent === undefined
+    ...rest,
+    toolName: card.toolName,
+    summary: card.summary,
+    ...(card.displayContent === undefined
       ? {}
-      : { displayContent: pending.request.displayContent }),
+      : { displayContent: card.displayContent }),
+  } as T;
+}
+
+/** A session snapshot whose pending card is the control plane's. */
+function presentedSnapshot<
+  T extends {
+    readonly pendingInteraction?: {
+      readonly request: Parameters<typeof presented>[2];
+    };
+  },
+>(bindings: RunnerApprovalBindings, sessionId: string, snapshot: T): T {
+  const pending = snapshot.pendingInteraction;
+  if (!pending) return snapshot;
+  return {
+    ...snapshot,
+    pendingInteraction: {
+      ...pending,
+      request: presented(bindings, sessionId, pending.request),
+    },
   };
 }
 
-/** The background child's card the owner answered, by its interaction. */
-async function backgroundCard(
-  host: Pick<RemoteWorkspaceHost, "listBackgroundAgents">,
-  request: {
-    readonly callerSessionId: string;
-    readonly childSessionId: string;
-    readonly interactionId: string;
-  },
-): Promise<RunnerApprovalCard | undefined> {
-  const agents = await Promise.resolve(
-    host.listBackgroundAgents(request.callerSessionId),
-  ).catch(() => []);
-  const approval = agents.find(
-    (agent) => agent.childSessionId === request.childSessionId,
-  )?.approval;
-  if (!approval || approval.interactionId !== request.interactionId) {
-    return undefined;
-  }
-  return {
-    toolName: approval.toolName,
-    summary: approval.summary,
-    ...(approval.displayContent === undefined
-      ? {}
-      : { displayContent: approval.displayContent }),
+/** A turn event or result whose approval card is the control plane's. */
+function presentedTurn<T>(
+  bindings: RunnerApprovalBindings,
+  sessionId: string,
+  value: T,
+): T {
+  const item = value as {
+    readonly type?: string;
+    readonly status?: string;
+    readonly interaction?: Parameters<typeof presented>[2];
+    readonly result?: unknown;
   };
+  if (item.type === "interaction.required" && item.interaction) {
+    return {
+      ...item,
+      interaction: presented(bindings, sessionId, item.interaction),
+    } as T;
+  }
+  if (item.type === "turn.suspended" && item.result) {
+    return {
+      ...item,
+      result: presentedTurn(bindings, sessionId, item.result),
+    } as T;
+  }
+  if (item.status === "suspended" && item.interaction) {
+    return {
+      ...item,
+      interaction: presented(bindings, sessionId, item.interaction),
+    } as T;
+  }
+  return value;
 }
 
 /**
@@ -177,6 +202,19 @@ export async function startSessionRunnerPool(
     }
     return grants;
   };
+  const approvalToolsByProject = new Map<
+    string,
+    WorkspaceApprovalHostTools | undefined
+  >();
+  const approvalToolsFor = (projectId: string) => {
+    if (!approvalToolsByProject.has(projectId)) {
+      approvalToolsByProject.set(
+        projectId,
+        options.approvalHostTools?.(projectId),
+      );
+    }
+    return approvalToolsByProject.get(projectId);
+  };
   const routesFor = (projectId: string) => {
     let routes = routesByProject.get(projectId);
     if (!routes) {
@@ -184,7 +222,7 @@ export async function startSessionRunnerPool(
         tenantId: "local",
         subjectId: `runner:${projectId}`,
       };
-      const approvalTools = options.approvalHostTools?.(projectId);
+      const approvalTools = approvalToolsFor(projectId);
       routes = {
         ...modelProxyRoutes({ backends: options.backends, principal }),
         ...hostToolProxyRoutes({
@@ -293,31 +331,97 @@ export async function startSessionRunnerPool(
       });
       const closeHost = host.close;
       const grants = grantsFor(projectId);
+      const toolNames = new Set<string>();
+      const bindings = createRunnerApprovalBindings(grants, () => {
+        if (toolNames.size === 0) {
+          for (const name of approvalToolsFor(projectId)?.toolNames ?? []) {
+            toolNames.add(name);
+          }
+        }
+        return toolNames;
+      });
+      // Every approval card the owner sees from this runner is the control
+      // plane's own (`presented`), and the owner's decisions pass through
+      // here, so a runner can run an approval tool only after the owner
+      // allowed the exact preparation they were shown.
+      const turnOptions = <
+        O extends { readonly onEvent?: (event: never) => void } | undefined,
+      >(
+        sessionId: string,
+        turn: O,
+      ): O =>
+        turn?.onEvent
+          ? ({
+              ...turn,
+              onEvent: (event: never) =>
+                turn.onEvent!(presentedTurn(bindings, sessionId, event)),
+            } as O)
+          : turn;
       const tracked: RemoteWorkspaceHost = {
         ...host,
-        // The owner's decisions pass through here, so a runner can run an
-        // approval tool only after the owner allowed it, and only the call
-        // prepared for the exact card the owner answered.
+        readSession: async (sessionId) =>
+          presentedSnapshot(
+            bindings,
+            sessionId,
+            await host.readSession(sessionId),
+          ),
+        runTurn: async (sessionId, text, runOptions) =>
+          presentedTurn(
+            bindings,
+            sessionId,
+            await host.runTurn(
+              sessionId,
+              text,
+              turnOptions(sessionId, runOptions),
+            ),
+          ),
         resumeInteraction: async (sessionId, decision, resumeOptions) => {
+          const expected = resumeOptions?.expected;
           grants.decide(
             sessionId,
             decision,
-            decision === "allow"
-              ? await pendingCard(host, sessionId, resumeOptions?.expected)
+            decision === "allow" && expected
+              ? bindings.shown(sessionId, expected.interactionId)
               : undefined,
           );
-          return await host.resumeInteraction(
+          return presentedTurn(
+            bindings,
             sessionId,
-            decision,
-            resumeOptions,
+            await host.resumeInteraction(
+              sessionId,
+              decision,
+              turnOptions(sessionId, resumeOptions),
+            ),
           );
         },
+        listBackgroundAgents: async (parentSessionId) =>
+          (await host.listBackgroundAgents(parentSessionId)).map((agent) =>
+            agent.approval
+              ? {
+                  ...agent,
+                  approval: presented(
+                    bindings,
+                    agent.childSessionId,
+                    agent.approval,
+                  ),
+                }
+              : agent,
+          ),
+        readBackgroundAgentSession: async (parentSessionId, childSessionId) =>
+          presentedSnapshot(
+            bindings,
+            childSessionId,
+            await host.readBackgroundAgentSession(
+              parentSessionId,
+              childSessionId,
+            ),
+          ),
         respondToBackgroundApproval: async (request) => {
           grants.decide(
             request.childSessionId,
             request.decision,
             request.decision === "allow"
-              ? await backgroundCard(host, request)
+              ? bindings.shown(request.childSessionId, request.interactionId)
               : undefined,
           );
           return await host.respondToBackgroundApproval(request);

@@ -12,6 +12,8 @@ import type {
   WorkspaceHostToolApproval,
 } from "@agentlink/workspace-host";
 
+import { randomBytes } from "node:crypto";
+
 import { HttpError } from "./httpJson.js";
 import { hashTool } from "./mcpRegistry.js";
 import type { RunnerHttpClient, RunnerRouteHandler } from "./runnerProtocol.js";
@@ -98,33 +100,41 @@ export interface RunnerApprovalCard {
 
 /**
  * What a runner's sessions may run of the control plane's approval tools
- * (MCP calls). The runner holds the session and shows the card, but it is
- * never trusted to say the owner approved: `prepare` records exactly what
- * the control plane prepared for that session (the input that will run and
- * the card it produced for it), the owner's Allow approves only the grant
- * whose card is the one the owner answered, and a call runs only if it
- * matches an approved grant, once. So a runner cannot prepare A, prepare
- * B, show A's card and run B.
+ * (MCP calls). The runner holds the session, but it is never trusted to
+ * say what the owner saw or that the owner approved: `prepare` records
+ * each prepared call under a random preparation ID with the exact input
+ * that will run and the control plane's own card for it. The owner is
+ * shown that card (`createRunnerApprovalBindings`), their Allow approves
+ * only that preparation, and a call runs only if it matches an approved
+ * grant, once.
  */
 export interface RunnerApprovalGrants {
-  /** Record a prepared call; `approved` for one the host allows outright. */
+  /**
+   * Record a prepared call and its card; `approved` for one the host
+   * allows outright. Returns its preparation ID.
+   */
   expect(
     sessionId: string,
     toolName: string,
     input: Readonly<Record<string, unknown>>,
     approved: boolean,
-    card?: RunnerApprovalCard,
-  ): void;
+    card: RunnerApprovalCard,
+  ): string;
+  /** The control plane's card for one of the session's preparations. */
+  card(
+    sessionId: string,
+    preparationId: string,
+  ): RunnerApprovalCard | undefined;
   /**
-   * The owner decided the session's pending card. Allow approves the one
-   * undecided grant prepared with exactly that card, or nothing when there
-   * is no card or the card does not identify exactly one grant. Either
-   * decision drops the session's other undecided grants.
+   * The owner decided the session's pending card. Allow approves only the
+   * undecided preparation `preparationId` (the one the owner was shown);
+   * without one it approves nothing. Either decision drops the session's
+   * other undecided grants.
    */
   decide(
     sessionId: string,
     decision: "allow" | "deny",
-    card?: RunnerApprovalCard,
+    preparationId?: string,
   ): void;
   /** Use up the matching approved grant; false when there is none. */
   take(
@@ -139,38 +149,42 @@ const MAX_GRANTS_PER_SESSION = 10;
 export function createRunnerApprovalGrants(): RunnerApprovalGrants {
   const grants = new Map<
     string,
-    Array<{ readonly key: string; readonly card?: string; approved: boolean }>
+    Array<{
+      readonly id: string;
+      readonly key: string;
+      readonly card: RunnerApprovalCard;
+      approved: boolean;
+    }>
   >();
   const keyOf = (toolName: string, input: Readonly<Record<string, unknown>>) =>
     hashTool({ toolName, input });
-  const cardOf = (card: RunnerApprovalCard) =>
-    hashTool({
-      toolName: card.toolName,
-      input: {
-        summary: card.summary,
-        // A card read back over JSON has no undefined fields.
-        displayContent: card.displayContent ?? null,
-      },
-    });
   return {
     expect(sessionId, toolName, input, approved, card) {
+      const id = randomBytes(16).toString("hex");
       const list = grants.get(sessionId) ?? [];
       list.push({
+        id,
         key: keyOf(toolName, input),
-        ...(card ? { card: cardOf(card) } : {}),
+        card: structuredClone(card),
         approved,
       });
       grants.set(sessionId, list.slice(-MAX_GRANTS_PER_SESSION));
+      return id;
     },
-    decide(sessionId, decision, card) {
+    card(sessionId, preparationId) {
+      const grant = grants
+        .get(sessionId)
+        ?.find((entry) => entry.id === preparationId);
+      return grant ? structuredClone(grant.card) : undefined;
+    },
+    decide(sessionId, decision, preparationId) {
       const list = grants.get(sessionId);
       if (!list) return;
-      const undecided = list.filter((grant) => !grant.approved);
-      if (decision === "allow" && card) {
-        const shown = cardOf(card);
-        const matching = undecided.filter((grant) => grant.card === shown);
-        // Two prepared calls with the same card are ambiguous: neither runs.
-        if (matching.length === 1) matching[0]!.approved = true;
+      if (decision === "allow" && preparationId !== undefined) {
+        const shown = list.find(
+          (grant) => !grant.approved && grant.id === preparationId,
+        );
+        if (shown) shown.approved = true;
       }
       grants.set(
         sessionId,
@@ -254,22 +268,29 @@ export function approvalToolProxyRoutes(options: {
         input,
         effect: "external",
       } as Parameters<WorkspaceApprovalHostTools["prepare"]>[0]);
-      if (approval.decision !== "deny") {
-        grants.expect(
-          sessionId,
+      if (approval.decision === "deny") return approval;
+      const preparationId = grants.expect(
+        sessionId,
+        toolName,
+        approval.preparedInput ?? input,
+        approval.decision === "allow",
+        {
           toolName,
-          approval.preparedInput ?? input,
-          approval.decision === "allow",
-          {
-            toolName,
-            summary: approval.summary,
-            ...(approval.displayContent === undefined
-              ? {}
-              : { displayContent: approval.displayContent }),
-          },
-        );
-      }
-      return approval;
+          summary: approval.summary,
+          ...(approval.displayContent === undefined
+            ? {}
+            : { displayContent: approval.displayContent }),
+        },
+      );
+      // The runner carries the ID on its card; the owner is shown the
+      // control plane's own copy of the card it names.
+      return {
+        ...approval,
+        displayContent: withPreparationId(
+          approval.displayContent,
+          preparationId,
+        ),
+      };
     },
     "/approval-tools/validate": async (body) => {
       const { sessionId } = ids(body);
@@ -302,6 +323,107 @@ export function approvalToolProxyRoutes(options: {
         model: body.model as AgentResolvedModelSelection,
         signal,
       });
+    },
+  };
+}
+
+/** Where a runner's card carries its preparation ID. */
+export const RUNNER_PREPARATION_KEY = "agentlinkPreparationId";
+
+function withPreparationId(displayContent: unknown, preparationId: string) {
+  if (displayContent === undefined) {
+    return { [RUNNER_PREPARATION_KEY]: preparationId };
+  }
+  if (
+    displayContent &&
+    typeof displayContent === "object" &&
+    !Array.isArray(displayContent)
+  ) {
+    return { ...displayContent, [RUNNER_PREPARATION_KEY]: preparationId };
+  }
+  // Nowhere to carry it: the card cannot be matched, so it is never allowed.
+  return displayContent;
+}
+
+/** The preparation ID a runner's card claims, if any. */
+function claimedPreparation(displayContent: unknown): string | undefined {
+  if (!displayContent || typeof displayContent !== "object") return undefined;
+  const value = (displayContent as Record<string, unknown>)[
+    RUNNER_PREPARATION_KEY
+  ];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The card shown for an approval-tool request the control plane did not
+ * prepare (or no longer knows). Its Allow approves nothing.
+ */
+export const UNVERIFIED_RUNNER_CARD: RunnerApprovalCard = {
+  toolName: "unverified_request",
+  summary:
+    "This request could not be verified: the task's runner asked for something the Assistant did not prepare. Deny it.",
+  displayContent: { kind: "unverified_runner_request" },
+};
+
+/**
+ * Which preparation the owner was shown for each of a runner's approval
+ * cards, fixed on the control plane the first time the card is served.
+ * Every approval-tool card from the runner goes through `present`, which
+ * replaces what the runner says with the control plane's own card for the
+ * preparation it names (or `UNVERIFIED_RUNNER_CARD`), so a runner cannot
+ * show one call and have another approved, or change the card later.
+ */
+export interface RunnerApprovalBindings {
+  /** The card to show for `interactionId` in `sessionId`. */
+  present(
+    sessionId: string,
+    interaction: {
+      readonly interactionId: string;
+      readonly toolName: string;
+      readonly displayContent?: unknown;
+    },
+  ): RunnerApprovalCard | undefined;
+  /** The preparation the owner was shown for this interaction, if any. */
+  shown(sessionId: string, interactionId: string): string | undefined;
+}
+
+const MAX_BINDINGS_PER_SESSION = 50;
+
+export function createRunnerApprovalBindings(
+  grants: Pick<RunnerApprovalGrants, "card">,
+  toolNames: () => ReadonlySet<string>,
+): RunnerApprovalBindings {
+  /** Session → interaction → preparation shown (null: unverified). */
+  const bound = new Map<string, Map<string, string | null>>();
+  return {
+    present(sessionId, interaction) {
+      let session = bound.get(sessionId);
+      let preparationId = session?.get(interaction.interactionId);
+      if (preparationId === undefined) {
+        // Not an approval tool's card: the runner's own, shown as it is.
+        if (!toolNames().has(interaction.toolName)) return undefined;
+        const claimed = claimedPreparation(interaction.displayContent);
+        preparationId =
+          claimed !== undefined && grants.card(sessionId, claimed)
+            ? claimed
+            : null;
+        if (!session) {
+          session = new Map();
+          bound.set(sessionId, session);
+        }
+        session.set(interaction.interactionId, preparationId);
+        while (session.size > MAX_BINDINGS_PER_SESSION) {
+          session.delete(session.keys().next().value!);
+        }
+      }
+      return (
+        (preparationId !== null
+          ? grants.card(sessionId, preparationId)
+          : undefined) ?? UNVERIFIED_RUNNER_CARD
+      );
+    },
+    shown(sessionId, interactionId) {
+      return bound.get(sessionId)?.get(interactionId) ?? undefined;
     },
   };
 }

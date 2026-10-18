@@ -19,7 +19,10 @@ import {
 import { openMcpRegistry, type McpRegistry } from "./mcpRegistry.js";
 import {
   approvalToolProxyRoutes,
+  createRunnerApprovalBindings,
   createRunnerApprovalGrants,
+  RUNNER_PREPARATION_KEY,
+  UNVERIFIED_RUNNER_CARD,
 } from "./remoteHostTools.js";
 
 const principal: AgentPrincipal = { tenantId: "local", subjectId: "owner" };
@@ -478,27 +481,24 @@ describe("approvalToolProxyRoutes", () => {
         { ...ids, toolName: "call_mcp_tool", input },
         context,
       );
-    /** The card the owner sees for a prepared call. */
-    const cardOf = (approval: Awaited<ReturnType<typeof prepare>>) => ({
-      toolName: "call_mcp_tool",
-      summary: approval.summary ?? "",
-      ...(approval.displayContent === undefined
-        ? {}
-        : { displayContent: approval.displayContent }),
-    });
-    return { handlers, grants, prepare, call, cardOf };
+    /** The preparation ID the runner's card carries for a prepared call. */
+    const idOf = (approval: Awaited<ReturnType<typeof prepare>>) =>
+      (approval.displayContent as Record<string, string>)[
+        RUNNER_PREPARATION_KEY
+      ]!;
+    return { handlers, grants, prepare, call, idOf };
   }
 
   it("runs a runner's Ask call only after the owner allows it, once", async () => {
     const { registry, serverId, calls } = await setup();
-    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
+    const { grants, prepare, call, idOf } = await routes(registry, serverId);
     const approval = await prepare("search");
     expect(approval.decision).toBe("require_user");
     // The runner cannot run it on its own say-so.
     await expect(call(approval.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
-    grants.decide("s1", "allow", cardOf(approval));
+    grants.decide("s1", "allow", idOf(approval));
     await expect(call(approval.preparedInput)).resolves.toMatchObject({
       modelContent: expect.stringContaining("secret result text"),
     });
@@ -511,13 +511,14 @@ describe("approvalToolProxyRoutes", () => {
 
   it("allows only the call prepared for the card the owner answered", async () => {
     const { registry, serverId, calls } = await setup();
-    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
+    const { grants, prepare, call, idOf } = await routes(registry, serverId);
     const shown = await prepare("search");
     // A second call prepared later in the same session, never shown.
     const hidden = await prepare("create");
     expect(shown.decision).toBe("require_user");
     expect(hidden.decision).toBe("require_user");
-    grants.decide("s1", "allow", cardOf(shown));
+    expect(idOf(shown)).not.toBe(idOf(hidden));
+    grants.decide("s1", "allow", idOf(shown));
     await expect(call(hidden.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
@@ -525,25 +526,22 @@ describe("approvalToolProxyRoutes", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("approves nothing for an allow without a matching card", async () => {
+  it("approves nothing for an allow without a matching preparation", async () => {
     const { registry, serverId, calls } = await setup();
-    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
+    const { grants, prepare, call, idOf } = await routes(registry, serverId);
     const first = await prepare("search");
     grants.decide("s1", "allow");
     await expect(call(first.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
     const second = await prepare("search");
-    grants.decide("s1", "allow", {
-      ...cardOf(second),
-      summary: "Something the owner did not see",
-    });
+    grants.decide("s1", "allow", "not-a-preparation");
     await expect(call(second.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
-    // A decision drops undecided grants, so a later allow of the old card
-    // cannot revive them.
-    grants.decide("s1", "allow", cardOf(second));
+    // A decision drops undecided grants, so a later allow of the old
+    // preparation cannot revive them.
+    grants.decide("s1", "allow", idOf(second));
     await expect(call(second.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
@@ -566,10 +564,7 @@ describe("approvalToolProxyRoutes", () => {
     const approval = await prepare("search");
     expect(approval.decision).toBe("deny");
     expect(JSON.stringify(approval)).not.toContain("ha-secret-token");
-    grants.decide("s1", "allow", {
-      toolName: "call_mcp_tool",
-      summary: "anything",
-    });
+    grants.decide("s1", "allow", "anything");
     await expect(
       call({
         server: home.id,
@@ -605,5 +600,78 @@ describe("approvalToolProxyRoutes", () => {
       status: 403,
     });
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("createRunnerApprovalBindings", () => {
+  const card = (summary: string) => ({
+    toolName: "call_mcp_tool",
+    summary,
+    displayContent: { kind: "shared_mcp_tool_call", summary },
+  });
+  const setupBindings = () => {
+    const grants = createRunnerApprovalGrants();
+    const a = grants.expect("s1", "call_mcp_tool", { a: 1 }, false, card("A"));
+    const b = grants.expect("s1", "call_mcp_tool", { b: 1 }, false, card("B"));
+    const bindings = createRunnerApprovalBindings(
+      grants,
+      () => new Set(["call_mcp_tool"]),
+    );
+    const runnerCard = (interactionId: string, claimed: string) => ({
+      interactionId,
+      toolName: "call_mcp_tool",
+      summary: "What the runner says",
+      displayContent: { [RUNNER_PREPARATION_KEY]: claimed },
+    });
+    return { grants, a, b, bindings, runnerCard };
+  };
+
+  it("shows the control plane's card for the preparation named", () => {
+    const { a, bindings, runnerCard } = setupBindings();
+    expect(bindings.present("s1", runnerCard("i1", a))).toEqual(card("A"));
+    expect(bindings.shown("s1", "i1")).toBe(a);
+  });
+
+  it("fixes the binding the first time the card is served", () => {
+    const { grants, a, b, bindings, runnerCard } = setupBindings();
+    bindings.present("s1", runnerCard("i1", a));
+    // The runner later claims B for the same interaction: still A.
+    expect(bindings.present("s1", runnerCard("i1", b))).toEqual(card("A"));
+    expect(bindings.shown("s1", "i1")).toBe(a);
+    grants.decide("s1", "allow", bindings.shown("s1", "i1"));
+    expect(grants.take("s1", "call_mcp_tool", { b: 1 })).toBe(false);
+    expect(grants.take("s1", "call_mcp_tool", { a: 1 })).toBe(true);
+  });
+
+  it("shows an unverified card for a forged, foreign or missing ID", () => {
+    const { a, bindings, runnerCard } = setupBindings();
+    expect(bindings.present("s1", runnerCard("i1", "forged"))).toBe(
+      UNVERIFIED_RUNNER_CARD,
+    );
+    // Another session's preparation is not this session's.
+    expect(bindings.present("s2", runnerCard("i2", a))).toBe(
+      UNVERIFIED_RUNNER_CARD,
+    );
+    expect(
+      bindings.present("s1", {
+        interactionId: "i3",
+        toolName: "call_mcp_tool",
+      }),
+    ).toBe(UNVERIFIED_RUNNER_CARD);
+    for (const id of ["i1", "i2", "i3"]) {
+      expect(bindings.shown("s1", id)).toBeUndefined();
+    }
+  });
+
+  it("leaves the runner's own tool cards alone, and binds nothing for them", () => {
+    const { a, bindings } = setupBindings();
+    expect(
+      bindings.present("s1", {
+        interactionId: "i1",
+        toolName: "write_file",
+        displayContent: { [RUNNER_PREPARATION_KEY]: a },
+      }),
+    ).toBeUndefined();
+    expect(bindings.shown("s1", "i1")).toBeUndefined();
   });
 });
