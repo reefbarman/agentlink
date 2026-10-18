@@ -1,0 +1,14 @@
+.github/workflows/assistant-release.yml
+  h_e08a86bb3a33a2 54-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9bbcb0340288d7e7964667bc2885674790c57695",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
