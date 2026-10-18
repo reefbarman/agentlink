@@ -1,0 +1,41 @@
+apps/server/src/remoteHostTools.ts
+  h_e08a86bb3a33a2 15-16,105-106,113-115,121-124,129,155,166,168,172,175-178,271-277,330-410
+  h_e08a86bb3a33a2 103-104,107-109,112,125-127,130-132,137,152-154,156-157,163,173-174,180,183-187,279-293,411-430
+apps/server/src/sessionRunners.ts
+  h_e08a86bb3a33a2 16,19,40-61,63-66,68-69,72-77,79-81,83-101,103-121,205-216,225,334-359,362-377,379,383-384,387-388,390-391,393-394,397-418,424
+  s_ca0a11e74f0eca::t_f7e4af67fc8945 217,392
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 10-11,139-211,215-216,224,236-238,247,259-263,303,306-308,345-346,461-618
+apps/server/src/assistantMcpTools.test.ts
+  h_e08a86bb3a33a2 22,24-25,484-489,494,501,514,520-521,529,531,538,543-544,605-675
+  s_ee29718d75ecfa::t_6a13c443742e35 542,567,676-677
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d0e4b550b7ad95dafe86673800c559b413066e6f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ca0a11e74f0eca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5e5cdae4-48bb-49d4-b8ff-11cefd489513",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_ee29718d75ecfa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97e6da4f-d86f-4036-9a4d-2e154b466ddb",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
