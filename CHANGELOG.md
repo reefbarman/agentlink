@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.38.0
+
 - Fixes the TypeSafe Jev first-pass audit being cancelled. After Jev approved a command early, the command starting also stopped the Guardian's background audit, and the cancelled review was recorded as a denial (16 of 22 first-pass approvals). The audit now keeps running to completion. `npm run telemetry:sessions` only compares completed Guardian reviews and lists unfinished audits separately, so a cancelled review no longer counts as a disagreement or a leaked denial.
 
 - Desktop and Browser Ask Agent no longer replace the saved model or thinking level with a temporary fallback when provider catalogs load or reconnect. The saved choices return when the model is available again; requests still use a supported thinking level for the active model.

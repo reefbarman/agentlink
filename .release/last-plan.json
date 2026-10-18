@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
-  "createdAt": "2026-10-17T23:56:34.523Z",
+  "sourceSha": "a4f4e7f280d97051c64032a18f68aceee2ff8cb3",
+  "createdAt": "2026-10-18T01:05:52.788Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,81 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.37.0",
-      "baselineRef": "v1.37.0",
-      "reserved": "1.37.0",
-      "commits": ["dd819f3c9d12f09b8af7b97544b2e43bd5f118a2"],
+      "published": "1.37.1",
+      "baselineRef": "v1.37.1",
+      "reserved": "1.37.1",
+      "commits": [
+        "753ce8268a3ef529394ebe775605d5b79c7e74d6",
+        "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
+        "a4f4e7f280d97051c64032a18f68aceee2ff8cb3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.37.1",
-      "effectiveBump": "patch",
+      "version": "1.38.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.37.1",
+      "tag": "v1.38.0",
       "notes": [
         {
-          "sha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
-          "subject": "fix(guardian): request human approval after MCP denials",
-          "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+          "sha": "753ce8268a3ef529394ebe775605d5b79c7e74d6",
+          "subject": "feat(browser-gateway): add files, photos and camera buttons to mobile Ask Agent composer",
+          "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+          "breaking": false
+        },
+        {
+          "sha": "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
+          "subject": "fix(browser-gateway): keep saved model and thinking level across catalog reloads",
+          "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+          "breaking": false
+        },
+        {
+          "sha": "a4f4e7f280d97051c64032a18f68aceee2ff8cb3",
+          "subject": "fix(guardian): keep the Jev first-pass Guardian audit running",
+          "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.24.0",
-      "baselineRef": "desktop-v0.24.0",
-      "reserved": "0.24.0",
-      "commits": ["dd819f3c9d12f09b8af7b97544b2e43bd5f118a2"],
+      "published": "0.24.1",
+      "baselineRef": "desktop-v0.24.1",
+      "reserved": "0.24.1",
+      "commits": [
+        "753ce8268a3ef529394ebe775605d5b79c7e74d6",
+        "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
+        "a4f4e7f280d97051c64032a18f68aceee2ff8cb3"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.24.1",
-      "effectiveBump": "patch",
+      "version": "0.25.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.24.1",
+      "tag": "desktop-v0.25.0",
       "notes": [
         {
-          "sha": "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2",
-          "subject": "fix(guardian): request human approval after MCP denials",
-          "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+          "sha": "753ce8268a3ef529394ebe775605d5b79c7e74d6",
+          "subject": "feat(browser-gateway): add files, photos and camera buttons to mobile Ask Agent composer",
+          "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+          "breaking": false
+        },
+        {
+          "sha": "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
+          "subject": "fix(browser-gateway): keep saved model and thinking level across catalog reloads",
+          "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+          "breaking": false
+        },
+        {
+          "sha": "a4f4e7f280d97051c64032a18f68aceee2ff8cb3",
+          "subject": "fix(guardian): keep the Jev first-pass Guardian audit running",
+          "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
           "breaking": false
         }
       ]
@@ -83,6 +115,14 @@
     }
   },
   "decisions": {
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1": {
       "bump": "patch",
       "breakingUnits": [],
@@ -147,10 +187,26 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
