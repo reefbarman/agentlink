@@ -1,0 +1,48 @@
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 838-872
+scripts/jev-replay.mjs
+  h_e08a86bb3a33a2 472,480,497-501,504,766-768,925-927
+  s_f212aca19ce452::t_f4f32275d7610d 473-478,503
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 9251-9266,9296-9300
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 41,53-73,87-89,318-342,352,1018-1023,1033-1038,1209-1210,1212-1214
+  s_f212aca19ce452::t_2120b1df9951cb 343-344,351,1024
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 31,82-87,92-96,106-108,111-119,809,881-884,887-908,910,912-918,934,948,975,1057,1115-1116,1124,1126
+  s_f212aca19ce452::t_6f614044cd73a4 109-110,885-886,909
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4228-4232
+  s_f212aca19ce452::t_f819ee2c4b4998 4226-4227,4233
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 108
+CHANGELOG.md
+  h_e08a86bb3a33a2 8
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 5073-5075
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 977-1086
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27108a79f2e074884338de46aecfe26caeb534e7",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f212aca19ce452": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5788944-2745-459a-abc4-9402d18f2b64",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
