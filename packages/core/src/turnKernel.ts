@@ -939,6 +939,15 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           ...structuredClone(messages),
         ];
       },
+      // A failed model call keeps the work before it, and any steering
+      // message admitted for it: the owner's words are never dropped.
+      onModelCallFailed: (messages) => {
+        durableMessages = [
+          ...structuredClone(prepared.history),
+          structuredClone(userMessage),
+          ...structuredClone(messages),
+        ];
+      },
       finishSuccess: (text) => ({ text }),
       finishEmpty: () => ({ text: "" }),
     });

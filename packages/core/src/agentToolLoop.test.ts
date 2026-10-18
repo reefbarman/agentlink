@@ -381,6 +381,45 @@ describe("runAgentToolLoop interjections", () => {
     expect(result.text).toBe(" Answered 2 messages.");
   });
 
+  it("hands back an admitted message when the model call for it fails", async () => {
+    const queue: CoreModelMessage[] = [];
+    let failedWith: readonly CoreModelMessage[] | undefined;
+    let completed = false;
+    let calls = 0;
+    await expect(
+      runAgentToolLoop(
+        makeHandlers({
+          takeInterjections: () => queue.splice(0),
+          callModel: async () => {
+            calls += 1;
+            if (calls === 1) {
+              return {
+                text: "",
+                toolCalls: [{ id: "a", name: "read", input: {} }],
+              };
+            }
+            throw new Error("provider unavailable");
+          },
+          runTool: async () => {
+            queue.push(user("use blue"));
+            return { stop: false, content: "", toolMessage: toolMessage("ok") };
+          },
+          onIterationMessagesComplete: () => {
+            completed = true;
+          },
+          onModelCallFailed: (messages) => {
+            failedWith = structuredClone(messages);
+          },
+        }),
+      ),
+    ).rejects.toThrow("provider unavailable");
+    expect(completed).toBe(false);
+    expect(failedWith?.slice(-2)).toEqual([
+      toolMessage("ok"),
+      user("use blue"),
+    ]);
+  });
+
   it("takes nothing once cancelled", async () => {
     const controller = new AbortController();
     let taken = 0;

@@ -127,6 +127,12 @@ export interface AgentToolLoopHandlers<
    */
   onIterationMessagesComplete?(messages: readonly CoreModelMessage[]): void;
   /**
+   * Observe the iteration sequence when a model call fails with an error
+   * other than a limit or cancellation. It is complete up to that call,
+   * including user messages admitted for it that the model never answered.
+   */
+  onModelCallFailed?(messages: readonly CoreModelMessage[]): void;
+  /**
    * User messages to admit now (queued input that steers the turn), oldest
    * first. Called once every result of an assistant turn is in, and before
    * the turn would end; returning any keeps the turn going so the model
@@ -171,26 +177,36 @@ export async function runAgentToolLoop<
         execution.beginModelCall();
         let reportedModelAttempts = 0;
         const textBeforeModelCall = assistantText;
-        result = await handlers.callModel({
-          iterationMessages,
-          toolMessages,
-          onText: (delta) => {
-            assistantText += delta;
-          },
-          onTextReset: () => {
-            assistantText = textBeforeModelCall;
-          },
-          onModelCallAttempt: () => {
-            reportedModelAttempts += 1;
-            if (
-              handlers.modelCallAccounting === "handler" &&
-              reportedModelAttempts > 1
-            ) {
-              execution.beginModelCall();
-            }
-          },
-          signal: handlers.execution?.signal,
-        });
+        try {
+          result = await handlers.callModel({
+            iterationMessages,
+            toolMessages,
+            onText: (delta) => {
+              assistantText += delta;
+            },
+            onTextReset: () => {
+              assistantText = textBeforeModelCall;
+            },
+            onModelCallAttempt: () => {
+              reportedModelAttempts += 1;
+              if (
+                handlers.modelCallAccounting === "handler" &&
+                reportedModelAttempts > 1
+              ) {
+                execution.beginModelCall();
+              }
+            },
+            signal: handlers.execution?.signal,
+          });
+        } catch (error) {
+          if (
+            !(error instanceof TurnExecutionLimitError) &&
+            !(error instanceof TurnExecutionCancelledError)
+          ) {
+            handlers.onModelCallFailed?.(iterationMessages);
+          }
+          throw error;
+        }
         if (!assistantText && result.text) {
           assistantText = result.text;
         }

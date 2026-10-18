@@ -2033,6 +2033,47 @@ describe("headless E4 turn kernel", () => {
     expect(JSON.stringify({ events, result })).not.toContain("private.example");
   });
 
+  it("keeps an admitted steering message when the model call for it fails", async () => {
+    // One tool turn, then no scripted turn remains: the next call throws.
+    const backend = new ScriptedBackend([
+      toolTurn([{ id: "call-1", name: "lookup" }]),
+    ]);
+    const queue: Array<{ id: string; text: string }> = [];
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      tools: [
+        tool("lookup", async () => {
+          // Sent by the owner while the tool ran.
+          queue.push({ id: "i1", text: "Use the blue logo." });
+          return { modelContent: "ok" };
+        }),
+      ],
+    });
+    const states: Array<{ messages: readonly CoreModelMessage[] }> = [];
+
+    const { events, result } = await collect(
+      kernel.runTurn(prepared(), {
+        signal: new AbortController().signal,
+        takeInterjections: () => queue.splice(0),
+        onDurableState: (state) => states.push(state),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "user.interjected",
+        text: "Use the blue logo.",
+      }),
+    );
+    expect(backend.requests).toHaveLength(2);
+    // Saved with the turn, not dropped with the failed call.
+    expect(states.at(-1)!.messages.at(-1)).toEqual({
+      role: "user",
+      content: "Use the blue logo.",
+    });
+  });
+
   it("reports the private cause of a failed turn to the host only", async () => {
     const cause = new Error("upstream said no: private.example");
     class FailingBackend extends ScriptedBackend {
