@@ -27,6 +27,15 @@ import {
 } from "./desktopUpdateApply.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Removes a staging tree that contains app bundles. Electron's asar-aware fs
+ * treats every app.asar as a directory, so fs.rm fails partway through a bundle
+ * and leaves a partial tree that blocks later updates. /bin/rm sees plain files.
+ */
+async function removeUpdateTree(target: string): Promise<void> {
+  await execFileAsync("/bin/rm", ["-rf", "--", target], { timeout: 120_000 });
+}
 export type DesktopUpdateCommand = (
   file: string,
   args: string[],
@@ -347,7 +356,7 @@ export class DesktopReleaseInstaller {
           process.arch,
           this.run,
         );
-        await rm(root, { recursive: true });
+        await removeUpdateTree(root);
         await rm(this.recordPath("pending-update.json"));
         await rm(this.recordPath("apply-result.json"), { force: true });
         this.pending = undefined;
@@ -365,6 +374,22 @@ export class DesktopReleaseInstaller {
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (
+        result?.status === "applied" &&
+        compareReleaseVersions(this.options.identity.version, pending.version) >
+          0
+      ) {
+        // The update applied, but its cleanup never finished and a newer
+        // version has since been installed. The backup is an obsolete bundle.
+        await removeUpdateTree(root);
+        await rm(this.recordPath("pending-update.json"));
+        await rm(this.recordPath("apply-result.json"), { force: true });
+        this.pending = undefined;
+        this.options.log(
+          `removed leftover ${pending.version} update files at ${root}`,
+        );
+        return;
       }
       if (
         result ||
@@ -545,7 +570,7 @@ export class DesktopReleaseInstaller {
         message: error instanceof Error ? error.message : String(error),
       });
       if (stageRoot && stageCleanupSafe && !this.pending) {
-        await rm(stageRoot, { recursive: true, force: true }).catch((error) =>
+        await removeUpdateTree(stageRoot).catch((error) =>
           this.options.log(
             `update staging cleanup failed at ${stageRoot}: ${String(error)}`,
           ),

@@ -974,6 +974,116 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       expect(result.observation?.assessment).toBe("eligible");
     });
 
+    it("judges each subcommand of a mixed chain on what it does", async () => {
+      for (const command of [
+        "cd packages/core && git status -sb | head -1",
+        "git fetch origin && git log --oneline HEAD..origin/main",
+        "sleep 20; gh run list --repo acme/app --limit 3",
+        "gh auth status; gh repo view acme/app --json url",
+      ]) {
+        const result = await run(command, [olderMarker, recentDecision]);
+        expect(result.olderDecisionsWaived, command).toBe(true);
+        expect(result.observation?.assessment, command).toBe("eligible");
+      }
+    });
+
+    it("keeps one publishing or opaque step disqualifying the chain", async () => {
+      for (const command of [
+        "git status --short && git push -q",
+        "git pull --rebase && git log -1",
+        "cd src && gh release download v1 --pattern '*.vsix'",
+        "gh pr merge 12 --squash",
+        "/tmp/bin/head -1 notes.txt",
+        "cd src && jq . config.json",
+        "echo $(gh run list) && ls",
+      ]) {
+        const result = await run(command, [olderMarker, recentDecision]);
+        expect(result.olderDecisionsWaived, command).toBeUndefined();
+        expect(result.observation?.assessment, command).toBe(
+          "incomplete_evidence",
+        );
+      }
+    });
+
+    it("waives older omitted instructions when every decision is intact", async () => {
+      const result = await run("git status --short && cd src", [
+        recentDecision,
+      ]);
+      expect(result.humanDecisionEvidence).toBe("complete");
+      expect(result.olderDecisionsWaived).toBe(true);
+      expect(result.observation?.assessment).toBe("eligible");
+    });
+
+    it("uses the host's extended human history instead of the shared window", async () => {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValue(typeSafeResponse());
+      const reviewer = createTypeSafeGuardianShadowReviewer({
+        getConfig: () => ({ enabled: true }),
+        getApiKey: async () => "typesafe-key",
+        fetch,
+        readGitEnvironment: async () => undefined,
+      });
+      const input = reviewInput("git push origin main");
+      const answers = Array.from({ length: 12 }, (_, index) =>
+        JSON.stringify({
+          agentAuthoredSubject: {
+            question: { id: "q", question: `Step ${index}?` },
+          },
+          humanAnswer: `answer-${index}`,
+        }),
+      );
+      const decisionEntry = (content: string) => ({
+        role: "tool" as const,
+        content,
+        humanDecisionEvidence: true,
+      });
+      input.context = [
+        ...input.context!,
+        decisionEntry(olderMarker),
+        ...answers.slice(-7).map(decisionEntry),
+      ];
+      input.evidenceMetadata = {
+        humanAuthority: {
+          state: "partial",
+          reasons: ["projection_budget"],
+          sourceCount: 13,
+          includedCount: 8,
+          omittedCount: 5,
+        },
+        scripts: {
+          state: "complete",
+          reasons: [],
+          sourceCount: 0,
+          includedCount: 0,
+          omittedCount: 0,
+        },
+      };
+      input.extendedHumanAuthority = {
+        context: [...reviewInput("x").context!, ...answers.map(decisionEntry)],
+        humanAuthority: {
+          state: "complete",
+          reasons: [],
+          sourceCount: 13,
+          includedCount: 13,
+          omittedCount: 0,
+        },
+      };
+      const result = await reviewer.review(input);
+      expect(result.humanDecisionEvidence).toBe("complete");
+      expect(result.humanDecisionCount).toBe(12);
+      expect(
+        result.observation?.projection.coverage.human_authority.state,
+      ).toBe("complete");
+      expect(result.observation?.assessment).toBe("eligible");
+      const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+      expect(
+        body.state.action.humanDecisions.map(
+          (decision: { humanAnswer?: string }) => decision.humanAnswer,
+        ),
+      ).toEqual(answers.map((_, index) => `answer-${index}`));
+    });
+
     it("still counts as incomplete when a newer answer was omitted", async () => {
       const newerOmitted = JSON.stringify({
         evidenceOmitted:
@@ -1618,6 +1728,66 @@ describe("shadowing command reviewer", () => {
       expect(
         toGuardianShadowComparisonEvent(comparison).shadowFirstPassApproved,
       ).toBe(true);
+    });
+
+    it("keeps the Guardian audit running when the caller aborts after a first-pass approval", async () => {
+      let auditSignal: AbortSignal | undefined;
+      let resolvePrimary: (value: CommandApprovalReviewResult) => void = () =>
+        undefined;
+      const record = vi.fn();
+      const reviewer = createShadowingCommandApprovalReviewer({
+        primary: {
+          review: vi.fn((input: CommandApprovalReviewInput) => {
+            auditSignal = input.signal;
+            return new Promise<CommandApprovalReviewResult>((resolve) => {
+              resolvePrimary = resolve;
+            });
+          }),
+        },
+        shadow: { review: vi.fn().mockResolvedValue(confident) },
+        record,
+        getFirstPass: () => ({ enabled: true, threshold: 0.9 }),
+      });
+      const caller = new AbortController();
+      const result = await reviewer.review({
+        ...reviewInput("git status"),
+        signal: caller.signal,
+      });
+      expect(result.model).toBe("typesafe/jev-1.14.0");
+      // The command starts and the tool call's signal fires.
+      caller.abort();
+      expect(auditSignal?.aborted).toBe(false);
+      resolvePrimary(guardianAllow);
+      await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+      expect(record.mock.calls[0]![0].primary.status).toBe("reviewed");
+    });
+
+    it("still cancels the Guardian when the caller aborts before a decision", async () => {
+      let auditSignal: AbortSignal | undefined;
+      const reviewer = createShadowingCommandApprovalReviewer({
+        primary: {
+          review: vi.fn((input: CommandApprovalReviewInput) => {
+            auditSignal = input.signal;
+            return new Promise<CommandApprovalReviewResult>((resolve) =>
+              input.signal?.addEventListener("abort", () =>
+                resolve({ ...guardianAllow, status: "cancelled" }),
+              ),
+            );
+          }),
+        },
+        shadow: { review: vi.fn(() => new Promise<never>(() => undefined)) },
+        record: vi.fn(),
+        getFirstPass: () => ({ enabled: true }),
+      });
+      const caller = new AbortController();
+      const pending = reviewer.review({
+        ...reviewInput("git status"),
+        signal: caller.signal,
+      });
+      await vi.waitFor(() => expect(auditSignal).toBeDefined());
+      caller.abort();
+      await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+      expect(auditSignal?.aborted).toBe(true);
     });
 
     it("waits for the Guardian when Jev does not qualify", async () => {

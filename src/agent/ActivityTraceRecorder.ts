@@ -8,7 +8,10 @@ import type {
 } from "../core/sessionActivityDiagnostics.js";
 
 import type { AgentEvent } from "./types.js";
-import type { ToolResult } from "@agentlink/protocol/tool-result";
+import {
+  sanitizeAuthorizationAudit,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
 import { randomUUID } from "crypto";
 
 export type ActivityTraceSource =
@@ -429,6 +432,9 @@ export class ActivityTraceRecorder {
             input: summarizeToolInput(event.input),
             outcome: inferToolResultOutcome(event.result),
             result: summarizeToolResultEvidence(event.result),
+            authorizationAudit: sanitizeAuthorizationAudit(
+              event.authorizationAudit,
+            ),
             mcpApprovalPromoted: Boolean(event.mcpApprovalPromotion),
             mcpServerName: event.mcpApprovalPromotion?.serverName,
           },
@@ -888,6 +894,9 @@ function toSessionActivityEvidence(
       toolName: readString(event.payload, "toolName"),
       durationMs: readOptionalNumber(event.payload, "durationMs"),
       outcome: readString(event.payload, "outcome"),
+      authorizationAudit: sanitizeAuthorizationAudit(
+        event.payload?.authorizationAudit,
+      ),
       input: event.payload?.input,
       result: event.payload?.result,
     };

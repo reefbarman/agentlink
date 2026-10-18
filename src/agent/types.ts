@@ -167,6 +167,7 @@ export type AgentEvent =
       parentCallId?: string;
       humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
       composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
     }
   | { type: "todo_update"; todos: TodoItem[] }

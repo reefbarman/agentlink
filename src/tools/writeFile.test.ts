@@ -9,6 +9,7 @@ import type {
 } from "../core/capabilities/editReview.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { classifyEditDurability } from "../core/editDurability.js";
 import { createHash } from "node:crypto";
 
 vi.mock("vscode", () => ({
@@ -568,6 +569,57 @@ describe("handleWriteFile", () => {
     });
     expect(toolJson(result)).not.toHaveProperty("warnings");
   });
+
+  it.each([30, 1_000])(
+    "preserves save-participant warnings alongside write-risk warnings (%i lines)",
+    async (lineCount) => {
+      const baseline = `vi.mock('example')\n${Array.from({ length: lineCount }, (_, i) => `value${i}\n`).join("")}`;
+      const approved = baseline.replace("value0\n", "changed0\n");
+      const saved = approved.replace(/\n/g, ";\n");
+      const classification = classifyEditDurability({
+        relativePath: "src/example.test.ts",
+        baselineExists: true,
+        baselineContent: baseline,
+        approvedContent: approved,
+        editorContent: saved,
+        disk: { status: "readable", content: saved },
+      });
+      const editReviewProvider: EditReviewProvider = {
+        reviewAndApply: vi.fn(async () => ({
+          status: "accepted" as const,
+          path: "src/example.test.ts",
+          durability: classification.durability,
+          ...classification.formatOnSaveReport,
+        })),
+      };
+      const { handleWriteFile } = await import("./writeFile.js");
+      const result = toolJson(
+        await handleWriteFile(
+          { path: "src/example.test.ts", content: approved },
+          {} as never,
+          {} as never,
+          "session-1",
+          undefined,
+          "code",
+          {
+            editReviewProvider,
+            writeApprovalPolicyProvider: createApprovalPolicy(true),
+          },
+        ),
+      );
+      expect(result.warnings).toEqual([
+        ...classification.formatOnSaveReport!.warnings!,
+        expect.stringContaining("Vitest mock factories are hoisted"),
+      ]);
+      expect(result).toMatchObject({
+        format_on_save_changed_lines: {
+          added: lineCount + 1,
+          removed: lineCount + 1,
+        },
+        durability: { requires_reread: true },
+      });
+    },
+  );
 
   it("adds write-risk warnings to provider results", async () => {
     const editReviewProvider: EditReviewProvider = {

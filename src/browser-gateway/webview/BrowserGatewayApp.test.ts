@@ -5,6 +5,7 @@ import {
   cacheDetachedSessionDetail,
   mergeDetachedSessionDetail,
   pruneDetachedSessionDetailCache,
+  reconcileAskAgentSessionTarget,
 } from "./BrowserGatewayApp";
 import type {
   ChatMessage,
@@ -815,6 +816,68 @@ async function selectWorkspaceTab(): Promise<HTMLElement> {
   });
   return selectedWorkspaceTab!;
 }
+
+describe("reconcileAskAgentSessionTarget", () => {
+  const target = "browser-gateway:ask-agent:new-chat";
+  const helperSnapshot = () => {
+    const { snapshot } = createAskAgentSessionResponse();
+    snapshot.session.foreground.model = "gpt-6.1-sol";
+    snapshot.session.foreground.reasoningEffort = "medium";
+    snapshot.session.foreground.projectedMessages = [
+      {
+        id: "other-chat-message",
+        role: "assistant",
+        content: "Other chat transcript",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Other chat transcript" }],
+      },
+    ];
+    return snapshot;
+  };
+
+  it("accepts snapshots for the targeted session unchanged", () => {
+    const snapshot = helperSnapshot();
+    snapshot.session.foreground.sessionId = target;
+    expect(
+      reconcileAskAgentSessionTarget(snapshot as never, target, undefined),
+    ).toBe(snapshot);
+  });
+
+  it("keeps an empty targeted chat the helper no longer knows, adopting the helper's model", () => {
+    const reconciled = reconcileAskAgentSessionTarget(
+      helperSnapshot() as never,
+      target,
+      undefined,
+    );
+    expect(reconciled?.session.foreground).toMatchObject({
+      sessionId: target,
+      model: "gpt-6.1-sol",
+      reasoningEffort: "medium",
+      projectedMessages: [],
+      streaming: false,
+    });
+  });
+
+  it("rejects when the helper has a transcript for the targeted session", () => {
+    const snapshot = helperSnapshot();
+    (snapshot.session.sessions as unknown[]).push({ id: target });
+    expect(
+      reconcileAskAgentSessionTarget(snapshot as never, target, undefined),
+    ).toBeNull();
+  });
+
+  it("never replaces a transcript the page already shows for the target", () => {
+    const cached = helperSnapshot();
+    cached.session.foreground.sessionId = target;
+    expect(
+      reconcileAskAgentSessionTarget(
+        helperSnapshot() as never,
+        target,
+        cached as never,
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("detached session detail cache", () => {
   it("retains the owner approval when a detached detail has no local card", () => {
@@ -7116,6 +7179,64 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(screen.getByTitle("New Chat"));
     await waitFor(() => {
       expect(newSessionBodies).toHaveLength(2);
+    });
+  });
+
+  it("shows the helper's model when the helper restarted without the empty new chat", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const newSessionBodies: Array<{ sessionId?: string }> = [];
+    const sendBodies: Array<{ sessionId?: string }> = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/session/new") {
+          newSessionBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as { sessionId?: string },
+          );
+          return new Promise<Response>(() => {});
+        }
+        if (pathname === "/api/ask-agent/model") {
+          // The restarted helper's active chat is a different session.
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.model = "claude-sonnet-4-6";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/send") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId?: string;
+          };
+          sendBodies.push(body);
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId = body.sessionId ?? "";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    fireEvent.click(await screen.findByTitle("New Chat"));
+    await waitFor(() => expect(newSessionBodies).toHaveLength(1));
+    const mintedSessionId = newSessionBodies[0]?.sessionId ?? "";
+
+    fireEvent.click(screen.getByTestId("trigger-select-model"));
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(sendBodies[0]).toMatchObject({ sessionId: mintedSessionId });
     });
   });
 

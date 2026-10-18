@@ -38,7 +38,7 @@ export const TYPESAFE_GUARDIAN_API_KEY_SECRET =
  * tied to one model version; aliases move without a code change.
  */
 export const DEFAULT_TYPESAFE_GUARDIAN_MODEL = "jev-1.14.0";
-const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v5";
+const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v7";
 // Subcommand codes where an omitted older human answer cannot plausibly carry
 // a restriction that matters: read-only work, local toolchain steps, and git's
 // own recoverable local operations (staging, committing, switching branches).
@@ -50,6 +50,27 @@ const OLDER_DECISION_WAIVER_CODES: ReadonlySet<string> = new Set([
   "project_toolchain",
   "git_mutation",
 ]);
+// Helpers the static classifier does not recognize but that change nothing on
+// their own: navigation, waiting, and reading or filtering text. Only waived
+// when classified as a plain unrecognized executable, so any redirection,
+// substitution or secret-path read guard has already produced a stricter
+// code. File readers outside that guard (jq, cut, less) are not listed.
+const OLDER_DECISION_INERT_EXECUTABLES: ReadonlySet<string> = new Set([
+  "cd",
+  "pushd",
+  "popd",
+  "sleep",
+  "cat",
+  "head",
+  "tail",
+  "tr",
+  "test",
+  "[",
+  "printf",
+]);
+// Read-only GitHub CLI queries: they read remote state but change nothing.
+const GH_READ_ONLY_PATTERN =
+  /^gh\s+(?:auth\s+status|status|search\s+\S+|(?:run|pr|issue|release|repo|workflow)\s+(?:list|view|watch|status|checks|diff))(?:\s|$)/;
 const OLDER_DECISIONS_OMITTED_PREFIX = "Older verified human input";
 export const DEFAULT_TYPESAFE_GUARDIAN_TIMEOUT_MS = 15_000;
 const TYPESAFE_SYSTEM_ONE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -63,9 +84,9 @@ const MAX_BODY_CHARS = 16_384;
 const MAX_TOTAL_BODY_CHARS = 48_000;
 const MAX_DELETION_SAMPLE_ENTRIES = 12;
 const MAX_PRECEDING_ASSISTANT_CHARS = 1_000;
-// Matches the most the shared review context supplies, so Jev sees every
-// recorded decision the primary Guardian sees.
-const MAX_HUMAN_DECISIONS = 8;
+// Matches the extended human-decision budget the host builds for Jev, so Jev
+// sees every recorded decision it was given.
+const MAX_HUMAN_DECISIONS = 32;
 // Human-authored fields are never clipped: an over-budget field is omitted.
 const MAX_HUMAN_FIELD_CHARS = 4_000;
 // Agent-authored question context only scopes an answer, so it may be
@@ -294,17 +315,41 @@ function isRemoteGitWorkflow(
   );
 }
 
+/**
+ * Judge one subcommand of a chain on what it actually does, so a harmless
+ * helper (`cd`, `head -1`, `gh run list`) does not stop an otherwise
+ * low-impact chain from qualifying. Anything that publishes, pulls in remote
+ * changes, overwrites files or hides execution still disqualifies the chain.
+ */
+export function isOlderDecisionWaivableSubcommand(
+  command: string,
+  result: { code: string; executable?: string },
+): boolean {
+  if (OLDER_DECISION_WAIVER_CODES.has(result.code)) return true;
+  const text = command.trim();
+  if (result.code === "git_workflow") {
+    // Fetching only updates remote-tracking refs; push, pull and gh change
+    // shared or working-tree state an older restriction could cover.
+    return (
+      result.executable !== "gh" && !/\bgit\b.*\b(?:push|pull)\b/.test(text)
+    );
+  }
+  if (result.code !== "unrecognized_executable") return false;
+  // A path-qualified binary is reported by its basename; require the bare name.
+  const executable = text.split(/\s+/, 1)[0] ?? "";
+  if (executable !== result.executable) return false;
+  if (OLDER_DECISION_INERT_EXECUTABLES.has(executable)) return true;
+  return result.executable === "gh" && GH_READ_ONLY_PATTERN.test(text);
+}
+
 function isOlderDecisionWaivableAction(
   input: CommandApprovalReviewInput,
 ): boolean {
   const subcommands = input.classified.perSubCommand;
   return (
     subcommands.length > 0 &&
-    subcommands.every(
-      ({ command, result }) =>
-        OLDER_DECISION_WAIVER_CODES.has(result.code) ||
-        (result.code === "git_workflow" &&
-          !isRemoteGitWorkflow(command, result)),
+    subcommands.every(({ command, result }) =>
+      isOlderDecisionWaivableSubcommand(command, result),
     )
   );
 }
@@ -642,10 +687,23 @@ export function createShadowingCommandApprovalReviewer(
       } catch {
         firstPass = undefined;
       }
+      // With the first pass on, the Guardian gets its own abort signal that
+      // follows the caller's only until a decision is returned. Once Jev has
+      // approved and the command starts, the caller's signal fires, and the
+      // Guardian must keep running as the audit instead of being cancelled.
+      const primaryAbort = firstPass?.enabled ? new AbortController() : null;
+      const forwardAbort = () => primaryAbort?.abort(signal?.reason);
+      if (primaryAbort && signal) {
+        if (signal.aborted) forwardAbort();
+        else signal.addEventListener("abort", forwardAbort, { once: true });
+      }
+      const detachPrimarySignal = () =>
+        signal?.removeEventListener("abort", forwardAbort);
       // Observations are forwarded only for the decision actually returned.
       let primaryObservation: GuardianReviewObservation | undefined;
       const primaryInput = {
         ...snapshot,
+        ...(primaryAbort ? { signal: primaryAbort.signal } : {}),
         observe: (observation: GuardianReviewObservation) => {
           primaryObservation = observation;
         },
@@ -717,6 +775,7 @@ export function createShadowingCommandApprovalReviewer(
           });
 
       if (firstPassApproved) {
+        detachPrimarySignal();
         const { shadow } = await shadowPromise;
         if (shadow.observation) {
           reportGuardianObservation(observe, shadow.observation);
@@ -726,7 +785,8 @@ export function createShadowingCommandApprovalReviewer(
         return firstPassReviewResult(shadow);
       }
 
-      const { primary, primaryDurationMs } = await primaryPromise;
+      const { primary, primaryDurationMs } =
+        await primaryPromise.finally(detachPrimarySignal);
       if (primaryObservation) {
         reportGuardianObservation(observe, primaryObservation);
       }
@@ -955,7 +1015,13 @@ function buildTypeSafeGuardianState(
     1_200,
   );
   redacted ||= safeLatestUserInstruction.redacted;
-  const humanDecisions = projectHumanDecisions(input.context);
+  // Jev accepts more context than the primary Guardian, so it gets the larger
+  // human-decision budget when the host supplied one. The recent window is
+  // the same in both, so everything else still reads input.context.
+  const extendedAuthority = input.extendedHumanAuthority;
+  const humanDecisions = projectHumanDecisions(
+    extendedAuthority?.context ?? input.context,
+  );
   redacted ||= humanDecisions.redacted || humanDecisions.agentRedacted;
   const actionFamily = classifyActionFamily(input);
   const commandView = safeText(input.command, 2_001);
@@ -964,6 +1030,12 @@ function buildTypeSafeGuardianState(
   const projection = structuredClone(buildPrimaryGuardianProjection(input));
   projection.kind = "jev_shadow";
   projection.commandExact = commandExact;
+  if (extendedAuthority) {
+    projection.coverage.human_authority = {
+      ...extendedAuthority.humanAuthority,
+      reasons: [...extendedAuthority.humanAuthority.reasons],
+    };
+  }
   if (!commandExact)
     projection.coverage.command = {
       state: "partial",
@@ -1134,8 +1206,12 @@ function buildTypeSafeGuardianState(
     humanDecisionEvidence: humanDecisions.classification,
     humanDecisionCount: humanDecisions.count,
     projection,
+    // The shared context keeps the newest instruction and decisions, so a
+    // budget gap with every projected decision intact is older input.
     olderDecisionsWaivable:
-      humanDecisions.onlyOlderOmitted &&
+      (humanDecisions.onlyOlderOmitted ||
+        humanDecisions.classification === "none" ||
+        humanDecisions.classification === "complete") &&
       !humanDecisions.redacted &&
       safeLatestUserInstruction.classification === "complete" &&
       !input.context?.some((entry) => entry.queuedHumanInput) &&

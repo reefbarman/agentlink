@@ -4,6 +4,7 @@ import { BrowserGatewayAskAgentSessionStore } from "./browserGatewayAskAgentSess
 import { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { ChatModelInfo } from "@agentlink/protocol/chat-catalog";
 
 const theme: BrowserGatewayThemeSnapshot = {
   cssVariables: {},
@@ -725,6 +726,82 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
 
     expect(store.setModel("gpt-5.5")).toBe(true);
     expect(store.getModelProvider()).toBe("openai-codex");
+  });
+
+  it("restores saved selections after partial catalogs and reconnects", () => {
+    const preferences = {
+      model: "desktop-model",
+      reasoningEffort: "max" as const,
+    };
+    const store = createStore();
+    store.applyPreferences(preferences);
+    const limitedModel: ChatModelInfo = {
+      id: "temporary-model",
+      displayName: "Temporary model",
+      provider: "test",
+      contextWindow: 100_000,
+      authenticated: true,
+      reasoningEfforts: ["low", "medium"],
+      defaultReasoningEffort: "medium" as const,
+    };
+    const preferredModel: ChatModelInfo = {
+      ...limitedModel,
+      id: preferences.model,
+      reasoningEfforts: ["low", "max"],
+      defaultReasoningEffort: "low",
+    };
+
+    store.updateAvailableModels([limitedModel]);
+    expect(store.getModel()).toBe(limitedModel.id);
+    expect(store.getReasoningEffort()).toBe("medium");
+    expect(store.getPreferencesSnapshot()).toEqual(preferences);
+
+    // Repeated publications must not turn a temporary fallback into a choice.
+    store.updateAvailableModels([]);
+    expect(store.getPreferencesSnapshot()).toEqual(preferences);
+    store.updateAvailableModels([preferredModel]);
+    expect(store.getModel()).toBe(preferences.model);
+    expect(store.getReasoningEffort()).toBe("max");
+
+    store.updateAvailableModels([]);
+    const reloaded = new BrowserGatewayAskAgentSessionStore(
+      new BrowserGatewayCoreOwnerRegistry({ heartbeatTtlMs: 30_000 }),
+      store.getPreferencesSnapshot(),
+    );
+    reloaded.updateAvailableModels([preferredModel]);
+    expect(reloaded.getModel()).toBe(preferences.model);
+    expect(reloaded.getReasoningEffort()).toBe("max");
+  });
+
+  it("preserves thinking preference through capability changes until explicitly changed", () => {
+    const store = createStore();
+    const model: ChatModelInfo = {
+      id: "desktop-model",
+      displayName: "Desktop model",
+      provider: "test",
+      contextWindow: 100_000,
+      authenticated: true,
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "low" as const,
+    };
+    store.updateAvailableModels([model]);
+    expect(store.setModel(model.id)).toBe(true);
+    expect(store.setReasoningEffort("high")).toBe(true);
+    store.updateAvailableModels([{ ...model, reasoningEfforts: ["low"] }]);
+    expect(store.getReasoningEffort()).toBe("low");
+    expect(store.getPreferencesSnapshot().reasoningEffort).toBe("high");
+    store.updateAvailableModels([model]);
+    expect(store.getReasoningEffort()).toBe("high");
+
+    store.updateAvailableModels([{ ...model, id: "other-model" }]);
+    expect(store.setModel("other-model")).toBe(true);
+    expect(store.setReasoningEffort("low")).toBe(true);
+    store.updateAvailableModels([model, { ...model, id: "other-model" }]);
+    expect(store.getModel()).toBe("other-model");
+    expect(store.getPreferencesSnapshot()).toEqual({
+      model: "other-model",
+      reasoningEffort: "low",
+    });
   });
 
   it("applies persisted model preferences when the published catalog arrives", () => {

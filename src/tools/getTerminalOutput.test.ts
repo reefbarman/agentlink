@@ -711,7 +711,9 @@ describe("handleGetTerminalOutput", () => {
     const waitForPendingInterjection = vi.fn().mockResolvedValue(false);
 
     const result = await handleGetTerminalOutput(
-      { terminal_id: "term_42", wait_seconds: 0.001 },
+      // A generous window keeps the poll loop from expiring before its first
+      // iteration on a slow runner; the mock completes after one poll.
+      { terminal_id: "term_42", wait_seconds: 30 },
       { terminalProvider, waitForPendingInterjection },
     );
 

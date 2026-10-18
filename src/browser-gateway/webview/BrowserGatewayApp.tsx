@@ -92,6 +92,7 @@ import {
   InputArea,
   type ComposerContextMode,
   type ComposerMedia,
+  type MediaPickerSource,
 } from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
 import { useBrowserVoiceInput } from "./useBrowserVoiceInput";
@@ -237,6 +238,11 @@ const MIN_CHAT_PANE_WIDTH = 420;
 const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
+const ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES: readonly MediaPickerSource[] = [
+  "files",
+  "photos",
+  "camera",
+];
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
 const MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES = 4;
 
@@ -803,6 +809,85 @@ function rebindLogicalTabSnapshot(
       },
     },
   };
+}
+
+/**
+ * Project a helper snapshot onto an empty Ask Agent chat with the given id,
+ * keeping the helper's model, thinking level, capabilities and session list.
+ * New Chat uses this optimistically before the helper confirms the session.
+ */
+export function projectEmptyAskAgentSession(
+  base: GatewaySnapshot,
+  sessionId: string,
+): GatewaySnapshot {
+  const foreground = base.session.foreground;
+  if (!foreground) return base;
+  return {
+    ...base,
+    ui: {
+      ...base.ui,
+      approval: null,
+      question: null,
+      questionProgress: null,
+    },
+    session: {
+      ...base.session,
+      foreground: {
+        ...foreground,
+        sessionId,
+        title: BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
+        originalPrompt: undefined,
+        status: "idle",
+        streaming: false,
+        interrupted: undefined,
+        projectedMessages: [],
+        messageQueue: [],
+        questionRequest: null,
+        detectedQuestion: null,
+        todos: [],
+        restoringSession: false,
+        revertRecoveryNotice: null,
+        lastInputTokens: 0,
+        lastOutputTokens: 0,
+        lastCacheReadTokens: 0,
+        estimatedTotalUsed: 0,
+      },
+    },
+  };
+}
+
+/**
+ * Decide what to render when an Ask Agent snapshot belongs to a different
+ * session than the one this page targets. Returns `null` to reject it.
+ *
+ * Rejecting stops an out-of-order update from switching the chat back to a
+ * previous session. But when the helper does not know the targeted session
+ * (an empty new chat lost to a helper restart or another client rewriting
+ * shared history), rejecting forever strands the page with no snapshot: the
+ * model picker shows a placeholder and model changes appear not to apply.
+ * In that case keep the empty targeted chat and adopt the helper's current
+ * state; the next send still materializes the session by id.
+ */
+export function reconcileAskAgentSessionTarget(
+  next: GatewaySnapshot,
+  targetSessionId: string,
+  cached: GatewaySnapshot | undefined,
+): GatewaySnapshot | null {
+  const foreground = next.session.foreground;
+  if (!foreground || foreground.sessionId === targetSessionId) return next;
+  // The helper has a transcript for the target; it is just not active here.
+  if (next.session.sessions.some((session) => session.id === targetSessionId)) {
+    return null;
+  }
+  const cachedForeground = cached?.session.foreground;
+  if (
+    cachedForeground?.sessionId === targetSessionId &&
+    (cachedForeground.projectedMessages?.length ?? 0) > 0
+  ) {
+    // Never replace a transcript this page is already showing.
+    return null;
+  }
+  return projectEmptyAskAgentSession(next, targetSessionId);
 }
 
 export function mergeDetachedSessionDetail(
@@ -1784,26 +1869,32 @@ export function BrowserGatewayApp({
 
   const commitSnapshot = useCallback(
     (
-      next: GatewaySnapshot,
+      incoming: GatewaySnapshot,
       tabId: string,
       generation: number,
       sourceEventPaint?: RelaySourceEventPaintMarker,
     ): boolean => {
-      const incomingAskAgentSessionId =
-        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
-          ? (next.session.foreground?.sessionId ?? null)
-          : null;
+      let next = incoming;
       const expectedAskAgentSessionId = askAgentSessionTargetRef.current;
       // The quick-ask panel never targets a session itself; it follows
       // whichever Ask Agent chat is current so model/thinking stay in sync.
       if (
         !quickAsk &&
-        incomingAskAgentSessionId &&
-        expectedAskAgentSessionId &&
-        incomingAskAgentSessionId !== expectedAskAgentSessionId
+        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID &&
+        expectedAskAgentSessionId
       ) {
-        return false;
+        const reconciled = reconcileAskAgentSessionTarget(
+          incoming,
+          expectedAskAgentSessionId,
+          snapshotCacheRef.current.get(tabId)?.snapshot,
+        );
+        if (!reconciled) return false;
+        next = reconciled;
       }
+      const incomingAskAgentSessionId =
+        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+          ? (next.session.foreground?.sessionId ?? null)
+          : null;
       if (incomingAskAgentSessionId) {
         askAgentSessionTargetRef.current = incomingAskAgentSessionId;
       }
@@ -5792,38 +5883,7 @@ export function BrowserGatewayApp({
     const base = (isAskAgentSelected ? snapshot : null) ?? cached;
     if (base?.session.foreground) {
       commitSnapshot(
-        {
-          ...base,
-          ui: {
-            ...base.ui,
-            approval: null,
-            question: null,
-            questionProgress: null,
-          },
-          session: {
-            ...base.session,
-            foreground: {
-              ...base.session.foreground,
-              sessionId,
-              title: BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
-              originalPrompt: undefined,
-              status: "idle",
-              streaming: false,
-              interrupted: undefined,
-              projectedMessages: [],
-              messageQueue: [],
-              questionRequest: null,
-              detectedQuestion: null,
-              todos: [],
-              restoringSession: false,
-              revertRecoveryNotice: null,
-              lastInputTokens: 0,
-              lastOutputTokens: 0,
-              lastCacheReadTokens: 0,
-              estimatedTotalUsed: 0,
-            },
-          },
-        },
+        projectEmptyAskAgentSession(base, sessionId),
         BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
         selectedTabGenerationRef.current,
       );
@@ -10892,6 +10952,11 @@ export function BrowserGatewayApp({
                     }
                     allowAttachments={!isAskAgentSelected}
                     allowMediaPaste={true}
+                    mediaPickerSources={
+                      isAskAgentSelected && (mobileLayout || touchInput)
+                        ? ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES
+                        : undefined
+                    }
                     allowUriAttachments={false}
                     allowThinkingToggle={true}
                     allowExportTranscript={isAskAgentSelected}

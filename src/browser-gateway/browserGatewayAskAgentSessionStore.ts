@@ -386,6 +386,7 @@ export class BrowserGatewayAskAgentSessionStore {
   private model = BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL;
   private preferredModel: string | undefined;
   private reasoningEffort: ReasoningEffort = "low";
+  private preferredReasoningEffort: ReasoningEffort | undefined;
   private questionRequest: QuestionRequest | null = null;
   private questionProgress: BrowserGatewayAskAgentQuestionProgress | null =
     null;
@@ -399,17 +400,7 @@ export class BrowserGatewayAskAgentSessionStore {
     initialPreferences: BrowserGatewayAskAgentPreferencesSnapshot = {},
     private readonly options: BrowserGatewayAskAgentSessionStoreOptions = {},
   ) {
-    const initialModel = initialPreferences.model?.trim();
-    if (initialModel) {
-      this.preferredModel = initialModel;
-      if (this.availableModels.some((model) => model.id === initialModel)) {
-        this.model = initialModel;
-      }
-    }
-    if (initialPreferences.reasoningEffort) {
-      this.reasoningEffort = initialPreferences.reasoningEffort;
-    }
-    this.syncReasoningEffortForCurrentModel();
+    this.applyPreferences(initialPreferences);
   }
 
   loadHistory(history: BrowserGatewayAskAgentHistorySnapshot): void {
@@ -665,8 +656,10 @@ export class BrowserGatewayAskAgentSessionStore {
 
   getPreferencesSnapshot(): BrowserGatewayAskAgentPreferencesSnapshot {
     return {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
+      // Catalog availability is transient. Only explicit choices replace the
+      // saved preference, never a temporary fallback during startup/reconnect.
+      model: this.preferredModel ?? this.model,
+      reasoningEffort: this.preferredReasoningEffort ?? this.reasoningEffort,
     };
   }
 
@@ -681,7 +674,7 @@ export class BrowserGatewayAskAgentSessionStore {
       }
     }
     if (preferences.reasoningEffort) {
-      this.reasoningEffort = preferences.reasoningEffort;
+      this.preferredReasoningEffort = preferences.reasoningEffort;
     }
     this.syncReasoningEffortForCurrentModel();
   }
@@ -916,7 +909,6 @@ export class BrowserGatewayAskAgentSessionStore {
     if (!this.availableModels.some((model) => model.id === this.model)) {
       const nextModel = this.availableModels[0];
       this.model = nextModel.id;
-      this.preferredModel = nextModel.id;
       this.reasoningEffort =
         nextModel.defaultReasoningEffort ??
         nextModel.reasoningEfforts?.[0] ??
@@ -948,6 +940,7 @@ export class BrowserGatewayAskAgentSessionStore {
     ) {
       return false;
     }
+    this.preferredReasoningEffort = effort;
     this.reasoningEffort = effort;
     return true;
   }
@@ -1183,6 +1176,8 @@ export class BrowserGatewayAskAgentSessionStore {
   }
 
   private syncReasoningEffortForCurrentModel(): void {
+    this.reasoningEffort =
+      this.preferredReasoningEffort ?? this.reasoningEffort;
     const model = this.availableModels.find(
       (candidate) => candidate.id === this.model,
     );

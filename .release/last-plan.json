@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-  "createdAt": "2026-10-16T10:06:04.312Z",
+  "sourceSha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+  "createdAt": "2026-10-18T06:46:48.742Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,34 +10,58 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.35.0",
-      "baselineRef": "v1.35.0",
-      "reserved": "1.35.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
+      "published": "1.38.2",
+      "baselineRef": "v1.38.2",
+      "reserved": "1.38.2",
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.36.0",
+      "version": "1.39.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.36.0",
+      "tag": "v1.39.0",
       "notes": [
         {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
           "breaking": false
         }
       ]
     },
     "desktop": {
+      "published": "0.26.3",
+      "baselineRef": "desktop-v0.26.3",
+      "reserved": "0.26.3",
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.27.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.27.0",
+      "notes": [
+        {
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
       "published": "0.22.0",
-      "baselineRef": "desktop-v0.22.0",
+      "baselineRef": "cli-v0.22.0",
       "reserved": "0.22.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -47,36 +71,12 @@
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.23.0",
+      "tag": "cli-v0.23.0",
       "notes": [
         {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
-          "breaking": false
-        }
-      ]
-    },
-    "cli": {
-      "published": "0.20.0",
-      "baselineRef": "cli-v0.20.0",
-      "reserved": "0.20.0",
-      "commits": ["5accef8e78f9930bb3c5260a1a13223c624ea732"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.21.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.21.0",
-      "notes": [
-        {
-          "sha": "5accef8e78f9930bb3c5260a1a13223c624ea732",
-          "subject": "feat(guardian): add opt-in TypeSafe Jev first pass for command approval",
-          "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
           "breaking": false
         }
       ]
@@ -85,16 +85,92 @@
       "published": "0.13.0",
       "baselineRef": "sdk-v0.13.0",
       "reserved": "0.13.0",
-      "commits": [],
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.14.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.14.0",
+      "notes": [
+        {
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "27108a79f2e074884338de46aecfe26caeb534e7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f197e1422486394963198bea440d3bcda8a121fa": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "870bdc1a3b83d150e754d4c1888e6e5d9190d6a1": {
       "bump": "patch",
       "breakingUnits": [],
@@ -147,6 +223,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Adds an opt-in, off-by-default TypeSafe Jev first pass that can approve confident, low-risk commands before the Guardian finishes (with a background audit), plus new settings, telemetry and a wider older-decision waiver for local git steps.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

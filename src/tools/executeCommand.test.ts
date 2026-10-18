@@ -6483,174 +6483,383 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("pauses each unseen default sandbox network destination for human approval", async () => {
-    const networkRequest = {
-      requestId: "network-1",
-      sessionId: "session-managed-network",
-      auditId: "audit-managed-network",
-      terminalId: "sandbox-network-1",
-      commandId: "command-1",
-      generation: 1,
-      command: "npm view vite version",
-      cwd: "/workspace",
-      reason: "Managed public network requested",
-      host: "registry.npmjs.org",
-      protocol: "https" as const,
-      port: 443,
-      address: "104.16.24.34",
-      family: 4 as const,
-      dnsAnswers: [{ address: "104.16.24.34", family: 4 as const }],
-      destinationClass: "public" as const,
-    };
-    const execute = vi.fn();
-    const prepareExecution = vi.fn(async (options, routeContext) => ({
-      security: {
+  it.each([
+    "allow",
+    "risky",
+    "unavailable",
+    "deny",
+    "prompt",
+    "forbidden",
+    "manual",
+    "human-drift",
+    "destination-drift",
+    "retained-denial",
+    "first-pass",
+    "rule",
+    "unknown-source",
+    "late-socket",
+  ])(
+    "routes unseen public destinations through Guardian with human fallback: %s",
+    async (scenario) => {
+      let humanRevision = 1;
+      const networkRequest = {
+        requestId: "network-1",
+        sessionId: "session-managed-network",
         auditId: "audit-managed-network",
-        route: "sandbox" as const,
-        executionSurface: "verified-sandbox" as const,
-        confinement: "verified-baseline" as const,
-        routeReason: "verified-local-macos" as const,
-        ...routeContext,
-        executionPolicy: "sandbox-baseline-v2" as const,
-        preparedAt: 100,
-        sandbox: {
-          attestationId: "attestation-1",
-          attestationVersion: "sandbox-behavior-v1",
-          policyVersion: "policy-v1",
-          profileId: "workspace-write",
-          backend: "seatbelt" as const,
-          architecture: "arm64" as const,
-          capabilities: {
-            backend: "seatbelt",
-            processTree: true,
-            filesystemRead: "host-visible" as const,
-            filesystemWrite: "strict" as const,
-            network: "proxy-only" as const,
-            privateHome: false,
-            privateTmp: false,
-            hostIpcBlocked: false,
-            resourceLimits: "partial" as const,
-            warnings: [],
+        terminalId: "sandbox-network-1",
+        commandId: "command-1",
+        generation: 1,
+        command: "npm view vite version",
+        cwd: "/workspace",
+        reason: "Managed public network requested",
+        host: "registry.npmjs.org",
+        protocol: "https" as const,
+        port: 443,
+        address: "104.16.24.34",
+        family: 4 as const,
+        dnsAnswers: [{ address: "104.16.24.34", family: 4 as const }],
+        destinationClass: "public" as const,
+      };
+      const execute = vi.fn();
+      const prepareExecution = vi.fn(async (options, routeContext) => ({
+        security: {
+          auditId: "audit-managed-network",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+          sandbox: {
+            attestationId: "attestation-1",
+            attestationVersion: "sandbox-behavior-v1",
+            policyVersion: "policy-v1",
+            profileId: "workspace-write",
+            backend: "seatbelt" as const,
+            architecture: "arm64" as const,
+            capabilities: {
+              backend: "seatbelt",
+              processTree: true,
+              filesystemRead: "host-visible" as const,
+              filesystemWrite: "strict" as const,
+              network: "proxy-only" as const,
+              privateHome: false,
+              privateTmp: false,
+              hostIpcBlocked: false,
+              resourceLimits: "partial" as const,
+              warnings: [],
+            },
+            grant: { grantId: "grant-1", auditId: "network-audit-1" },
           },
-          grant: { grantId: "grant-1", auditId: "network-audit-1" },
         },
-      },
-      execute: async () => {
-        const decision = await options.onManagedNetworkRequest?.(
-          networkRequest,
+        execute: async () => {
+          const decision = await options.onManagedNetworkRequest?.(
+            networkRequest,
+            new AbortController().signal,
+          );
+          execute(decision);
+          if (scenario === "retained-denial") {
+            execute(
+              await options.onManagedNetworkRequest?.(
+                {
+                  ...networkRequest,
+                  requestId: "network-2",
+                  commandId: "command-2",
+                },
+                new AbortController().signal,
+              ),
+            );
+          }
+          return {
+            exit_code: 0,
+            output: "7.0.0",
+            output_captured: true,
+            terminal_id: "sandbox-network-1",
+            command_sent: true,
+            process_launched: true,
+            execution_mode: "sandbox_pty" as const,
+          };
+        },
+        dispose: vi.fn(),
+      }));
+      const enqueueCommandApproval = vi.fn();
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "medium" as const,
+        userAuthorization: "high" as const,
+        rationale: "Routine package registry lookup",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const networkReview = vi.fn(async ({ request }: any) => {
+        if (scenario === "human-drift") humanRevision = 2;
+        if (scenario === "destination-drift")
+          request.host = "unrelated.example";
+        return {
+          outcome: ["deny", "retained-denial"].includes(scenario)
+            ? ("deny" as const)
+            : ("allow" as const),
+          risk: scenario === "risky" ? ("critical" as const) : ("low" as const),
+          userAuthorization: "high" as const,
+          rationale: "Destination risk review",
+          source:
+            scenario === "unknown-source" ? undefined : ("guardian" as const),
+          model: "review-model",
+          status:
+            scenario === "unavailable"
+              ? ("unavailable" as const)
+              : ("reviewed" as const),
+        };
+      });
+      const enqueueNetworkApproval = vi.fn(() => ({
+        promise: Promise.resolve({
+          decision: scenario === "retained-denial" ? "reject" : "allow-once",
+        }),
+      }));
+      const evaluateNetworkRules = vi.fn(() => ({
+        key: "https://registry.npmjs.org:443",
+        decision:
+          scenario === "prompt"
+            ? ("prompt" as const)
+            : scenario === "forbidden"
+              ? ("forbidden" as const)
+              : scenario === "rule"
+                ? ("allow" as const)
+                : ("unmatched" as const),
+        matches: [],
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const { createNetworkApprovalReviewer } =
+        await import("../approvals/networkApprovalReview.js");
+      const firstPass = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        status: "reviewed" as const,
+        model: "jev-1.14.0",
+        rationale: "private rationale",
+      }));
+
+      const result = await handleExecuteCommand(
+        {
+          command: "npm view vite version",
+          sandbox_permissions: "require_managed_network",
+          reason: "Inspect public package metadata in the mediated sandbox",
+        },
+        {
+          evaluateCommandRules: (_sessionId: string, command: string) =>
+            evaluateCommandRulePolicy(
+              {
+                session: [],
+                project: [
+                  {
+                    pattern: "npm view vite version",
+                    mode: "exact",
+                    decision: "allow",
+                  },
+                ],
+                global: [],
+              },
+              command,
+            ),
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(() => ({
+            rule: {
+              pattern: "npm view vite version",
+              mode: "exact",
+              decision: "allow",
+            },
+            scope: "project",
+          })),
+          evaluateNetworkRules,
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval,
+          enqueueNetworkApproval,
+        } as never,
+        "session-managed-network",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () =>
+            scenario === "manual" ? "manual" : "approve-for-me",
+          commandApprovalReviewer: { review },
+          networkApprovalReviewer:
+            scenario === "first-pass"
+              ? createNetworkApprovalReviewer({
+                  resolveContext: () => undefined,
+                  firstPass,
+                })
+              : { review: networkReview },
+          retainedCommandReviewDenials: createRetainedCommandReviewDenials(),
+          getHumanInputRevision: () => humanRevision,
+          getUserObjective: () => "Check the Vite version on npm",
+          getReviewContext: () => [
+            {
+              role: "user",
+              content: "Check the Vite version on npm",
+              directUserInstruction: true,
+            },
+          ],
+          isSessionActive: () => true,
+        },
+      );
+
+      if (scenario === "manual") {
+        expect(prepareExecution).toHaveBeenCalledWith(
+          expect.objectContaining({ onManagedNetworkRequest: undefined }),
+          expect.objectContaining({ approvalReviewerSnapshot: "user" }),
+        );
+        expect(networkReview).not.toHaveBeenCalled();
+        expect(enqueueNetworkApproval).not.toHaveBeenCalled();
+        return;
+      }
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "npm view vite version",
+          sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+          onManagedNetworkRequest: expect.any(Function),
+        }),
+        expect.objectContaining({
+          requiredAuthority: "sandbox",
+          permissionIntent: "additional-permissions",
+          approvalRequirement: "explicit-permissions",
+          authorityReason: "explicit-rule",
+        }),
+      );
+      expect(review).not.toHaveBeenCalled();
+      const humanFallback = [
+        "risky",
+        "unavailable",
+        "deny",
+        "prompt",
+        "manual",
+      ].includes(scenario);
+      expect(enqueueNetworkApproval).toHaveBeenCalledTimes(
+        scenario === "retained-denial" ? 2 : humanFallback ? 1 : 0,
+      );
+      const reviewed = ![
+        "prompt",
+        "forbidden",
+        "manual",
+        "rule",
+        "first-pass",
+      ].includes(scenario);
+      expect(networkReview).toHaveBeenCalledTimes(reviewed ? 1 : 0);
+      if (reviewed)
+        expect(networkReview).toHaveBeenCalledWith(
+          expect.objectContaining({
+            request: expect.objectContaining({
+              host:
+                scenario === "destination-drift"
+                  ? "unrelated.example"
+                  : "registry.npmjs.org",
+            }),
+            userObjective: "Check the Vite version on npm",
+          }),
+        );
+      const audit = result.uiMeta?.authorizationAudit;
+      expect(audit?.decisions.length).toBeGreaterThan(0);
+      const basis = ["forbidden", "rule"].includes(scenario)
+        ? "rule"
+        : ["human-drift", "destination-drift"].includes(scenario)
+          ? "host-policy"
+          : scenario === "first-pass"
+            ? "first-pass"
+            : scenario === "unknown-source"
+              ? "unknown"
+              : humanFallback || scenario === "retained-denial"
+                ? "human"
+                : "guardian";
+      expect(audit?.decisions.at(-1)?.basis).toBe(basis);
+      expect(JSON.stringify(audit)).not.toMatch(
+        /registry|104\.16|npm view|Destination risk|private rationale/,
+      );
+      if (scenario === "first-pass")
+        expect(audit?.decisions[0]).toMatchObject({
+          reviewer: "first-pass",
+          model: "jev-1.14.0",
+          risk: "low",
+        });
+      if (scenario === "unavailable")
+        expect(audit?.decisions[0]?.risk).toBeUndefined();
+      if (scenario === "late-socket") {
+        const snapshot = JSON.stringify(audit);
+        await prepareExecution.mock.calls[0]![0].onManagedNetworkRequest(
+          { ...networkRequest, requestId: "later" },
           new AbortController().signal,
         );
-        execute(decision);
-        return {
-          exit_code: 0,
-          output: "7.0.0",
-          output_captured: true,
-          terminal_id: "sandbox-network-1",
-          command_sent: true,
-          process_launched: true,
-          execution_mode: "sandbox_pty" as const,
-        };
-      },
-      dispose: vi.fn(),
-    }));
-    const enqueueCommandApproval = vi.fn();
-    const review = vi.fn(async () => ({
-      outcome: "allow" as const,
-      risk: "medium" as const,
-      userAuthorization: "high" as const,
-      rationale: "Routine package registry lookup",
-      model: "review-model",
-      status: "reviewed" as const,
-    }));
-    const enqueueNetworkApproval = vi.fn(() => ({
-      promise: Promise.resolve({ decision: "allow-once" }),
-    }));
-    const evaluateNetworkRules = vi.fn(() => ({
-      key: "https://registry.npmjs.org:443",
-      decision: "unmatched" as const,
-      matches: [],
-    }));
-    const { handleExecuteCommand } = await import("./executeCommand.js");
-
-    const result = await handleExecuteCommand(
-      {
-        command: "npm view vite version",
-        sandbox_permissions: "require_managed_network",
-        reason: "Inspect public package metadata in the mediated sandbox",
-      },
-      {
-        evaluateCommandRules: (_sessionId: string, command: string) =>
-          evaluateCommandRulePolicy(
-            {
-              session: [],
-              project: [
-                {
-                  pattern: "npm view vite version",
-                  mode: "exact",
-                  decision: "allow",
-                },
-              ],
-              global: [],
-            },
-            command,
-          ),
-        isCommandApproved: () => true,
-        findMatchingCommandRule: vi.fn(() => ({
-          rule: {
-            pattern: "npm view vite version",
-            mode: "exact",
-            decision: "allow",
+        expect(JSON.stringify(result.uiMeta?.authorizationAudit)).toBe(
+          snapshot,
+        );
+      }
+      const { ActivityTraceRecorder } =
+        await import("../agent/ActivityTraceRecorder.js");
+      const { handleDiagnoseActivity } = await import("./diagnoseActivity.js");
+      const directory = fs.mkdtempSync("/tmp/network-authorization-");
+      const recorder = new ActivityTraceRecorder({ workspaceDir: directory });
+      try {
+        recorder.appendAgentEvent(
+          "session-managed-network",
+          "project",
+          {
+            type: "tool_result",
+            toolCallId: "network-call",
+            toolName: "execute_command",
+            result: result.content,
+            durationMs: 1,
+            authorizationAudit: audit,
           },
-          scope: "project",
-        })),
-        evaluateNetworkRules,
-      } as never,
-      {
-        isRecentlyApproved: () => true,
-        enqueueCommandApproval,
-        enqueueNetworkApproval,
-      } as never,
-      "session-managed-network",
-      undefined,
-      {
-        terminalProvider: { ...terminalProvider, prepareExecution },
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-        isSessionActive: () => true,
-      },
-    );
-
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "npm view vite version",
-        sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
-        onManagedNetworkRequest: expect.any(Function),
-      }),
-      expect.objectContaining({
-        requiredAuthority: "sandbox",
-        permissionIntent: "additional-permissions",
-        approvalRequirement: "explicit-permissions",
-        authorityReason: "explicit-rule",
-      }),
-    );
-    expect(review).not.toHaveBeenCalled();
-    expect(enqueueNetworkApproval).toHaveBeenCalledOnce();
-    expect(evaluateNetworkRules).toHaveBeenCalledTimes(2);
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
-    expect(execute).toHaveBeenCalledWith("allow-once");
-    expect(textPayload(result)).toMatchObject({
-      exit_code: 0,
-      approval: { by: "explicit_rule" },
-      security: {
-        route: "sandbox",
-        permissionIntent: "additional-permissions",
-        sandbox: {
-          capabilities: { network: "proxy-only" },
-          grant: { grantId: "grant-1", auditId: "network-audit-1" },
+          "foreground_agent",
+        );
+        const diagnosis = handleDiagnoseActivity(
+          { tool_name: "execute_command", limit: 1 },
+          {
+            diagnose: (query) =>
+              recorder.diagnoseSessionActivity(
+                "session-managed-network",
+                query,
+              ),
+          },
+        );
+        expect(
+          (
+            diagnosis.data as {
+              evidence: Array<{ authorizationAudit: unknown }>;
+            }
+          ).evidence[0]?.authorizationAudit,
+        ).toEqual(audit);
+      } finally {
+        await recorder.dispose();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledWith(
+        [
+          "forbidden",
+          "human-drift",
+          "destination-drift",
+          "retained-denial",
+        ].includes(scenario)
+          ? "reject"
+          : "allow-once",
+      );
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 0,
+        approval: { by: "explicit_rule" },
+        security: {
+          route: "sandbox",
+          permissionIntent: "additional-permissions",
+          sandbox: {
+            capabilities: { network: "proxy-only" },
+            grant: { grantId: "grant-1", auditId: "network-audit-1" },
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("does not let a command allow rule override an explicit managed-network prompt", async () => {
     const request = {
@@ -9144,6 +9353,22 @@ describe("handleExecuteCommand", () => {
             omittedCount: 0,
           },
         },
+        extendedHumanAuthority: {
+          context: [
+            {
+              role: "tool" as const,
+              humanDecisionEvidence: true,
+              content: '{"humanAnswer":"distinctive-extended-answer"}',
+            },
+          ],
+          humanAuthority: {
+            state: "complete" as const,
+            reasons: [],
+            sourceCount: 1,
+            includedCount: 1,
+            omittedCount: 0,
+          },
+        },
       };
       const enqueueCommandApproval = vi.fn();
       const result = await run(
@@ -9173,6 +9398,11 @@ describe("handleExecuteCommand", () => {
           }),
         );
       }
+      expect(shadow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extendedHumanAuthority: contextSnapshot.extendedHumanAuthority,
+        }),
+      );
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result).approval).toMatchObject({
         by: "model_reviewer",

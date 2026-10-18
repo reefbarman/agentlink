@@ -52,6 +52,9 @@ export interface FormatOnSaveReport {
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
   format_on_save_reverted_proposal?: true;
+  format_on_save_changed_lines?: { added: number; removed: number };
+  reviewed_changed_lines?: { added: number; removed: number };
+  format_on_save_exceeds_proposal?: true;
   eol_changed?: boolean;
   hint?: string;
   warnings?: string[];
@@ -151,7 +154,8 @@ export function createFormatOnSaveReport(
   }
 
   if (normalizedExpected !== normalizedFinal) {
-    const patch = diffLib.createPatch(
+    const structured = diffLib.structuredPatch(
+      relativePath,
       relativePath,
       normalizedExpected,
       normalizedFinal,
@@ -159,11 +163,50 @@ export function createFormatOnSaveReport(
       "saved",
       { context: 1 },
     );
+    const savedLines = { added: 0, removed: 0 };
+    for (const hunk of structured.hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith("+")) savedLines.added++;
+        if (line.startsWith("-")) savedLines.removed++;
+      }
+    }
+    report.format_on_save_changed_lines = savedLines;
+    if (originalContent !== undefined) {
+      // Counting the reviewed edit must not add an unbounded second diff.
+      const reviewedChanges = diffLib.diffLines(
+        originalContent.replace(/\r\n|\n/g, eol),
+        normalizedExpected,
+        { timeout: 100 },
+      );
+      if (reviewedChanges) {
+        const reviewedLines = { added: 0, removed: 0 };
+        for (const change of reviewedChanges) {
+          if (change.added) reviewedLines.added += change.count;
+          if (change.removed) reviewedLines.removed += change.count;
+        }
+        report.reviewed_changed_lines = reviewedLines;
+        if (
+          savedLines.added + savedLines.removed >
+          10 * Math.max(1, reviewedLines.added + reviewedLines.removed)
+        ) {
+          report.format_on_save_exceeds_proposal = true;
+          report.warnings = [
+            ...(report.warnings ?? []),
+            `Save participants changed +${savedLines.added}/-${savedLines.removed} lines, more than 10 times the reviewed edit (+${reviewedLines.added}/-${reviewedLines.removed}). Inspect the full saved diff before committing; use a new reviewed edit with save_without_formatting=true if this formatting was unintended.`,
+          ];
+        }
+      }
+    }
+    const patch = diffLib.formatPatch(structured);
 
     if (patch.length <= FORMAT_ON_SAVE_PATCH_LIMIT) {
       report.format_on_save_edits = patch;
     } else {
       report.format_on_save_edits_omitted = "size_cap";
+      report.warnings = [
+        ...(report.warnings ?? []),
+        `Save participants changed +${savedLines.added}/-${savedLines.removed} lines; the full formatting diff exceeds the preview limit. Re-read the file and inspect the full saved diff before committing.`,
+      ];
       if (!report.format_on_save_reverted_proposal) {
         report.hint =
           "Save participants changed the file substantially; re-read it before composing further diffs. If the saved formatting conflicts with the repository formatter, inspect save-participant configuration and compose a new reviewed edit with save_without_formatting=true when exact preservation is intended.";
@@ -297,7 +340,8 @@ export function classifyEditDurability(
       ...common,
       ...finalFields,
       requires_reread:
-        formatOnSaveReport?.format_on_save_edits_omitted === "size_cap",
+        formatOnSaveReport?.format_on_save_edits_omitted === "size_cap" ||
+        formatOnSaveReport?.format_on_save_exceeds_proposal === true,
     },
     ...(formatOnSaveReport ? { formatOnSaveReport } : {}),
   };

@@ -34,6 +34,8 @@ import {
 import { BUILT_IN_MODES } from "./agent/modes.js";
 import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
 import { createActionApprovalReviewer } from "./approvals/actionApprovalReview.js";
+import { createTypeSafeMcpFirstPass } from "./approvals/typeSafeMcpFirstPass.js";
+import { createTypeSafeNetworkFirstPass } from "./approvals/typeSafeNetworkFirstPass.js";
 import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCommands.js";
 import {
   createShadowingCommandApprovalReviewer,
@@ -3197,11 +3199,41 @@ export async function activate(
       ),
     log,
   });
+  const typeSafeActionFirstPassOptions = {
+    getConfig: () => {
+      const config = vscode.workspace.getConfiguration("agentlink");
+      return {
+        enabled:
+          config.get<boolean>("guardian.typeSafeShadow.enabled", false) &&
+          config.get<boolean>(
+            "guardian.typeSafeShadow.firstPass.enabled",
+            false,
+          ),
+        threshold: config.get<number>(
+          "guardian.typeSafeShadow.firstPass.threshold",
+          DEFAULT_TYPESAFE_FIRST_PASS_THRESHOLD,
+        ),
+        model: config.get<string>(
+          "guardian.typeSafeShadow.model",
+          DEFAULT_TYPESAFE_GUARDIAN_MODEL,
+        ),
+        timeoutMs: config.get<number>(
+          "guardian.typeSafeShadow.timeoutMs",
+          15_000,
+        ),
+      };
+    },
+    getApiKey: () =>
+      Promise.resolve(context.secrets.get(TYPESAFE_GUARDIAN_API_KEY_SECRET)),
+    fetch: agentLinkFetch,
+  };
   const networkApprovalReviewer = createNetworkApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
+    firstPass: createTypeSafeNetworkFirstPass(typeSafeActionFirstPassOptions),
   });
   const actionApprovalReviewer = createActionApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
+    mcpFirstPass: createTypeSafeMcpFirstPass(typeSafeActionFirstPassOptions),
   });
 
   agentSessionManager.setSessionOutcomeTelemetry(

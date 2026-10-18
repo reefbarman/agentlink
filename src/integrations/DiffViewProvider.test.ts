@@ -943,6 +943,54 @@ describe("DiffViewProvider durable save lifecycle", () => {
     expect(await fs.readFile(filePath, "utf-8")).toBe("");
   });
 
+  it("forwards disproportionate save warnings and line counts through the review provider", async () => {
+    const baseline = Array.from({ length: 30 }, (_, i) => `value${i}\n`).join(
+      "",
+    );
+    const approved = baseline.replace("value0\n", "changed0\n");
+    const formatted = approved.replace(/\n/g, ";\n");
+    let text = approved;
+    let dirty = true;
+    let filePath = "";
+    const { provider, filePath: target } = await makeProvider({
+      requestId: "disproportionate-formatting",
+      save: async () => {
+        text = formatted;
+        await fs.writeFile(filePath, formatted, "utf-8");
+        dirty = false;
+        return true;
+      },
+      dirtyAfterSave: () => dirty,
+    });
+    filePath = target;
+    await fs.writeFile(filePath, baseline, "utf-8");
+    Object.assign(provider, {
+      originalContent: baseline,
+      newContent: approved,
+    });
+    const editor = (
+      provider as unknown as { activeDiffEditor: vscode.TextEditor }
+    ).activeDiffEditor;
+    Object.assign(editor.document, { getText: () => text });
+
+    const result = await provider.saveChanges();
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      reviewed_changed_lines: { added: 1, removed: 1 },
+      format_on_save_changed_lines: { added: 30, removed: 30 },
+      format_on_save_exceeds_proposal: true,
+      durability: {
+        status: "durable",
+        outcome: "transformed",
+        requires_reread: true,
+      },
+    });
+    expect(result.warnings?.join(" ")).toContain("more than 10 times");
+    expect(await fs.readFile(filePath, "utf-8")).toBe(formatted);
+    expect(diffSnapshotHub.get("disproportionate-formatting")).toBeUndefined();
+  });
+
   it("does not save a closed review document", async () => {
     const requestId = "closed-review-document";
     const save = vi.fn(async () => true);

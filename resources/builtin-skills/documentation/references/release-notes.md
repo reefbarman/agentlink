@@ -66,6 +66,36 @@
 - SDK: `@agentlink/core` exports `projectEmbeddedAgentTurnEvent(...)` and `projectEmbeddedAgentSessionSnapshot(...)`, the same host-safe projections the embedded web handler uses. Hosts that run turns themselves can publish events later without exposing provenance, usage or transcripts.
 - SDK: `createOpenAICompatibleProvider(...)` now accepts `meridianSessionAffinity`, matching the connection setting, so embedded hosts can send each session ID as `x-session-affinity` to Meridian. Previously the factory silently dropped it.
 
+## 1.39.0
+
+- Development activity diagnostics now distinguish MCP grants, human approval, first-pass review, and full Guardian review, and capture managed-network destination decisions observed before a command tool returns. The bounded host-owned audit excludes arguments, destinations, credentials, and raw review rationale. Older activity and later sockets from background or timed-out commands have no additional provenance.
+
+- Edit tools now report how many lines save participants changed separately from the reviewed edit. Formatting changes larger than ten times the reviewed edit, or too large to preview, produce explicit warnings to inspect the full saved diff before committing. Disproportionate changes also require a re-read; ordinary formatting and exact-save behaviour are unchanged.
+
+## 1.38.2
+
+- Jev now receives every earlier instruction you typed, not just your latest one and your answers to the agent's questions. Earlier instructions still in the recent part of the conversation were counted as given to Jev but never sent, so a restriction such as "plan only, don't push yet" could be missed. The main Guardian's evidence is unchanged. A message that only attaches an image or file, with no text, no longer counts as missing evidence: it has no text a reviewer could be given, and it made every later review in that session ineligible. In the 118-command replay, eligible Jev answers rose from 81 to 90 and reviews with missing human evidence fell from 29 to 18, with no should-block command approved by the first pass.
+
+## 1.38.1
+
+- Deferred native tools no longer fail solely because a model calls their known name directly instead of using `call_native_tool`. VS Code-backed sessions and Browser Ask Agent validate and execute authorised direct calls through the same deferred-tool path, preserving argument validation, access restrictions, approvals, and conversation replay.
+
+## 1.38.0
+
+- Jev now receives up to 32 recorded human answers and restored instructions per review (previously the same 8 as the main Guardian), so in most sessions it sees the full human history instead of counting the review as incomplete. The main Guardian's evidence is unchanged. In long sessions where older input is still left out, each step of a chained command is now judged on its own: harmless helpers such as `cd`, `sleep`, `head` or `cat`, read-only `gh` queries (`gh run list`, `gh pr view`, `gh auth status`) and `git fetch` no longer make an otherwise read-only or local chain ineligible. Pushes, pulls, other `gh` actions, file writes and hidden execution still do. In the 118-command replay, human-history gaps dropped from 43 to 29 commands and eligible Jev answers rose from 71 to 81, with no should-block command approved by the first pass.
+- Fixes the TypeSafe Jev first-pass audit being cancelled. After Jev approved a command early, the command starting also stopped the Guardian's background audit, and the cancelled review was recorded as a denial (16 of 22 first-pass approvals). The audit now keeps running to completion. `npm run telemetry:sessions` only compares completed Guardian reviews and lists unfinished audits separately, so a cancelled review no longer counts as a disagreement or a leaked denial.
+
+- Desktop and Browser Ask Agent no longer replace the saved model or thinking level with a temporary fallback when provider catalogs load or reconnect. The saved choices return when the model is available again; requests still use a supported thinking level for the active model.
+
+## 1.37.1
+
+- Guardian MCP denials now immediately request human approval with the reason and call arguments visible, instead of returning an outright rejection. Human rejection, cancellation and hard access restrictions still stop execution, and the agent receives the Guardian explanation if the human declines.
+
+## 1.37.0
+
+- Approve for Me now reviews unmatched public sandbox destinations through Guardian, optionally Jev first, instead of requiring a human card for every new site. Bounded task-authorized destinations receive an exact one-socket allow; high/critical risk, unknown or unavailable reviews still ask the user. Explicit network Prompt/Forbidden rules, private-address blocking and separate redirect/socket checks remain unchanged. Automated decisions never save destination rules.
+- Approve for Me now sends unapproved MCP tool calls in VS Code-backed sessions to Guardian instead of immediately asking the user. Existing MCP grants still apply first. With the experimental TypeSafe first pass enabled, Jev can allow an exact call from complete, non-sensitive evidence before full Guardian review; uncertain results fall back to Guardian. Automated allows are one-shot and do not save MCP rules. Guardian denials stop the call; unavailable review or oversized evidence retains the human approval fallback. Skill, read-only, delegation and compose restrictions remain in force.
+
 ## 1.36.0
 
 - Adds an experimental, opt-in TypeSafe Jev first pass for command approval (`agentlink.guardian.typeSafeShadow.firstPass.enabled`, off by default; requires shadow mode). When Jev is confident a command is fine (eligible answer, allow probability at or above `firstPass.threshold`, default 0.9, low or medium risk, and no step the command classifier rates dangerous, such as a force-push or `curl`, nor any destructive, secret, privileged or hidden-execution step), the command runs without waiting for the main Guardian. Jev never denies on its own: anything else is still decided by the Guardian, which now starts at the same time so there is no extra wait. The Guardian also reviews every first-pass approval in the background, and `npm run telemetry:sessions` reports how many it would have denied. In a replay of 118 commands (including 18 deliberately risky ones), the default rule approved 14% of commands early and let none of the should-block commands through.

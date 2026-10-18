@@ -4,6 +4,10 @@ AgentLink has first-class ChatGPT/Codex subscription sign-in and OpenAI API-key 
 
 This guide covers VS Code setup and the shared connection file. AgentLink Desktop reads the same file on the same Mac. Browser Ask Agent can use configured models but cannot create or edit provider configuration. For terminal-specific setup, see [Standalone CLI](standalone-cli.md).
 
+## Desktop and Browser Ask Agent selection restore
+
+Desktop and Browser Ask Agent retain the saved model and thinking level while provider catalogs load or reconnect. A temporary fallback does not replace those preferences: when the saved model returns, its selection and supported thinking level are restored. If the active model does not support the saved thinking level, the current request uses a supported default without erasing the saved choice. Explicitly choosing another model or thinking level updates the corresponding preference.
+
 ## Codex thinking summaries
 
 AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6 Astra and GPT-6.1 Sol through the subscription Responses Lite endpoint. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.

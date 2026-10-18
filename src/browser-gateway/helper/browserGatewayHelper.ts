@@ -6466,13 +6466,32 @@ export class BrowserGatewayHelper {
       };
     }
 
-    if (getDeferredNativeTool(disclosure, providerCall.name)) {
+    const deferredTool = getDeferredNativeTool(disclosure, providerCall.name);
+    if (deferredTool) {
+      const parsedTarget = parseAskAgentDeferredNativeToolInput(
+        deferredTool.name,
+        providerCall.input,
+      );
+      if (!parsedTarget.success) {
+        return {
+          providerCall,
+          canonicalCall: providerCall,
+          resolutionError: {
+            message:
+              parsedTarget.status === "native_tool_not_invocable"
+                ? `Native tool '${deferredTool.name}' has no Browser Ask Agent validator`
+                : `Invalid input for native tool '${deferredTool.name}'`,
+            status: parsedTarget.status,
+            issues: parsedTarget.issues,
+          },
+        };
+      }
       return {
         providerCall,
-        canonicalCall: providerCall,
-        resolutionError: {
-          message: `Native tool '${providerCall.name}' must be invoked through call_native_tool`,
-          status: "direct_deferred_native_tool_call",
+        canonicalCall: {
+          id: providerCall.id,
+          name: deferredTool.name,
+          input: parsedTarget.data,
         },
       };
     }
@@ -6508,9 +6527,7 @@ export class BrowserGatewayHelper {
       ok: false,
       error: error.status,
     });
-    const stop =
-      error.status === "native_tool_not_available" ||
-      error.status === "direct_deferred_native_tool_call";
+    const stop = error.status === "native_tool_not_available";
     return {
       content,
       stop,

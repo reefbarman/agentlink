@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.14.0 — 2026-10-18
+
+- Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.
+
 ## 0.13.0 — 2026-10-15
 
 - `@agentlink/node-host` adds `createNodeHostWebImageTools(...)`: `inspect_page_images` lists a public page's images and `present_images` retrieves image URLs or candidates so the model can see them and the host can show them with source attribution. Agents show images with Markdown; `resolveImageSource(sessionId, src)` resolves `![alt](source)` in agent output to bytes and attribution (automatically for URLs seen in the session, otherwise after user confirmation), so hosts never load remote URLs in their UI. Retrieval is public-address-only with byte, pixel and per-turn limits; `getImage(...)` returns retained bytes. Adds `undici` and `parse5` as node-host dependencies.

@@ -802,6 +802,7 @@ interface ToolCallResult {
   durationMs: number;
   humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
+  authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
   composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
 }
 
@@ -3282,6 +3283,7 @@ export class AgentEngine {
                 input: toolUseBlock?.input,
                 humanQuestionAnswer: tr.humanQuestionAnswer,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
+                authorizationAudit: tr.authorizationAudit,
                 composeTrace: tr.composeTrace,
               });
               if (
@@ -3456,6 +3458,7 @@ export class AgentEngine {
             content: toolResultContents[index]!,
             humanQuestionAnswer: tr.humanQuestionAnswer,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
+            authorizationAudit: tr.authorizationAudit,
             composeTrace: tr.composeTrace,
           })),
         );
@@ -3489,6 +3492,7 @@ export class AgentEngine {
             input: toolUseBlock?.input,
             humanQuestionAnswer: tr.humanQuestionAnswer,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
+            authorizationAudit: tr.authorizationAudit,
           };
         }
 
@@ -4064,6 +4068,7 @@ export class AgentEngine {
           humanQuestionAnswer:
             call.name === "ask_user" ? result.humanQuestionAnswer : undefined,
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
+          authorizationAudit: result.uiMeta?.authorizationAudit,
           composeTrace: result.uiMeta?.composeTrace,
         };
       } catch (err) {
