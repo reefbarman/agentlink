@@ -19,6 +19,7 @@ import {
   notPublishedReason,
   publishAction,
   shortRepository,
+  taskEditorAction,
   taskName,
 } from "./AssistantTasks";
 
@@ -53,6 +54,7 @@ function stubFetch(routes: Record<string, Route>) {
 }
 
 const REVIEW = {
+  kind: "review" as const,
   commit: "abc1234def",
   at: 1,
   model: "codex/gpt-5",
@@ -83,8 +85,9 @@ function task(overrides: Partial<Task> = {}): Task {
     createdAt: 1,
     updatedAt: 2,
     current: {
-      implementation: { commit: "abc1234def", at: 1 },
+      implementation: { kind: "implementation", commit: "abc1234def", at: 1 },
       validation: {
+        kind: "validation",
         commit: "abc1234def",
         at: 1,
         passed: true,
@@ -187,6 +190,38 @@ describe("chat task cards", () => {
     } finally {
       window.removeEventListener(OPEN_TASK_EVENT, listener);
     }
+  });
+});
+
+describe("taskEditorAction", () => {
+  const editorUrl = "https://assistant.local:8444/open?token=once";
+
+  it("sends the editor's link to the tab opened before the request", async () => {
+    stubFetch({ "POST /api/tasks/t1/editor": () => ({ url: editorUrl }) });
+    const tab = { opener: {}, location: { href: "" }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as never);
+    await taskEditorAction("t1", "open");
+    expect(open).toHaveBeenCalledExactlyOnceWith("", "_blank");
+    expect(tab).toMatchObject({ opener: null, location: { href: editorUrl } });
+  });
+
+  it("opens the link itself where no blank tab may open (the desktop app)", async () => {
+    stubFetch({ "POST /api/tasks/t1/editor": () => ({ url: editorUrl }) });
+    // The desktop refuses the blank tab, and opens other links in the
+    // system browser.
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    await taskEditorAction("t1", "take_over");
+    expect(open.mock.calls).toEqual([
+      ["", "_blank"],
+      [editorUrl, "_blank", "noopener,noreferrer"],
+    ]);
+  });
+
+  it("opens nothing to hand back", async () => {
+    stubFetch({ "POST /api/tasks/t1/editor": () => ({}) });
+    const open = vi.spyOn(window, "open");
+    await taskEditorAction("t1", "hand_back");
+    expect(open).not.toHaveBeenCalled();
   });
 });
 

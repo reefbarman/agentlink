@@ -37,6 +37,7 @@ import {
   type SsePublication,
 } from "../../../src/browser-gateway/SseHub.js";
 import { agentMessagesToChatMessages } from "../../../src/shared/chatProjection.js";
+import type { ChatTaskCard } from "../../../src/shared/assistantTasks.js";
 import type { WorkspaceBackgroundRecord } from "@agentlink/workspace-host";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { writeFileAtomic } from "./atomicFile.js";
@@ -240,15 +241,8 @@ export interface AskAgentBridgeOptions {
 /** What a chat is, for badges and filters in the chat list. */
 export type ChatKind = ChatSessionKind;
 
-/** A coding task as the chat that started it shows it. */
-export interface ChatTaskCard {
-  readonly id: string;
-  readonly state: string;
-  readonly objective: string;
-  readonly repository: string;
-  readonly pullRequest?: string;
-  readonly updatedAt: number;
-}
+/** A coding task as the chat that started it shows it (shared wire shape). */
+export type { ChatTaskCard } from "../../../src/shared/assistantTasks.js";
 
 export interface AskAgentBridge {
   /** Handles `/api/ask-agent/*`; false for any other path. */

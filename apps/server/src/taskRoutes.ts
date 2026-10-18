@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import type {
+  AssistantTaskDetailWire,
+  AssistantTaskWire,
+} from "../../../src/shared/assistantTasks.js";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import type { CheckpointStatus } from "./auditCheckpoint.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
@@ -91,9 +95,10 @@ export interface TaskEditorRoutes {
 
 /**
  * A task with the evidence that still applies: the latest of each kind
- * recorded for its head commit. Evidence for older commits is stale.
+ * recorded for its head commit. Evidence for older commits is stale. It
+ * must stay the browser's wire shape (`AssistantTaskWire`).
  */
-export function describeTask(task: TaskRun) {
+export function describeTask(task: TaskRun): TaskRun & AssistantTaskWire {
   return { ...task, current: evidenceFor(task, task.headCommit) };
 }
 
@@ -354,7 +359,7 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
     }
     if (method === "GET") {
       const task = requireTask(taskId);
-      sendJson(response, 200, {
+      const detail: AssistantTaskDetailWire = {
         task: describeTask(task),
         events: store.events(taskId),
         validation: repositories.get(task.repository)?.validation ?? [],
@@ -368,7 +373,8 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
                 : {}),
             }
           : { enabled: false },
-      });
+      };
+      sendJson(response, 200, detail);
       return true;
     }
     if (method === "DELETE") {

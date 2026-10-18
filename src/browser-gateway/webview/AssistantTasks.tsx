@@ -1,5 +1,16 @@
 import { Dialog, errorText, requestJson } from "./AssistantProjects";
 import { useEffect, useState } from "preact/hooks";
+import {
+  ACTIVE_TASK_STATES,
+  RESUMABLE_TASK_STATES,
+  type AssistantTaskDetailWire,
+  type AssistantTaskWire,
+  type ChatTaskCard,
+  type ReviewFinding,
+  type TaskCurrentEvidence,
+  type TaskState,
+  type ValidationCommandResult,
+} from "../../shared/assistantTasks";
 
 /**
  * Coding tasks in the AgentLink Assistant: each one's state, branch and
@@ -9,100 +20,11 @@ import { useEffect, useState } from "preact/hooks";
  * projects, so the chat list never shows them).
  */
 
-export type TaskState =
-  | "queued"
-  | "preparing"
-  | "implementing"
-  | "awaiting_approval"
-  | "validating"
-  | "reviewing"
-  | "fixing"
-  | "ready"
-  | "publishing"
-  | "published"
-  | "failed"
-  | "cancelled"
-  | "interrupted"
-  | "blocked_auth"
-  | "blocked_quota"
-  | "blocked_review"
-  | "editing";
-
-export interface ValidationCommandResult {
-  command: string;
-  exitCode?: number;
-  timedOut: boolean;
-  durationMs: number;
-  outputTail: string;
-}
-
-export interface ReviewFinding {
-  severity: "blocking" | "suggestion";
-  file?: string;
-  line?: number;
-  reason: string;
-}
-
-export interface TaskEvidence {
-  implementation?: { commit: string; at: number };
-  validation?: {
-    commit: string;
-    at: number;
-    passed: boolean;
-    commands: ValidationCommandResult[];
-    changedFiles?: string;
-  };
-  review?: {
-    commit: string;
-    at: number;
-    model: string;
-    sessionId: string;
-    verdict: "approve" | "changes_requested";
-    findings: ReviewFinding[];
-  };
-}
-
-export interface Task {
-  id: string;
-  projectId: string;
-  repository: string;
-  objective: string;
-  branch: string;
-  state: TaskState;
-  baseBranch?: string;
-  resolvedBaseBranch?: string;
-  /** Repositories the task reads, read-only. */
-  references?: string[];
-  baseCommit?: string;
-  headCommit?: string;
-  commits?: string[];
-  fixRounds?: number;
-  openFindings?: number;
-  sessionId?: string;
-  /** The chat that started the task; its own chat is listed beside it. */
-  origin?: { projectId: string; sessionId: string };
-  pullRequest?: { number: number; url: string };
-  publishedCommit?: string;
-  summary?: string;
-  error?: string;
-  errorDetail?: string;
-  createdAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  /** Evidence for `headCommit`. */
-  current: TaskEvidence;
-}
-
-export interface TaskDetail {
-  task: Task;
-  events: { at: number; state: TaskState; error?: string }[];
-  /** The repository's validation commands now. */
-  validation: string[];
-  /** The repository's publish permission, if any. */
-  publish: { connectionId: string; grantedAt: number } | null;
-  /** The browser editor: available, and open now (`ro` or `rw`). */
-  editor?: { enabled: boolean; mode?: "ro" | "rw" };
-}
+// The wire shapes are the server's (shared); labels and tones are this UI's.
+export type { ChatTaskCard, ReviewFinding, TaskState, ValidationCommandResult };
+export type TaskEvidence = TaskCurrentEvidence;
+export type Task = AssistantTaskWire;
+export type TaskDetail = AssistantTaskDetailWire;
 
 type Tone = "busy" | "ok" | "warn" | "bad" | "muted";
 
@@ -126,25 +48,8 @@ const STATES: Record<TaskState, { label: string; tone: Tone }> = {
   editing: { label: "You're editing", tone: "warn" },
 };
 
-const ACTIVE: readonly TaskState[] = [
-  "queued",
-  "preparing",
-  "implementing",
-  "awaiting_approval",
-  "validating",
-  "reviewing",
-  "fixing",
-  "publishing",
-];
-
-const RESUMABLE: readonly TaskState[] = [
-  "failed",
-  "cancelled",
-  "interrupted",
-  "blocked_auth",
-  "blocked_quota",
-  "blocked_review",
-];
+const ACTIVE = ACTIVE_TASK_STATES;
+const RESUMABLE = RESUMABLE_TASK_STATES;
 
 export function taskStateLabel(state: TaskState): {
   label: string;
@@ -163,22 +68,14 @@ export function taskName(objective: string): string {
   );
 }
 
-/** A coding task as the chat that started it shows it (snapshot `tasks`). */
-export interface ChatTaskCard {
-  id: string;
-  state: TaskState;
-  objective: string;
-  repository: string;
-  pullRequest?: string;
-  updatedAt: number;
-}
-
 type EditorAction = "open" | "take_over" | "hand_back";
 
 /**
  * Open, take over or hand back a task's folder in the browser editor.
  * The editor opens in a new tab, opened before the request so browsers
- * do not block it as a pop-up.
+ * do not block it as a pop-up. Where no blank tab can open (the desktop
+ * app refuses it, and opens other sites' links in the system browser),
+ * the editor's link itself is opened that way instead.
  */
 export async function taskEditorAction(
   taskId: string,
@@ -193,6 +90,8 @@ export async function taskEditorAction(
     if (tab && body.url) {
       tab.opener = null;
       tab.location.href = body.url;
+    } else if (body.url && action !== "hand_back") {
+      window.open(body.url, "_blank", "noopener,noreferrer");
     } else {
       tab?.close();
     }

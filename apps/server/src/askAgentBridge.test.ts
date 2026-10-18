@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAskAgentBridge, type AskAgentBridge } from "./askAgentBridge.js";
 import { parseAgentResultPrompt } from "./backgroundResultDelivery.js";
+import type { TaskState } from "./taskStore.js";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { HttpError } from "./httpJson.js";
 import {
@@ -1221,7 +1222,7 @@ describe("Ask Agent bridge", () => {
     });
 
     it("shows the open chat's coding tasks as live cards", async () => {
-      let state = "implementing";
+      let state: TaskState = "implementing";
       const chatTasks = vi.fn((sessionId: string) =>
         sessionId === "ws-1"
           ? [

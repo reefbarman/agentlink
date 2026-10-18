@@ -5,6 +5,13 @@ import path from "node:path";
 import { planRepositories } from "./projectCatalog.js";
 import { randomBytes } from "node:crypto";
 import { writeFileAtomic } from "./atomicFile.js";
+import {
+  ACTIVE_TASK_STATES,
+  RESUMABLE_TASK_STATES,
+  type TaskCurrentEvidence,
+  type TaskEvidence,
+  type TaskState,
+} from "../../../src/shared/assistantTasks.js";
 
 /**
  * Coding tasks: one record per task, kept in memory and persisted under
@@ -22,61 +29,18 @@ export const TASK_ID_PATTERN = /^[0-9a-f]{12}$/u;
 /** Every branch a task creates or pushes starts with this. */
 export const TASK_BRANCH_PREFIX = "agentlink/";
 
-export type TaskState =
-  | "queued"
-  | "preparing"
-  | "implementing"
-  /** The implementation chat is waiting for the owner. */
-  | "awaiting_approval"
-  /** The server is running the repository's validation commands. */
-  | "validating"
-  /** A reviewer on another provider is reading the change. */
-  | "reviewing"
-  /** The implementation chat is fixing failed checks or review findings. */
-  | "fixing"
-  /** No reviewer could review the change (none configured, or it failed). */
-  | "blocked_review"
-  /** Committed on the task branch with a clean tree. */
-  | "ready"
-  /** Pushing the branch and opening its draft pull request. */
-  | "publishing"
-  /** Pushed, with a draft pull request open. */
-  | "published"
-  | "failed"
-  | "cancelled"
-  /** The server stopped while it worked; the workspace is kept. */
-  | "interrupted"
-  /** The model provider's sign-in has expired or is missing. */
-  | "blocked_auth"
-  /** The model provider refused for rate or subscription limits. */
-  | "blocked_quota"
-  /**
-   * The owner took the folder over in the editor: the task does not work,
-   * resume or publish until it is handed back.
-   */
-  | "editing";
-
-/** States the runner owns: the task is queued or working. */
-export const ACTIVE_TASK_STATES: readonly TaskState[] = [
-  "queued",
-  "preparing",
-  "implementing",
-  "awaiting_approval",
-  "validating",
-  "reviewing",
-  "fixing",
-  "publishing",
-];
-
-/** States a task can be resumed from. */
-export const RESUMABLE_TASK_STATES: readonly TaskState[] = [
-  "failed",
-  "cancelled",
-  "interrupted",
-  "blocked_auth",
-  "blocked_quota",
-  "blocked_review",
-];
+// The states, evidence and wire shapes are shared with the browser UI.
+export {
+  ACTIVE_TASK_STATES,
+  RESUMABLE_TASK_STATES,
+  TASK_STATES,
+} from "../../../src/shared/assistantTasks.js";
+export type {
+  ReviewFinding,
+  TaskEvidence,
+  TaskState,
+  ValidationCommandResult,
+} from "../../../src/shared/assistantTasks.js";
 
 export interface TaskRequest {
   /** `https://` clone URL, without credentials. */
@@ -100,66 +64,11 @@ export const MAX_TASK_REFERENCES = 3;
 /** The task folder's subfolder holding reference clones. */
 export const TASK_REFERENCES_FOLDER = "refs";
 
-/** One validation command's run, against the evidence's commit. */
-export interface ValidationCommandResult {
-  readonly command: string;
-  /** Undefined when it was stopped by a signal. */
-  readonly exitCode: number | undefined;
-  readonly timedOut: boolean;
-  readonly durationMs: number;
-  /** The end of its output. */
-  readonly outputTail: string;
-}
-
-export interface ReviewFinding {
-  readonly severity: "blocking" | "suggestion";
-  readonly file?: string;
-  readonly line?: number;
-  readonly reason: string;
-}
-
-/**
- * Proof recorded against one exact commit. Evidence for any other commit
- * says nothing about the current one: a later commit makes it stale.
- */
-export type TaskEvidence =
-  | {
-      /** The chat finished with this commit and a clean tree. */
-      readonly kind: "implementation";
-      readonly commit: string;
-      readonly at: number;
-    }
-  | {
-      /** The server ran the repository's validation commands. */
-      readonly kind: "validation";
-      readonly commit: string;
-      readonly at: number;
-      readonly passed: boolean;
-      readonly commands: readonly ValidationCommandResult[];
-      /** Files the commands changed (restored afterwards); fails the run. */
-      readonly changedFiles?: string;
-    }
-  | {
-      /** A reviewer on another provider read `baseCommit..commit`. */
-      readonly kind: "review";
-      readonly commit: string;
-      readonly at: number;
-      /** `providerId/modelId`. */
-      readonly model: string;
-      readonly sessionId: string;
-      readonly verdict: "approve" | "changes_requested";
-      readonly findings: readonly ReviewFinding[];
-    };
-
 /** The latest evidence of each kind for exactly this commit. */
 export function evidenceFor(
   task: Pick<TaskRun, "evidence">,
   commit: string | undefined,
-): {
-  readonly implementation?: Extract<TaskEvidence, { kind: "implementation" }>;
-  readonly validation?: Extract<TaskEvidence, { kind: "validation" }>;
-  readonly review?: Extract<TaskEvidence, { kind: "review" }>;
-} {
+): TaskCurrentEvidence {
   const latest = <K extends TaskEvidence["kind"]>(kind: K) =>
     commit === undefined
       ? undefined
