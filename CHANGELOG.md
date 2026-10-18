@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.38.2
+
 - Jev now receives every earlier instruction you typed, not just your latest one and your answers to the agent's questions. Earlier instructions still in the recent part of the conversation were counted as given to Jev but never sent, so a restriction such as "plan only, don't push yet" could be missed. The main Guardian's evidence is unchanged. A message that only attaches an image or file, with no text, no longer counts as missing evidence: it has no text a reviewer could be given, and it made every later review in that session ineligible. In the 118-command replay, eligible Jev answers rose from 81 to 90 and reviews with missing human evidence fell from 29 to 18, with no should-block command approved by the first pass.
 
 ## 1.38.1

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "13c4a5bd2ce1db266db753cf0ab543f30f3db405",
-  "createdAt": "2026-10-18T06:04:41.442Z",
+  "sourceSha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
+  "createdAt": "2026-10-18T06:17:53.164Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -13,34 +13,46 @@
       "published": "1.38.1",
       "baselineRef": "v1.38.1",
       "reserved": "1.38.2",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "desktop": {
-      "published": "0.26.1",
-      "baselineRef": "desktop-v0.26.1",
-      "reserved": "0.26.2",
-      "commits": ["f197e1422486394963198bea440d3bcda8a121fa"],
+      "commits": ["b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.26.2",
+      "version": "1.38.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": true,
       "consumedIntent": false,
-      "tag": "desktop-v0.26.2",
+      "tag": "v1.38.2",
       "notes": [
         {
-          "sha": "f197e1422486394963198bea440d3bcda8a121fa",
-          "subject": "fix(tools): accept authorised direct calls to deferred native tools",
-          "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+          "sha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
+          "subject": "fix(guardian): give Jev earlier typed instructions and ignore text-less messages",
+          "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+          "breaking": false
+        }
+      ]
+    },
+    "desktop": {
+      "published": "0.26.2",
+      "baselineRef": "desktop-v0.26.2",
+      "reserved": "0.26.2",
+      "commits": ["b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.26.3",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.26.3",
+      "notes": [
+        {
+          "sha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
+          "subject": "fix(guardian): give Jev earlier typed instructions and ignore text-less messages",
+          "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
           "breaking": false
         }
       ]
@@ -71,14 +83,6 @@
     }
   },
   "decisions": {
-    "f197e1422486394963198bea440d3bcda8a121fa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
       "bump": "patch",
       "breakingUnits": [],
@@ -123,6 +127,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f197e1422486394963198bea440d3bcda8a121fa": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -187,6 +199,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
