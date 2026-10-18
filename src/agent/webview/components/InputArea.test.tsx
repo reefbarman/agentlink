@@ -746,6 +746,63 @@ describe("InputArea slash popup", () => {
     });
   });
 
+  it("renders device media picker buttons only when sources are provided", () => {
+    const { container: without } = renderInputArea([]);
+    expect(without.querySelector("[data-media-picker]")).toBeNull();
+    cleanup();
+
+    const { container } = renderInputArea([], {
+      mediaPickerSources: ["files", "photos", "camera"],
+    });
+    const inputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input[data-media-picker]"),
+    );
+    expect(inputs.map((input) => input.dataset.mediaPicker)).toEqual([
+      "files",
+      "photos",
+      "camera",
+    ]);
+    const camera = inputs[2];
+    expect(camera.accept).toBe("image/*");
+    expect(camera.getAttribute("capture")).toBe("environment");
+    expect(camera.multiple).toBe(false);
+    expect(inputs[1].getAttribute("capture")).toBeNull();
+    expect(inputs[1].multiple).toBe(true);
+    expect(inputs[0].accept).toContain("application/pdf");
+    expect(container.querySelectorAll(".media-picker-button").length).toBe(3);
+  });
+
+  it("attaches picked photos and warns about unsupported picked files", async () => {
+    const postMessage = vi.fn();
+    const { container } = renderInputArea([], {
+      vscodeApi: { postMessage },
+      mediaPickerSources: ["photos"],
+    });
+    const input = container.querySelector(
+      'input[data-media-picker="photos"]',
+    ) as HTMLInputElement;
+    const photo = new File(["image-bytes"], "IMG_0001.jpg", {
+      type: "image/jpeg",
+    });
+    const video = new File(["video-bytes"], "clip.mov", {
+      type: "video/quicktime",
+    });
+
+    // A native `change` event, as the browser fires after the picker closes.
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [photo, video],
+    });
+    fireEvent(input, new Event("change", { bubbles: true }));
+
+    await waitFor(() => {
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "agentToast", level: "warning" }),
+    );
+  });
+
   it("resolves copied Explorer image URIs into attachment thumbnails", async () => {
     const postMessage = vi.fn();
     const { container } = renderInputArea([], {

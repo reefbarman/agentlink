@@ -170,6 +170,37 @@ const LOCAL_BUILTIN_COMMANDS = new Set([
   "fleet",
 ]);
 
+/** Device sources offered by the composer's local media picker buttons. */
+export type MediaPickerSource = "files" | "photos" | "camera";
+
+const MEDIA_PICKER_FILE_ACCEPT = [
+  ...ACCEPTED_IMAGE_TYPES,
+  ...ACCEPTED_DOC_TYPES,
+  ...Object.keys(DOCUMENT_EXTENSION_MIME_TYPES).map((ext) => `.${ext}`),
+].join(",");
+
+const MEDIA_PICKER_BUTTONS: Record<
+  MediaPickerSource,
+  { icon: string; title: string; accept: string; capture?: "environment" }
+> = {
+  files: {
+    icon: "codicon-file",
+    title: "Add files",
+    accept: MEDIA_PICKER_FILE_ACCEPT,
+  },
+  photos: {
+    icon: "codicon-file-media",
+    title: "Add photos from library",
+    accept: "image/*",
+  },
+  camera: {
+    icon: "codicon-device-camera",
+    title: "Take a photo",
+    accept: "image/*",
+    capture: "environment",
+  },
+};
+
 function getDocumentMimeType(file: File): string | null {
   if (ACCEPTED_DOC_TYPES.has(file.type)) return file.type;
   const ext = file.name.split(".").pop()?.toLowerCase();
@@ -249,6 +280,11 @@ interface InputAreaProps {
   autoContinueStatus?: string;
   allowAttachments?: boolean;
   allowMediaPaste?: boolean;
+  /**
+   * Shows buttons that open the device file picker, photo library, or camera
+   * and add the chosen files as media attachments. Requires allowMediaPaste.
+   */
+  mediaPickerSources?: readonly MediaPickerSource[];
   allowFileMentions?: boolean;
   allowUriAttachments?: boolean;
   allowThinkingToggle?: boolean;
@@ -304,6 +340,7 @@ export function InputArea({
   autoContinueStatus,
   allowAttachments = true,
   allowMediaPaste = true,
+  mediaPickerSources,
   allowFileMentions = true,
   allowUriAttachments = true,
   allowThinkingToggle = true,
@@ -1200,6 +1237,86 @@ export function InputArea({
     setMediaAttachments((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
+  /**
+   * Reads accepted image/document files into media attachments. Returns how
+   * many files were accepted (including ones rejected only for size).
+   */
+  const addMediaFiles = useCallback(
+    (files: File[], fallbackNamePrefix: string): number => {
+      const acceptedFiles = files.filter(
+        (file) =>
+          ACCEPTED_IMAGE_TYPES.has(file.type) || getDocumentMimeType(file),
+      );
+
+      for (const file of acceptedFiles) {
+        const isImage = ACCEPTED_IMAGE_TYPES.has(file.type);
+        const docMimeType = isImage ? null : getDocumentMimeType(file);
+        if (!isImage && !docMimeType) continue;
+        const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
+
+        if (file.size > maxBytes) {
+          const limitMB = Math.round(maxBytes / (1024 * 1024));
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+          vscodeApi.postMessage({
+            command: "agentToast",
+            message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "files"}.`,
+            level: "error",
+          });
+          continue;
+        }
+
+        const fileName =
+          file.name ||
+          (isImage
+            ? `${fallbackNamePrefix}-image.png`
+            : `${fallbackNamePrefix}-file.txt`);
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const attachment: MediaAttachment = {
+            id: randomId(),
+            name: fileName,
+            mimeType: docMimeType || file.type || "text/plain",
+            dataUrl,
+            kind: isImage ? "image" : "document",
+          };
+          setMediaAttachments((prev) => [...prev, attachment]);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      return acceptedFiles.length;
+    },
+    [vscodeApi],
+  );
+
+  const mediaPickerInputRefs = useRef<
+    Partial<Record<MediaPickerSource, HTMLInputElement | null>>
+  >({});
+  const handleMediaPickerChange = useCallback(
+    (e: Event) => {
+      const input = e.target as HTMLInputElement;
+
+      const files = Array.from(input.files ?? []);
+      // Reset so picking the same file again still fires `change`.
+      input.value = "";
+      if (files.length === 0) return;
+      const accepted = addMediaFiles(files, "picked");
+      const rejected = files.length - accepted;
+      if (rejected > 0) {
+        vscodeApi.postMessage({
+          command: "agentToast",
+          message:
+            rejected === 1
+              ? "That file type can't be attached. Use an image (PNG, JPEG, GIF, WebP), PDF, or text file."
+              : `${rejected} files couldn't be attached. Use images (PNG, JPEG, GIF, WebP), PDFs, or text files.`,
+          level: "warning",
+        });
+      }
+    },
+    [addMediaFiles, vscodeApi],
+  );
+
   const handlePaste = useCallback(
     (e: ClipboardEvent) => {
       if (!allowMediaPaste) {
@@ -1536,46 +1653,7 @@ export function InputArea({
         const droppedFiles = Array.from(e.dataTransfer.files);
 
         if (allowMediaPaste) {
-          const acceptedFiles = droppedFiles.filter(
-            (file) =>
-              ACCEPTED_IMAGE_TYPES.has(file.type) || getDocumentMimeType(file),
-          );
-
-          for (const file of acceptedFiles) {
-            const isImage = ACCEPTED_IMAGE_TYPES.has(file.type);
-            const docMimeType = isImage ? null : getDocumentMimeType(file);
-            if (!isImage && !docMimeType) continue;
-            const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
-
-            if (file.size > maxBytes) {
-              const limitMB = Math.round(maxBytes / (1024 * 1024));
-              const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-              vscodeApi.postMessage({
-                command: "agentToast",
-                message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "files"}.`,
-                level: "error",
-              });
-              continue;
-            }
-
-            const fileName =
-              file.name || (isImage ? "dropped-image.png" : "dropped-file.txt");
-            const reader = new FileReader();
-            reader.onload = () => {
-              const dataUrl = reader.result as string;
-              const attachment: MediaAttachment = {
-                id: randomId(),
-                name: fileName,
-                mimeType: docMimeType || file.type || "text/plain",
-                dataUrl,
-                kind: isImage ? "image" : "document",
-              };
-              setMediaAttachments((prev) => [...prev, attachment]);
-            };
-            reader.readAsDataURL(file);
-          }
-
-          if (acceptedFiles.length > 0) {
+          if (addMediaFiles(droppedFiles, "dropped") > 0) {
             textareaRef.current?.focus();
             return;
           }
@@ -1616,7 +1694,7 @@ export function InputArea({
         paths,
       });
     },
-    [allowAttachments, allowMediaPaste, vscodeApi],
+    [addMediaFiles, allowAttachments, allowMediaPaste, vscodeApi],
   );
 
   // Listen for resolved dropped file paths
@@ -1857,6 +1935,40 @@ export function InputArea({
                 <i class="codicon codicon-attach" />
               </button>
             )}
+            {allowMediaPaste &&
+              mediaPickerSources?.map((source) => {
+                const config = MEDIA_PICKER_BUTTONS[source];
+                return (
+                  <span key={source} class="media-picker-control">
+                    <button
+                      class={`icon-button media-picker-button media-picker-${source}`}
+                      onClick={() =>
+                        mediaPickerInputRefs.current[source]?.click()
+                      }
+                      title={config.title}
+                      aria-label={config.title}
+                      type="button"
+                      disabled={disabled}
+                    >
+                      <i class={`codicon ${config.icon}`} />
+                    </button>
+                    <input
+                      ref={(element) => {
+                        mediaPickerInputRefs.current[source] = element;
+                      }}
+                      type="file"
+                      accept={config.accept}
+                      capture={config.capture}
+                      multiple={source !== "camera"}
+                      hidden
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      data-media-picker={source}
+                      onChange={handleMediaPickerChange}
+                    />
+                  </span>
+                );
+              })}
             {onPolishPrompt && (
               <button
                 class="icon-button polish-button"

@@ -86,6 +86,7 @@ import {
   InputArea,
   type ComposerContextMode,
   type ComposerMedia,
+  type MediaPickerSource,
 } from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
 import { useBrowserVoiceInput } from "./useBrowserVoiceInput";
@@ -215,6 +216,11 @@ const MIN_CHAT_PANE_WIDTH = 420;
 const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
+const ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES: readonly MediaPickerSource[] = [
+  "files",
+  "photos",
+  "camera",
+];
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
 const MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES = 4;
 
@@ -10654,6 +10660,11 @@ export function BrowserGatewayApp({
                     }
                     allowAttachments={!isAskAgentSelected}
                     allowMediaPaste={true}
+                    mediaPickerSources={
+                      isAskAgentSelected && (mobileLayout || touchInput)
+                        ? ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES
+                        : undefined
+                    }
                     allowUriAttachments={false}
                     allowThinkingToggle={true}
                     allowExportTranscript={isAskAgentSelected}
