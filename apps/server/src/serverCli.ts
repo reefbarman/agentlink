@@ -474,7 +474,9 @@ async function runBackupCommand(
       return 0;
     }
     io.stdout("Backing up (this waits for it to finish)...\n");
-    const status = await client.backupNow();
+    // A backup that starts now, not one already part way through: upgrades
+    // record it as their rollback point after draining.
+    const status = await client.backupNow({ fresh: true });
     const failure = status.lastFailure;
     if (
       failure &&

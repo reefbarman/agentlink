@@ -75,8 +75,12 @@ export interface BackupAgentOptions {
 export interface BackupAgent {
   readonly port: number;
   status(): BackupStatus;
-  /** Back up now, or join the backup already running. */
-  backupNow(): Promise<BackupStatus>;
+  /**
+   * Back up now, or join the backup already running. With `fresh`, only a
+   * backup that starts after this call will do: one already running is
+   * waited for, then another runs (or one started since is joined).
+   */
+  backupNow(options?: { readonly fresh?: boolean }): Promise<BackupStatus>;
   /** Run a scheduled check (tests). */
   check(): Promise<void>;
   close(): Promise<void>;
@@ -93,6 +97,9 @@ export async function startBackupAgent(
   const stageRoot = path.join(options.stateDirectory, "stage");
   let stored = await readStatus(statusFile);
   let running: Promise<BackupStatus> | undefined;
+  /** Backups started so far, and which one is running. */
+  let runsStarted = 0;
+  let runningRun = 0;
   let runningSince: number | undefined;
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
@@ -110,8 +117,11 @@ export async function startBackupAgent(
     await writeFileAtomic(statusFile, `${JSON.stringify(next)}\n`);
   };
 
-  const backupNow = (): Promise<BackupStatus> => {
-    running ??= (async () => {
+  const joinOrStart = (): Promise<BackupStatus> => {
+    if (running) return running;
+    runsStarted += 1;
+    runningRun = runsStarted;
+    running = (async () => {
       const startedAt = now();
       runningSince = startedAt;
       try {
@@ -152,6 +162,21 @@ export async function startBackupAgent(
     return running;
   };
 
+  const backupNow = async (
+    request: { readonly fresh?: boolean } = {},
+  ): Promise<BackupStatus> => {
+    if (!request.fresh) return await joinOrStart();
+    // An upgrade's rollback point must hold everything up to now: a backup
+    // that staged its copy earlier and is still uploading will not do.
+    const after = runsStarted;
+    for (;;) {
+      const current = running;
+      if (!current) return await joinOrStart();
+      if (runningRun > after) return await current;
+      await current.catch(() => undefined);
+    }
+  };
+
   /** Whether a scheduled backup is due now. */
   const due = async (): Promise<boolean> => {
     const at = now();
@@ -168,7 +193,7 @@ export async function startBackupAgent(
   const check = async () => {
     if (running) return;
     try {
-      if (await due()) await backupNow();
+      if (await due()) await joinOrStart();
     } catch (error) {
       log(
         `Backup check failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -259,7 +284,12 @@ export async function startBackupAgent(
       return;
     }
     if (url.pathname === "/v1/backup" && method === "POST") {
-      sendJson(response, 200, { status: await backupNow() });
+      const fresh = url.searchParams.get("fresh") === "1";
+      sendJson(response, 200, {
+        status: await backupNow({ fresh }),
+        // Said back, so a client can tell this agent honoured it.
+        ...(fresh ? { fresh: true } : {}),
+      });
       return;
     }
     if (url.pathname === "/v1/snapshots" && method === "GET") {

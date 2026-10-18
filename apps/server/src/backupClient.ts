@@ -23,8 +23,12 @@ export class BackupRequestError extends Error {
 export interface BackupClient {
   health(): Promise<{ readonly protocol: number; readonly build?: unknown }>;
   status(): Promise<BackupStatus>;
-  /** Waits for the backup (or the one already running). */
-  backupNow(): Promise<BackupStatus>;
+  /**
+   * Waits for the backup (or the one already running). With `fresh`, for
+   * one that starts after this request; an agent that cannot promise that
+   * is refused (`backup_fresh_unsupported`).
+   */
+  backupNow(options?: { readonly fresh?: boolean }): Promise<BackupStatus>;
   snapshots(): Promise<readonly BackupSnapshot[]>;
   /** Store a signed audit checkpoint in the witness. */
   writeCheckpoint(
@@ -92,14 +96,23 @@ export function createBackupClient(options: {
       (await call<{ status: BackupStatus }>("GET", "/v1/status", 10_000))
         .status,
     // A first backup reads every project: give it time.
-    backupNow: async () =>
-      (
-        await call<{ status: BackupStatus }>(
-          "POST",
-          "/v1/backup",
-          6 * 60 * 60 * 1_000,
-        )
-      ).status,
+    backupNow: async (request = {}) => {
+      const result = await call<{ status: BackupStatus; fresh?: unknown }>(
+        "POST",
+        request.fresh ? "/v1/backup?fresh=1" : "/v1/backup",
+        // Fresh may wait for a running backup first.
+        (request.fresh ? 12 : 6) * 60 * 60 * 1_000,
+      );
+      // An older agent ignores the request and may return an earlier one.
+      if (request.fresh && result.fresh !== true) {
+        throw new BackupRequestError(
+          409,
+          "backup_fresh_unsupported",
+          "the backup agent cannot take a fresh backup; update its image",
+        );
+      }
+      return result.status;
+    },
     snapshots: async () =>
       (
         await call<{ snapshots: BackupSnapshot[] }>(

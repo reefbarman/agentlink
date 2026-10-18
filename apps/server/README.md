@@ -451,6 +451,8 @@ docker compose exec assistant agentlink-server backup    # first backup, waits f
 docker compose exec assistant agentlink-server backups   # list them
 ```
 
+`agentlink-server backup` always takes a new backup that starts after you ask, waiting first for one already running, so it holds everything up to that moment. `upgrade.sh` relies on this for the rollback point it records after draining.
+
 **Write down the backup password** (`secrets/backup-password`) somewhere off the machine, such as a password manager. The backups are encrypted with it, and the copy in `secrets/` is inside what is backed up: without another copy, a lost deploy directory means unreadable backups.
 
 **Restoring.** Stop the assistant, move the deploy directory aside (never restore over it), and restore into a new, empty directory with the backup image. Run it as root so every file gets its owner back:

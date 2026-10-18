@@ -20,7 +20,11 @@ afterEach(async () => {
 const HOUR = 60 * 60 * 1_000;
 
 async function setup(
-  overrides: Partial<BackupAgentOptions> & { failBackups?: boolean } = {},
+  overrides: Partial<BackupAgentOptions> & {
+    failBackups?: boolean;
+    /** The first backup waits for this before it finishes. */
+    holdFirst?: Promise<void>;
+  } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "backup-agent-"));
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
@@ -32,6 +36,7 @@ async function setup(
   const restic: ResticRunner = async (args) => {
     if (args[0] === "backup") {
       backups += 1;
+      if (backups === 1) await overrides.holdFirst;
       if (overrides.failBackups) {
         return { exitCode: 1, stdout: "", stderr: "Fatal: store is full" };
       }
@@ -108,6 +113,42 @@ describe("backup agent", () => {
     ]);
     expect(first).toEqual(second);
     expect(backups()).toBe(1);
+  });
+
+  it("gives a fresh request a backup that starts after it, not the running one", async () => {
+    let release!: () => void;
+    const { client, backups } = await setup({
+      holdFirst: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
+    // A scheduled backup already staged its copy and is uploading.
+    const running = client().backupNow();
+    await expect.poll(() => backups()).toBe(1);
+    const fresh = client().backupNow({ fresh: true });
+    const alsoFresh = client().backupNow({ fresh: true });
+    release();
+    await expect(running).resolves.toMatchObject({
+      lastSuccess: { snapshotId: "0000000000000001" },
+    });
+    // Both fresh requests share the one backup started after them.
+    const [first, second] = await Promise.all([fresh, alsoFresh]);
+    expect(first.lastSuccess?.snapshotId).toBe("0000000000000002");
+    expect(second).toEqual(first);
+    expect(backups()).toBe(2);
+  });
+
+  it("refuses a fresh request to an agent that does not promise one", async () => {
+    const client = createBackupClient({
+      host: "127.0.0.1",
+      port: 1,
+      token: async () => "t",
+      fetch: async () => Response.json({ status: {} }),
+    });
+    await expect(client.backupNow({ fresh: true })).rejects.toMatchObject({
+      code: "backup_fresh_unsupported",
+    });
+    await expect(client.backupNow()).resolves.toEqual({});
   });
 
   it("keeps its status across restarts", async () => {
