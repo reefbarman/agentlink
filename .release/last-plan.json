@@ -1,55 +1,14 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "7d5414fac8ba18df279f9bfa2ef43ba93f0463b4",
-  "createdAt": "2026-10-18T23:08:15.197Z",
+  "sourceSha": "9bbcb0340288d7e7964667bc2885674790c57695",
+  "createdAt": "2026-10-18T23:32:12.457Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
     "omitted": [
-      "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
-      "ee051d16609eb920809e35e9606d6d79a6ad9ca5",
-      "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
-      "4e3babb8d750155f33943308b1fe24b52142de69",
-      "c3392576dce22a714d3a062f530261c36fee45af",
-      "24572597e878e1a919b6d837a13309ac268b964c",
-      "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
-      "1ea1171f7e3376dcbc84569b05486d51e35e0316",
-      "b553f41f735afdfe43d66ac321053115f7e888ae",
-      "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-      "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-      "06168451170a90231b5e1c9d6542b56331324a06",
-      "4155e76a74b399ec0c338760ccef635f9bebfc18",
-      "918cf44fe94cdde26e54aade3df1f733430f5c5e",
-      "19af91afde4b6820eed84e19dce71e4787950b79",
-      "78fe3f57c754f5496269b1c778a68a72e1068469",
-      "ca02d7dfc776682bcff1531a3c6af7361e9d830a",
-      "e07307e35594f174baf8b07518572a9cac090131",
-      "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-      "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
-      "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-      "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
-      "aaaa860856ebab145dd614b106ba07b7e38161cd",
-      "11b37d9283ba335f56a1703f3a4afeb96c8895cb",
-      "aae6f3328b608c4ab18ac37a13395d4ecab97a07",
-      "ed4945972f5ecc2a0f8fa30e080ee79e3d0884ce",
-      "ba5b17b3873467536307529f7298324dcd8091dd",
-      "a5b296383f33c500eb7d1673591387f6c756e22f",
-      "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-      "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
-      "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-      "b51ff9aec7f1710f419653ec1a784b751d126274",
-      "b7989e029fbf313815615a6c7ad4e575c868cf31",
-      "ecf7988de61ba6e20618a36d7befe016b6968dde",
-      "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
-      "dfbd5d84bc33f3552299780f8d78d33329b3c253",
-      "9fa880d83057c5987f2939b94d19bf935d407785",
-      "c84019dccbe1476b00a8372e13cbeedb37462afd",
-      "eee5304fe24d2f17feb43cac1941b092b99e71ba",
       "257cee467e0ec17eea7e5f539b88d89bbc4a1ec6",
       "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-      "f33e77568e9c6b6fb9d5644fd232f09daf5b5233",
       "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-      "8c8830135a45638b6684055daa3e6b1b9815fe3e",
       "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
       "b94259a3559e0df229e4a43deb371c763b2296bc",
       "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
@@ -72,1294 +31,52 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.39.0",
-      "baselineRef": "v1.39.0",
-      "reserved": "1.39.0",
-      "commits": [
-        "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-        "81717712e5d690008ab160700a2f502391bc95b9",
-        "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-        "64e1237a93391a634c1b032c95a3ef04abafc088",
-        "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-        "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-        "95e3632b9b51637952b904b7e91d2d4ead371e92",
-        "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-        "b3eb15f28497837c8274003b227cd45231c940a9",
-        "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-        "7ddf11689925456f3b73a3390ebb489396f9542c",
-        "a5b6a1072d8aaba6807bbc4fd07c4b4c97db9bd6",
-        "3a4ce5976fa71561ba25f61673abd2ed5824f424",
-        "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-        "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-        "3854f85f1de38e1048f63766d55249a70b115f99",
-        "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-        "4bbb98ce50fbb4117c53219bbe64416741255f19",
-        "00b0841975f5f7a7caaa7bf71def091fa35c7ce0",
-        "442661716834f51f346e7dc0d0fe855a0fbdbe58",
-        "ccc48a2fb86277045ef127ed7ddae0f39253751a",
-        "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-        "3da5b73e04bba755ac087ccc94f03c5b8a589524",
-        "7ae36dac6fb9f13d42bb867666e1f06169412168",
-        "b82851fe11bab35a1afc01c727883069903725ab",
-        "0372a83e5db452a6bb15547394cf6759c15da53b",
-        "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
-        "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
-        "4e3babb8d750155f33943308b1fe24b52142de69",
-        "24572597e878e1a919b6d837a13309ac268b964c",
-        "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
-        "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-        "15b0f7112896328934ebe7722650d2297e2e3249",
-        "b553f41f735afdfe43d66ac321053115f7e888ae",
-        "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-        "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-        "06168451170a90231b5e1c9d6542b56331324a06",
-        "78fe3f57c754f5496269b1c778a68a72e1068469",
-        "e07307e35594f174baf8b07518572a9cac090131",
-        "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-        "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
-        "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-        "dd3373fca78f1e8b4be057df21022d16e0add09e",
-        "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
-        "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-        "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
-        "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-        "b51ff9aec7f1710f419653ec1a784b751d126274",
-        "ecf7988de61ba6e20618a36d7befe016b6968dde",
-        "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
-        "dfbd5d84bc33f3552299780f8d78d33329b3c253",
-        "9fa880d83057c5987f2939b94d19bf935d407785",
-        "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-        "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-        "8c8830135a45638b6684055daa3e6b1b9815fe3e",
-        "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-        "b94259a3559e0df229e4a43deb371c763b2296bc",
-        "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-        "69fd7545b8d9509a651ea718d74f9e9c36496aef",
-        "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
-        "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-        "5059396572186fed56d325d392055168ec502fea",
-        "b973a3780043b78d3f7bb5ea04236c42b739e22c"
-      ],
+      "published": "1.40.0",
+      "baselineRef": "v1.40.0",
+      "reserved": "1.40.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "1.40.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "v1.40.0",
-      "notes": [
-        {
-          "sha": "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-          "subject": "feat(workspace-host): add prompt identity and command execution backend seams",
-          "summary": "Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.",
-          "breaking": false
-        },
-        {
-          "sha": "81717712e5d690008ab160700a2f502391bc95b9",
-          "subject": "feat(workspace-host): delegate file tools to the execution backend",
-          "summary": "File reads, writes, search and the git status probe can now run through an injected execution backend, with a new filesystem port in node-host; local behaviour is unchanged by default.",
-          "breaking": false
-        },
-        {
-          "sha": "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-          "subject": "feat(server): add standalone assistant server access layer",
-          "summary": "Adds the standalone assistant server access layer: HTTPS-only listener, owner bootstrap, device pairing, cookie sessions, passphrase reauthentication, request guarding and rate limiting.",
-          "breaking": false
-        },
-        {
-          "sha": "64e1237a93391a634c1b032c95a3ef04abafc088",
-          "subject": "feat(server): mount workspace sessions on the authenticated server",
-          "summary": "The assistant server can now create workspace sessions, stream turn events over SSE, run server-owned turns and take approvals bound to an exact interaction; core and workspace-host gain supporting exports and options.",
-          "breaking": false
-        },
-        {
-          "sha": "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-          "subject": "feat(server): add runnable service entry point with systemd and launchd definitions",
-          "summary": "Adds a runnable assistant server with a JSON config, an agentlink-server CLI with --check, a bundled build, systemd and launchd definitions, crash recovery of interrupted sessions, and new turns allowed after an interruption.",
-          "breaking": false
-        },
-        {
-          "sha": "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-          "subject": "feat(server): add a name-constrained local CA for device trust",
-          "summary": "The assistant server can create a name-constrained local CA, issue and auto-renew its HTTPS certificate, and export the CA for devices via a new export-ca command, selected by tls.localCa in config.",
-          "breaking": false
-        },
-        {
-          "sha": "95e3632b9b51637952b904b7e91d2d4ead371e92",
-          "subject": "feat(server): add ChatGPT sign-in and a hardened container deployment",
-          "summary": "The assistant server gains ChatGPT (Codex) sign-in with codex-login/codex-logout commands, a hardened Docker container deployment, and more robust file locks. The node-host Codex OAuth manager can now use custom storage and finish sign-in from a pasted redirect URL.",
-          "breaking": false
-        },
-        {
-          "sha": "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-          "subject": "feat(server): run background agents and route reviews to the review model",
-          "summary": "Agents can start read-only background children, such as a reviewer on a role-selected model. The assistant server gains routes to list, steer, stop and approve those children.",
-          "breaking": false
-        },
-        {
-          "sha": "b3eb15f28497837c8274003b227cd45231c940a9",
-          "subject": "feat(server): push background agent progress and completion to the parent stream",
-          "summary": "Background agent lifecycle, phase and current-tool changes are pushed to the parent session's event stream, so clients no longer need to poll. The supervisor also tracks tool completion more accurately.",
-          "breaking": false
-        },
-        {
-          "sha": "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-          "subject": "feat(server): let chats work without approval by default",
-          "summary": "Assistant chats now run in-project file edits and foreground commands without approval by default, with a per-session approval-mode switch. Recorded tool authorizations are now single-use in the turn kernel.",
-          "breaking": false
-        },
-        {
-          "sha": "7ddf11689925456f3b73a3390ebb489396f9542c",
-          "subject": "feat(server): share the Ask Agent UI and sign in with pairing codes",
-          "summary": "The assistant now serves the shared Ask Agent UI and signs devices in with single-use 6-digit pairing codes from `agentlink-server pair`. The setup credential, passphrase, recover command and CSRF header are removed, and old access state is migrated.",
-          "breaking": false
-        },
-        {
-          "sha": "a5b6a1072d8aaba6807bbc4fd07c4b4c97db9bd6",
-          "subject": "feat(server): per-model thinking levels, full model catalog and Assistant branding",
-          "summary": "The assistant offers the full model catalog with per-model thinking levels and richer openai-compatible model settings. It also adds Assistant branding, extra command-worker tools and an mDNS alias service.",
-          "breaking": false
-        },
-        {
-          "sha": "3a4ce5976fa71561ba25f61673abd2ed5824f424",
-          "subject": "feat(server): projects with per-project chats, creation and settings",
-          "summary": "The Assistant web app gains a project switcher with separate chats per project, creating empty or git-cloned projects when projectsRoot is set, and project settings for name, default model, thinking level and AGENTS.md.",
-          "breaking": false
-        },
-        {
-          "sha": "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-          "subject": "feat(server): live running, needs-you and unread status for chats and projects",
-          "summary": "The Assistant's chat sidebar and project switcher now show live working, needs-you and unread status, and chats keep running when you switch to another chat.",
-          "breaking": false
-        },
-        {
-          "sha": "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-          "subject": "feat(server): per-project network presets, web_fetch and web_search",
-          "summary": "Assistant projects get per-project network presets (Open web, Dependencies only, Off) enforced by a signed egress policy, plus read-only web_fetch and web_search tools and an optional SearXNG compose overlay.",
-          "breaking": false
-        },
-        {
-          "sha": "3854f85f1de38e1048f63766d55249a70b115f99",
-          "subject": "feat(server): read-only file viewer for chat file links",
-          "summary": "File links in Assistant chats open a read-only Monaco file viewer for the selected project's files, with path, symlink, binary and size protections.",
-          "breaking": false
-        },
-        {
-          "sha": "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-          "subject": "feat(server): show background agents on the Assistant's Agent Fleet cards",
-          "summary": "The Assistant shows the open chat's background agents as Agent Fleet cards with transcripts, steering, stopping and child approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "4bbb98ce50fbb4117c53219bbe64416741255f19",
-          "subject": "feat(server): reopen the Assistant's Agent Fleet with /fleet",
-          "summary": "The Assistant adds a /fleet command that reopens the Agent Fleet panel after all agents have finished.",
-          "breaking": false
-        },
-        {
-          "sha": "00b0841975f5f7a7caaa7bf71def091fa35c7ce0",
-          "subject": "feat(server): deliver background results and add an approval-mode toggle",
-          "summary": "The Assistant delivers finished background agent results as a result card and wakes the chat to report them, and adds an Auto-run / Ask first approval-mode toggle in the composer toolbar.",
-          "breaking": false
-        },
-        {
-          "sha": "442661716834f51f346e7dc0d0fe855a0fbdbe58",
-          "subject": "fix(webview): never show a negative Agent Fleet timer",
-          "summary": "The Agent Fleet strip no longer shows a negative elapsed timer for newly started agents.",
-          "breaking": false
-        },
-        {
-          "sha": "ccc48a2fb86277045ef127ed7ddae0f39253751a",
-          "subject": "feat(desktop): add an Assistant view and a browser gateway Assistant link",
-          "summary": "Desktop gains an Assistant view with a sandboxed persistent session and optional pinned local CA in Settings, and the browser gateway sidebar links to the Assistant in a new tab with a configurable address.",
-          "breaking": false
-        },
-        {
-          "sha": "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-          "subject": "feat(server): Jobs and Inbox in the Assistant web app",
-          "summary": "The Assistant web app gains a Jobs panel and an Inbox with an unread badge, live-following of run chats with approval cards, and a server-side inbox for finished, failed, blocked and approval-waiting runs.",
-          "breaking": false
-        },
-        {
-          "sha": "3da5b73e04bba755ac087ccc94f03c5b8a589524",
-          "subject": "feat(server): Web Push notifications for the Assistant inbox",
-          "summary": "Each new Assistant inbox entry can be sent as an encrypted Web Push notification to devices that opt in, with per-device subscriptions, a notifications config option, and a Turn off control on /devices.",
-          "breaking": false
-        },
-        {
-          "sha": "7ae36dac6fb9f13d42bb867666e1f06169412168",
-          "subject": "feat(server): create and manage scheduled jobs from an Assistant chat",
-          "summary": "Assistant chats can create, change, delete and list scheduled jobs via new tools, always requiring owner approval with an exact preview card, and the workspace host gains an approvalHostTools option.",
-          "breaking": false
-        },
-        {
-          "sha": "b82851fe11bab35a1afc01c727883069903725ab",
-          "subject": "feat(server): keep why a job run failed",
-          "summary": "Failed or blocked job runs now keep a redacted description of what actually went wrong, shown in Jobs history and the Inbox, via a new onTurnError hook threaded through the core engine, node host and workspace host.",
-          "breaking": false
-        },
-        {
-          "sha": "0372a83e5db452a6bb15547394cf6759c15da53b",
-          "subject": "fix(server): show a banner for every Assistant push, even with a repeated tag",
-          "summary": "Assistant push notifications now always show a banner even when a notification reuses an earlier tag, so repeated tests or run updates are no longer silent.",
-          "breaking": false
-        },
-        {
-          "sha": "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
-          "subject": "feat(server): publish ready tasks as draft pull requests through a separate publisher",
-          "breaking": false
-        },
-        {
-          "sha": "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
-          "subject": "feat(assistant): Tasks view, Inbox entries for task outcomes, resizable sidebar",
-          "breaking": false
-        },
-        {
-          "sha": "4e3babb8d750155f33943308b1fe24b52142de69",
-          "subject": "feat(assistant): find repositories through the publisher and pick connections by reachability",
-          "breaking": false
-        },
-        {
-          "sha": "24572597e878e1a919b6d837a13309ac268b964c",
-          "subject": "feat(assistant): reference repositories on coding tasks",
-          "breaking": false
-        },
-        {
-          "sha": "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
-          "subject": "feat(assistant): tasks in the conversation and continue_task",
-          "breaking": false
-        },
-        {
-          "sha": "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-          "subject": "fix(assistant): realistic turn limits, and tasks continue past them",
-          "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
-          "breaking": false
-        },
-        {
-          "sha": "15b0f7112896328934ebe7722650d2297e2e3249",
-          "subject": "fix(assistant): run checks with CI=true, and open chat web links in a new tab",
-          "summary": "Commands run by the assistant server now set CI=true so tools don't wait for prompts, and web links in chat messages open in a new tab.",
-          "breaking": false
-        },
-        {
-          "sha": "b553f41f735afdfe43d66ac321053115f7e888ae",
-          "subject": "feat(assistant): task chats are real chats, and messages steer running turns",
-          "breaking": false
-        },
-        {
-          "sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-          "subject": "feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard",
-          "breaking": false
-        },
-        {
-          "sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-          "subject": "feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work",
-          "breaking": false
-        },
-        {
-          "sha": "06168451170a90231b5e1c9d6542b56331324a06",
-          "subject": "feat(assistant): session runners, one container per coding task session with models and tools on the control plane",
-          "breaking": false
-        },
-        {
-          "sha": "78fe3f57c754f5496269b1c778a68a72e1068469",
-          "subject": "feat(assistant): backups to an append-only store, with restore",
-          "breaking": false
-        },
-        {
-          "sha": "e07307e35594f174baf8b07518572a9cac090131",
-          "subject": "feat(assistant): controlled upgrades with drain, version checks and rollback",
-          "breaking": false
-        },
-        {
-          "sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-          "subject": "fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain",
-          "breaking": false
-        },
-        {
-          "sha": "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
-          "subject": "feat(assistant): signed audit checkpoints in the append-only backup store",
-          "breaking": false
-        },
-        {
-          "sha": "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-          "subject": "feat(assistant): remote MCP servers with per-tool Ask/Run/Off, OAuth and audited calls",
-          "breaking": false
-        },
-        {
-          "sha": "dd3373fca78f1e8b4be057df21022d16e0add09e",
-          "subject": "fix(workspace-host): tell the model about host-provided MCP tools instead of saying MCP is off",
-          "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
-          "breaking": false
-        },
-        {
-          "sha": "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
-          "subject": "feat(assistant): take over a coding task in a browser editor",
-          "breaking": false
-        },
-        {
-          "sha": "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-          "subject": "feat(assistant): persona, time zone and quiet hours",
-          "breaking": false
-        },
-        {
-          "sha": "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
-          "subject": "fix(assistant): offer this device's time zone in Settings",
-          "breaking": false
-        },
-        {
-          "sha": "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-          "subject": "feat(assistant): memory the owner can see, correct and forget",
-          "breaking": false
-        },
-        {
-          "sha": "b51ff9aec7f1710f419653ec1a784b751d126274",
-          "subject": "feat(assistant): deleting a chat deletes it, with stated retention",
-          "breaking": false
-        },
-        {
-          "sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
-          "subject": "feat(assistant): watches that only ask a model when a page changed",
-          "breaking": false
-        },
-        {
-          "sha": "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
-          "subject": "feat(assistant): daily briefings with sourced sections",
-          "breaking": false
-        },
-        {
-          "sha": "dfbd5d84bc33f3552299780f8d78d33329b3c253",
-          "subject": "feat(assistant): email and calendar through MCP with always-ask tools",
-          "breaking": false
-        },
-        {
-          "sha": "9fa880d83057c5987f2939b94d19bf935d407785",
-          "subject": "feat(assistant): Home Assistant and other MCP servers on the owner's network",
-          "breaking": false
-        },
-        {
-          "sha": "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-          "subject": "fix(assistant): let chats run alongside one waiting on approval and make queue Remove/Edit work",
-          "breaking": false
-        },
-        {
-          "sha": "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-          "subject": "feat(assistant): polish management panels and task navigation",
-          "breaking": false
-        },
-        {
-          "sha": "8c8830135a45638b6684055daa3e6b1b9815fe3e",
-          "subject": "fix(assistant): keep long task previews compact",
-          "breaking": false
-        },
-        {
-          "sha": "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-          "subject": "feat(assistant): add guided release installation and image updates",
-          "breaking": false
-        },
-        {
-          "sha": "b94259a3559e0df229e4a43deb371c763b2296bc",
-          "subject": "feat(assistant): add confirmed browser updates and durable updater",
-          "breaking": false
-        },
-        {
-          "sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-          "subject": "feat(node-host): let Codex account saves check authority under the lock",
-          "breaking": false
-        },
-        {
-          "sha": "69fd7545b8d9509a651ea718d74f9e9c36496aef",
-          "subject": "feat(assistant): add browser setup, API-key models, optional features and uninstall",
-          "breaking": false
-        },
-        {
-          "sha": "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
-          "subject": "docs(assistant): point getting started at browser setup and installer features",
-          "breaking": false
-        },
-        {
-          "sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-          "subject": "fix(core): keep admitted steering messages when a model call fails",
-          "breaking": false
-        },
-        {
-          "sha": "5059396572186fed56d325d392055168ec502fea",
-          "subject": "refactor(assistant): share the task wire contract with the browser",
-          "breaking": false
-        },
-        {
-          "sha": "b973a3780043b78d3f7bb5ea04236c42b739e22c",
-          "subject": "fix(assistant): retire an update's rollback point when a feature is turned on or off",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "desktop": {
-      "published": "0.27.0",
-      "baselineRef": "desktop-v0.27.0",
-      "reserved": "0.27.0",
-      "commits": [
-        "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-        "81717712e5d690008ab160700a2f502391bc95b9",
-        "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-        "64e1237a93391a634c1b032c95a3ef04abafc088",
-        "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-        "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-        "95e3632b9b51637952b904b7e91d2d4ead371e92",
-        "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-        "b3eb15f28497837c8274003b227cd45231c940a9",
-        "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-        "7ddf11689925456f3b73a3390ebb489396f9542c",
-        "a5b6a1072d8aaba6807bbc4fd07c4b4c97db9bd6",
-        "3a4ce5976fa71561ba25f61673abd2ed5824f424",
-        "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-        "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-        "3854f85f1de38e1048f63766d55249a70b115f99",
-        "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-        "4bbb98ce50fbb4117c53219bbe64416741255f19",
-        "00b0841975f5f7a7caaa7bf71def091fa35c7ce0",
-        "442661716834f51f346e7dc0d0fe855a0fbdbe58",
-        "ccc48a2fb86277045ef127ed7ddae0f39253751a",
-        "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-        "3da5b73e04bba755ac087ccc94f03c5b8a589524",
-        "7ae36dac6fb9f13d42bb867666e1f06169412168",
-        "b82851fe11bab35a1afc01c727883069903725ab",
-        "0372a83e5db452a6bb15547394cf6759c15da53b",
-        "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
-        "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
-        "4e3babb8d750155f33943308b1fe24b52142de69",
-        "24572597e878e1a919b6d837a13309ac268b964c",
-        "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
-        "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-        "15b0f7112896328934ebe7722650d2297e2e3249",
-        "b553f41f735afdfe43d66ac321053115f7e888ae",
-        "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-        "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-        "06168451170a90231b5e1c9d6542b56331324a06",
-        "78fe3f57c754f5496269b1c778a68a72e1068469",
-        "e07307e35594f174baf8b07518572a9cac090131",
-        "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-        "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
-        "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-        "dd3373fca78f1e8b4be057df21022d16e0add09e",
-        "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
-        "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-        "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
-        "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-        "b51ff9aec7f1710f419653ec1a784b751d126274",
-        "ecf7988de61ba6e20618a36d7befe016b6968dde",
-        "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
-        "dfbd5d84bc33f3552299780f8d78d33329b3c253",
-        "9fa880d83057c5987f2939b94d19bf935d407785",
-        "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-        "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-        "8c8830135a45638b6684055daa3e6b1b9815fe3e",
-        "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-        "b94259a3559e0df229e4a43deb371c763b2296bc",
-        "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-        "69fd7545b8d9509a651ea718d74f9e9c36496aef",
-        "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
-        "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-        "5059396572186fed56d325d392055168ec502fea",
-        "b973a3780043b78d3f7bb5ea04236c42b739e22c"
-      ],
+      "published": "0.28.0",
+      "baselineRef": "desktop-v0.28.0",
+      "reserved": "0.28.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.28.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.28.0",
-      "notes": [
-        {
-          "sha": "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-          "subject": "feat(workspace-host): add prompt identity and command execution backend seams",
-          "summary": "Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.",
-          "breaking": false
-        },
-        {
-          "sha": "81717712e5d690008ab160700a2f502391bc95b9",
-          "subject": "feat(workspace-host): delegate file tools to the execution backend",
-          "summary": "File reads, writes, search and the git status probe can now run through an injected execution backend, with a new filesystem port in node-host; local behaviour is unchanged by default.",
-          "breaking": false
-        },
-        {
-          "sha": "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-          "subject": "feat(server): add standalone assistant server access layer",
-          "summary": "Adds the standalone assistant server access layer: HTTPS-only listener, owner bootstrap, device pairing, cookie sessions, passphrase reauthentication, request guarding and rate limiting.",
-          "breaking": false
-        },
-        {
-          "sha": "64e1237a93391a634c1b032c95a3ef04abafc088",
-          "subject": "feat(server): mount workspace sessions on the authenticated server",
-          "summary": "The assistant server can now create workspace sessions, stream turn events over SSE, run server-owned turns and take approvals bound to an exact interaction; core and workspace-host gain supporting exports and options.",
-          "breaking": false
-        },
-        {
-          "sha": "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-          "subject": "feat(server): add runnable service entry point with systemd and launchd definitions",
-          "summary": "Adds a runnable assistant server with a JSON config, an agentlink-server CLI with --check, a bundled build, systemd and launchd definitions, crash recovery of interrupted sessions, and new turns allowed after an interruption.",
-          "breaking": false
-        },
-        {
-          "sha": "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-          "subject": "feat(server): add a name-constrained local CA for device trust",
-          "summary": "The assistant server can create a name-constrained local CA, issue and auto-renew its HTTPS certificate, and export the CA for devices via a new export-ca command, selected by tls.localCa in config.",
-          "breaking": false
-        },
-        {
-          "sha": "95e3632b9b51637952b904b7e91d2d4ead371e92",
-          "subject": "feat(server): add ChatGPT sign-in and a hardened container deployment",
-          "summary": "The assistant server gains ChatGPT (Codex) sign-in with codex-login/codex-logout commands, a hardened Docker container deployment, and more robust file locks. The node-host Codex OAuth manager can now use custom storage and finish sign-in from a pasted redirect URL.",
-          "breaking": false
-        },
-        {
-          "sha": "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-          "subject": "feat(server): run background agents and route reviews to the review model",
-          "summary": "Agents can start read-only background children, such as a reviewer on a role-selected model. The assistant server gains routes to list, steer, stop and approve those children.",
-          "breaking": false
-        },
-        {
-          "sha": "b3eb15f28497837c8274003b227cd45231c940a9",
-          "subject": "feat(server): push background agent progress and completion to the parent stream",
-          "summary": "Background agent lifecycle, phase and current-tool changes are pushed to the parent session's event stream, so clients no longer need to poll. The supervisor also tracks tool completion more accurately.",
-          "breaking": false
-        },
-        {
-          "sha": "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-          "subject": "feat(server): let chats work without approval by default",
-          "summary": "Assistant chats now run in-project file edits and foreground commands without approval by default, with a per-session approval-mode switch. Recorded tool authorizations are now single-use in the turn kernel.",
-          "breaking": false
-        },
-        {
-          "sha": "7ddf11689925456f3b73a3390ebb489396f9542c",
-          "subject": "feat(server): share the Ask Agent UI and sign in with pairing codes",
-          "summary": "The assistant now serves the shared Ask Agent UI and signs devices in with single-use 6-digit pairing codes from `agentlink-server pair`. The setup credential, passphrase, recover command and CSRF header are removed, and old access state is migrated.",
-          "breaking": false
-        },
-        {
-          "sha": "a5b6a1072d8aaba6807bbc4fd07c4b4c97db9bd6",
-          "subject": "feat(server): per-model thinking levels, full model catalog and Assistant branding",
-          "summary": "The assistant offers the full model catalog with per-model thinking levels and richer openai-compatible model settings. It also adds Assistant branding, extra command-worker tools and an mDNS alias service.",
-          "breaking": false
-        },
-        {
-          "sha": "3a4ce5976fa71561ba25f61673abd2ed5824f424",
-          "subject": "feat(server): projects with per-project chats, creation and settings",
-          "summary": "The Assistant web app gains a project switcher with separate chats per project, creating empty or git-cloned projects when projectsRoot is set, and project settings for name, default model, thinking level and AGENTS.md.",
-          "breaking": false
-        },
-        {
-          "sha": "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-          "subject": "feat(server): live running, needs-you and unread status for chats and projects",
-          "summary": "The Assistant's chat sidebar and project switcher now show live working, needs-you and unread status, and chats keep running when you switch to another chat.",
-          "breaking": false
-        },
-        {
-          "sha": "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-          "subject": "feat(server): per-project network presets, web_fetch and web_search",
-          "summary": "Assistant projects get per-project network presets (Open web, Dependencies only, Off) enforced by a signed egress policy, plus read-only web_fetch and web_search tools and an optional SearXNG compose overlay.",
-          "breaking": false
-        },
-        {
-          "sha": "3854f85f1de38e1048f63766d55249a70b115f99",
-          "subject": "feat(server): read-only file viewer for chat file links",
-          "summary": "File links in Assistant chats open a read-only Monaco file viewer for the selected project's files, with path, symlink, binary and size protections.",
-          "breaking": false
-        },
-        {
-          "sha": "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-          "subject": "feat(server): show background agents on the Assistant's Agent Fleet cards",
-          "summary": "The Assistant shows the open chat's background agents as Agent Fleet cards with transcripts, steering, stopping and child approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "4bbb98ce50fbb4117c53219bbe64416741255f19",
-          "subject": "feat(server): reopen the Assistant's Agent Fleet with /fleet",
-          "summary": "The Assistant adds a /fleet command that reopens the Agent Fleet panel after all agents have finished.",
-          "breaking": false
-        },
-        {
-          "sha": "00b0841975f5f7a7caaa7bf71def091fa35c7ce0",
-          "subject": "feat(server): deliver background results and add an approval-mode toggle",
-          "summary": "The Assistant delivers finished background agent results as a result card and wakes the chat to report them, and adds an Auto-run / Ask first approval-mode toggle in the composer toolbar.",
-          "breaking": false
-        },
-        {
-          "sha": "442661716834f51f346e7dc0d0fe855a0fbdbe58",
-          "subject": "fix(webview): never show a negative Agent Fleet timer",
-          "summary": "The Agent Fleet strip no longer shows a negative elapsed timer for newly started agents.",
-          "breaking": false
-        },
-        {
-          "sha": "ccc48a2fb86277045ef127ed7ddae0f39253751a",
-          "subject": "feat(desktop): add an Assistant view and a browser gateway Assistant link",
-          "summary": "Desktop gains an Assistant view with a sandboxed persistent session and optional pinned local CA in Settings, and the browser gateway sidebar links to the Assistant in a new tab with a configurable address.",
-          "breaking": false
-        },
-        {
-          "sha": "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-          "subject": "feat(server): Jobs and Inbox in the Assistant web app",
-          "summary": "The Assistant web app gains a Jobs panel and an Inbox with an unread badge, live-following of run chats with approval cards, and a server-side inbox for finished, failed, blocked and approval-waiting runs.",
-          "breaking": false
-        },
-        {
-          "sha": "3da5b73e04bba755ac087ccc94f03c5b8a589524",
-          "subject": "feat(server): Web Push notifications for the Assistant inbox",
-          "summary": "Each new Assistant inbox entry can be sent as an encrypted Web Push notification to devices that opt in, with per-device subscriptions, a notifications config option, and a Turn off control on /devices.",
-          "breaking": false
-        },
-        {
-          "sha": "7ae36dac6fb9f13d42bb867666e1f06169412168",
-          "subject": "feat(server): create and manage scheduled jobs from an Assistant chat",
-          "summary": "Assistant chats can create, change, delete and list scheduled jobs via new tools, always requiring owner approval with an exact preview card, and the workspace host gains an approvalHostTools option.",
-          "breaking": false
-        },
-        {
-          "sha": "b82851fe11bab35a1afc01c727883069903725ab",
-          "subject": "feat(server): keep why a job run failed",
-          "summary": "Failed or blocked job runs now keep a redacted description of what actually went wrong, shown in Jobs history and the Inbox, via a new onTurnError hook threaded through the core engine, node host and workspace host.",
-          "breaking": false
-        },
-        {
-          "sha": "0372a83e5db452a6bb15547394cf6759c15da53b",
-          "subject": "fix(server): show a banner for every Assistant push, even with a repeated tag",
-          "summary": "Assistant push notifications now always show a banner even when a notification reuses an earlier tag, so repeated tests or run updates are no longer silent.",
-          "breaking": false
-        },
-        {
-          "sha": "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
-          "subject": "feat(server): publish ready tasks as draft pull requests through a separate publisher",
-          "breaking": false
-        },
-        {
-          "sha": "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
-          "subject": "feat(assistant): Tasks view, Inbox entries for task outcomes, resizable sidebar",
-          "breaking": false
-        },
-        {
-          "sha": "4e3babb8d750155f33943308b1fe24b52142de69",
-          "subject": "feat(assistant): find repositories through the publisher and pick connections by reachability",
-          "breaking": false
-        },
-        {
-          "sha": "24572597e878e1a919b6d837a13309ac268b964c",
-          "subject": "feat(assistant): reference repositories on coding tasks",
-          "breaking": false
-        },
-        {
-          "sha": "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
-          "subject": "feat(assistant): tasks in the conversation and continue_task",
-          "breaking": false
-        },
-        {
-          "sha": "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-          "subject": "fix(assistant): realistic turn limits, and tasks continue past them",
-          "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
-          "breaking": false
-        },
-        {
-          "sha": "15b0f7112896328934ebe7722650d2297e2e3249",
-          "subject": "fix(assistant): run checks with CI=true, and open chat web links in a new tab",
-          "summary": "Commands run by the assistant server now set CI=true so tools don't wait for prompts, and web links in chat messages open in a new tab.",
-          "breaking": false
-        },
-        {
-          "sha": "b553f41f735afdfe43d66ac321053115f7e888ae",
-          "subject": "feat(assistant): task chats are real chats, and messages steer running turns",
-          "breaking": false
-        },
-        {
-          "sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-          "subject": "feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard",
-          "breaking": false
-        },
-        {
-          "sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-          "subject": "feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work",
-          "breaking": false
-        },
-        {
-          "sha": "06168451170a90231b5e1c9d6542b56331324a06",
-          "subject": "feat(assistant): session runners, one container per coding task session with models and tools on the control plane",
-          "breaking": false
-        },
-        {
-          "sha": "78fe3f57c754f5496269b1c778a68a72e1068469",
-          "subject": "feat(assistant): backups to an append-only store, with restore",
-          "breaking": false
-        },
-        {
-          "sha": "e07307e35594f174baf8b07518572a9cac090131",
-          "subject": "feat(assistant): controlled upgrades with drain, version checks and rollback",
-          "breaking": false
-        },
-        {
-          "sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-          "subject": "fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain",
-          "breaking": false
-        },
-        {
-          "sha": "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
-          "subject": "feat(assistant): signed audit checkpoints in the append-only backup store",
-          "breaking": false
-        },
-        {
-          "sha": "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-          "subject": "feat(assistant): remote MCP servers with per-tool Ask/Run/Off, OAuth and audited calls",
-          "breaking": false
-        },
-        {
-          "sha": "dd3373fca78f1e8b4be057df21022d16e0add09e",
-          "subject": "fix(workspace-host): tell the model about host-provided MCP tools instead of saying MCP is off",
-          "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
-          "breaking": false
-        },
-        {
-          "sha": "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
-          "subject": "feat(assistant): take over a coding task in a browser editor",
-          "breaking": false
-        },
-        {
-          "sha": "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-          "subject": "feat(assistant): persona, time zone and quiet hours",
-          "breaking": false
-        },
-        {
-          "sha": "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
-          "subject": "fix(assistant): offer this device's time zone in Settings",
-          "breaking": false
-        },
-        {
-          "sha": "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-          "subject": "feat(assistant): memory the owner can see, correct and forget",
-          "breaking": false
-        },
-        {
-          "sha": "b51ff9aec7f1710f419653ec1a784b751d126274",
-          "subject": "feat(assistant): deleting a chat deletes it, with stated retention",
-          "breaking": false
-        },
-        {
-          "sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
-          "subject": "feat(assistant): watches that only ask a model when a page changed",
-          "breaking": false
-        },
-        {
-          "sha": "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
-          "subject": "feat(assistant): daily briefings with sourced sections",
-          "breaking": false
-        },
-        {
-          "sha": "dfbd5d84bc33f3552299780f8d78d33329b3c253",
-          "subject": "feat(assistant): email and calendar through MCP with always-ask tools",
-          "breaking": false
-        },
-        {
-          "sha": "9fa880d83057c5987f2939b94d19bf935d407785",
-          "subject": "feat(assistant): Home Assistant and other MCP servers on the owner's network",
-          "breaking": false
-        },
-        {
-          "sha": "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-          "subject": "fix(assistant): let chats run alongside one waiting on approval and make queue Remove/Edit work",
-          "breaking": false
-        },
-        {
-          "sha": "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-          "subject": "feat(assistant): polish management panels and task navigation",
-          "breaking": false
-        },
-        {
-          "sha": "8c8830135a45638b6684055daa3e6b1b9815fe3e",
-          "subject": "fix(assistant): keep long task previews compact",
-          "breaking": false
-        },
-        {
-          "sha": "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-          "subject": "feat(assistant): add guided release installation and image updates",
-          "breaking": false
-        },
-        {
-          "sha": "b94259a3559e0df229e4a43deb371c763b2296bc",
-          "subject": "feat(assistant): add confirmed browser updates and durable updater",
-          "breaking": false
-        },
-        {
-          "sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-          "subject": "feat(node-host): let Codex account saves check authority under the lock",
-          "breaking": false
-        },
-        {
-          "sha": "69fd7545b8d9509a651ea718d74f9e9c36496aef",
-          "subject": "feat(assistant): add browser setup, API-key models, optional features and uninstall",
-          "breaking": false
-        },
-        {
-          "sha": "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
-          "subject": "docs(assistant): point getting started at browser setup and installer features",
-          "breaking": false
-        },
-        {
-          "sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-          "subject": "fix(core): keep admitted steering messages when a model call fails",
-          "breaking": false
-        },
-        {
-          "sha": "5059396572186fed56d325d392055168ec502fea",
-          "subject": "refactor(assistant): share the task wire contract with the browser",
-          "breaking": false
-        },
-        {
-          "sha": "b973a3780043b78d3f7bb5ea04236c42b739e22c",
-          "subject": "fix(assistant): retire an update's rollback point when a feature is turned on or off",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "cli": {
-      "published": "0.23.0",
-      "baselineRef": "cli-v0.23.0",
-      "reserved": "0.23.0",
-      "commits": [
-        "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-        "81717712e5d690008ab160700a2f502391bc95b9",
-        "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-        "64e1237a93391a634c1b032c95a3ef04abafc088",
-        "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-        "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-        "95e3632b9b51637952b904b7e91d2d4ead371e92",
-        "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-        "b3eb15f28497837c8274003b227cd45231c940a9",
-        "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-        "7ddf11689925456f3b73a3390ebb489396f9542c",
-        "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-        "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-        "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-        "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-        "7ae36dac6fb9f13d42bb867666e1f06169412168",
-        "b82851fe11bab35a1afc01c727883069903725ab",
-        "24572597e878e1a919b6d837a13309ac268b964c",
-        "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-        "b553f41f735afdfe43d66ac321053115f7e888ae",
-        "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-        "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-        "06168451170a90231b5e1c9d6542b56331324a06",
-        "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-        "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-        "dd3373fca78f1e8b4be057df21022d16e0add09e",
-        "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-        "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-        "b51ff9aec7f1710f419653ec1a784b751d126274",
-        "ecf7988de61ba6e20618a36d7befe016b6968dde",
-        "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-        "b94259a3559e0df229e4a43deb371c763b2296bc",
-        "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-        "47fa323432dd1cfed05be4f7471f0d34cf7697a8"
-      ],
+      "published": "0.24.0",
+      "baselineRef": "cli-v0.24.0",
+      "reserved": "0.24.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.24.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.24.0",
-      "notes": [
-        {
-          "sha": "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-          "subject": "feat(workspace-host): add prompt identity and command execution backend seams",
-          "summary": "Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.",
-          "breaking": false
-        },
-        {
-          "sha": "81717712e5d690008ab160700a2f502391bc95b9",
-          "subject": "feat(workspace-host): delegate file tools to the execution backend",
-          "summary": "File reads, writes, search and the git status probe can now run through an injected execution backend, with a new filesystem port in node-host; local behaviour is unchanged by default.",
-          "breaking": false
-        },
-        {
-          "sha": "cf0db4ce420157c0ece1a8ac0fea5bb16297dbb5",
-          "subject": "feat(server): add standalone assistant server access layer",
-          "summary": "Adds the standalone assistant server access layer: HTTPS-only listener, owner bootstrap, device pairing, cookie sessions, passphrase reauthentication, request guarding and rate limiting.",
-          "breaking": false
-        },
-        {
-          "sha": "64e1237a93391a634c1b032c95a3ef04abafc088",
-          "subject": "feat(server): mount workspace sessions on the authenticated server",
-          "summary": "The assistant server can now create workspace sessions, stream turn events over SSE, run server-owned turns and take approvals bound to an exact interaction; core and workspace-host gain supporting exports and options.",
-          "breaking": false
-        },
-        {
-          "sha": "6c758a48f2d913fb7bd4d46c0964f21e07e38026",
-          "subject": "feat(server): add runnable service entry point with systemd and launchd definitions",
-          "summary": "Adds a runnable assistant server with a JSON config, an agentlink-server CLI with --check, a bundled build, systemd and launchd definitions, crash recovery of interrupted sessions, and new turns allowed after an interruption.",
-          "breaking": false
-        },
-        {
-          "sha": "8267f932a9b66a0f1bd4f7c7a93a8077b11a98a3",
-          "subject": "feat(server): add a name-constrained local CA for device trust",
-          "summary": "The assistant server can create a name-constrained local CA, issue and auto-renew its HTTPS certificate, and export the CA for devices via a new export-ca command, selected by tls.localCa in config.",
-          "breaking": false
-        },
-        {
-          "sha": "95e3632b9b51637952b904b7e91d2d4ead371e92",
-          "subject": "feat(server): add ChatGPT sign-in and a hardened container deployment",
-          "summary": "The assistant server gains ChatGPT (Codex) sign-in with codex-login/codex-logout commands, a hardened Docker container deployment, and more robust file locks. The node-host Codex OAuth manager can now use custom storage and finish sign-in from a pasted redirect URL.",
-          "breaking": false
-        },
-        {
-          "sha": "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-          "subject": "feat(server): run background agents and route reviews to the review model",
-          "summary": "Agents can start read-only background children, such as a reviewer on a role-selected model. The assistant server gains routes to list, steer, stop and approve those children.",
-          "breaking": false
-        },
-        {
-          "sha": "b3eb15f28497837c8274003b227cd45231c940a9",
-          "subject": "feat(server): push background agent progress and completion to the parent stream",
-          "summary": "Background agent lifecycle, phase and current-tool changes are pushed to the parent session's event stream, so clients no longer need to poll. The supervisor also tracks tool completion more accurately.",
-          "breaking": false
-        },
-        {
-          "sha": "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-          "subject": "feat(server): let chats work without approval by default",
-          "summary": "Assistant chats now run in-project file edits and foreground commands without approval by default, with a per-session approval-mode switch. Recorded tool authorizations are now single-use in the turn kernel.",
-          "breaking": false
-        },
-        {
-          "sha": "7ddf11689925456f3b73a3390ebb489396f9542c",
-          "subject": "feat(server): share the Ask Agent UI and sign in with pairing codes",
-          "summary": "The assistant now serves the shared Ask Agent UI and signs devices in with single-use 6-digit pairing codes from `agentlink-server pair`. The setup credential, passphrase, recover command and CSRF header are removed, and old access state is migrated.",
-          "breaking": false
-        },
-        {
-          "sha": "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-          "subject": "feat(server): live running, needs-you and unread status for chats and projects",
-          "summary": "The Assistant's chat sidebar and project switcher now show live working, needs-you and unread status, and chats keep running when you switch to another chat.",
-          "breaking": false
-        },
-        {
-          "sha": "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-          "subject": "feat(server): per-project network presets, web_fetch and web_search",
-          "summary": "Assistant projects get per-project network presets (Open web, Dependencies only, Off) enforced by a signed egress policy, plus read-only web_fetch and web_search tools and an optional SearXNG compose overlay.",
-          "breaking": false
-        },
-        {
-          "sha": "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-          "subject": "feat(server): show background agents on the Assistant's Agent Fleet cards",
-          "summary": "The Assistant shows the open chat's background agents as Agent Fleet cards with transcripts, steering, stopping and child approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-          "subject": "feat(server): Jobs and Inbox in the Assistant web app",
-          "summary": "The Assistant web app gains a Jobs panel and an Inbox with an unread badge, live-following of run chats with approval cards, and a server-side inbox for finished, failed, blocked and approval-waiting runs.",
-          "breaking": false
-        },
-        {
-          "sha": "7ae36dac6fb9f13d42bb867666e1f06169412168",
-          "subject": "feat(server): create and manage scheduled jobs from an Assistant chat",
-          "summary": "Assistant chats can create, change, delete and list scheduled jobs via new tools, always requiring owner approval with an exact preview card, and the workspace host gains an approvalHostTools option.",
-          "breaking": false
-        },
-        {
-          "sha": "b82851fe11bab35a1afc01c727883069903725ab",
-          "subject": "feat(server): keep why a job run failed",
-          "summary": "Failed or blocked job runs now keep a redacted description of what actually went wrong, shown in Jobs history and the Inbox, via a new onTurnError hook threaded through the core engine, node host and workspace host.",
-          "breaking": false
-        },
-        {
-          "sha": "24572597e878e1a919b6d837a13309ac268b964c",
-          "subject": "feat(assistant): reference repositories on coding tasks",
-          "breaking": false
-        },
-        {
-          "sha": "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-          "subject": "fix(assistant): realistic turn limits, and tasks continue past them",
-          "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
-          "breaking": false
-        },
-        {
-          "sha": "b553f41f735afdfe43d66ac321053115f7e888ae",
-          "subject": "feat(assistant): task chats are real chats, and messages steer running turns",
-          "breaking": false
-        },
-        {
-          "sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-          "subject": "feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard",
-          "breaking": false
-        },
-        {
-          "sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-          "subject": "feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work",
-          "breaking": false
-        },
-        {
-          "sha": "06168451170a90231b5e1c9d6542b56331324a06",
-          "subject": "feat(assistant): session runners, one container per coding task session with models and tools on the control plane",
-          "breaking": false
-        },
-        {
-          "sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-          "subject": "fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain",
-          "breaking": false
-        },
-        {
-          "sha": "1ea72282cb68858987e5ae187acf9470cc93f4f5",
-          "subject": "feat(assistant): remote MCP servers with per-tool Ask/Run/Off, OAuth and audited calls",
-          "breaking": false
-        },
-        {
-          "sha": "dd3373fca78f1e8b4be057df21022d16e0add09e",
-          "subject": "fix(workspace-host): tell the model about host-provided MCP tools instead of saying MCP is off",
-          "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
-          "breaking": false
-        },
-        {
-          "sha": "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-          "subject": "feat(assistant): persona, time zone and quiet hours",
-          "breaking": false
-        },
-        {
-          "sha": "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-          "subject": "feat(assistant): memory the owner can see, correct and forget",
-          "breaking": false
-        },
-        {
-          "sha": "b51ff9aec7f1710f419653ec1a784b751d126274",
-          "subject": "feat(assistant): deleting a chat deletes it, with stated retention",
-          "breaking": false
-        },
-        {
-          "sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
-          "subject": "feat(assistant): watches that only ask a model when a page changed",
-          "breaking": false
-        },
-        {
-          "sha": "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-          "subject": "feat(assistant): add guided release installation and image updates",
-          "breaking": false
-        },
-        {
-          "sha": "b94259a3559e0df229e4a43deb371c763b2296bc",
-          "subject": "feat(assistant): add confirmed browser updates and durable updater",
-          "breaking": false
-        },
-        {
-          "sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-          "subject": "feat(node-host): let Codex account saves check authority under the lock",
-          "breaking": false
-        },
-        {
-          "sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-          "subject": "fix(core): keep admitted steering messages when a model call fails",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.14.0",
-      "baselineRef": "sdk-v0.14.0",
-      "reserved": "0.14.0",
-      "commits": [
-        "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-        "81717712e5d690008ab160700a2f502391bc95b9",
-        "64e1237a93391a634c1b032c95a3ef04abafc088",
-        "95e3632b9b51637952b904b7e91d2d4ead371e92",
-        "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-        "b3eb15f28497837c8274003b227cd45231c940a9",
-        "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-        "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-        "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-        "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-        "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-        "7ae36dac6fb9f13d42bb867666e1f06169412168",
-        "b82851fe11bab35a1afc01c727883069903725ab",
-        "24572597e878e1a919b6d837a13309ac268b964c",
-        "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-        "b553f41f735afdfe43d66ac321053115f7e888ae",
-        "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-        "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-        "06168451170a90231b5e1c9d6542b56331324a06",
-        "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-        "dd3373fca78f1e8b4be057df21022d16e0add09e",
-        "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-        "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-        "b51ff9aec7f1710f419653ec1a784b751d126274",
-        "ecf7988de61ba6e20618a36d7befe016b6968dde",
-        "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-        "47fa323432dd1cfed05be4f7471f0d34cf7697a8"
-      ],
+      "published": "0.15.0",
+      "baselineRef": "sdk-v0.15.0",
+      "reserved": "0.15.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.15.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.15.0",
-      "notes": [
-        {
-          "sha": "c1c05c42d55e6b5686752caefe2e3f36e424dae4",
-          "subject": "feat(workspace-host): add prompt identity and command execution backend seams",
-          "summary": "Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.",
-          "breaking": false
-        },
-        {
-          "sha": "81717712e5d690008ab160700a2f502391bc95b9",
-          "subject": "feat(workspace-host): delegate file tools to the execution backend",
-          "summary": "File reads, writes, search and the git status probe can now run through an injected execution backend, with a new filesystem port in node-host; local behaviour is unchanged by default.",
-          "breaking": false
-        },
-        {
-          "sha": "64e1237a93391a634c1b032c95a3ef04abafc088",
-          "subject": "feat(server): mount workspace sessions on the authenticated server",
-          "summary": "The assistant server can now create workspace sessions, stream turn events over SSE, run server-owned turns and take approvals bound to an exact interaction; core and workspace-host gain supporting exports and options.",
-          "breaking": false
-        },
-        {
-          "sha": "95e3632b9b51637952b904b7e91d2d4ead371e92",
-          "subject": "feat(server): add ChatGPT sign-in and a hardened container deployment",
-          "summary": "The assistant server gains ChatGPT (Codex) sign-in with codex-login/codex-logout commands, a hardened Docker container deployment, and more robust file locks. The node-host Codex OAuth manager can now use custom storage and finish sign-in from a pasted redirect URL.",
-          "breaking": false
-        },
-        {
-          "sha": "e468a8be8ff8ae2312a8d007670d47c59b9ca478",
-          "subject": "feat(server): run background agents and route reviews to the review model",
-          "summary": "Agents can start read-only background children, such as a reviewer on a role-selected model. The assistant server gains routes to list, steer, stop and approve those children.",
-          "breaking": false
-        },
-        {
-          "sha": "b3eb15f28497837c8274003b227cd45231c940a9",
-          "subject": "feat(server): push background agent progress and completion to the parent stream",
-          "summary": "Background agent lifecycle, phase and current-tool changes are pushed to the parent session's event stream, so clients no longer need to poll. The supervisor also tracks tool completion more accurately.",
-          "breaking": false
-        },
-        {
-          "sha": "8c61736ab9e472987436a86d2e8701cb4ee1bf04",
-          "subject": "feat(server): let chats work without approval by default",
-          "summary": "Assistant chats now run in-project file edits and foreground commands without approval by default, with a per-session approval-mode switch. Recorded tool authorizations are now single-use in the turn kernel.",
-          "breaking": false
-        },
-        {
-          "sha": "82503b62d05b2a762e90824ffa696e56c7e7e0dd",
-          "subject": "feat(server): live running, needs-you and unread status for chats and projects",
-          "summary": "The Assistant's chat sidebar and project switcher now show live working, needs-you and unread status, and chats keep running when you switch to another chat.",
-          "breaking": false
-        },
-        {
-          "sha": "8739d5b3a1bf9de980ddc2e68d6842b473a59cf2",
-          "subject": "feat(server): per-project network presets, web_fetch and web_search",
-          "summary": "Assistant projects get per-project network presets (Open web, Dependencies only, Off) enforced by a signed egress policy, plus read-only web_fetch and web_search tools and an optional SearXNG compose overlay.",
-          "breaking": false
-        },
-        {
-          "sha": "2c0ed2c00df5dc860eb24ada67d3da51b0d06488",
-          "subject": "feat(server): show background agents on the Assistant's Agent Fleet cards",
-          "summary": "The Assistant shows the open chat's background agents as Agent Fleet cards with transcripts, steering, stopping and child approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "0dda1c93a2fc53a402fabf2570c315cbbc66e201",
-          "subject": "feat(server): Jobs and Inbox in the Assistant web app",
-          "summary": "The Assistant web app gains a Jobs panel and an Inbox with an unread badge, live-following of run chats with approval cards, and a server-side inbox for finished, failed, blocked and approval-waiting runs.",
-          "breaking": false
-        },
-        {
-          "sha": "7ae36dac6fb9f13d42bb867666e1f06169412168",
-          "subject": "feat(server): create and manage scheduled jobs from an Assistant chat",
-          "summary": "Assistant chats can create, change, delete and list scheduled jobs via new tools, always requiring owner approval with an exact preview card, and the workspace host gains an approvalHostTools option.",
-          "breaking": false
-        },
-        {
-          "sha": "b82851fe11bab35a1afc01c727883069903725ab",
-          "subject": "feat(server): keep why a job run failed",
-          "summary": "Failed or blocked job runs now keep a redacted description of what actually went wrong, shown in Jobs history and the Inbox, via a new onTurnError hook threaded through the core engine, node host and workspace host.",
-          "breaking": false
-        },
-        {
-          "sha": "24572597e878e1a919b6d837a13309ac268b964c",
-          "subject": "feat(assistant): reference repositories on coding tasks",
-          "breaking": false
-        },
-        {
-          "sha": "a4022290531c1aaf8623e46e18e8e90f831df5fb",
-          "subject": "fix(assistant): realistic turn limits, and tasks continue past them",
-          "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
-          "breaking": false
-        },
-        {
-          "sha": "b553f41f735afdfe43d66ac321053115f7e888ae",
-          "subject": "feat(assistant): task chats are real chats, and messages steer running turns",
-          "breaking": false
-        },
-        {
-          "sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
-          "subject": "feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard",
-          "breaking": false
-        },
-        {
-          "sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
-          "subject": "feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work",
-          "breaking": false
-        },
-        {
-          "sha": "06168451170a90231b5e1c9d6542b56331324a06",
-          "subject": "feat(assistant): session runners, one container per coding task session with models and tools on the control plane",
-          "breaking": false
-        },
-        {
-          "sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
-          "subject": "fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain",
-          "breaking": false
-        },
-        {
-          "sha": "dd3373fca78f1e8b4be057df21022d16e0add09e",
-          "subject": "fix(workspace-host): tell the model about host-provided MCP tools instead of saying MCP is off",
-          "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
-          "breaking": false
-        },
-        {
-          "sha": "c49197065ef32e97167f59df9e60aaccc7d79ef5",
-          "subject": "feat(assistant): persona, time zone and quiet hours",
-          "breaking": false
-        },
-        {
-          "sha": "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
-          "subject": "feat(assistant): memory the owner can see, correct and forget",
-          "breaking": false
-        },
-        {
-          "sha": "b51ff9aec7f1710f419653ec1a784b751d126274",
-          "subject": "feat(assistant): deleting a chat deletes it, with stated retention",
-          "breaking": false
-        },
-        {
-          "sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
-          "subject": "feat(assistant): watches that only ask a model when a page changed",
-          "breaking": false
-        },
-        {
-          "sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-          "subject": "feat(node-host): let Codex account saves check authority under the lock",
-          "breaking": false
-        },
-        {
-          "sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-          "subject": "fix(core): keep admitted steering messages when a model call fails",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
       "published": "0.0.0",
@@ -1485,7 +202,8 @@
       "unknownPaths": [],
       "breakingCommits": [
         "45b225d751146a615367a69bb531705aba8eb143",
-        "7ddf11689925456f3b73a3390ebb489396f9542c"
+        "7ddf11689925456f3b73a3390ebb489396f9542c",
+        "ec0f3164ebd3fc262523447c6d463bb127dc8fb8"
       ],
       "bump": "breaking",
       "status": "release",
@@ -1746,36 +464,43 @@
         {
           "sha": "9ecc9182b558ce5fa596dc12bb6a989caaa18de5",
           "subject": "feat(server): publish ready tasks as draft pull requests through a separate publisher",
+          "summary": "The Assistant can now push ready coding tasks to their own agentlink/* branch and open draft pull requests through a separate publisher, with GitHub connections, per-repository publish permission and a new GitHub panel in the web app.",
           "breaking": false
         },
         {
           "sha": "ee051d16609eb920809e35e9606d6d79a6ad9ca5",
           "subject": "feat(server): clone private repositories for tasks through the publisher",
+          "summary": "Coding tasks can now clone private repositories: the publisher fetches the base branch with the connection's token and the server clones from a bundle, so the token never reaches the server or the clone.",
           "breaking": false
         },
         {
           "sha": "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb",
           "subject": "feat(assistant): Tasks view, Inbox entries for task outcomes, resizable sidebar",
+          "summary": "Adds a Tasks panel with evidence, history, read-only chats and Stop/Resume/Delete/Publish actions, Inbox entries and push notifications for task outcomes, and a resizable, responsive chat sidebar.",
           "breaking": false
         },
         {
           "sha": "4e3babb8d750155f33943308b1fe24b52142de69",
           "subject": "feat(assistant): find repositories through the publisher and pick connections by reachability",
+          "summary": "The Assistant can now list the repositories each GitHub connection reaches, search them from chats with a list_repositories tool, show them in the GitHub panel, and clone tasks with the one connection that reaches a repository.",
           "breaking": false
         },
         {
           "sha": "c3392576dce22a714d3a062f530261c36fee45af",
           "subject": "feat(assistant): one-card task start and read_repository",
+          "summary": "Chats can propose a task's checks and first-time publish permission on a single approval card, and a new read_repository tool lets them list, read and search a repository's files without starting a task.",
           "breaking": false
         },
         {
           "sha": "24572597e878e1a919b6d837a13309ac268b964c",
           "subject": "feat(assistant): reference repositories on coding tasks",
+          "summary": "Assistant coding tasks can name up to 3 other GitHub repositories as read-only references, cloned beside the task's repository, and commands are confined to the task's clone.",
           "breaking": false
         },
         {
           "sha": "630a7dcf50382dfd08f10c42054d7e81e75ed6d3",
           "subject": "feat(assistant): tasks in the conversation and continue_task",
+          "summary": "Assistant task outcomes now come back to the chat that started them, tasks show as cards above the composer, and a new continue_task tool sends follow-ups to a finished task's branch and pull request.",
           "breaking": false
         },
         {
@@ -1793,6 +518,7 @@
         {
           "sha": "1ea1171f7e3376dcbc84569b05486d51e35e0316",
           "subject": "fix(assistant): pnpm and yarn in the command worker; missing check programs don't use fix rounds",
+          "summary": "The command worker image now includes pnpm and yarn through Corepack, and a check whose program is missing fails the task with a clear message instead of using up fix rounds.",
           "breaking": false
         },
         {
@@ -1804,26 +530,31 @@
         {
           "sha": "b553f41f735afdfe43d66ac321053115f7e888ae",
           "subject": "feat(assistant): task chats are real chats, and messages steer running turns",
+          "summary": "Messages sent while a chat is working are taken into the running turn at its next break, and coding task chats are listed in the chat list with a badge and filters, stream live, and accept messages and Stop.",
           "breaking": false
         },
         {
           "sha": "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76",
           "subject": "feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard",
+          "summary": "Assistant chats and tasks now run without step or time limits, continue automatically while todos are unfinished, share the chat's approval grant with background agents, and send Inbox notices with Stop or Keep going when a session runs long or looks stuck.",
           "breaking": false
         },
         {
           "sha": "6e447ab54445519c9b4634e27d0e8a7cab51b133",
           "subject": "feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work",
+          "summary": "The assistant can run coding tasks in the current chat with live progress and steering, and in auto-run chats repeat tasks and follow-ups on an already approved repository start without an approval card.",
           "breaking": false
         },
         {
           "sha": "06168451170a90231b5e1c9d6542b56331324a06",
           "subject": "feat(assistant): session runners, one container per coding task session with models and tools on the control plane",
+          "summary": "The assistant can run each coding task's session in its own locked-down container via a runner manager, with model calls and web tools staying on the server. It is opt-in through a new `runners` setting.",
           "breaking": false
         },
         {
           "sha": "4155e76a74b399ec0c338760ccef635f9bebfc18",
           "subject": "feat(assistant): show finished task chats without starting their runners, and document session runners",
+          "summary": "Finished task chats are now shown from the assistant's saved copy of the last transcript, so opening the app doesn't wake every task's runner. Session runners are also documented.",
           "breaking": false
         },
         {
@@ -1835,41 +566,49 @@
         {
           "sha": "918cf44fe94cdde26e54aade3df1f733430f5c5e",
           "subject": "fix(assistant): remember sessions a runner does not have, so they never wake it again",
+          "summary": "The assistant remembers sessions a runner doesn't have, so reading them no longer repeatedly starts that runner.",
           "breaking": false
         },
         {
           "sha": "19af91afde4b6820eed84e19dce71e4787950b79",
           "subject": "feat(assistant): hash-chained audit log for coding tasks",
+          "summary": "The assistant keeps a hash-chained audit log of coding task changes, gate results, external effects and who asked for them. Check it with `GET /api/tasks/:id/audit` or `agentlink-server audit-check`.",
           "breaking": false
         },
         {
           "sha": "78fe3f57c754f5496269b1c778a68a72e1068469",
           "subject": "feat(assistant): backups to an append-only store, with restore",
+          "summary": "The assistant can back up its deploy directory to an append-only restic store through a sidecar, with restore, `backup`/`backups` commands, and a backup status and Back up now button in the Inbox.",
           "breaking": false
         },
         {
           "sha": "ca02d7dfc776682bcff1531a3c6af7361e9d830a",
           "subject": "fix(assistant): stage backups with a plain copy, which works in the backup container",
+          "summary": "Backups now stage the data folder with a plain read-and-write copy, which fixes copy failures inside the backup container.",
           "breaking": false
         },
         {
           "sha": "e07307e35594f174baf8b07518572a9cac090131",
           "subject": "feat(assistant): controlled upgrades with drain, version checks and rollback",
+          "summary": "Adds controlled upgrades: `upgrade.sh` with drain, a backup, a version smoke check and automatic rollback. Also adds `drain`, `resume` and `smoke-check` commands, service version reporting, data format versioning, and an \"Upgrading\" notice in the app.",
           "breaking": false
         },
         {
           "sha": "ec0f3164ebd3fc262523447c6d463bb127dc8fb8",
           "subject": "fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain",
-          "breaking": false
+          "summary": "The assistant now stores chats by project ID instead of folder identity, so restored or moved folders keep their history. Existing chat history stored under the old folder identity is not carried over. Chats stopped by a drain also add an Inbox entry.",
+          "breaking": true
         },
         {
           "sha": "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8",
           "subject": "feat(assistant): signed audit checkpoints in the append-only backup store",
+          "summary": "The assistant signs audit log heads and stores them as append-only backup checkpoints, adds audit-check --checkpoints verification, and shows the last checkpoint in the Inbox panel.",
           "breaking": false
         },
         {
           "sha": "1ea72282cb68858987e5ae187acf9470cc93f4f5",
           "subject": "feat(assistant): remote MCP servers with per-tool Ask/Run/Off, OAuth and audited calls",
+          "summary": "The assistant can connect remote MCP servers with per-tool Ask/Run/Off, OAuth or header sign-in, a new MCP panel, and audited tool calls from chats and tasks.",
           "breaking": false
         },
         {
@@ -1881,91 +620,109 @@
         {
           "sha": "3ded2c18cb2c88dc1826fd389008e5e915b176ab",
           "subject": "feat(assistant): take over a coding task in a browser editor",
+          "summary": "Coding tasks can be opened in a read-only browser editor, taken over to edit, and handed back to continue, using per-task editor containers on a separate HTTPS port with audited actions.",
           "breaking": false
         },
         {
           "sha": "aaaa860856ebab145dd614b106ba07b7e38161cd",
           "subject": "fix(assistant): let code-server accept editor WebSockets behind the proxy",
+          "summary": "Fixes editor WebSocket connections being refused behind the proxy by forwarding the checked public host and dropping client-supplied forwarding headers.",
           "breaking": false
         },
         {
           "sha": "11b37d9283ba335f56a1703f3a4afeb96c8895cb",
           "subject": "fix(assistant): keep session runners' chats by task project ID",
+          "summary": "Fixes tasks continued after a redeploy failing with session_not_found by keying session runners' saved chats by task project ID.",
           "breaking": false
         },
         {
           "sha": "aae6f3328b608c4ab18ac37a13395d4ecab97a07",
           "subject": "feat(assistant): AgentLink built into the task editor, with models through the assistant",
+          "summary": "The task editor now has the AgentLink extension built in, with models served through the assistant's own backends via a per-editor token and a new editor.modelsPort setting.",
           "breaking": false
         },
         {
           "sha": "ed4945972f5ecc2a0f8fa30e080ee79e3d0884ce",
           "subject": "fix(assistant): keep the build commit when packaging the editor extension",
+          "summary": "The upgrade script now keeps the build commit when packaging the editor extension.",
           "breaking": false
         },
         {
           "sha": "ba5b17b3873467536307529f7298324dcd8091dd",
           "subject": "fix(assistant): give read-only task editors a scratch folder for AgentLink's chats",
+          "summary": "Read-only task editors now get a scratch folder so AgentLink's chats can store state without making the task's files writable.",
           "breaking": false
         },
         {
           "sha": "a5b296383f33c500eb7d1673591387f6c756e22f",
           "subject": "fix(assistant): keep scheduled runs waiting for approval across restarts",
+          "summary": "Scheduled runs waiting for approval now stay waiting across restarts and upgrades, and the upgrade drain no longer waits for them.",
           "breaking": false
         },
         {
           "sha": "c49197065ef32e97167f59df9e60aaccc7d79ef5",
           "subject": "feat(assistant): persona, time zone and quiet hours",
+          "summary": "The Assistant gets a Settings panel and a propose_persona_change approval tool for its name, persona, owner name, time zone and quiet hours, with push notifications held during quiet hours.",
           "breaking": false
         },
         {
           "sha": "38494f87b9dd2f42a8283d83207c152ee5ed6f25",
           "subject": "fix(assistant): offer this device's time zone in Settings",
+          "summary": "Assistant Settings now offers this device's time zone with one click, which helps when a containerised server defaults to UTC.",
           "breaking": false
         },
         {
           "sha": "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499",
           "subject": "feat(assistant): memory the owner can see, correct and forget",
+          "summary": "The Assistant remembers lasting things the owner says and uses them in later chats, with a Memory panel to search, edit, forget and export, a Remembered strip with Undo, and a new @agentlink/core/memory entry point.",
           "breaking": false
         },
         {
           "sha": "b51ff9aec7f1710f419653ec1a784b751d126274",
           "subject": "feat(assistant): deleting a chat deletes it, with stated retention",
+          "summary": "Deleting an Assistant chat or task now removes its data (session, background agents, commands, events, Inbox entries), refuses while work is running, records audit text only as hashes, and Settings shows storage and retention.",
           "breaking": false
         },
         {
           "sha": "b7989e029fbf313815615a6c7ad4e575c868cf31",
           "subject": "fix(assistant): say that older audit entries kept their text",
+          "summary": "The Assistant's retention text and docs now say that audit entries written before this version kept their original text.",
           "breaking": false
         },
         {
           "sha": "ecf7988de61ba6e20618a36d7befe016b6968dde",
           "subject": "feat(assistant): watches that only ask a model when a page changed",
+          "summary": "The Assistant can watch a web page or feed and only ask a model when it changes, via the new watch_page tool. Job runs now record token usage with an unusual-usage notice, and web fetch and push delivery now use the checked connection.",
           "breaking": false
         },
         {
           "sha": "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22",
           "subject": "feat(assistant): daily briefings with sourced sections",
+          "summary": "The assistant can schedule daily briefings with sourced sections (watch changes, news, calendar, email, open items), approved on a card, delivered to the Inbox with a count of unsourced items, and shown in the Jobs panel.",
           "breaking": false
         },
         {
           "sha": "dfbd5d84bc33f3552299780f8d78d33329b3c253",
           "subject": "feat(assistant): email and calendar through MCP with always-ask tools",
+          "summary": "Briefings read the owner's calendar and email through MCP read tools. MCP tools gain an always-ask list that can never be set to Run, plus argument limits on Run, edited in the MCP panel.",
           "breaking": false
         },
         {
           "sha": "9fa880d83057c5987f2939b94d19bf935d407785",
           "subject": "feat(assistant): Home Assistant and other MCP servers on the owner's network",
+          "summary": "MCP servers on the owner's network (such as Home Assistant) can be added with an \"On my network\" option. Only the owner's own chats see them, and only read-named tools can be set to Run.",
           "breaking": false
         },
         {
           "sha": "c84019dccbe1476b00a8372e13cbeedb37462afd",
           "subject": "feat(assistant): browser research in a throwaway headless Chromium",
+          "summary": "Chats on Open web projects can browse JavaScript pages in a throwaway headless Chromium via browse_* tools, with downloads, uploads and password forms refused. The egress gateway now answers unauthenticated refused requests with a 407 challenge.",
           "breaking": false
         },
         {
           "sha": "eee5304fe24d2f17feb43cac1941b092b99e71ba",
           "subject": "fix(assistant): expose browser DevTools through socat since Chromium binds loopback only",
+          "summary": "Fixes the research browser's DevTools connection by forwarding its port with socat, since Chromium listens on loopback only, and adds logging for browser startup failures.",
           "breaking": false
         },
         {
@@ -1981,6 +738,7 @@
         {
           "sha": "f33e77568e9c6b6fb9d5644fd232f09daf5b5233",
           "subject": "fix(assistant): send the bare Host header on checked HTTPS connections",
+          "summary": "Fixes watches on GitHub feeds failing with \"Too many redirects\" by sending the bare Host header on checked HTTPS connections, and the same for push delivery.",
           "breaking": false
         },
         {
@@ -1991,6 +749,7 @@
         {
           "sha": "8c8830135a45638b6684055daa3e6b1b9815fe3e",
           "subject": "fix(assistant): keep long task previews compact",
+          "summary": "Long task titles and code previews in the task list are now clamped so rows stay compact.",
           "breaking": false
         },
         {
@@ -2130,86 +889,6 @@
     }
   },
   "decisions": {
-    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "27108a79f2e074884338de46aecfe26caeb534e7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f197e1422486394963198bea440d3bcda8a121fa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "c1c05c42d55e6b5686752caefe2e3f36e424dae4": {
       "bump": "minor",
       "breakingUnits": [],
@@ -2574,6 +1253,414 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "27108a79f2e074884338de46aecfe26caeb534e7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f197e1422486394963198bea440d3bcda8a121fa": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9ecc9182b558ce5fa596dc12bb6a989caaa18de5": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant can now push ready coding tasks to their own agentlink/* branch and open draft pull requests through a separate publisher, with GitHub connections, per-repository publish permission and a new GitHub panel in the web app.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ee051d16609eb920809e35e9606d6d79a6ad9ca5": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Coding tasks can now clone private repositories: the publisher fetches the base branch with the connection's token and the server clones from a bundle, so the token never reaches the server or the clone.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a7ea6d6f4f0ca7c9370ac7785e1018c1cac879eb": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a Tasks panel with evidence, history, read-only chats and Stop/Resume/Delete/Publish actions, Inbox entries and push notifications for task outcomes, and a resizable, responsive chat sidebar.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4e3babb8d750155f33943308b1fe24b52142de69": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant can now list the repositories each GitHub connection reaches, search them from chats with a list_repositories tool, show them in the GitHub panel, and clone tasks with the one connection that reaches a repository.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c3392576dce22a714d3a062f530261c36fee45af": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Chats can propose a task's checks and first-time publish permission on a single approval card, and a new read_repository tool lets them list, read and search a repository's files without starting a task.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "24572597e878e1a919b6d837a13309ac268b964c": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Assistant coding tasks can name up to 3 other GitHub repositories as read-only references, cloned beside the task's repository, and commands are confined to the task's clone.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "630a7dcf50382dfd08f10c42054d7e81e75ed6d3": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Assistant task outcomes now come back to the chat that started them, tasks show as cards above the composer, and a new continue_task tool sends follow-ups to a finished task's branch and pull request.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1ea1171f7e3376dcbc84569b05486d51e35e0316": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The command worker image now includes pnpm and yarn through Corepack, and a check whose program is missing fails the task with a clear message instead of using up fix rounds.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b553f41f735afdfe43d66ac321053115f7e888ae": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Messages sent while a chat is working are taken into the running turn at its next break, and coding task chats are listed in the chat list with a badge and filters, stream live, and accept messages and Stop.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "33d3aa1c335d8f82f7c8f4538e29b01ea344ec76": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Assistant chats and tasks now run without step or time limits, continue automatically while todos are unfinished, share the chat's approval grant with background agents, and send Inbox notices with Stop or Keep going when a session runs long or looks stuck.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6e447ab54445519c9b4634e27d0e8a7cab51b133": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant can run coding tasks in the current chat with live progress and steering, and in auto-run chats repeat tasks and follow-ups on an already approved repository start without an approval card.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "06168451170a90231b5e1c9d6542b56331324a06": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant can run each coding task's session in its own locked-down container via a runner manager, with model calls and web tools staying on the server. It is opt-in through a new `runners` setting.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4155e76a74b399ec0c338760ccef635f9bebfc18": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Finished task chats are now shown from the assistant's saved copy of the last transcript, so opening the app doesn't wake every task's runner. Session runners are also documented.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "918cf44fe94cdde26e54aade3df1f733430f5c5e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The assistant remembers sessions a runner doesn't have, so reading them no longer repeatedly starts that runner.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "19af91afde4b6820eed84e19dce71e4787950b79": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant keeps a hash-chained audit log of coding task changes, gate results, external effects and who asked for them. Check it with `GET /api/tasks/:id/audit` or `agentlink-server audit-check`.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "78fe3f57c754f5496269b1c778a68a72e1068469": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant can back up its deploy directory to an append-only restic store through a sidecar, with restore, `backup`/`backups` commands, and a backup status and Back up now button in the Inbox.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ca02d7dfc776682bcff1531a3c6af7361e9d830a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Backups now stage the data folder with a plain read-and-write copy, which fixes copy failures inside the backup container.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e07307e35594f174baf8b07518572a9cac090131": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds controlled upgrades: `upgrade.sh` with drain, a backup, a version smoke check and automatic rollback. Also adds `drain`, `resume` and `smoke-check` commands, service version reporting, data format versioning, and an \"Upgrading\" notice in the app.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ec0f3164ebd3fc262523447c6d463bb127dc8fb8": {
+      "bump": "patch",
+      "breakingUnits": ["assistant"],
+      "summary": "The assistant now stores chats by project ID instead of folder identity, so restored or moved folders keep their history. Existing chat history stored under the old folder identity is not carried over. Chats stopped by a drain also add an Inbox entry.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "56b2de03bf89bf8cb2b4cd1ca036c38ef95dfbc8": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant signs audit log heads and stores them as append-only backup checkpoints, adds audit-check --checkpoints verification, and shows the last checkpoint in the Inbox panel.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1ea72282cb68858987e5ae187acf9470cc93f4f5": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant can connect remote MCP servers with per-tool Ask/Run/Off, OAuth or header sign-in, a new MCP panel, and audited tool calls from chats and tasks.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3ded2c18cb2c88dc1826fd389008e5e915b176ab": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Coding tasks can be opened in a read-only browser editor, taken over to edit, and handed back to continue, using per-task editor containers on a separate HTTPS port with audited actions.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "aaaa860856ebab145dd614b106ba07b7e38161cd": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes editor WebSocket connections being refused behind the proxy by forwarding the checked public host and dropping client-supplied forwarding headers.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "11b37d9283ba335f56a1703f3a4afeb96c8895cb": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes tasks continued after a redeploy failing with session_not_found by keying session runners' saved chats by task project ID.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "aae6f3328b608c4ab18ac37a13395d4ecab97a07": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The task editor now has the AgentLink extension built in, with models served through the assistant's own backends via a per-editor token and a new editor.modelsPort setting.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ed4945972f5ecc2a0f8fa30e080ee79e3d0884ce": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The upgrade script now keeps the build commit when packaging the editor extension.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ba5b17b3873467536307529f7298324dcd8091dd": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Read-only task editors now get a scratch folder so AgentLink's chats can store state without making the task's files writable.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a5b296383f33c500eb7d1673591387f6c756e22f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Scheduled runs waiting for approval now stay waiting across restarts and upgrades, and the upgrade drain no longer waits for them.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c49197065ef32e97167f59df9e60aaccc7d79ef5": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant gets a Settings panel and a propose_persona_change approval tool for its name, persona, owner name, time zone and quiet hours, with push notifications held during quiet hours.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "38494f87b9dd2f42a8283d83207c152ee5ed6f25": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Assistant Settings now offers this device's time zone with one click, which helps when a containerised server defaults to UTC.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6cb5e8e3f4b3b07e3c97319f1772fffa22d88499": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant remembers lasting things the owner says and uses them in later chats, with a Memory panel to search, edit, forget and export, a Remembered strip with Undo, and a new @agentlink/core/memory entry point.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b51ff9aec7f1710f419653ec1a784b751d126274": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Deleting an Assistant chat or task now removes its data (session, background agents, commands, events, Inbox entries), refuses while work is running, records audit text only as hashes, and Settings shows storage and retention.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b7989e029fbf313815615a6c7ad4e575c868cf31": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Assistant's retention text and docs now say that audit entries written before this version kept their original text.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ecf7988de61ba6e20618a36d7befe016b6968dde": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant can watch a web page or feed and only ask a model when it changes, via the new watch_page tool. Job runs now record token usage with an unusual-usage notice, and web fetch and push delivery now use the checked connection.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5fc84e9ecd4ddaa18c1edf7eb8473492f3052a22": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant can schedule daily briefings with sourced sections (watch changes, news, calendar, email, open items), approved on a card, delivered to the Inbox with a count of unsourced items, and shown in the Jobs panel.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dfbd5d84bc33f3552299780f8d78d33329b3c253": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Briefings read the owner's calendar and email through MCP read tools. MCP tools gain an always-ask list that can never be set to Run, plus argument limits on Run, edited in the MCP panel.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9fa880d83057c5987f2939b94d19bf935d407785": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "MCP servers on the owner's network (such as Home Assistant) can be added with an \"On my network\" option. Only the owner's own chats see them, and only read-named tools can be set to Run.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c84019dccbe1476b00a8372e13cbeedb37462afd": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Chats on Open web projects can browse JavaScript pages in a throwaway headless Chromium via browse_* tools, with downloads, uploads and password forms refused. The egress gateway now answers unauthenticated refused requests with a 407 challenge.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "eee5304fe24d2f17feb43cac1941b092b99e71ba": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes the research browser's DevTools connection by forwarding its port with socat, since Chromium listens on loopback only, and adds logging for browser startup failures.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f33e77568e9c6b6fb9d5644fd232f09daf5b5233": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes watches on GitHub feeds failing with \"Too many redirects\" by sending the bare Host header on checked HTTPS connections, and the same for push delivery.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8c8830135a45638b6684055daa3e6b1b9815fe3e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Long task titles and code previews in the task list are now clamped so rows stay compact.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
