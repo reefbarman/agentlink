@@ -20,6 +20,10 @@ import {
 import { writeFileAtomic } from "./atomicFile.js";
 import { tokensMatch } from "./commandWorkerProtocol.js";
 import { withFileLock } from "./fileLock.js";
+import {
+  lifecycleBlocker,
+  withDeploymentMutationLock,
+} from "./deploymentLifecycle.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import {
   validateUpdateBody,
@@ -186,9 +190,13 @@ async function saveOperation(
   root: string,
   operation: AssistantUpdateOperation,
 ): Promise<void> {
+  // Readable (no secrets: IDs, versions, phases) so the installer's local
+  // lifecycle commands, run as the owner, can check the supervisor's state.
+  // The updater directory itself stays private to the owner.
   await writeFileAtomic(
     operationFile(root, operation.id),
     `${JSON.stringify(operation)}\n`,
+    0o644,
   );
 }
 function locked<T>(root: string, action: () => Promise<T>): Promise<T> {
@@ -207,7 +215,7 @@ export async function startAssistantUpdater(
     throw new Error("update_token_invalid");
   await fs.mkdir(path.join(options.updaterDirectory, "operations"), {
     recursive: true,
-    mode: 0o700,
+    mode: 0o755,
   });
   const now = options.now ?? Date.now;
   const installed = () =>
@@ -342,6 +350,10 @@ export async function startAssistantUpdater(
         )
       )
         throw new HttpError(409, "update_operation_active");
+      // A local capability change, uninstall or unrecovered transaction owns
+      // the deployment; the worker rechecks under the guard itself.
+      if (await lifecycleBlocker(options.updaterDirectory))
+        throw new HttpError(409, "update_lifecycle_busy");
       const state = await installed();
       if (!state.managed || !state.version)
         throw new HttpError(409, "update_source_build_unmanaged");
@@ -378,6 +390,7 @@ export async function startAssistantUpdater(
       await writeFileAtomic(
         path.join(options.updaterDirectory, "current-operation.json"),
         `${JSON.stringify({ id: operation.id })}\n`,
+        0o644,
       );
       // Persist first. A lost launch response must never trigger a second job.
       try {
@@ -670,12 +683,28 @@ export async function runUpdaterJob(options: UpdaterJobOptions): Promise<void> {
           operation.kind === "rollback"
             ? (options.runRollback ?? runDeploymentRollback)
             : (options.runUpdate ?? runDeploymentUpdate);
-        await run({
-          deployDirectory: options.deployDirectory,
-          updaterDirectory: options.updaterDirectory,
-          operation,
-          onProgress: progress,
-        });
+        // The whole asset/image/supervisor transaction holds the deployment
+        // guard, so a local capability change or uninstall cannot interleave.
+        // A failed recovery or a termination mid-transaction may leave app
+        // and supervisor files out of step, so the guard then stays until an
+        // operator has recovered (see the README).
+        await withDeploymentMutationLock(
+          options.updaterDirectory,
+          { kind: "update", id: operation.id },
+          () =>
+            run({
+              deployDirectory: options.deployDirectory,
+              updaterDirectory: options.updaterDirectory,
+              operation,
+              onProgress: progress,
+            }),
+          {
+            keepGuard: (error) =>
+              error instanceof Error &&
+              (error.message === "deployment_rollback_failed" ||
+                error.message === "deployment_terminated"),
+          },
+        );
         await locked(options.updaterDirectory, async () => {
           const fresh = await readOperation(
             options.updaterDirectory,

@@ -58,6 +58,10 @@ export function writeAssistantDeploymentMetadata({ out, version, commit }) {
   const metadata = {
     schemaVersion: 1,
     updaterProtocol: 1,
+    // The release's installer and updater share the deployment lifecycle
+    // guard (UPDATER/.deployment-mutation-lock and .lifecycle-state.json).
+    // Installer capability and uninstall commands require it.
+    lifecycleProtocol: 1,
     version,
     commit,
     assets,

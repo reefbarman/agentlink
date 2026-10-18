@@ -533,6 +533,114 @@ describe("private Assistant updater", () => {
       phase: "failed",
       error: "update_job_failed",
     });
+    // A failure the update path recovered from releases the guard.
+    await expect(
+      fs.lstat(
+        path.join(options.updaterDirectory, ".deployment-mutation-lock"),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the deployment guard after a failed recovery so nothing else changes the deployment", async () => {
+    const { options, client, call } = await setup();
+    const operation = (await client().apply(confirmation)).operation!;
+    await expect(
+      runUpdaterJob({
+        ...options,
+        operation: operation.id,
+        runUpdate: async () => {
+          throw new Error("deployment_rollback_failed");
+        },
+      }),
+    ).rejects.toThrow("update_job_failed");
+    expect((await client().status()).operation?.phase).toBe("failed");
+    expect(
+      await fs.readFile(
+        path.join(
+          options.updaterDirectory,
+          ".deployment-mutation-lock",
+          "owner",
+        ),
+        "utf8",
+      ),
+    ).toContain(`kind=update\nid=${operation.id}\n`);
+    expect(await call("/apply", confirmation)).toMatchObject({
+      status: 409,
+      body: { error: "update_lifecycle_busy" },
+    });
+  });
+
+  it("refuses to start while the installer holds the guard or a local change is unsettled", async () => {
+    const { options, call, jobs } = await setup();
+    await fs.mkdir(options.updaterDirectory, { recursive: true });
+    const lock = path.join(
+      options.updaterDirectory,
+      ".deployment-mutation-lock",
+    );
+    const journal = path.join(
+      options.updaterDirectory,
+      ".lifecycle-state.json",
+    );
+    await fs.mkdir(lock);
+    expect(await call("/apply", confirmation)).toMatchObject({
+      status: 409,
+      body: { error: "update_lifecycle_busy" },
+    });
+    await fs.rmdir(lock);
+    for (const status of ["applying", "uninstalled"]) {
+      await fs.writeFile(journal, JSON.stringify({ schemaVersion: 1, status }));
+      expect(
+        await call("/rollback", { ...confirmation, version: "1.8.7" }),
+      ).toMatchObject({
+        status: 409,
+        body: { error: "update_lifecycle_busy" },
+      });
+    }
+    expect(jobs.launch).not.toHaveBeenCalled();
+    await fs.writeFile(
+      journal,
+      JSON.stringify({ schemaVersion: 1, status: "completed" }),
+    );
+    expect((await call("/apply", confirmation)).status).toBe(202);
+  });
+
+  it("holds the deployment guard for the whole worker run and fails closed if it is taken", async () => {
+    const { options, client } = await setup();
+    const lock = path.join(
+      options.updaterDirectory,
+      ".deployment-mutation-lock",
+    );
+    const first = (await client().apply(confirmation)).operation!;
+    await runUpdaterJob({
+      ...options,
+      operation: first.id,
+      runUpdate: async () => {
+        expect(await fs.readFile(path.join(lock, "owner"), "utf8")).toContain(
+          `kind=update\nid=${first.id}\n`,
+        );
+      },
+    });
+    await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
+
+    // An installer command took the guard after the browser queued an update.
+    const second = (
+      await client().apply({
+        ...confirmation,
+        expectedInstalledVersion: "1.9.8",
+      })
+    ).operation!;
+    await fs.mkdir(lock);
+    const runUpdate = vi.fn(async () => undefined);
+    await expect(
+      runUpdaterJob({ ...options, operation: second.id, runUpdate }),
+    ).rejects.toThrow("update_job_failed");
+    expect(runUpdate).not.toHaveBeenCalled();
+    expect((await client().status()).operation).toMatchObject({
+      phase: "failed",
+      error: "update_job_failed",
+    });
+    // The installer's guard is left alone.
+    expect((await fs.lstat(lock)).isDirectory()).toBe(true);
   });
 });
 

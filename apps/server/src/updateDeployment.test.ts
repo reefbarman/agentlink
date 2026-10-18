@@ -43,10 +43,15 @@ function manifest(version: string) {
       .join("")
   );
 }
-function metadata(version: string, assets: Record<string, string>) {
+function metadata(
+  version: string,
+  assets: Record<string, string>,
+  lifecycle = false,
+) {
   return JSON.stringify({
     schemaVersion: 1,
     updaterProtocol: 1,
+    ...(lifecycle ? { lifecycleProtocol: 1 } : {}),
     version,
     commit,
     assets: Object.fromEntries(
@@ -54,7 +59,9 @@ function metadata(version: string, assets: Record<string, string>) {
     ),
   });
 }
-async function fixture(standalone = false) {
+const OPTIONAL_ENV =
+  "PRIVATE=do-not-touch\nCOMPOSE_FILE=compose.yaml:compose.runners.yaml:compose.editor.yaml:compose.browser.yaml\n";
+async function fixture(standalone = false, optional = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "deployment-worker-"));
   cleanup.push(root);
   const deployDirectory = path.join(root, "deploy");
@@ -70,6 +77,12 @@ async function fixture(standalone = false) {
     "compose.update-client.yaml":
       "services: {assistant: {networks: [updater-control]}}\n",
   };
+  if (optional) {
+    // Installed by `install.sh enable editor` / `enable browser`.
+    oldAssets["compose.runners.yaml"] = "services: {runner-manager: {}}\n";
+    oldAssets["compose.editor.yaml"] = "services: {editor-proxy: {}}\n";
+    oldAssets["compose.browser.yaml"] = "services: {browser-pool: {}}\n";
+  }
   if (standalone)
     oldAssets["compose.updater.yaml"] =
       "services: {updater: {image: '${UPDATER_IMAGE}'}}\n";
@@ -104,7 +117,7 @@ async function fixture(standalone = false) {
   );
   await fs.writeFile(
     path.join(deployDirectory, ".env"),
-    "PRIVATE=do-not-touch\n",
+    optional ? OPTIONAL_ENV : "PRIVATE=do-not-touch\n",
   );
   const nextAssets: Record<string, string> = {
     ...oldAssets,
@@ -114,7 +127,8 @@ async function fixture(standalone = false) {
   if (standalone) nextAssets["compose.updater.yaml"] += "# next template\n";
   const downloads: Record<string, string> = {
     ...nextAssets,
-    "assistant-deployment.json": metadata("1.3.0", nextAssets),
+    // The next release honours the lifecycle guard; the installed one predates it.
+    "assistant-deployment.json": metadata("1.3.0", nextAssets, true),
     "assistant-release.env": manifest("1.3.0"),
   };
   const request = vi.fn<typeof fetch>(async (input, init) => {
@@ -422,6 +436,7 @@ describe("deployment worker", () => {
     "hash",
     "metadata schema",
     "protocol",
+    "lifecycle protocol",
     "version",
     "commit",
     "unknown template",
@@ -435,6 +450,7 @@ describe("deployment worker", () => {
       if (failure === "hash") fx.downloads["upgrade.sh"] += "tampered";
       if (failure === "metadata schema") doc.schemaVersion = 2;
       if (failure === "protocol") doc.updaterProtocol = 2;
+      if (failure === "lifecycle protocol") doc.lifecycleProtocol = 2;
       if (failure === "version") doc.version = "9.9.9";
       if (failure === "commit") doc.commit = "e".repeat(40);
       if (failure === "unknown template")
@@ -645,6 +661,31 @@ describe("deployment worker", () => {
     );
   });
 
+  it.each([false, true])(
+    "keeps the optional-feature selection through an update (features on: %s)",
+    async (optional) => {
+      const fx = await fixture(true, optional);
+      const env = await fs.readFile(path.join(fx.deployDirectory, ".env"));
+      const config = await fs.readFile(
+        path.join(fx.deployDirectory, "server.json"),
+      );
+      expect((await readInstalledDeploymentState(fx)).managed).toBe(true);
+      await runDeploymentUpdate(fx);
+      // Every installed feature template is fetched from the next release.
+      for (const name of Object.keys(fx.oldAssets))
+        expect(fx.request).toHaveBeenCalledWith(
+          expect.stringMatching(new RegExp(`/${name.replace(/\./g, "\\.")}$`)),
+          expect.anything(),
+        );
+      expect(await fs.readFile(path.join(fx.deployDirectory, ".env"))).toEqual(
+        env,
+      );
+      expect(
+        await fs.readFile(path.join(fx.deployDirectory, "server.json")),
+      ).toEqual(config);
+    },
+  );
+
   it("refuses custom COMPOSE_FILE paths before fetching or execution", async () => {
     const fx = await fixture();
     await fs.writeFile(
@@ -668,53 +709,66 @@ describe("deployment worker", () => {
     );
   });
 
-  it("restores previous standalone updater only after explicit rollback and reconnecting", async () => {
-    const fx = await fixture(true);
-    const previous = path.join(fx.deployDirectory, ".upgrade-updater-previous");
-    const assetsPrevious = path.join(
-      fx.deployDirectory,
-      ".upgrade-assets-previous",
-    );
-    await fs.mkdir(previous);
-    await fs.mkdir(assetsPrevious);
-    const priorNames = Object.keys(fx.oldAssets).filter(
-      (name) => name !== "compose.updater.yaml",
-    );
-    for (const name of priorNames)
-      await fs.writeFile(path.join(assetsPrevious, name), fx.oldAssets[name]!);
-    await fs.writeFile(
-      path.join(assetsPrevious, ".files"),
-      [...priorNames, "assistant-deployment.json"].join("\n") + "\n",
-    );
-    await fs.writeFile(
-      path.join(previous, "compose.yaml"),
-      fx.oldAssets["compose.updater.yaml"]!,
-    );
-    await fs.writeFile(path.join(previous, ".env"), fx.oldUpdaterEnv);
-    await fs.writeFile(
-      path.join(assetsPrevious, "assistant-deployment.json"),
-      metadata("1.1.0", fx.oldAssets),
-    );
-    await fs.writeFile(
-      path.join(fx.deployDirectory, ".release-previous.env"),
-      manifest("1.1.0").replace(
-        updaterImage,
-        `ghcr.io/reefbarman/agentlink-updater@sha256:${"c".repeat(64)}`,
-      ),
-    );
-    await fs.writeFile(
-      path.join(fx.deployDirectory, ".upgrade-state"),
-      "status=done\n",
-    );
-    fx.operation.kind = "rollback";
-    fx.operation.targetVersion = "1.1.0";
-    expect((await readInstalledDeploymentState(fx)).rollbackVersion).toBe(
-      "1.1.0",
-    );
-    await runDeploymentRollback(fx);
-    expect(fx.request).not.toHaveBeenCalled();
-    expect(fx.phases).toEqual(["rolling_back", "reconnecting"]);
-    expect(fx.run.mock.calls[0]![1]).toContain("rollback");
-    expect(fx.run.mock.calls.at(-1)?.[0]).toBe("docker");
-  });
+  it.each([false, true])(
+    "restores previous standalone updater only after explicit rollback and reconnecting (features on: %s)",
+    async (optional) => {
+      const fx = await fixture(true, optional);
+      const env = await fs.readFile(path.join(fx.deployDirectory, ".env"));
+      const previous = path.join(
+        fx.deployDirectory,
+        ".upgrade-updater-previous",
+      );
+      const assetsPrevious = path.join(
+        fx.deployDirectory,
+        ".upgrade-assets-previous",
+      );
+      await fs.mkdir(previous);
+      await fs.mkdir(assetsPrevious);
+      const priorNames = Object.keys(fx.oldAssets).filter(
+        (name) => name !== "compose.updater.yaml",
+      );
+      for (const name of priorNames)
+        await fs.writeFile(
+          path.join(assetsPrevious, name),
+          fx.oldAssets[name]!,
+        );
+      await fs.writeFile(
+        path.join(assetsPrevious, ".files"),
+        [...priorNames, "assistant-deployment.json"].join("\n") + "\n",
+      );
+      await fs.writeFile(
+        path.join(previous, "compose.yaml"),
+        fx.oldAssets["compose.updater.yaml"]!,
+      );
+      await fs.writeFile(path.join(previous, ".env"), fx.oldUpdaterEnv);
+      await fs.writeFile(
+        path.join(assetsPrevious, "assistant-deployment.json"),
+        metadata("1.1.0", fx.oldAssets),
+      );
+      await fs.writeFile(
+        path.join(fx.deployDirectory, ".release-previous.env"),
+        manifest("1.1.0").replace(
+          updaterImage,
+          `ghcr.io/reefbarman/agentlink-updater@sha256:${"c".repeat(64)}`,
+        ),
+      );
+      await fs.writeFile(
+        path.join(fx.deployDirectory, ".upgrade-state"),
+        "status=done\n",
+      );
+      fx.operation.kind = "rollback";
+      fx.operation.targetVersion = "1.1.0";
+      expect((await readInstalledDeploymentState(fx)).rollbackVersion).toBe(
+        "1.1.0",
+      );
+      await runDeploymentRollback(fx);
+      expect(fx.request).not.toHaveBeenCalled();
+      expect(fx.phases).toEqual(["rolling_back", "reconnecting"]);
+      expect(fx.run.mock.calls[0]![1]).toContain("rollback");
+      expect(fx.run.mock.calls.at(-1)?.[0]).toBe("docker");
+      expect(await fs.readFile(path.join(fx.deployDirectory, ".env"))).toEqual(
+        env,
+      );
+    },
+  );
 });

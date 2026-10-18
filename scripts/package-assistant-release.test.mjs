@@ -108,6 +108,7 @@ test("writes strict digest-pinned manifest and individual deployment release ass
     assert.equal(deployment.version, "0.2.3");
     assert.equal(deployment.commit, "a".repeat(40));
     assert.equal(deployment.updaterProtocol, 1);
+    assert.equal(deployment.lifecycleProtocol, 1);
     assert.match(deployment.assets["compose.yaml"], /^[0-9a-f]{64}$/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -177,6 +178,9 @@ test("builds architecture-specific editor images from the shared verified server
     /mv "apps\/server\/dist\/agentlink-editor-linux-\$\{EDITOR_TARGET\}\.vsix" apps\/server\/dist\/agentlink-editor\.vsix/u,
   );
   assert.match(workflow, /notes --unit assistant/u);
+  // Managed updates replace templates with images; notes must not say otherwise.
+  assert.doesNotMatch(workflow, /changes images only/u);
+  assert.match(workflow, /images and management templates together/u);
   assert.match(workflow, /--notes-file notes\.md/u);
   assert.match(workflow, /name: assistant-editor-linux-/u);
   assert.match(

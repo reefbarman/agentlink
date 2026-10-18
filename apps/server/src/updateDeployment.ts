@@ -55,6 +55,8 @@ const IMAGE_TARGETS: Record<string, string> = {
 interface Metadata {
   schemaVersion: 1;
   updaterProtocol: 1;
+  /** Present when the release honours the deployment lifecycle guard. */
+  lifecycleProtocol?: 1;
   version: string;
   commit: string;
   assets: Record<string, string>;
@@ -89,8 +91,11 @@ function metadata(bytes: Uint8Array): Metadata {
     !value.assets ||
     typeof value.assets !== "object" ||
     Array.isArray(value.assets) ||
-    Object.keys(value).sort().join(",") !==
-      "assets,commit,schemaVersion,updaterProtocol,version" ||
+    (value.lifecycleProtocol !== undefined && value.lifecycleProtocol !== 1) ||
+    Object.keys(value)
+      .filter((key) => key !== "lifecycleProtocol")
+      .sort()
+      .join(",") !== "assets,commit,schemaVersion,updaterProtocol,version" ||
     !REQUIRED.every((name) => Object.hasOwn(value.assets, name)) ||
     Object.entries(value.assets).some(
       ([name, digest]) =>
