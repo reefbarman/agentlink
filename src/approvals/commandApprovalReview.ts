@@ -28,6 +28,7 @@ import {
   completeGuardianCoverage,
   reportGuardianObservation,
   unknownGuardianCoverage,
+  type GuardianEvidenceCoverage,
   type GuardianEvidenceSourceMetadata,
   type GuardianProjectionManifest,
   type GuardianReviewObservation,
@@ -78,8 +79,19 @@ export interface CommandApprovalReviewInput {
   /** Session human-input revision the supplied context reflects. */
   humanInputRevision?: number;
   evidenceMetadata?: GuardianEvidenceSourceMetadata;
+  /**
+   * The same review context with a larger human-decision budget, for
+   * reviewers that accept more context (the TypeSafe shadow). The primary
+   * Guardian ignores it.
+   */
+  extendedHumanAuthority?: ExtendedHumanAuthority;
   observe?: (observation: GuardianReviewObservation) => void;
   reviewPublicationContext?: ReviewPublicationContext;
+}
+
+export interface ExtendedHumanAuthority {
+  context: CommandReviewContextEntry[];
+  humanAuthority: GuardianEvidenceCoverage;
 }
 
 export interface CommandReviewContextEntry {
@@ -91,8 +103,20 @@ export interface CommandReviewContextEntry {
   queuedHumanInput?: boolean;
 }
 
-const MAX_HUMAN_DECISION_ENTRIES = 8;
-const MAX_HUMAN_DECISION_LENGTH = 8_000;
+interface HumanDecisionBudget {
+  maxEntries: number;
+  maxLength: number;
+}
+
+const PRIMARY_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
+  maxEntries: 8,
+  maxLength: 8_000,
+};
+/** Enough for most sessions' full human history; long sessions still mark omissions. */
+export const EXTENDED_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
+  maxEntries: 32,
+  maxLength: 32_000,
+};
 
 const HUMAN_DECISION_OMITTED_CONTENT = JSON.stringify({
   evidenceOmitted:
@@ -782,6 +806,7 @@ export function buildCommandReviewContextWithMetadata(
 ): {
   context: CommandReviewContextEntry[];
   metadata: GuardianEvidenceSourceMetadata;
+  extendedHumanAuthority: ExtendedHumanAuthority;
 } {
   const context = buildCommandReviewContext(
     messages,
@@ -853,14 +878,44 @@ export function buildCommandReviewContextWithMetadata(
       0,
     ) +
     recordOnlyCount;
-  const authorityIncludedCount = context.filter(
-    (entry) => entry.directUserInstruction || entry.humanDecisionEvidence,
-  ).length;
-  const authorityOmittedCount = Math.max(
-    0,
-    authoritySourceCount - authorityIncludedCount,
-  );
+  const authorityCoverage = (
+    selected: readonly CommandReviewContextEntry[],
+  ): GuardianEvidenceCoverage => {
+    const includedCount = selected.filter(
+      (entry) => entry.directUserInstruction || entry.humanDecisionEvidence,
+    ).length;
+    const omitted = Math.max(0, authoritySourceCount - includedCount);
+    return {
+      state:
+        humanDecisionRecord?.incomplete || omitted > 0 ? "partial" : "complete",
+      reasons: [
+        ...(omitted ? ["projection_budget" as const] : []),
+        ...(humanDecisionRecord?.incomplete ? ["source_unknown" as const] : []),
+      ],
+      sourceCount: authoritySourceCount,
+      includedCount,
+      omittedCount: omitted,
+    };
+  };
+  const humanAuthority = authorityCoverage(context);
+  // Only rebuild with the larger budget when the shared one dropped something.
+  const extendedContext = humanAuthority.omittedCount
+    ? buildCommandReviewContext(
+        messages,
+        sessionId,
+        queuedHumanInputs,
+        humanDecisionRecord,
+        EXTENDED_HUMAN_DECISION_BUDGET,
+      )
+    : context;
   return {
+    extendedHumanAuthority: {
+      context: extendedContext,
+      humanAuthority:
+        extendedContext === context
+          ? humanAuthority
+          : authorityCoverage(extendedContext),
+    },
     context,
     metadata: {
       context: {
@@ -876,21 +931,7 @@ export function buildCommandReviewContextWithMetadata(
         includedCount,
         omittedCount,
       },
-      humanAuthority: {
-        state:
-          humanDecisionRecord?.incomplete || authorityOmittedCount > 0
-            ? "partial"
-            : "complete",
-        reasons: [
-          ...(authorityOmittedCount ? ["projection_budget" as const] : []),
-          ...(humanDecisionRecord?.incomplete
-            ? ["source_unknown" as const]
-            : []),
-        ],
-        sourceCount: authoritySourceCount,
-        includedCount: authorityIncludedCount,
-        omittedCount: authorityOmittedCount,
-      },
+      humanAuthority,
       sourceInputIds: includedIds,
       ...(humanDecisionRecord
         ? { humanDecisionRecordIncomplete: humanDecisionRecord.incomplete }
@@ -904,6 +945,7 @@ export function buildCommandReviewContext(
   sessionId?: string,
   queuedHumanInputs: readonly string[] = [],
   humanDecisionRecord?: HumanDecisionRecordSnapshot,
+  decisionBudget: HumanDecisionBudget = PRIMARY_HUMAN_DECISION_BUDGET,
 ): CommandReviewContextEntry[] {
   const entries: IndexedContextEntry[] = [
     ...messages.flatMap((message, messageIndex) =>
@@ -930,6 +972,7 @@ export function buildCommandReviewContext(
     recent,
     messages,
     humanDecisionRecord,
+    decisionBudget,
   );
   return [...recent, ...decisions]
     .sort((a, b) => a.index - b.index)
@@ -1011,6 +1054,7 @@ function selectHumanDecisions(
   recent: readonly IndexedContextEntry[],
   messages: readonly AgentMessage[],
   record: HumanDecisionRecordSnapshot | undefined,
+  budget: HumanDecisionBudget,
 ): IndexedContextEntry[] {
   const candidates = new Map<string, IndexedContextEntry>();
   transcriptDecisions.forEach((entry, position) => {
@@ -1068,8 +1112,8 @@ function selectHumanDecisions(
   const incomplete = record?.incomplete === true;
   if (
     !incomplete &&
-    ordered.length <= MAX_HUMAN_DECISION_ENTRIES &&
-    totalLength <= MAX_HUMAN_DECISION_LENGTH
+    ordered.length <= budget.maxEntries &&
+    totalLength <= budget.maxLength
   ) {
     return ordered;
   }
@@ -1077,9 +1121,9 @@ function selectHumanDecisions(
   let length = 0;
   for (const entry of ordered) {
     if (
-      selected.length >= MAX_HUMAN_DECISION_ENTRIES - 1 ||
+      selected.length >= budget.maxEntries - 1 ||
       length + entry.content.length + HUMAN_DECISION_OMITTED_CONTENT.length >
-        MAX_HUMAN_DECISION_LENGTH
+        budget.maxLength
     ) {
       break;
     }

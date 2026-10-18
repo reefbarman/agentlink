@@ -835,6 +835,41 @@ describe("command review context", () => {
     ).toBeLessThanOrEqual(8_000);
   });
 
+  it("builds a larger extended decision window only when the shared one overflows", () => {
+    const messages = Array.from({ length: 12 }, (_, index) =>
+      decision(`call-${index}`, `Step ${index}?`, true),
+    ).flat();
+    const built = buildCommandReviewContextWithMetadata(messages, "session");
+    expect(built.metadata.humanAuthority).toMatchObject({
+      state: "partial",
+      reasons: ["projection_budget"],
+    });
+    const extendedDecisions = built.extendedHumanAuthority.context
+      .filter((entry) => entry.humanDecisionEvidence)
+      .map((entry) => JSON.parse(entry.content).toolCallId);
+    expect(extendedDecisions).toEqual(
+      Array.from({ length: 12 }, (_, index) => `call-${index}`),
+    );
+    expect(built.extendedHumanAuthority.humanAuthority).toMatchObject({
+      state: "complete",
+      reasons: [],
+      omittedCount: 0,
+    });
+    // The shared context the primary Guardian sees is unchanged.
+    expect(built.context).toEqual(
+      buildCommandReviewContext(messages, "session"),
+    );
+
+    const small = buildCommandReviewContextWithMetadata(
+      decision("only", "Go?", true),
+      "session",
+    );
+    expect(small.extendedHumanAuthority.context).toBe(small.context);
+    expect(small.extendedHumanAuthority.humanAuthority).toBe(
+      small.metadata.humanAuthority,
+    );
+  });
+
   it("restores earlier typed instructions from the private record without duplicating the window", () => {
     const messages: import("../agent/types.js").AgentMessage[] = [
       {

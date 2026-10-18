@@ -4223,7 +4223,14 @@ describe("dispatchToolCall", () => {
         omittedCount: 4,
       },
     };
-    const contextSnapshot = { context: [], metadata: sourceMetadata };
+    const contextSnapshot = {
+      context: [],
+      metadata: sourceMetadata,
+      extendedHumanAuthority: {
+        context: [],
+        humanAuthority: sourceMetadata.humanAuthority,
+      },
+    };
     const getCommandReviewContextWithMetadata = vi.fn(() => contextSnapshot);
     const reviewPublicationHost = {
       prepare: vi.fn(),

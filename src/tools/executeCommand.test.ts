@@ -9248,6 +9248,22 @@ describe("handleExecuteCommand", () => {
             omittedCount: 0,
           },
         },
+        extendedHumanAuthority: {
+          context: [
+            {
+              role: "tool" as const,
+              humanDecisionEvidence: true,
+              content: '{"humanAnswer":"distinctive-extended-answer"}',
+            },
+          ],
+          humanAuthority: {
+            state: "complete" as const,
+            reasons: [],
+            sourceCount: 1,
+            includedCount: 1,
+            omittedCount: 0,
+          },
+        },
       };
       const enqueueCommandApproval = vi.fn();
       const result = await run(
@@ -9277,6 +9293,11 @@ describe("handleExecuteCommand", () => {
           }),
         );
       }
+      expect(shadow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extendedHumanAuthority: contextSnapshot.extendedHumanAuthority,
+        }),
+      );
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result).approval).toMatchObject({
         by: "model_reviewer",

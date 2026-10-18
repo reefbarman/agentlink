@@ -5070,6 +5070,9 @@ async function approveSubCommands(
             ...contextSnapshot?.metadata,
             ...collectedEvidence.metadata,
           },
+          ...(contextSnapshot?.extendedHumanAuthority
+            ? { extendedHumanAuthority: contextSnapshot.extendedHumanAuthority }
+            : {}),
           ...(reviewPublicationContext ? { reviewPublicationContext } : {}),
           signal: reviewProviders.toolAbortSignal,
           reviewId,

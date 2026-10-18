@@ -469,13 +469,15 @@ function safeInlineFiles(redact, files) {
 /** Review context the live shadow would have built when the command ran. */
 function buildStoredReview(modules, redact, session, messages, record, index) {
   const slice = messages.slice(0, index + 1);
-  const { context, metadata } = modules.buildCommandReviewContextWithMetadata(
-    slice,
-    session.id,
-    [],
-    recordAsOf(record, slice, messages.slice(index + 1)),
-  );
+  const { context, metadata, extendedHumanAuthority } =
+    modules.buildCommandReviewContextWithMetadata(
+      slice,
+      session.id,
+      [],
+      recordAsOf(record, slice, messages.slice(index + 1)),
+    );
   const stored = redactReviewContext(context, redact);
+  const extended = redactReviewContext(extendedHumanAuthority.context, redact);
   const objective = modules.selectCommandReviewObjective(slice);
   const safeObjective = objective ? redact(objective.trim()) : undefined;
   return {
@@ -492,8 +494,14 @@ function buildStoredReview(modules, redact, session, messages, record, index) {
             }
           : {}),
       },
+      // Same shape the live execute_command path hands the shadow reviewer.
+      extendedHumanAuthority: {
+        context: extended.context,
+        humanAuthority: extendedHumanAuthority.humanAuthority,
+      },
     },
-    redacted: stored.redacted || Boolean(safeObjective?.redacted),
+    redacted:
+      stored.redacted || extended.redacted || Boolean(safeObjective?.redacted),
   };
 }
 
@@ -755,6 +763,9 @@ export function replayContext(entry) {
       context: entry.review.context,
       userObjective: entry.review.userObjective ?? undefined,
       metadata: entry.review.metadata ?? {},
+      ...(entry.review.extendedHumanAuthority
+        ? { extendedHumanAuthority: entry.review.extendedHumanAuthority }
+        : {}),
     };
   }
   const context = [
@@ -911,6 +922,9 @@ async function replay(args) {
         evidence,
         // Same merge order as the live execute_command path.
         evidenceMetadata: { ...replayInput.metadata, ...metadata },
+        ...(replayInput.extendedHumanAuthority
+          ? { extendedHumanAuthority: replayInput.extendedHumanAuthority }
+          : {}),
       };
       let shadow = await reviewer.review(request);
       // TypeSafe answers 429/529 when overloaded; back off and retry.
