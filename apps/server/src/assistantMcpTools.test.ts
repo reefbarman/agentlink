@@ -467,25 +467,38 @@ describe("approvalToolProxyRoutes", () => {
           input: { server: serverId, tool },
         },
         context,
-      )) as { decision: string; preparedInput?: Record<string, unknown> };
+      )) as {
+        decision: string;
+        summary?: string;
+        displayContent?: unknown;
+        preparedInput?: Record<string, unknown>;
+      };
     const call = async (input: unknown) =>
       await handlers["/approval-tools/call"]!(
         { ...ids, toolName: "call_mcp_tool", input },
         context,
       );
-    return { handlers, grants, prepare, call };
+    /** The card the owner sees for a prepared call. */
+    const cardOf = (approval: Awaited<ReturnType<typeof prepare>>) => ({
+      toolName: "call_mcp_tool",
+      summary: approval.summary ?? "",
+      ...(approval.displayContent === undefined
+        ? {}
+        : { displayContent: approval.displayContent }),
+    });
+    return { handlers, grants, prepare, call, cardOf };
   }
 
   it("runs a runner's Ask call only after the owner allows it, once", async () => {
     const { registry, serverId, calls } = await setup();
-    const { grants, prepare, call } = await routes(registry, serverId);
+    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
     const approval = await prepare("search");
     expect(approval.decision).toBe("require_user");
     // The runner cannot run it on its own say-so.
     await expect(call(approval.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
-    grants.decide("s1", "allow");
+    grants.decide("s1", "allow", cardOf(approval));
     await expect(call(approval.preparedInput)).resolves.toMatchObject({
       modelContent: expect.stringContaining("secret result text"),
     });
@@ -494,6 +507,47 @@ describe("approvalToolProxyRoutes", () => {
     await expect(call(approval.preparedInput)).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it("allows only the call prepared for the card the owner answered", async () => {
+    const { registry, serverId, calls } = await setup();
+    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
+    const shown = await prepare("search");
+    // A second call prepared later in the same session, never shown.
+    const hidden = await prepare("create");
+    expect(shown.decision).toBe("require_user");
+    expect(hidden.decision).toBe("require_user");
+    grants.decide("s1", "allow", cardOf(shown));
+    await expect(call(hidden.preparedInput)).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(call(shown.preparedInput)).resolves.toBeDefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("approves nothing for an allow without a matching card", async () => {
+    const { registry, serverId, calls } = await setup();
+    const { grants, prepare, call, cardOf } = await routes(registry, serverId);
+    const first = await prepare("search");
+    grants.decide("s1", "allow");
+    await expect(call(first.preparedInput)).rejects.toMatchObject({
+      status: 403,
+    });
+    const second = await prepare("search");
+    grants.decide("s1", "allow", {
+      ...cardOf(second),
+      summary: "Something the owner did not see",
+    });
+    await expect(call(second.preparedInput)).rejects.toMatchObject({
+      status: 403,
+    });
+    // A decision drops undecided grants, so a later allow of the old card
+    // cannot revive them.
+    grants.decide("s1", "allow", cardOf(second));
+    await expect(call(second.preparedInput)).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(calls).toEqual([]);
   });
 
   it("never gives a runner a server on the owner's network, or its token", async () => {
@@ -512,7 +566,10 @@ describe("approvalToolProxyRoutes", () => {
     const approval = await prepare("search");
     expect(approval.decision).toBe("deny");
     expect(JSON.stringify(approval)).not.toContain("ha-secret-token");
-    grants.decide("s1", "allow");
+    grants.decide("s1", "allow", {
+      toolName: "call_mcp_tool",
+      summary: "anything",
+    });
     await expect(
       call({
         server: home.id,

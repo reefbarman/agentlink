@@ -15,6 +15,7 @@ import {
   approvalToolProxyRoutes,
   createRunnerApprovalGrants,
   hostToolProxyRoutes,
+  type RunnerApprovalCard,
   type RunnerApprovalGrants,
 } from "./remoteHostTools.js";
 import { modelProxyRoutes } from "./remoteModels.js";
@@ -34,6 +35,66 @@ import {
 } from "./runnerProtocol.js";
 import type { SessionApprovalMode } from "./SessionApprovalModes.js";
 import { RUNNER_ENV, type SessionRunnerSpec } from "./sessionRunner.js";
+
+/**
+ * The card the owner answered for a session: its pending interaction, but
+ * only if it is the exact interaction (and revision) the decision names.
+ * Undefined approves nothing.
+ */
+async function pendingCard(
+  host: Pick<RemoteWorkspaceHost, "readSession">,
+  sessionId: string,
+  expected:
+    | { readonly interactionId: string; readonly interactionRevision: string }
+    | undefined,
+): Promise<RunnerApprovalCard | undefined> {
+  if (!expected) return undefined;
+  const pending = await host
+    .readSession(sessionId)
+    .then((snapshot) => snapshot.pendingInteraction)
+    .catch(() => undefined);
+  if (
+    !pending ||
+    pending.request.interactionId !== expected.interactionId ||
+    pending.interactionRevision !== expected.interactionRevision
+  ) {
+    return undefined;
+  }
+  return {
+    toolName: pending.request.toolName,
+    summary: pending.request.summary,
+    ...(pending.request.displayContent === undefined
+      ? {}
+      : { displayContent: pending.request.displayContent }),
+  };
+}
+
+/** The background child's card the owner answered, by its interaction. */
+async function backgroundCard(
+  host: Pick<RemoteWorkspaceHost, "listBackgroundAgents">,
+  request: {
+    readonly callerSessionId: string;
+    readonly childSessionId: string;
+    readonly interactionId: string;
+  },
+): Promise<RunnerApprovalCard | undefined> {
+  const agents = await Promise.resolve(
+    host.listBackgroundAgents(request.callerSessionId),
+  ).catch(() => []);
+  const approval = agents.find(
+    (agent) => agent.childSessionId === request.childSessionId,
+  )?.approval;
+  if (!approval || approval.interactionId !== request.interactionId) {
+    return undefined;
+  }
+  return {
+    toolName: approval.toolName,
+    summary: approval.summary,
+    ...(approval.displayContent === undefined
+      ? {}
+      : { displayContent: approval.displayContent }),
+  };
+}
 
 /**
  * The control plane's side of session runners: one runner per coding task
@@ -235,9 +296,16 @@ export async function startSessionRunnerPool(
       const tracked: RemoteWorkspaceHost = {
         ...host,
         // The owner's decisions pass through here, so a runner can run an
-        // approval tool only after the owner allowed it.
+        // approval tool only after the owner allowed it, and only the call
+        // prepared for the exact card the owner answered.
         resumeInteraction: async (sessionId, decision, resumeOptions) => {
-          grants.decide(sessionId, decision);
+          grants.decide(
+            sessionId,
+            decision,
+            decision === "allow"
+              ? await pendingCard(host, sessionId, resumeOptions?.expected)
+              : undefined,
+          );
           return await host.resumeInteraction(
             sessionId,
             decision,
@@ -245,7 +313,13 @@ export async function startSessionRunnerPool(
           );
         },
         respondToBackgroundApproval: async (request) => {
-          grants.decide(request.childSessionId, request.decision);
+          grants.decide(
+            request.childSessionId,
+            request.decision,
+            request.decision === "allow"
+              ? await backgroundCard(host, request)
+              : undefined,
+          );
           return await host.respondToBackgroundApproval(request);
         },
         async close() {

@@ -138,7 +138,13 @@ function toolCall(
  * A control plane with a runner pool whose "manager" starts runners in this
  * process (a new one, on a new port, each time), and routes over them.
  */
-async function setup(script: Script) {
+async function setup(
+  script: Script,
+  extra: Pick<
+    Parameters<typeof startSessionRunnerPool>[0],
+    "approvalHostTools" | "approvalMode"
+  > = { approvalMode: () => "autonomous" },
+) {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "session-runner-")),
   );
@@ -202,7 +208,7 @@ async function setup(script: Script) {
     },
     dataRoot: path.join(root, "data", "runners"),
     cacheRoot: path.join(root, "data", "runner-sessions"),
-    approvalMode: () => "autonomous",
+    ...extra,
     log: () => undefined,
   });
   controlUrl = `http://127.0.0.1:${pool.port}`;
@@ -292,6 +298,72 @@ describe("session runners", () => {
     );
     expect(JSON.stringify(read.messages)).toContain("All done.");
     expect(harness.manager.starts).toBe(1);
+  });
+
+  it("runs an approval tool only for the card the owner answered", async () => {
+    const reminders: string[] = [];
+    const remind = defineTool({
+      name: "host_remind",
+      description: "Set a reminder.",
+      inputSchema: {
+        type: "object",
+        properties: { when: { type: "string" } },
+        required: ["when"],
+      },
+      effect: "external",
+      authorization: "required",
+      handler: async (input) => {
+        reminders.push(String(input.when));
+        return { modelContent: "set" };
+      },
+    });
+    const harness = await setup(
+      async function* (request) {
+        const results = request.messages.filter(
+          (message) =>
+            Array.isArray(message.content) &&
+            message.content.some((block) => block.type === "tool_result"),
+        ).length;
+        if (results === 0) yield* toolCall("host_remind", { when: "7am" });
+        else yield* final("Reminder set.");
+      },
+      {
+        approvalMode: () => "ask",
+        approvalHostTools: () => ({
+          toolNames: ["host_remind"],
+          resolveTools: () => [remind],
+          prepare: (request) => ({
+            decision: "require_user",
+            summary: `Remind at ${String(request.input.when)}?`,
+            displayContent: { kind: "reminder", when: request.input.when },
+          }),
+        }),
+      },
+    );
+    const { sessionId } = await harness.routes.operations.createSession(
+      auth(),
+      "task-t1",
+    );
+    await harness.run(sessionId, "Remind me");
+    expect(reminders).toEqual([]);
+    const read = await harness.routes.operations.readSession(
+      auth(),
+      "task-t1",
+      sessionId,
+    );
+    const pending = read.pendingApproval!;
+    expect(pending).toBeDefined();
+
+    // The decision reaches the control plane with the card it was for, so
+    // the grant prepared for that card is the one that runs.
+    await harness.routes.operations.answerInteraction(
+      auth(),
+      "task-t1",
+      sessionId,
+      { ...pending, decision: "allow" },
+    );
+    await harness.routes.whenIdle("task-t1", sessionId);
+    expect(reminders).toEqual(["7am"]);
   });
 
   it("keeps the session when the runner restarts, and starts it again on demand", async () => {

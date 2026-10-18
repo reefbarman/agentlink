@@ -86,12 +86,25 @@ export function hostToolProxyRoutes(options: {
 }
 
 /**
+ * What the owner saw on an approval card: the tool and the summary and
+ * display content the control plane prepared for it. The runner shows the
+ * card, but these come from the control plane's own `prepare`.
+ */
+export interface RunnerApprovalCard {
+  readonly toolName: string;
+  readonly summary: string;
+  readonly displayContent?: unknown;
+}
+
+/**
  * What a runner's sessions may run of the control plane's approval tools
  * (MCP calls). The runner holds the session and shows the card, but it is
  * never trusted to say the owner approved: `prepare` records exactly what
- * the control plane prepared for that session, the owner's Allow (which
- * passes through the control plane) approves it, and a call runs only if
- * it matches an approved grant, once.
+ * the control plane prepared for that session (the input that will run and
+ * the card it produced for it), the owner's Allow approves only the grant
+ * whose card is the one the owner answered, and a call runs only if it
+ * matches an approved grant, once. So a runner cannot prepare A, prepare
+ * B, show A's card and run B.
  */
 export interface RunnerApprovalGrants {
   /** Record a prepared call; `approved` for one the host allows outright. */
@@ -100,9 +113,19 @@ export interface RunnerApprovalGrants {
     toolName: string,
     input: Readonly<Record<string, unknown>>,
     approved: boolean,
+    card?: RunnerApprovalCard,
   ): void;
-  /** The owner decided the session's pending card. */
-  decide(sessionId: string, decision: "allow" | "deny"): void;
+  /**
+   * The owner decided the session's pending card. Allow approves the one
+   * undecided grant prepared with exactly that card, or nothing when there
+   * is no card or the card does not identify exactly one grant. Either
+   * decision drops the session's other undecided grants.
+   */
+  decide(
+    sessionId: string,
+    decision: "allow" | "deny",
+    card?: RunnerApprovalCard,
+  ): void;
   /** Use up the matching approved grant; false when there is none. */
   take(
     sessionId: string,
@@ -116,30 +139,43 @@ const MAX_GRANTS_PER_SESSION = 10;
 export function createRunnerApprovalGrants(): RunnerApprovalGrants {
   const grants = new Map<
     string,
-    Array<{ readonly key: string; approved: boolean }>
+    Array<{ readonly key: string; readonly card?: string; approved: boolean }>
   >();
   const keyOf = (toolName: string, input: Readonly<Record<string, unknown>>) =>
     hashTool({ toolName, input });
+  const cardOf = (card: RunnerApprovalCard) =>
+    hashTool({
+      toolName: card.toolName,
+      input: {
+        summary: card.summary,
+        // A card read back over JSON has no undefined fields.
+        displayContent: card.displayContent ?? null,
+      },
+    });
   return {
-    expect(sessionId, toolName, input, approved) {
-      const list = (grants.get(sessionId) ?? []).filter(
-        // A card not yet decided is replaced by the next one prepared.
-        (grant) => grant.approved,
-      );
-      list.push({ key: keyOf(toolName, input), approved });
+    expect(sessionId, toolName, input, approved, card) {
+      const list = grants.get(sessionId) ?? [];
+      list.push({
+        key: keyOf(toolName, input),
+        ...(card ? { card: cardOf(card) } : {}),
+        approved,
+      });
       grants.set(sessionId, list.slice(-MAX_GRANTS_PER_SESSION));
     },
-    decide(sessionId, decision) {
+    decide(sessionId, decision, card) {
       const list = grants.get(sessionId);
       if (!list) return;
-      if (decision === "allow") {
-        for (const grant of list) grant.approved = true;
-      } else {
-        grants.set(
-          sessionId,
-          list.filter((grant) => grant.approved),
-        );
+      const undecided = list.filter((grant) => !grant.approved);
+      if (decision === "allow" && card) {
+        const shown = cardOf(card);
+        const matching = undecided.filter((grant) => grant.card === shown);
+        // Two prepared calls with the same card are ambiguous: neither runs.
+        if (matching.length === 1) matching[0]!.approved = true;
       }
+      grants.set(
+        sessionId,
+        list.filter((grant) => grant.approved),
+      );
     },
     take(sessionId, toolName, input) {
       const list = grants.get(sessionId) ?? [];
@@ -224,6 +260,13 @@ export function approvalToolProxyRoutes(options: {
           toolName,
           approval.preparedInput ?? input,
           approval.decision === "allow",
+          {
+            toolName,
+            summary: approval.summary,
+            ...(approval.displayContent === undefined
+              ? {}
+              : { displayContent: approval.displayContent }),
+          },
         );
       }
       return approval;
