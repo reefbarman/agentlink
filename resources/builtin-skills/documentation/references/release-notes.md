@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Desktop and Browser Ask Agent no longer replace the saved model or thinking level with a temporary fallback when provider catalogs load or reconnect. The saved choices return when the model is available again; requests still use a supported thinking level for the active model.
+
 ## 1.37.1
 
 - Guardian MCP denials now immediately request human approval with the reason and call arguments visible, instead of returning an outright rejection. Human rejection, cancellation and hard access restrictions still stop execution, and the agent receives the Guardian explanation if the human declines.
