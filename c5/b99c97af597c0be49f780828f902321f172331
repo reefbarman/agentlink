@@ -1,0 +1,27 @@
+apps/desktop/src/desktopReleaseInstall.ts
+  h_e08a86bb3a33a2 30-38,359,378-392,573
+  s_fed8012e963c78::t_220b713fee4b9c 393
+apps/desktop/src/desktopReleaseInstall.test.ts
+  h_e08a86bb3a33a2 548-581
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5b99c97af597c0be49f780828f902321f172331",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_fed8012e963c78": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c2f1585e-8e66-472a-97b4-0e8652ec600e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
