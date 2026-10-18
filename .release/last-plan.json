@@ -1,32 +1,11 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "9bbcb0340288d7e7964667bc2885674790c57695",
-  "createdAt": "2026-10-18T23:32:12.457Z",
+  "sourceSha": "06bf5b37f3daba48a1d4a207c0bbba52743db5b0",
+  "createdAt": "2026-10-18T23:52:48.408Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
-    "omitted": [
-      "257cee467e0ec17eea7e5f539b88d89bbc4a1ec6",
-      "9264f7c50f054166c9ae12e07e4c3d76277a3552",
-      "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
-      "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
-      "b94259a3559e0df229e4a43deb371c763b2296bc",
-      "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
-      "3f14f70be12478546de1ed295b0228e714354b83",
-      "69fd7545b8d9509a651ea718d74f9e9c36496aef",
-      "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
-      "ba96fb56abed19c263d4d7f37b8b8814d2c57d25",
-      "a5fc87f636698cdd3d7e9abc1248ac2d720b252f",
-      "7b66de11e3b436d99c9412e52205f27b504bbba3",
-      "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
-      "a02c212ef0f09b070026cbb07fbfb37e22c8c201",
-      "053e19ea0afd9982ba064315b5d31700e37bda9a",
-      "5059396572186fed56d325d392055168ec502fea",
-      "d0e4b550b7ad95dafe86673800c559b413066e6f",
-      "89e194e5f26bb9e1373fba73b918534ffe9a7c89",
-      "b973a3780043b78d3f7bb5ea04236c42b739e22c",
-      "4f48a6ee2bdb18d8229f7d8faa37215873866bff"
-    ]
+    "omitted": []
   },
   "overrides": [],
   "units": {
@@ -728,11 +707,13 @@
         {
           "sha": "257cee467e0ec17eea7e5f539b88d89bbc4a1ec6",
           "subject": "feat(assistant): count push notifications and add a per-day usage report",
+          "summary": "The assistant server counts push notifications and adds an `agentlink-server usage-report` command showing per-day Inbox entries, pushes, job runs, model requests and tokens.",
           "breaking": false
         },
         {
           "sha": "9264f7c50f054166c9ae12e07e4c3d76277a3552",
           "subject": "fix(assistant): let chats run alongside one waiting on approval and make queue Remove/Edit work",
+          "summary": "Chats now keep running alongside another chat that is waiting on approval, with its approval card shown only in its own chat, and queued messages can be removed or edited.",
           "breaking": false
         },
         {
@@ -744,6 +725,7 @@
         {
           "sha": "cdd2fab10bd6093e89075530628169b9e9ddc0ed",
           "subject": "feat(assistant): polish management panels and task navigation",
+          "summary": "Assistant management panels get search and filters for Tasks and Jobs, grouped Settings sections with Save changes enabled only after an edit, sticky headers, and keyboard focus containment in dialogs.",
           "breaking": false
         },
         {
@@ -761,6 +743,7 @@
         {
           "sha": "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec",
           "subject": "feat(assistant): add guided release installation and image updates",
+          "summary": "Adds a guided release installer for the Assistant that installs prebuilt digest-pinned images and supports status, pair, update and rollback, plus released-image upgrades in upgrade.sh.",
           "breaking": false
         },
         {
@@ -772,6 +755,7 @@
         {
           "sha": "b94259a3559e0df229e4a43deb371c763b2296bc",
           "subject": "feat(assistant): add confirmed browser updates and durable updater",
+          "summary": "Adds owner-confirmed Assistant updates and rollbacks from Settings > Updates, run by a separate durable updater supervisor, with transactional template updates and recovery.",
           "breaking": false
         },
         {
@@ -795,21 +779,25 @@
         {
           "sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
           "subject": "feat(node-host): let Codex account saves check authority under the lock",
+          "summary": "The Codex account save API accepts an optional beforeCommit hook that runs under the storage lock, so a save whose authority lapsed while waiting is refused with nothing written.",
           "breaking": false
         },
         {
           "sha": "3f14f70be12478546de1ed295b0228e714354b83",
           "subject": "feat(assistant): add a deployment guard shared by updates and the installer",
+          "summary": "Browser updates and installer changes now share one exclusive deployment guard, so updates are refused while a local change is unfinished and a failed recovery keeps the guard for operator recovery.",
           "breaking": false
         },
         {
           "sha": "69fd7545b8d9509a651ea718d74f9e9c36496aef",
           "subject": "feat(assistant): add browser setup, API-key models, optional features and uninstall",
+          "summary": "The Assistant gains a resumable browser setup guide, an OpenAI API key as a model option, installer commands for optional editor and browser features, uninstall, resume, recover and diagnose, and documented restore steps.",
           "breaking": false
         },
         {
           "sha": "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9",
           "subject": "docs(assistant): point getting started at browser setup and installer features",
+          "summary": "The built-in getting-started documentation now describes the browser Setup guide and the installer's optional features, uninstall and recovery commands.",
           "breaking": false
         },
         {
@@ -821,36 +809,43 @@
         {
           "sha": "ba96fb56abed19c263d4d7f37b8b8814d2c57d25",
           "subject": "fix(assistant): challenge every unsigned egress request",
+          "summary": "With a policy key, the egress gateway now answers every request without proxy credentials with 407, so a command in an Off project can no longer drop its credentials to reach the dependency allowlist.",
           "breaking": false
         },
         {
           "sha": "a5fc87f636698cdd3d7e9abc1248ac2d720b252f",
           "subject": "fix(assistant): bind runner approval grants to the answered card",
+          "summary": "Runner approvals now approve only the prepared call tied to the exact card the owner answered; ambiguous, missing or stale cards approve nothing.",
           "breaking": false
         },
         {
           "sha": "7b66de11e3b436d99c9412e52205f27b504bbba3",
           "subject": "fix(assistant): start only one continuation or hand back per task",
+          "summary": "Two simultaneous continue or hand-back requests for the same task can no longer both start it; the second is refused as busy.",
           "breaking": false
         },
         {
           "sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
           "subject": "fix(core): keep admitted steering messages when a model call fails",
+          "summary": "A steering message admitted for a model call that then fails is now kept with the turn instead of being lost.",
           "breaking": false
         },
         {
           "sha": "a02c212ef0f09b070026cbb07fbfb37e22c8c201",
           "subject": "fix(assistant): give each task editor its own sign-in secret",
+          "summary": "Each task editor now requires its own random sign-in secret, which only the Assistant's editor proxy supplies, so other editors on the shared network cannot sign in.",
           "breaking": false
         },
         {
           "sha": "053e19ea0afd9982ba064315b5d31700e37bda9a",
           "subject": "fix(assistant): take a fresh backup for upgrade rollback points",
+          "summary": "agentlink-server backup now always takes a new backup that starts after the request, so upgrade rollback points include everything up to the moment of draining.",
           "breaking": false
         },
         {
           "sha": "5059396572186fed56d325d392055168ec502fea",
           "subject": "refactor(assistant): share the task wire contract with the browser",
+          "summary": "Task wire types are now shared between server and browser UI, and the editor link opens directly where a blank tab is refused, as in the desktop app.",
           "breaking": false
         },
         {
@@ -862,16 +857,19 @@
         {
           "sha": "d0e4b550b7ad95dafe86673800c559b413066e6f",
           "subject": "fix(assistant): show the owner the control plane's own card for runner approvals",
+          "summary": "Owners are now shown the control plane's own copy of a runner's approval card, and Allow approves only that preparation; unknown preparations show as unverified and approve nothing.",
           "breaking": false
         },
         {
           "sha": "89e194e5f26bb9e1373fba73b918534ffe9a7c89",
           "subject": "fix(assistant): check the previous updater image before a rollback stops anything",
+          "summary": "A browser rollback now checks for the previous updater image before stopping anything, pulls it if missing, and refuses safely if it cannot be obtained.",
           "breaking": false
         },
         {
           "sha": "b973a3780043b78d3f7bb5ea04236c42b739e22c",
           "subject": "fix(assistant): retire an update's rollback point when a feature is turned on or off",
+          "summary": "Turning an optional feature on or off with install.sh now retires the last update's rollback point, and rollback refuses before stopping anything if it would remove a template still in use.",
           "breaking": false
         },
         {
@@ -883,6 +881,7 @@
         {
           "sha": "4f48a6ee2bdb18d8229f7d8faa37215873866bff",
           "subject": "test(assistant): expect unreachable egress targets to be refused before the credential check",
+          "summary": "The container smoke test now accepts a 403 refusal for unreachable egress targets before the credential check; no shipped behaviour changes.",
           "breaking": false
         }
       ]
@@ -1217,126 +1216,6 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "344b1159f04f4f717f2e379548586ecb8017fdd2": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Chat tool cards for the assistant's job, repository, task and web tools now show the inputs the model passed.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a4022290531c1aaf8623e46e18e8e90f831df5fb": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "15b0f7112896328934ebe7722650d2297e2e3249": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Commands run by the assistant server now set CI=true so tools don't wait for prompts, and web links in chat messages open in a new tab.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a51ba414d6dfa752d49e864c9b45561000fd1745": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The assistant server now logs which call starts a session runner, aiding diagnosis without changing behaviour.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "dd3373fca78f1e8b4be057df21022d16e0add09e": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "27108a79f2e074884338de46aecfe26caeb534e7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f197e1422486394963198bea440d3bcda8a121fa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
     "9ecc9182b558ce5fa596dc12bb6a989caaa18de5": {
       "bump": "minor",
       "breakingUnits": [],
@@ -1393,10 +1272,34 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
+    "344b1159f04f4f717f2e379548586ecb8017fdd2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Chat tool cards for the assistant's job, repository, task and web tools now show the inputs the model passed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a4022290531c1aaf8623e46e18e8e90f831df5fb": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "1ea1171f7e3376dcbc84569b05486d51e35e0316": {
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The command worker image now includes pnpm and yarn through Corepack, and a check whose program is missing fails the task with a clear message instead of using up fix rounds.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "15b0f7112896328934ebe7722650d2297e2e3249": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Commands run by the assistant server now set CI=true so tools don't wait for prompts, and web links in chat messages open in a new tab.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -1437,6 +1340,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Finished task chats are now shown from the assistant's saved copy of the last transcript, so opening the app doesn't wake every task's runner. Session runners are also documented.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a51ba414d6dfa752d49e864c9b45561000fd1745": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The assistant server now logs which call starts a session runner, aiding diagnosis without changing behaviour.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -1501,6 +1412,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The assistant can connect remote MCP servers with per-tool Ask/Run/Off, OAuth or header sign-in, a new MCP panel, and audited tool calls from chats and tasks.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dd3373fca78f1e8b4be057df21022d16e0add09e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -1661,6 +1580,246 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Long task titles and code previews in the task list are now clamped so rows stay compact.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "50fbc610a6459c3b39cb6dcbc1efa1353940f6a7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "69cdcd2ef3a4899ea26d6b6d6aa0215476010519": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a4f4e7f280d97051c64032a18f68aceee2ff8cb3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "27108a79f2e074884338de46aecfe26caeb534e7": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f197e1422486394963198bea440d3bcda8a121fa": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "257cee467e0ec17eea7e5f539b88d89bbc4a1ec6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The assistant server counts push notifications and adds an `agentlink-server usage-report` command showing per-day Inbox entries, pushes, job runs, model requests and tokens.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9264f7c50f054166c9ae12e07e4c3d76277a3552": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Chats now keep running alongside another chat that is waiting on approval, with its approval card shown only in its own chat, and queued messages can be removed or edited.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "cdd2fab10bd6093e89075530628169b9e9ddc0ed": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Assistant management panels get search and filters for Tasks and Jobs, grouped Settings sections with Save changes enabled only after an edit, sticky headers, and keyboard focus containment in dialogs.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7e2208c7e7cc47f6e5d99fa54f98edbe3ce894ec": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a guided release installer for the Assistant that installs prebuilt digest-pinned images and supports status, pair, update and rollback, plus released-image upgrades in upgrade.sh.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b94259a3559e0df229e4a43deb371c763b2296bc": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds owner-confirmed Assistant updates and rollbacks from Settings > Updates, run by a separate durable updater supervisor, with transactional template updates and recovery.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Codex account save API accepts an optional beforeCommit hook that runs under the storage lock, so a save whose authority lapsed while waiting is refused with nothing written.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3f14f70be12478546de1ed295b0228e714354b83": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Browser updates and installer changes now share one exclusive deployment guard, so updates are refused while a local change is unfinished and a failed recovery keeps the guard for operator recovery.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "69fd7545b8d9509a651ea718d74f9e9c36496aef": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant gains a resumable browser setup guide, an OpenAI API key as a model option, installer commands for optional editor and browser features, uninstall, resume, recover and diagnose, and documented restore steps.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2b1e04931e0a4ab6938b0eff3630bdea02c4cad9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The built-in getting-started documentation now describes the browser Setup guide and the installer's optional features, uninstall and recovery commands.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ba96fb56abed19c263d4d7f37b8b8814d2c57d25": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "With a policy key, the egress gateway now answers every request without proxy credentials with 407, so a command in an Off project can no longer drop its credentials to reach the dependency allowlist.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a5fc87f636698cdd3d7e9abc1248ac2d720b252f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Runner approvals now approve only the prepared call tied to the exact card the owner answered; ambiguous, missing or stale cards approve nothing.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7b66de11e3b436d99c9412e52205f27b504bbba3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Two simultaneous continue or hand-back requests for the same task can no longer both start it; the second is refused as busy.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "47fa323432dd1cfed05be4f7471f0d34cf7697a8": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "A steering message admitted for a model call that then fails is now kept with the turn instead of being lost.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a02c212ef0f09b070026cbb07fbfb37e22c8c201": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Each task editor now requires its own random sign-in secret, which only the Assistant's editor proxy supplies, so other editors on the shared network cannot sign in.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "053e19ea0afd9982ba064315b5d31700e37bda9a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "agentlink-server backup now always takes a new backup that starts after the request, so upgrade rollback points include everything up to the moment of draining.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5059396572186fed56d325d392055168ec502fea": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Task wire types are now shared between server and browser UI, and the editor link opens directly where a blank tab is refused, as in the desktop app.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d0e4b550b7ad95dafe86673800c559b413066e6f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Owners are now shown the control plane's own copy of a runner's approval card, and Allow approves only that preparation; unknown preparations show as unverified and approve nothing.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "89e194e5f26bb9e1373fba73b918534ffe9a7c89": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "A browser rollback now checks for the previous updater image before stopping anything, pulls it if missing, and refuses safely if it cannot be obtained.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b973a3780043b78d3f7bb5ea04236c42b739e22c": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Turning an optional feature on or off with install.sh now retires the last update's rollback point, and rollback refuses before stopping anything if it would remove a template still in use.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4f48a6ee2bdb18d8229f7d8faa37215873866bff": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "The container smoke test now accepts a 403 refusal for unreachable egress targets before the credential check; no shipped behaviour changes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
