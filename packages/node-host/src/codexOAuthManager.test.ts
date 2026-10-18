@@ -107,6 +107,26 @@ describe("CodexOAuthManager", () => {
     expect(all.find((a) => a.id === first.account.id)?.isActive).toBe(true);
   });
 
+  it("aborts a save with nothing written when beforeCommit throws", async () => {
+    await expect(
+      manager.saveOAuthAccount(
+        makeCreds({
+          accountId: "acct-revoked",
+          email: "revoked@example.com",
+          accessToken: "at-x",
+          refreshToken: "rt-x",
+        }),
+        {
+          makeActive: true,
+          beforeCommit: async () => {
+            throw new Error("authority lapsed");
+          },
+        },
+      ),
+    ).rejects.toThrow("authority lapsed");
+    expect(await manager.listAccounts()).toEqual([]);
+  });
+
   it("treats same-organization account ids as distinct OAuth accounts", async () => {
     const first = await manager.saveOAuthAccount(
       makeCreds({

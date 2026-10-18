@@ -103,6 +103,12 @@ export interface SaveOAuthAccountOptions {
   label?: string;
   makeActive?: boolean;
   replaceAccountId?: string;
+  /**
+   * Runs inside the storage mutation lock, immediately before the account is
+   * written. Throwing aborts the save with nothing changed, for callers whose
+   * authority may lapse while waiting for the lock.
+   */
+  beforeCommit?: () => Promise<void>;
 }
 
 export interface SaveOAuthAccountResult {
@@ -744,9 +750,11 @@ export class CodexOAuthManager {
 
   private async withFreshStateWrite<T>(options: {
     notify?: boolean;
+    beforeCommit?: () => Promise<void>;
     mutate: () => T;
   }): Promise<T> {
     const operation = async () => {
+      await options.beforeCommit?.();
       await this.ensureStateLoaded({
         forceReload: true,
         persistNormalization: true,
@@ -1001,6 +1009,7 @@ export class CodexOAuthManager {
   ): Promise<SaveOAuthAccountResult> {
     return this.withFreshStateWrite({
       notify: true,
+      ...(options?.beforeCommit ? { beforeCommit: options.beforeCommit } : {}),
       mutate: () => {
         const now = Date.now();
         const makeActive = options?.makeActive ?? true;
