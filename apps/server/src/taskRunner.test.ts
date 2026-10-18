@@ -1329,6 +1329,43 @@ describe("follow-ups", () => {
     await test.waitFor(created.id, "ready");
   });
 
+  it("starts only one of two continuations or hand backs sent at once", async () => {
+    const test = await setup();
+    const created = await test.runner.create(REQUEST);
+    await test.waitForTurns(1);
+    await test.runner.stop(created.id);
+    const continued = await Promise.allSettled([
+      test.runner.continueTask(created.id, "First."),
+      test.runner.continueTask(created.id, "Second."),
+    ]);
+    expect(continued.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(continued.find((result) => result.status === "rejected")).toEqual({
+      status: "rejected",
+      reason: expect.objectContaining({ code: "task_busy" }),
+    });
+    await test.waitForTurns(2);
+    expect(test.store.get(created.id)?.followUps).toEqual([
+      expect.objectContaining({ instructions: "First." }),
+    ]);
+
+    await test.runner.takeOver(created.id);
+    const handedBack = await Promise.allSettled([
+      test.runner.handBack(created.id),
+      test.runner.handBack(created.id),
+    ]);
+    expect(handedBack.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    await test.waitForTurns(3);
+    test.endTurn("completed");
+    await test.waitFor(created.id, "ready");
+    expect(test.turns).toHaveLength(3);
+  });
+
   it("refuses follow-ups for working, unstarted and unknown tasks", async () => {
     const test = await setup();
     const created = await test.runner.create(REQUEST);

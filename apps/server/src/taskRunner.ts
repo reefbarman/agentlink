@@ -268,6 +268,19 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
   const approvalTimeoutMs =
     options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const live = new Map<string, LiveTask>();
+  /**
+   * Tasks between their busy check and the point they are live (or given
+   * up). Reserved synchronously, so two requests for the same task cannot
+   * both pass the check while one awaits.
+   */
+  const starting = new Set<string>();
+  const reserve = (taskId: string): (() => void) => {
+    if (live.has(taskId) || starting.has(taskId)) {
+      throw new TaskInputError("task_busy", 409);
+    }
+    starting.add(taskId);
+    return () => starting.delete(taskId);
+  };
   const queue: LiveTask[] = [];
   let running = 0;
   let closed = false;
@@ -1172,39 +1185,44 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     },
     async continueTask(taskId, instructions, extras = {}) {
       assertAdmitting();
-      const task = requireTask(taskId);
-      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
-      if (task.state === "editing") {
-        throw new TaskInputError("task_editing", 409);
+      requireTask(taskId);
+      const release = reserve(taskId);
+      try {
+        const task = requireTask(taskId);
+        if (task.state === "editing") {
+          throw new TaskInputError("task_editing", 409);
+        }
+        if (!CONTINUABLE_STATES.has(task.state)) {
+          throw new TaskInputError("task_not_continuable", 409);
+        }
+        // Without its chat and clone there is nothing to continue.
+        if (!task.sessionId || !(await workspaces.exists(task))) {
+          throw new TaskInputError("task_not_started", 409);
+        }
+        const text = instructions.trim();
+        if (!text) throw new TaskInputError("instructions_required");
+        if (text.length > MAX_FOLLOW_UP_LENGTH) {
+          throw new TaskInputError("instructions_too_long");
+        }
+        const at = now();
+        const updated: TaskRun = {
+          ...task,
+          ...(extras.origin
+            ? // The latest asker decides where it is shown.
+              { origin: extras.origin, here: extras.here === true }
+            : {}),
+          followUps: [
+            ...(task.followUps ?? []),
+            { instructions: text, at },
+          ].slice(-MAX_FOLLOW_UPS),
+          pendingFollowUp: text,
+          updatedAt: at,
+        };
+        await store.save(updated);
+        return await enqueue(updated);
+      } finally {
+        release();
       }
-      if (!CONTINUABLE_STATES.has(task.state)) {
-        throw new TaskInputError("task_not_continuable", 409);
-      }
-      // Without its chat and clone there is nothing to continue.
-      if (!task.sessionId || !(await workspaces.exists(task))) {
-        throw new TaskInputError("task_not_started", 409);
-      }
-      const text = instructions.trim();
-      if (!text) throw new TaskInputError("instructions_required");
-      if (text.length > MAX_FOLLOW_UP_LENGTH) {
-        throw new TaskInputError("instructions_too_long");
-      }
-      const at = now();
-      const updated: TaskRun = {
-        ...task,
-        ...(extras.origin
-          ? // The latest asker decides where it is shown.
-            { origin: extras.origin, here: extras.here === true }
-          : {}),
-        followUps: [
-          ...(task.followUps ?? []),
-          { instructions: text, at },
-        ].slice(-MAX_FOLLOW_UPS),
-        pendingFollowUp: text,
-        updatedAt: at,
-      };
-      await store.save(updated);
-      return enqueue(updated);
     },
     async create(request, extras = {}) {
       assertAdmitting();
@@ -1237,75 +1255,92 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
     async resume(taskId) {
       assertAdmitting();
       const task = requireTask(taskId);
-      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      if (live.has(taskId) || starting.has(taskId)) {
+        throw new TaskInputError("task_busy", 409);
+      }
       if (task.state === "editing") {
         throw new TaskInputError("task_editing", 409);
       }
       if (!isResumableTask(task)) {
         throw new TaskInputError("task_not_resumable", 409);
       }
+      // No await before this: enqueue marks the task live synchronously.
       return enqueue(task);
     },
     async takeOver(taskId) {
       const task = requireTask(taskId);
       if (task.state === "editing") return task;
-      // Without its chat and clone there is nothing to hand back to.
-      if (!task.sessionId || !(await workspaces.exists(task))) {
-        throw new TaskInputError("task_not_started", 409);
+      // A continuation or hand back on its way in is not stopped mid-start.
+      if (starting.has(taskId)) throw new TaskInputError("task_busy", 409);
+      starting.add(taskId);
+      try {
+        // Without its chat and clone there is nothing to hand back to.
+        if (!task.sessionId || !(await workspaces.exists(task))) {
+          throw new TaskInputError("task_not_started", 409);
+        }
+        const entry = live.get(taskId);
+        if (entry?.mode === "publish") {
+          throw new TaskInputError("task_busy", 409);
+        }
+        if (entry) await stop(entry, "taken_over", "editing");
+        const current = requireTask(taskId);
+        const inspection = await workspaces.inspect(current);
+        const at = now();
+        const updated: TaskRun = {
+          ...current,
+          state: "editing",
+          error: "taken_over",
+          takeover: { at, head: inspection.head },
+          finishedAt: current.finishedAt ?? at,
+          updatedAt: at,
+        };
+        await store.save(updated);
+        changed(updated);
+        log(`Task ${taskId} taken over in the editor`);
+        return updated;
+      } finally {
+        starting.delete(taskId);
       }
-      const entry = live.get(taskId);
-      if (entry?.mode === "publish") {
-        throw new TaskInputError("task_busy", 409);
-      }
-      if (entry) await stop(entry, "taken_over", "editing");
-      const current = requireTask(taskId);
-      const inspection = await workspaces.inspect(current);
-      const at = now();
-      const updated: TaskRun = {
-        ...current,
-        state: "editing",
-        error: "taken_over",
-        takeover: { at, head: inspection.head },
-        finishedAt: current.finishedAt ?? at,
-        updatedAt: at,
-      };
-      await store.save(updated);
-      changed(updated);
-      log(`Task ${taskId} taken over in the editor`);
-      return updated;
     },
     async handBack(taskId, handBackOptions = {}) {
       assertAdmitting();
-      const task = requireTask(taskId);
-      if (task.state !== "editing") {
+      const first = requireTask(taskId);
+      if (first.state !== "editing") {
         throw new TaskInputError("task_not_editing", 409);
       }
-      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
-      const files = task.takeover
-        ? await workspaces.changedSince(task, task.takeover.head)
-        : [];
-      const note = handBackPrompt(task, files, handBackOptions.idle === true);
-      const at = now();
-      const { takeover: _takeover, ...rest } = task;
-      const updated: TaskRun = {
-        ...rest,
-        followUps: [
-          ...(task.followUps ?? []),
-          { instructions: note, at },
-        ].slice(-MAX_FOLLOW_UPS),
-        pendingFollowUp: note,
-        updatedAt: at,
-      };
-      await store.save(updated);
-      log(
-        `Task ${taskId} handed back${handBackOptions.idle ? " (editor idle)" : ""}: ${files.length} file(s) changed`,
-      );
-      return enqueue(updated);
+      const release = reserve(taskId);
+      try {
+        const task = requireTask(taskId);
+        const files = task.takeover
+          ? await workspaces.changedSince(task, task.takeover.head)
+          : [];
+        const note = handBackPrompt(task, files, handBackOptions.idle === true);
+        const at = now();
+        const { takeover: _takeover, ...rest } = task;
+        const updated: TaskRun = {
+          ...rest,
+          followUps: [
+            ...(task.followUps ?? []),
+            { instructions: note, at },
+          ].slice(-MAX_FOLLOW_UPS),
+          pendingFollowUp: note,
+          updatedAt: at,
+        };
+        await store.save(updated);
+        log(
+          `Task ${taskId} handed back${handBackOptions.idle ? " (editor idle)" : ""}: ${files.length} file(s) changed`,
+        );
+        return await enqueue(updated);
+      } finally {
+        release();
+      }
     },
     async publish(taskId, publishOptions = {}) {
       assertAdmitting();
       const task = requireTask(taskId);
-      if (live.has(taskId)) throw new TaskInputError("task_busy", 409);
+      if (live.has(taskId) || starting.has(taskId)) {
+        throw new TaskInputError("task_busy", 409);
+      }
       const allowUnreviewed = publishOptions.allowUnreviewed === true;
       const publishable =
         task.state === "ready" ||
