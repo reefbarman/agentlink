@@ -545,6 +545,40 @@ describe.skipIf(process.platform !== "darwin")("Desktop release host", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("clears a leftover applied update after a newer version is installed", async () => {
+    const f = await fixture();
+    await f.installer.install();
+    const pending = await f.pending();
+    await rename(f.destination, pending.backup);
+    await rename(pending.staged, f.destination);
+    // An earlier cleanup stopped partway, leaving only an app.asar behind.
+    await rm(pending.backup, { recursive: true });
+    await mkdir(path.join(pending.backup, "Contents/Resources"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(pending.backup, "Contents/Resources/app.asar"),
+      "asar",
+    );
+    await writeFile(
+      path.join(f.userData, "updates/apply-result.json"),
+      JSON.stringify({ status: "applied" }),
+    );
+    await bundle(f.destination, "2.0.0");
+    const reopened = new DesktopReleaseInstaller({
+      ...f.options,
+      identity: { ...f.options.identity, version: "2.0.0" },
+    });
+    await reopened.reconcile();
+    expect(reopened.snapshot().phase).not.toBe("failed");
+    await expect(readFile(f.pendingPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readdir(path.dirname(pending.staged))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("retains backup and staging and surfaces recorded apply failures", async () => {
     const f = await fixture();
     await f.installer.install();
