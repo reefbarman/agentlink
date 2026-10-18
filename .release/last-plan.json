@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
-  "createdAt": "2026-10-18T06:17:53.164Z",
+  "sourceSha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+  "createdAt": "2026-10-18T06:46:48.742Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.38.1",
-      "baselineRef": "v1.38.1",
+      "published": "1.38.2",
+      "baselineRef": "v1.38.2",
       "reserved": "1.38.2",
-      "commits": ["b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d"],
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.38.2",
-      "effectiveBump": "patch",
+      "version": "1.39.0",
+      "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.38.2",
+      "tag": "v1.39.0",
       "notes": [
         {
-          "sha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
-          "subject": "fix(guardian): give Jev earlier typed instructions and ignore text-less messages",
-          "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.26.2",
-      "baselineRef": "desktop-v0.26.2",
-      "reserved": "0.26.2",
-      "commits": ["b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d"],
+      "published": "0.26.3",
+      "baselineRef": "desktop-v0.26.3",
+      "reserved": "0.26.3",
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.26.3",
-      "effectiveBump": "patch",
+      "version": "0.27.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.26.3",
+      "tag": "desktop-v0.27.0",
       "notes": [
         {
-          "sha": "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d",
-          "subject": "fix(guardian): give Jev earlier typed instructions and ignore text-less messages",
-          "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
           "breaking": false
         }
       ]
@@ -61,25 +61,49 @@
       "published": "0.22.0",
       "baselineRef": "cli-v0.22.0",
       "reserved": "0.22.0",
-      "commits": [],
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.23.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.23.0",
+      "notes": [
+        {
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.13.0",
       "baselineRef": "sdk-v0.13.0",
       "reserved": "0.13.0",
-      "commits": [],
+      "commits": ["145cc82e54ace9df4007da6586397ca6255fb4a8"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.14.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.14.0",
+      "notes": [
+        {
+          "sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+          "subject": "fix(tools): surface formatting churn and approval provenance",
+          "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -135,6 +159,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -203,10 +235,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "b6ccce8d5ff471b7eb300ac3fe0a3069a6608e1d": {
-      "bump": "patch",
+    "145cc82e54ace9df4007da6586397ca6255fb4a8": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "The experimental TypeSafe Jev shadow reviewer now sees all earlier typed instructions, and attachment-only messages no longer count as missing human evidence, fixing a permanent one-item evidence gap.",
+      "summary": "Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

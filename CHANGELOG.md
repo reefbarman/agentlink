@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.39.0
+
 - Development activity diagnostics now distinguish MCP grants, human approval, first-pass review, and full Guardian review, and capture managed-network destination decisions observed before a command tool returns. The bounded host-owned audit excludes arguments, destinations, credentials, and raw review rationale. Older activity and later sockets from background or timed-out commands have no additional provenance.
 
 - Edit tools now report how many lines save participants changed separately from the reviewed edit. Formatting changes larger than ten times the reviewed edit, or too large to preview, produce explicit warnings to inspect the full saved diff before committing. Disproportionate changes also require a re-read; ordinary formatting and exact-save behaviour are unchanged.
