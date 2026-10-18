@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.15.0 — 2026-10-18
+
+- Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.
+- File reads, writes, search and the git status probe can now run through an injected execution backend, with a new filesystem port in node-host; local behaviour is unchanged by default.
+- The assistant server can now create workspace sessions, stream turn events over SSE, run server-owned turns and take approvals bound to an exact interaction; core and workspace-host gain supporting exports and options.
+- The assistant server gains ChatGPT (Codex) sign-in with codex-login/codex-logout commands, a hardened Docker container deployment, and more robust file locks. The node-host Codex OAuth manager can now use custom storage and finish sign-in from a pasted redirect URL.
+- Agents can start read-only background children, such as a reviewer on a role-selected model. The assistant server gains routes to list, steer, stop and approve those children.
+- Background agent lifecycle, phase and current-tool changes are pushed to the parent session's event stream, so clients no longer need to poll. The supervisor also tracks tool completion more accurately.
+- Assistant chats now run in-project file edits and foreground commands without approval by default, with a per-session approval-mode switch. Recorded tool authorizations are now single-use in the turn kernel.
+- The Assistant's chat sidebar and project switcher now show live working, needs-you and unread status, and chats keep running when you switch to another chat.
+- Assistant projects get per-project network presets (Open web, Dependencies only, Off) enforced by a signed egress policy, plus read-only web_fetch and web_search tools and an optional SearXNG compose overlay.
+- The Assistant shows the open chat's background agents as Agent Fleet cards with transcripts, steering, stopping and child approvals.
+- The Assistant web app gains a Jobs panel and an Inbox with an unread badge, live-following of run chats with approval cards, and a server-side inbox for finished, failed, blocked and approval-waiting runs.
+- Assistant chats can create, change, delete and list scheduled jobs via new tools, always requiring owner approval with an exact preview card, and the workspace host gains an approvalHostTools option.
+- Failed or blocked job runs now keep a redacted description of what actually went wrong, shown in Jobs history and the Inbox, via a new onTurnError hook threaded through the core engine, node host and workspace host.
+- feat(assistant): reference repositories on coding tasks
+- Chat turns get larger step limits (more for coding tasks), and tasks that hit the per-turn limit automatically continue in the same chat instead of failing.
+- feat(assistant): task chats are real chats, and messages steer running turns
+- feat(assistant): long-running sessions with Auto Continue and a notify-only runaway guard
+- feat(assistant): the assistant chooses how to handle a request, with work here and no card for repeat work
+- feat(assistant): session runners, one container per coding task session with models and tools on the control plane
+- fix(assistant): keep chats by project ID so restores keep them; tell the owner about chats stopped by a drain
+- When the host provides MCP tools through approval tools, the model is told how to use find_mcp_tools and call_mcp_tool instead of being told MCP is not enabled.
+- feat(assistant): persona, time zone and quiet hours
+- feat(assistant): memory the owner can see, correct and forget
+- feat(assistant): deleting a chat deletes it, with stated retention
+- feat(assistant): watches that only ask a model when a page changed
+- feat(node-host): let Codex account saves check authority under the lock
+- fix(core): keep admitted steering messages when a model call fails
+
 ## 0.14.0 — 2026-10-18
 
 - Write results now warn when format-on-save changes far exceed the reviewed edit and require a reread, and development builds can inspect host-recorded approval provenance for MCP and managed-network commands via diagnose_activity.
