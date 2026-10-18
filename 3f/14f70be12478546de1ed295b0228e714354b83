@@ -1,0 +1,58 @@
+apps/server/src/deploymentLifecycle.test.ts
+  h_e08a86bb3a33a2 1-164
+apps/server/src/assistantUpdater.test.ts
+  h_e08a86bb3a33a2 536-570,572-643
+  s_272745f5b7415e::t_9852a3f2a3c80a 571
+scripts/assistant-deployment-assets.mjs
+  h_e08a86bb3a33a2 61-64
+apps/server/src/updateDeployment.test.ts
+  h_e08a86bb3a33a2 48-49,54,62-64,80-85,120,130-131,439,453,664-687,712-716,719,733,768-772
+  s_b54b7fd5ed0d2e::t_067f266a48b077 46-47,50,688,717-718,720-732,734-767,773
+apps/server/src/updateDeployment.ts
+  h_e08a86bb3a33a2 58-59,94-96
+  s_063ddeef8d79de::t_ec20bf0dc75d4c 97-98
+apps/server/src/deploymentLifecycle.ts
+  h_e08a86bb3a33a2 1-137
+scripts/package-assistant-release.test.mjs
+  h_e08a86bb3a33a2 111,181-183
+apps/server/src/assistantUpdater.ts
+  h_e08a86bb3a33a2 23-26,193-195,199,218,353-356,393,686-694,700-706
+  s_272745f5b7415e::t_84179d55657438 695-699,707
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f14f70be12478546de1ed295b0228e714354b83",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_063ddeef8d79de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c91ad8c8-7cb0-408f-8814-e9b6be251569",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_272745f5b7415e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5092a6f-a2e3-435f-b65d-e69d292cec45",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b54b7fd5ed0d2e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c24e14ae-4045-47fe-b4a7-fe99f76dae03",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
