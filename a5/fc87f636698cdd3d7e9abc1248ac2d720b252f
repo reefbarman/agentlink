@@ -1,0 +1,50 @@
+apps/server/src/sessionRunners.ts
+  h_e08a86bb3a33a2 18,40-97,299-300,304-307,318-321
+  s_c2c09f8eb71dd7::t_3d2c393c9fc9ca 39,98,302-303,308,316-317,322
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 142-146,211,303-366
+  s_02ac9fbd7f32e8::t_b80fa7e5ac9902 141,147,367-368
+apps/server/src/remoteHostTools.ts
+  h_e08a86bb3a33a2 88-91,95-98,116-119,142,146,148-149,152-153,157,160-162,165,168-170
+  s_0c4257378842ed::t_d5ab90e1b85aca 92-94,103-107,120-127,147,150-151,154,156,158-159,171-173,175-178,263-269
+apps/server/src/assistantMcpTools.test.ts
+  h_e08a86bb3a33a2 472-474,481-489,494,501,512-547,550,569-572
+  s_02ac9fbd7f32e8::t_22884f6c997a20 470-471,475,548-549,551-552
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5fc87f636698cdd3d7e9abc1248ac2d720b252f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02ac9fbd7f32e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bffc655-a954-4851-86f1-fff00a6775e5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0c4257378842ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52ad7d7e-188e-4af3-a27f-dbf7a623078e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c2c09f8eb71dd7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d04b8e8-5b7f-4b7d-a804-d1a82eb30145",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
