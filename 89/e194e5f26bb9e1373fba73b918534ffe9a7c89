@@ -1,0 +1,27 @@
+apps/server/src/updateDeployment.ts
+  h_e08a86bb3a33a2 822-845,869,891-894
+apps/server/src/updateDeployment.test.ts
+  h_e08a86bb3a33a2 712-715,726,742,750-794,798-806,810,818-820,822
+  s_006a5643048c49::t_2167747d4deaf0 716-725,727-741,743-749,795-797,821,823
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "89e194e5f26bb9e1373fba73b918534ffe9a7c89",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_006a5643048c49": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "112bfb8b-a20f-41f1-bd1a-7bd5b5e5ce38",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
