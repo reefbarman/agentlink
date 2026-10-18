@@ -165,11 +165,17 @@ case "$allowed" in "200 "*) ;; *) fail "gateway did not open a tunnel to npm: $a
 pass "gateway tunnels to an allowlisted registry with a signed policy"
 # Without credentials nothing gets through, not even the dependency hosts:
 # an Off project's command must not be able to drop its credentials.
-for target in registry.npmjs.org:443 example.com:443 assistant:8443 1.1.1.1:443; do
+for target in registry.npmjs.org:443 example.com:443; do
   result="$(egress "$target")"
   case "$result" in "407 "*) ;; *) fail "gateway did not challenge an unsigned request to $target: $result" ;; esac
 done
-pass "gateway challenges every request without credentials (407)"
+# Targets no policy could ever reach (IP addresses, sibling containers'
+# single-label names) are refused before credentials are even looked at.
+for target in assistant:8443 1.1.1.1:443; do
+  result="$(egress "$target")"
+  case "$result" in "403 "* | "407 "*) ;; *) fail "gateway did not refuse an unsigned request to $target: $result" ;; esac
+done
+pass "gateway challenges every request without credentials (407), and refuses unreachable targets"
 for target in example.com:443 assistant:8443 meridian:3456 registry.npmjs.org:80 1.1.1.1:443; do
   result="$(egress "$target" "$dependencies_policy")"
   case "$result" in "403 "*) ;; *) fail "gateway allowed $target: $result" ;; esac
