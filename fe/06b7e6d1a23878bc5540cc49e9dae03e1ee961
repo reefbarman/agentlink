@@ -1,0 +1,16 @@
+packages/node-host/src/codexOAuthManager.ts
+  h_e08a86bb3a33a2 106-111,753,757,1012
+packages/node-host/src/codexOAuthManager.test.ts
+  h_e08a86bb3a33a2 110-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe06b7e6d1a23878bc5540cc49e9dae03e1ee961",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
