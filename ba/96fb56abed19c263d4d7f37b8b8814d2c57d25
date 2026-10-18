@@ -1,0 +1,22 @@
+apps/server/src/serverCli.ts
+  h_e08a86bb3a33a2 216-218
+apps/server/src/egressPolicy.ts
+  h_e08a86bb3a33a2 211-217,228-234,242,244
+apps/server/deploy/container/smoke-test.sh
+  h_e08a86bb3a33a2 147,153-155,157,160,165-168,170-174,177,191
+apps/server/README.md
+  h_e08a86bb3a33a2 155,275-276
+apps/server/src/egressPolicy.test.ts
+  h_e08a86bb3a33a2 212-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ba96fb56abed19c263d4d7f37b8b8814d2c57d25",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
