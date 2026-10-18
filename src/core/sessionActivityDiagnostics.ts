@@ -15,6 +15,7 @@ export interface SessionActivityEvidence {
   toolName?: string;
   durationMs?: number;
   outcome?: string;
+  authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
   input?: unknown;
   result?: unknown;
   retryable?: boolean;

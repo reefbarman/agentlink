@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Development activity diagnostics now distinguish MCP grants, human approval, first-pass review, and full Guardian review, and capture managed-network destination decisions observed before a command tool returns. The bounded host-owned audit excludes arguments, destinations, credentials, and raw review rationale. Older activity and later sockets from background or timed-out commands have no additional provenance.
+
+- Edit tools now report how many lines save participants changed separately from the reviewed edit. Formatting changes larger than ten times the reviewed edit, or too large to preview, produce explicit warnings to inspect the full saved diff before committing. Disproportionate changes also require a re-read; ordinary formatting and exact-save behaviour are unchanged.
+
 ## 1.38.2
 
 - Jev now receives every earlier instruction you typed, not just your latest one and your answers to the agent's questions. Earlier instructions still in the recent part of the conversation were counted as given to Jev but never sent, so a restriction such as "plan only, don't push yet" could be missed. The main Guardian's evidence is unchanged. A message that only attaches an image or file, with no text, no longer counts as missing evidence: it has no text a reviewer could be given, and it made every later review in that session ineligible. In the 118-command replay, eligible Jev answers rose from 81 to 90 and reviews with missing human evidence fell from 29 to 18, with no should-block command approved by the first pass.

@@ -6494,6 +6494,10 @@ describe("handleExecuteCommand", () => {
     "human-drift",
     "destination-drift",
     "retained-denial",
+    "first-pass",
+    "rule",
+    "unknown-source",
+    "late-socket",
   ])(
     "routes unseen public destinations through Guardian with human fallback: %s",
     async (scenario) => {
@@ -6599,6 +6603,8 @@ describe("handleExecuteCommand", () => {
           risk: scenario === "risky" ? ("critical" as const) : ("low" as const),
           userAuthorization: "high" as const,
           rationale: "Destination risk review",
+          source:
+            scenario === "unknown-source" ? undefined : ("guardian" as const),
           model: "review-model",
           status:
             scenario === "unavailable"
@@ -6618,10 +6624,22 @@ describe("handleExecuteCommand", () => {
             ? ("prompt" as const)
             : scenario === "forbidden"
               ? ("forbidden" as const)
-              : ("unmatched" as const),
+              : scenario === "rule"
+                ? ("allow" as const)
+                : ("unmatched" as const),
         matches: [],
       }));
       const { handleExecuteCommand } = await import("./executeCommand.js");
+      const { createNetworkApprovalReviewer } =
+        await import("../approvals/networkApprovalReview.js");
+      const firstPass = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        status: "reviewed" as const,
+        model: "jev-1.14.0",
+        rationale: "private rationale",
+      }));
 
       const result = await handleExecuteCommand(
         {
@@ -6668,7 +6686,13 @@ describe("handleExecuteCommand", () => {
           getCommandApprovalPolicy: () =>
             scenario === "manual" ? "manual" : "approve-for-me",
           commandApprovalReviewer: { review },
-          networkApprovalReviewer: { review: networkReview },
+          networkApprovalReviewer:
+            scenario === "first-pass"
+              ? createNetworkApprovalReviewer({
+                  resolveContext: () => undefined,
+                  firstPass,
+                })
+              : { review: networkReview },
           retainedCommandReviewDenials: createRetainedCommandReviewDenials(),
           getHumanInputRevision: () => humanRevision,
           getUserObjective: () => "Check the Vite version on npm",
@@ -6716,7 +6740,13 @@ describe("handleExecuteCommand", () => {
       expect(enqueueNetworkApproval).toHaveBeenCalledTimes(
         scenario === "retained-denial" ? 2 : humanFallback ? 1 : 0,
       );
-      const reviewed = !["prompt", "forbidden", "manual"].includes(scenario);
+      const reviewed = ![
+        "prompt",
+        "forbidden",
+        "manual",
+        "rule",
+        "first-pass",
+      ].includes(scenario);
       expect(networkReview).toHaveBeenCalledTimes(reviewed ? 1 : 0);
       if (reviewed)
         expect(networkReview).toHaveBeenCalledWith(
@@ -6730,6 +6760,81 @@ describe("handleExecuteCommand", () => {
             userObjective: "Check the Vite version on npm",
           }),
         );
+      const audit = result.uiMeta?.authorizationAudit;
+      expect(audit?.decisions.length).toBeGreaterThan(0);
+      const basis = ["forbidden", "rule"].includes(scenario)
+        ? "rule"
+        : ["human-drift", "destination-drift"].includes(scenario)
+          ? "host-policy"
+          : scenario === "first-pass"
+            ? "first-pass"
+            : scenario === "unknown-source"
+              ? "unknown"
+              : humanFallback || scenario === "retained-denial"
+                ? "human"
+                : "guardian";
+      expect(audit?.decisions.at(-1)?.basis).toBe(basis);
+      expect(JSON.stringify(audit)).not.toMatch(
+        /registry|104\.16|npm view|Destination risk|private rationale/,
+      );
+      if (scenario === "first-pass")
+        expect(audit?.decisions[0]).toMatchObject({
+          reviewer: "first-pass",
+          model: "jev-1.14.0",
+          risk: "low",
+        });
+      if (scenario === "unavailable")
+        expect(audit?.decisions[0]?.risk).toBeUndefined();
+      if (scenario === "late-socket") {
+        const snapshot = JSON.stringify(audit);
+        await prepareExecution.mock.calls[0]![0].onManagedNetworkRequest(
+          { ...networkRequest, requestId: "later" },
+          new AbortController().signal,
+        );
+        expect(JSON.stringify(result.uiMeta?.authorizationAudit)).toBe(
+          snapshot,
+        );
+      }
+      const { ActivityTraceRecorder } =
+        await import("../agent/ActivityTraceRecorder.js");
+      const { handleDiagnoseActivity } = await import("./diagnoseActivity.js");
+      const directory = fs.mkdtempSync("/tmp/network-authorization-");
+      const recorder = new ActivityTraceRecorder({ workspaceDir: directory });
+      try {
+        recorder.appendAgentEvent(
+          "session-managed-network",
+          "project",
+          {
+            type: "tool_result",
+            toolCallId: "network-call",
+            toolName: "execute_command",
+            result: result.content,
+            durationMs: 1,
+            authorizationAudit: audit,
+          },
+          "foreground_agent",
+        );
+        const diagnosis = handleDiagnoseActivity(
+          { tool_name: "execute_command", limit: 1 },
+          {
+            diagnose: (query) =>
+              recorder.diagnoseSessionActivity(
+                "session-managed-network",
+                query,
+              ),
+          },
+        );
+        expect(
+          (
+            diagnosis.data as {
+              evidence: Array<{ authorizationAudit: unknown }>;
+            }
+          ).evidence[0]?.authorizationAudit,
+        ).toEqual(audit);
+      } finally {
+        await recorder.dispose();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(execute).toHaveBeenCalledWith(
         [

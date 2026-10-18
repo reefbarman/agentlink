@@ -53,6 +53,7 @@ export interface NetworkApprovalReviewResult {
   rationale: string;
   model: string;
   status: CommandReviewStatus;
+  source?: "first-pass" | "guardian";
 }
 
 export interface NetworkApprovalReviewer {
@@ -140,8 +141,10 @@ export function createNetworkApprovalReviewer(
         ? AbortSignal.any([input.signal, timeoutController.signal])
         : timeoutController.signal;
       let model = "";
+      let source: "first-pass" | "guardian" | undefined;
       try {
         if (options.firstPass && !signal.aborted) {
+          source = "first-pass";
           try {
             const firstPass = await awaitWithAbort(
               options.firstPass({ ...input, signal }),
@@ -153,12 +156,13 @@ export function createNetworkApprovalReviewer(
               firstPass.outcome === "allow" &&
               firstPass.risk === "low"
             )
-              return firstPass;
+              return { ...firstPass, source: "first-pass" };
           } catch (error) {
             if (signal.aborted) throw error;
             // Jev uncertainty or failure defers to the full Guardian.
           }
         }
+        source = "guardian";
         const context = await awaitWithAbort(
           Promise.resolve(
             options.resolveContext(input.request.sessionId, signal),
@@ -167,7 +171,7 @@ export function createNetworkApprovalReviewer(
         );
         model = context?.sessionModel ?? "";
         if (!context || !isRoutable(context.provider, context.sessionModel)) {
-          return unavailableReviewResult(model);
+          return { ...unavailableReviewResult(model), source: "guardian" };
         }
         let retryingInvalidResponse = false;
         const decision = await runGuardianReviewAttempts({
@@ -205,7 +209,7 @@ export function createNetworkApprovalReviewer(
           },
           shouldRetry: (result) => result.status === "invalid",
         });
-        return { ...decision, model: context.sessionModel };
+        return { ...decision, model: context.sessionModel, source: "guardian" };
       } catch (error) {
         const timedOut =
           timeoutController.signal.aborted ||
@@ -220,6 +224,7 @@ export function createNetworkApprovalReviewer(
               ? "Network review timed out"
               : "Network review was unavailable",
           model,
+          source,
           status: input.signal?.aborted
             ? "cancelled"
             : timedOut

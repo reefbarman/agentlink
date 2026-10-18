@@ -5,6 +5,9 @@ import {
   handleToolError,
   jsonResult,
   successResult,
+  appendAuthorizationDecision,
+  sanitizeAuthorizationAudit,
+  type AuthorizationAudit,
   type ImageAttribution,
   type McpApprovalPromotionMeta,
   type McpContentAnnotations,
@@ -64,9 +67,75 @@ describe("tool result protocol", () => {
       | {
           mcpApprovalPromotion?: McpApprovalPromotionMeta;
           composeTrace?: import("./compose.js").ComposeTrace;
+          authorizationAudit?: AuthorizationAudit;
         }
       | undefined
     >();
+  });
+
+  it("allowlists bounded authorization metadata without sensitive evidence", () => {
+    const raw = {
+      family: "mcp",
+      basis: "first-pass",
+      decision: "allow",
+      status: "reviewed",
+      reviewer: "first-pass",
+      model: "jev-1.14.0",
+      risk: "low",
+      userAuthorization: "high",
+      input: { token: "private-input" },
+      host: "private.example",
+      url: "https://private.example",
+      rationale: "private rationale",
+      credentials: "private-credential",
+    };
+    const sanitized = sanitizeAuthorizationAudit({
+      decisions: Array(25).fill(raw),
+      omittedCount: 3,
+      secret: "private",
+    })!;
+    expect(sanitized.decisions).toHaveLength(20);
+    expect(sanitized.omittedCount).toBe(8);
+    expect(sanitized.decisions[0]).toEqual({
+      family: "mcp",
+      basis: "first-pass",
+      decision: "allow",
+      status: "reviewed",
+      reviewer: "first-pass",
+      model: "jev-1.14.0",
+      risk: "low",
+      userAuthorization: "high",
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("private");
+    for (const model of [
+      "https://user:password@example.com",
+      "sk-privatecredential",
+      "model\nprivate",
+      "x".repeat(97),
+    ]) {
+      expect(
+        sanitizeAuthorizationAudit({ decisions: [{ ...raw, model }] })
+          ?.decisions[0]?.model,
+      ).toBeUndefined();
+    }
+    expect(
+      sanitizeAuthorizationAudit({ decisions: [{ ...raw, basis: "private" }] })
+        ?.decisions,
+    ).toEqual([]);
+  });
+
+  it("caps retained decisions and counts omissions without unbounded storage", () => {
+    const audit: AuthorizationAudit = { decisions: [], omittedCount: 0 };
+    for (let n = 0; n < 100; n++)
+      appendAuthorizationDecision(audit, {
+        family: "managed-network",
+        basis: "rule",
+        decision: "deny",
+        status: "rejected",
+      });
+    expect(audit.decisions).toHaveLength(20);
+    expect(audit.omittedCount).toBe(80);
+    expect(sanitizeAuthorizationAudit(audit)).toEqual(audit);
   });
 
   it("preserves compact and pretty canonical JSON results", () => {

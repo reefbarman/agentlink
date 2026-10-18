@@ -81,7 +81,6 @@ import type {
 import type {
   CommandRecoveryAttempt,
   CommandReviewSummary,
-  NetworkReviewSummary,
   SubCommandEntry,
 } from "@agentlink/protocol/approval-transport";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
@@ -169,7 +168,12 @@ const MAX_FRESH_REVIEW_ATTEMPTS = 2;
 const STALE_REVIEW_HUMAN_ONLY_REASON =
   "New input from you arrived while this command was being reviewed. Your direct approval is required.";
 
-import type { ToolResult } from "@agentlink/protocol/tool-result";
+import {
+  appendAuthorizationDecision,
+  type AuthorizationAudit,
+  type AuthorizationDecision,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
 
 export interface ExecuteCommandProviders {
   terminalProvider?: TerminalProvider;
@@ -1914,19 +1918,35 @@ async function reviewManagedNetworkRequest(
   approvalPanel: ApprovalPanelProvider,
   providers: ExecuteCommandProviders,
   approvalMode: TerminalApprovalModeSnapshot,
+  authorizationAudit: AuthorizationAudit,
 ): Promise<"allow-once" | "reject"> {
+  const finish = (
+    decision: "allow-once" | "reject",
+    basis: AuthorizationDecision["basis"],
+    status: AuthorizationDecision["status"] = decision === "allow-once"
+      ? "authorized"
+      : "rejected",
+  ) => {
+    appendAuthorizationDecision(authorizationAudit, {
+      family: "managed-network",
+      basis,
+      decision: decision === "allow-once" ? "allow" : "deny",
+      status,
+    });
+    return decision;
+  };
   if (
     signal.aborted ||
     isCommandApprovalCancelled(request.sessionId, providers)
   ) {
-    return "reject";
+    return finish("reject", "host-policy", "cancelled");
   }
   const initialPolicy = approvalManager.evaluateNetworkRules(
     request.sessionId,
     request,
   );
-  if (initialPolicy.decision === "forbidden") return "reject";
-  if (initialPolicy.decision === "allow") return "allow-once";
+  if (initialPolicy.decision === "forbidden") return finish("reject", "rule");
+  if (initialPolicy.decision === "allow") return finish("allow-once", "rule");
 
   const requestSnapshot = structuredClone(request);
   const requestKey = JSON.stringify(requestSnapshot);
@@ -1948,7 +1968,9 @@ async function reviewManagedNetworkRequest(
     request.sessionId,
     denialKey,
   );
-  let review: NetworkReviewSummary | undefined;
+  let review:
+    | import("../approvals/networkApprovalReview.js").NetworkApprovalReviewResult
+    | undefined;
   // Explicit Prompt/Forbidden rules stay authoritative. Risky, unknown and
   // unavailable reviews reach the human card, never silently widen networking.
   if (
@@ -1967,9 +1989,23 @@ async function reviewManagedNetworkRequest(
         signal,
       });
     } catch {
+      finish("reject", "unknown", "unavailable");
       // No valid reviewer response means human approval is still required.
     }
-    if (review) providers.commandReviewTurnCircuit?.record(review);
+    if (review) {
+      providers.commandReviewTurnCircuit?.record(review);
+      appendAuthorizationDecision(authorizationAudit, {
+        family: "managed-network",
+        basis: review.source ?? "unknown",
+        reviewer: review.source,
+        decision: review.outcome,
+        status: review.status,
+        model: review.model,
+        risk: review.status === "reviewed" ? review.risk : undefined,
+        userAuthorization:
+          review.status === "reviewed" ? review.userAuthorization : undefined,
+      });
+    }
     const currentPolicy = approvalManager.evaluateNetworkRules(
       request.sessionId,
       request,
@@ -1984,7 +2020,7 @@ async function reviewManagedNetworkRequest(
       currentPolicy.key !== initialPolicy.key ||
       currentPolicy.decision !== initialPolicy.decision
     )
-      return "reject";
+      return finish("reject", "host-policy", "invalidated");
     if (
       review?.status === "reviewed" &&
       review.outcome === "allow" &&
@@ -1995,7 +2031,7 @@ async function reviewManagedNetworkRequest(
       ) &&
       !providers.commandReviewTurnCircuit?.interrupted
     )
-      return "allow-once";
+      return finish("allow-once", review.source ?? "unknown");
     if (review?.status === "reviewed" && review.outcome === "deny") {
       providers.retainedCommandReviewDenials?.retain(
         request.sessionId,
@@ -2025,7 +2061,19 @@ async function reviewManagedNetworkRequest(
         request.sessionId,
         denialKey,
       );
-    return "reject";
+    const cancelled =
+      signal.aborted ||
+      isCommandApprovalCancelled(request.sessionId, providers);
+    const invalidated = hasNetworkApprovalModeDrift(
+      providers,
+      request.sessionId,
+      approvalMode,
+    );
+    return finish(
+      "reject",
+      cancelled || invalidated ? "host-policy" : "human",
+      cancelled ? "cancelled" : invalidated ? "invalidated" : "rejected",
+    );
   }
   providers.retainedCommandReviewDenials?.clear(request.sessionId, denialKey);
   const currentPolicy = approvalManager.evaluateNetworkRules(
@@ -2036,7 +2084,7 @@ async function reviewManagedNetworkRequest(
     currentPolicy.key !== initialPolicy.key ||
     currentPolicy.decision !== initialPolicy.decision
   ) {
-    return "reject";
+    return finish("reject", "host-policy", "invalidated");
   }
   const scope = networkRuleScope(response);
   if (scope) {
@@ -2047,16 +2095,20 @@ async function reviewManagedNetworkRequest(
         scope,
       )
     ) {
-      return "reject";
+      return finish("reject", "host-policy", "invalidated");
     }
-    return approvalManager.evaluateNetworkRules(request.sessionId, request)
-      .decision === "allow"
-      ? "allow-once"
-      : "reject";
+    return finish(
+      approvalManager.evaluateNetworkRules(request.sessionId, request)
+        .decision === "allow"
+        ? "allow-once"
+        : "reject",
+      "human",
+    );
   }
-  return currentPolicy.decision === initialPolicy.decision
-    ? "allow-once"
-    : "reject";
+  return finish(
+    currentPolicy.decision === initialPolicy.decision ? "allow-once" : "reject",
+    "human",
+  );
 }
 
 function hasNetworkApprovalModeDrift(
@@ -2307,6 +2359,39 @@ function unavailableExecuteCommandResult(command: string): ToolResult {
 }
 
 export async function handleExecuteCommand(
+  params: Parameters<typeof executeCommandWithAudit>[0],
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+  sessionId: string,
+  trackerCtx?: TrackerContext,
+  providers: ExecuteCommandProviders = {},
+): Promise<ToolResult> {
+  const authorizationAudit: AuthorizationAudit = {
+    decisions: [],
+    omittedCount: 0,
+  };
+  const result = await executeCommandWithAudit(
+    params,
+    approvalManager,
+    approvalPanel,
+    sessionId,
+    trackerCtx,
+    providers,
+    authorizationAudit,
+  );
+  if (authorizationAudit.decisions.length || authorizationAudit.omittedCount) {
+    result.uiMeta = {
+      ...result.uiMeta,
+      authorizationAudit: {
+        ...authorizationAudit,
+        decisions: [...authorizationAudit.decisions],
+      },
+    };
+  }
+  return result;
+}
+
+async function executeCommandWithAudit(
   params: {
     command: string;
     cwd?: string;
@@ -2338,8 +2423,9 @@ export async function handleExecuteCommand(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
-  trackerCtx?: TrackerContext,
-  providers: ExecuteCommandProviders = {},
+  trackerCtx: TrackerContext | undefined,
+  providers: ExecuteCommandProviders,
+  authorizationAudit: AuthorizationAudit,
 ): Promise<ToolResult> {
   let commandToRun = params.command;
   // Set only for automatic reviewer approvals: the human-input revision that
@@ -2744,15 +2830,27 @@ export async function handleExecuteCommand(
                 }
               : undefined,
           onManagedNetworkRequest: routeUsesManagedNetwork
-            ? (request, signal) =>
-                reviewManagedNetworkRequest(
-                  request,
-                  signal,
-                  approvalManager,
-                  approvalPanel,
-                  providers,
-                  approvalMode,
-                )
+            ? async (request, signal) => {
+                try {
+                  return await reviewManagedNetworkRequest(
+                    request,
+                    signal,
+                    approvalManager,
+                    approvalPanel,
+                    providers,
+                    approvalMode,
+                    authorizationAudit,
+                  );
+                } catch {
+                  appendAuthorizationDecision(authorizationAudit, {
+                    family: "managed-network",
+                    basis: "host-policy",
+                    decision: "deny",
+                    status: signal.aborted ? "cancelled" : "unavailable",
+                  });
+                  return "reject";
+                }
+              }
             : undefined,
           sandboxInlineFiles: inlineFiles?.map((file) => ({
             name: file.name,

@@ -89,6 +89,7 @@ export interface PendingQuestionRecoveryState extends PendingQuestionRecoveryCon
 export interface PersistedPendingToolResult extends CoreModelToolResultBlock {
   humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
   mcpApprovalPromotion?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta;
+  authorizationAudit?: import("@agentlink/protocol/tool-result").AuthorizationAudit;
   composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
 }
 

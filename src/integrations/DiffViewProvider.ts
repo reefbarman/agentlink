@@ -174,6 +174,9 @@ export interface DiffResult {
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
   format_on_save_reverted_proposal?: true;
+  format_on_save_changed_lines?: EditReviewResult["format_on_save_changed_lines"];
+  reviewed_changed_lines?: EditReviewResult["reviewed_changed_lines"];
+  format_on_save_exceeds_proposal?: true;
   eol_changed?: boolean;
   durability?: EditReviewResult["durability"];
   hint?: string;

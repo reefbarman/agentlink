@@ -194,7 +194,9 @@ export async function handleWriteFile(
         : undefined;
     const finalized = finalizeEditReviewResult(result, {
       ...(appliedAuthorization ? { authorization: appliedAuthorization } : {}),
-      ...(warnings ? { warnings } : {}),
+      ...(warnings
+        ? { warnings: [...(result.warnings ?? []), ...warnings] }
+        : {}),
     });
     return finalized.accepted
       ? successResult(finalized.response)

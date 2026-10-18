@@ -142,6 +142,7 @@ describe("network approval reviewer", () => {
     expect(result).toMatchObject({
       outcome: "allow",
       model: "typesafe/jev-1.14.0",
+      source: "first-pass",
     });
   });
 
@@ -166,7 +167,11 @@ describe("network approval reviewer", () => {
         },
       }).review(reviewInput());
       expect(complete).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({ outcome: "deny", model });
+      expect(result).toMatchObject({
+        outcome: "deny",
+        model,
+        source: "guardian",
+      });
     },
   );
 
@@ -185,6 +190,7 @@ describe("network approval reviewer", () => {
       rationale: "Authorized package registry",
       model,
       status: "reviewed",
+      source: "guardian",
     });
     const call = complete.mock.calls[0]?.[0];
     expect(call?.systemPrompt).toContain(

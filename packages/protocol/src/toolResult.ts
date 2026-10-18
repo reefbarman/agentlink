@@ -75,6 +75,138 @@ export interface ImageAttribution {
   retrievedAt?: string;
 }
 
+/** Host-owned approval evidence. Never populate from tool arguments or MCP JSON. */
+export interface AuthorizationDecision {
+  family: "mcp" | "managed-network";
+  basis:
+    | "existing-grant"
+    | "rule"
+    | "human"
+    | "first-pass"
+    | "guardian"
+    | "host-policy"
+    | "unknown";
+  decision: "allow" | "deny";
+  status:
+    | "authorized"
+    | "rejected"
+    | "reviewed"
+    | "invalid"
+    | "unavailable"
+    | "timed_out"
+    | "cancelled"
+    | "invalidated";
+  reviewer?: "first-pass" | "guardian";
+  model?: string;
+  risk?: "low" | "medium" | "high" | "critical";
+  userAuthorization?: "unknown" | "low" | "medium" | "high";
+}
+
+export interface AuthorizationAudit {
+  decisions: AuthorizationDecision[];
+  omittedCount: number;
+}
+
+export const MAX_AUTHORIZATION_DECISIONS = 20;
+
+/** Explicit allowlist also protects diagnostics from malformed persisted metadata. */
+export function sanitizeAuthorizationAudit(
+  value: unknown,
+): AuthorizationAudit | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (!Array.isArray(raw.decisions)) return undefined;
+  const decisions: AuthorizationDecision[] = [];
+  for (const item of raw.decisions.slice(0, MAX_AUTHORIZATION_DECISIONS)) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    if (
+      !(["mcp", "managed-network"] as unknown[]).includes(entry.family) ||
+      !(
+        [
+          "existing-grant",
+          "rule",
+          "human",
+          "first-pass",
+          "guardian",
+          "host-policy",
+          "unknown",
+        ] as unknown[]
+      ).includes(entry.basis) ||
+      !(["allow", "deny"] as unknown[]).includes(entry.decision) ||
+      !(
+        [
+          "authorized",
+          "rejected",
+          "reviewed",
+          "invalid",
+          "unavailable",
+          "timed_out",
+          "cancelled",
+          "invalidated",
+        ] as unknown[]
+      ).includes(entry.status)
+    )
+      continue;
+    const decision: AuthorizationDecision = {
+      family: entry.family as AuthorizationDecision["family"],
+      basis: entry.basis as AuthorizationDecision["basis"],
+      decision: entry.decision as AuthorizationDecision["decision"],
+      status: entry.status as AuthorizationDecision["status"],
+    };
+    if (entry.reviewer === "first-pass" || entry.reviewer === "guardian")
+      decision.reviewer = entry.reviewer;
+    // Model identifiers only, never URLs, free text, credentials or rationale.
+    if (
+      typeof entry.model === "string" &&
+      /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,95}$/.test(entry.model) &&
+      !/(?:sk-|token|secret|password|credential)/i.test(entry.model)
+    )
+      decision.model = entry.model;
+    if (
+      (["low", "medium", "high", "critical"] as unknown[]).includes(entry.risk)
+    )
+      decision.risk = entry.risk as AuthorizationDecision["risk"];
+    if (
+      (["unknown", "low", "medium", "high"] as unknown[]).includes(
+        entry.userAuthorization,
+      )
+    )
+      decision.userAuthorization =
+        entry.userAuthorization as AuthorizationDecision["userAuthorization"];
+    decisions.push(decision);
+  }
+  const omittedCount =
+    typeof raw.omittedCount === "number" &&
+    Number.isSafeInteger(raw.omittedCount) &&
+    raw.omittedCount >= 0
+      ? raw.omittedCount
+      : 0;
+  return {
+    decisions,
+    omittedCount: Math.min(
+      Number.MAX_SAFE_INTEGER,
+      omittedCount +
+        Math.max(0, raw.decisions.length - MAX_AUTHORIZATION_DECISIONS),
+    ),
+  };
+}
+
+export function appendAuthorizationDecision(
+  audit: AuthorizationAudit,
+  decision: AuthorizationDecision,
+): void {
+  const sanitized = sanitizeAuthorizationAudit({ decisions: [decision] });
+  if (!sanitized?.decisions.length) return;
+  if (audit.decisions.length < MAX_AUTHORIZATION_DECISIONS)
+    audit.decisions.push(sanitized.decisions[0]!);
+  else
+    audit.omittedCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      audit.omittedCount + 1,
+    );
+}
+
 export interface ToolResult {
   /** Host metadata, separate from arbitrary tool/MCP result data. */
   humanQuestionAnswer?: HumanQuestionAnswer;
@@ -98,6 +230,7 @@ export interface ToolResult {
   uiMeta?: {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
     composeTrace?: ComposeTrace;
+    authorizationAudit?: AuthorizationAudit;
   };
 }
 

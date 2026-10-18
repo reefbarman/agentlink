@@ -117,6 +117,9 @@ export interface EditReviewResult {
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
   format_on_save_reverted_proposal?: true;
+  format_on_save_changed_lines?: { added: number; removed: number };
+  reviewed_changed_lines?: { added: number; removed: number };
+  format_on_save_exceeds_proposal?: true;
   eol_changed?: boolean;
   durability?: EditDurabilityEvidence;
   hint?: string;

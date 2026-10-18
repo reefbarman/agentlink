@@ -252,6 +252,7 @@ export type ActionApprovalReviewOutcome =
   | {
       disposition: "reviewed";
       binding: ActionApprovalBinding;
+      source?: "first-pass" | "guardian";
       result: GuardianReviewResult;
     };
 
@@ -428,6 +429,7 @@ export function createActionApprovalReviewer(
             return {
               disposition: "reviewed",
               binding: prepared.binding,
+              source: "first-pass",
               result: firstPass,
             };
           }
@@ -452,7 +454,12 @@ export function createActionApprovalReviewer(
           cancelled: "Action review was cancelled",
         },
       });
-      return { disposition: "reviewed", binding: prepared.binding, result };
+      return {
+        disposition: "reviewed",
+        binding: prepared.binding,
+        source: "guardian",
+        result,
+      };
     },
   };
 }

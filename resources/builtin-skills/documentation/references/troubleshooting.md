@@ -94,6 +94,8 @@ That is expected when the requested action crosses a configured boundary. Review
 
 For approval behavior and rules, see [approvals](capabilities.md#approvals) and [the complete approval reference](complete-reference.md#approval-system).
 
+In development builds, use `diagnose_activity` in the owning VS Code-backed session to inspect host-recorded MCP and managed-network approval provenance. It distinguishes recorded grants, human decisions, and automatic reviewers without exposing arguments or destinations. Missing evidence, including older activity and sockets opened after a command tool returns, does not prove that approval was skipped. See [authorization provenance](tools.md#inspect-authorization-provenance) for coverage and limits.
+
 ## A sandboxed command failed with permission or TLS errors
 
 Follow the returned `retry_guidance` rather than changing permissions or replaying the command blindly. AgentLink distinguishes narrow TCP listener access from Unix IPC, keeps Docker/Colima sockets behind reviewed native execution, and never recommends disabling TLS verification. A disposable `temporary_home` is suitable only when the failed step does not need your normal credentials or configuration. For a host-HOME write denial in a credential-dependent command, choose the separately reviewed native option instead; it preserves your host HOME but runs outside the sandbox only after independent approval. For compound commands, confirm which step failed and retry that step alone because earlier steps may already have succeeded. If Turbopack still reports a listener denial after local binding was granted, use the unresolved-capability guidance rather than repeating the same grant.
@@ -112,6 +114,7 @@ An npm denial under `~/.npm/_cacache/tmp` is a host-HOME write denial, not a sys
 - Do not overwrite or discard the dirty editor to clear the error. Both `read_file` views (content and context) show disk content, which can differ from the unsaved buffer.
 - Ask the VS Code workspace agent to inspect `get_editor_state`, then use `save_editor` with the returned hashes/version if the existing buffer is correct. You must approve the exact save once; it skips formatting and preserves the buffer on rejection. These tools only work for an open file-backed target editor. If a review retained a stale, closed, or non-file buffer, inspect it directly in VS Code before closing it, then re-open the target and compose the edit again after reconciling the buffer.
 - If the buffer contains unrelated or incorrect edits, reconcile it in VS Code first. State changes invalidate the old save request.
+- A transformed save can succeed while changing much more than the reviewed edit. Check the reported reviewed and save-participant line counts, follow any reread warning, and inspect the full saved diff before committing. If formatting was unintended, compose a new reviewed edit with `save_without_formatting: true`; do not repeat the same ordinary save or change formatter settings automatically.
 - Large files/diffs or protected instructions require native editor or instruction-workflow handling. The tools cannot repair a filesystem/save-participant failure; a failed recovery still reports failure and preserves unsaved work where VS Code allows it.
 
 See [editor recovery tools](tools.md#recover-unsaved-editor-changes) for limits and surfaces.

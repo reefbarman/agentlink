@@ -235,6 +235,88 @@ describe("edit durability classification", () => {
 });
 
 describe("createFormatOnSaveReport", () => {
+  it("counts formatting churn separately from a small reviewed edit and requires reread", () => {
+    const baseline = Array.from({ length: 30 }, (_, i) => `value${i}\n`).join(
+      "",
+    );
+    const approved = baseline.replace("value0\n", "changed0\n");
+    const saved = approved.replace(/\n/g, ";\n");
+    const result = classify({
+      baselineContent: baseline,
+      approvedContent: approved,
+      editorContent: saved,
+      disk: { status: "readable", content: saved },
+    });
+
+    expect(result.durability).toMatchObject({
+      status: "durable",
+      outcome: "transformed",
+      requires_reread: true,
+    });
+    expect(result.formatOnSaveReport).toMatchObject({
+      reviewed_changed_lines: { added: 1, removed: 1 },
+      format_on_save_changed_lines: { added: 30, removed: 30 },
+      format_on_save_exceeds_proposal: true,
+    });
+    expect(result.formatOnSaveReport?.warnings?.join(" ")).toContain(
+      "more than 10 times the reviewed edit",
+    );
+    expect(result.formatOnSaveReport?.format_on_save_edits).toBeDefined();
+  });
+
+  it("does not warn about a routine small formatting transformation", () => {
+    const report = createFormatOnSaveReport(
+      "example.ts",
+      "const value=2\n",
+      "const value = 2;\n",
+      "const value=1\n",
+    );
+    expect(report).toMatchObject({
+      reviewed_changed_lines: { added: 1, removed: 1 },
+      format_on_save_changed_lines: { added: 1, removed: 1 },
+    });
+    expect(report?.format_on_save_exceeds_proposal).toBeUndefined();
+    expect(report?.warnings).toBeUndefined();
+  });
+
+  it("warns with changed-line counts even without a baseline when the patch is omitted", () => {
+    const report = createFormatOnSaveReport(
+      "example.ts",
+      "before\n".repeat(1_000),
+      "after\n".repeat(1_000),
+    );
+    expect(report).toMatchObject({
+      format_on_save_edits_omitted: "size_cap",
+      format_on_save_changed_lines: { added: 1_000, removed: 1_000 },
+    });
+    expect(report?.reviewed_changed_lines).toBeUndefined();
+    expect(report?.warnings?.join(" ")).toContain("+1000/-1000 lines");
+  });
+
+  it("does not count EOL-only conversions as line churn", () => {
+    const report = createFormatOnSaveReport(
+      "example.ts",
+      "a\r\nb\r\n",
+      "a\nb\n",
+      "a\r\n",
+    );
+    expect(report).toMatchObject({ eol_changed: true });
+    expect(report?.format_on_save_changed_lines).toBeUndefined();
+    expect(report?.warnings).toBeUndefined();
+  });
+
+  it("counts content beginning with diff marker characters without treating it as headers", () => {
+    const report = createFormatOnSaveReport(
+      "example.txt",
+      "++old\n",
+      "--new\n",
+      "base\n",
+    );
+    expect(report?.format_on_save_changed_lines).toEqual({
+      added: 1,
+      removed: 1,
+    });
+  });
   it("returns undefined for exact content", () => {
     expect(
       createFormatOnSaveReport("src/example.ts", "same", "same"),
