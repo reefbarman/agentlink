@@ -1,0 +1,36 @@
+apps/server/src/guidedInstall.test.ts
+  h_e08a86bb3a33a2 960-1034
+apps/server/deploy/upgrade.sh
+  h_e08a86bb3a33a2 339-355,361-362
+apps/server/deploy/install.sh
+  h_e08a86bb3a33a2 445,526-537,542
+CHANGELOG.md
+  h_e08a86bb3a33a2 5,9
+apps/server/README.md
+  h_e08a86bb3a33a2 86-87
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 48
+resources/builtin-skills/documentation/references/release-notes.md
+  s_006a5643048c49::t_8b5928fa7d59ae 5,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b973a3780043b78d3f7bb5ea04236c42b739e22c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_006a5643048c49": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "112bfb8b-a20f-41f1-bd1a-7bd5b5e5ce38",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
