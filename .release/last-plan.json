@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "4be808d3ee5d68152bc90e46b9628d4808df232f",
-  "createdAt": "2026-10-18T01:22:01.559Z",
+  "sourceSha": "5d0a1a9639a4a96c03dc812fe57791ed47469a50",
+  "createdAt": "2026-10-18T01:38:57.014Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,72 +10,37 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.37.1",
-      "baselineRef": "v1.37.1",
+      "published": "1.38.0",
+      "baselineRef": "v1.38.0",
       "reserved": "1.38.0",
-      "commits": [
-        "753ce8268a3ef529394ebe775605d5b79c7e74d6",
-        "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
-        "a4f4e7f280d97051c64032a18f68aceee2ff8cb3",
-        "27108a79f2e074884338de46aecfe26caeb534e7"
-      ],
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "1.38.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "v1.38.0",
-      "notes": [
-        {
-          "sha": "753ce8268a3ef529394ebe775605d5b79c7e74d6",
-          "subject": "feat(browser-gateway): add files, photos and camera buttons to mobile Ask Agent composer",
-          "summary": "Mobile and touch Ask Agent composers in the browser gateway gain Files, Photos and Camera buttons to attach images, PDFs and text files from the device.",
-          "breaking": false
-        },
-        {
-          "sha": "69cdcd2ef3a4899ea26d6b6d6aa0215476010519",
-          "subject": "fix(browser-gateway): keep saved model and thinking level across catalog reloads",
-          "summary": "Desktop and Browser Ask Agent keep the saved model and thinking level when provider catalogs load or reconnect, instead of overwriting them with a temporary fallback.",
-          "breaking": false
-        },
-        {
-          "sha": "a4f4e7f280d97051c64032a18f68aceee2ff8cb3",
-          "subject": "fix(guardian): keep the Jev first-pass Guardian audit running",
-          "summary": "The first-pass Guardian audit now keeps running after a command starts instead of being cancelled and recorded as a deny; telemetry reports unfinished audits separately.",
-          "breaking": false
-        },
-        {
-          "sha": "27108a79f2e074884338de46aecfe26caeb534e7",
-          "subject": "feat(guardian): give Jev a larger human-history window and judge waiver steps individually",
-          "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "desktop": {
-      "published": "0.25.0",
-      "baselineRef": "desktop-v0.25.0",
-      "reserved": "0.25.0",
-      "commits": ["27108a79f2e074884338de46aecfe26caeb534e7"],
+      "published": "0.26.0",
+      "baselineRef": "desktop-v0.26.0",
+      "reserved": "0.26.0",
+      "commits": ["5d0a1a9639a4a96c03dc812fe57791ed47469a50"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.26.0",
-      "effectiveBump": "minor",
+      "version": "0.26.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.26.0",
+      "tag": "desktop-v0.26.1",
       "notes": [
         {
-          "sha": "27108a79f2e074884338de46aecfe26caeb534e7",
-          "subject": "feat(guardian): give Jev a larger human-history window and judge waiver steps individually",
-          "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+          "sha": "5d0a1a9639a4a96c03dc812fe57791ed47469a50",
+          "subject": "fix(desktop): finish update cleanup inside Electron and clear stale applied updates",
+          "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
           "breaking": false
         }
       ]
@@ -106,6 +71,14 @@
     }
   },
   "decisions": {
+    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "753ce8268a3ef529394ebe775605d5b79c7e74d6": {
       "bump": "minor",
       "breakingUnits": [],
@@ -130,10 +103,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "dd819f3c9d12f09b8af7b97544b2e43bd5f118a2": {
-      "bump": "patch",
+    "27108a79f2e074884338de46aecfe26caeb534e7": {
+      "bump": "minor",
       "breakingUnits": [],
-      "summary": "When Guardian denies an MCP tool call in Approve for Me sessions, the call now pauses for a human approval card showing the reason and arguments instead of failing immediately; hard restrictions still apply.",
+      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -202,10 +175,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "27108a79f2e074884338de46aecfe26caeb534e7": {
-      "bump": "minor",
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
