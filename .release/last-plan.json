@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f197e1422486394963198bea440d3bcda8a121fa",
-  "createdAt": "2026-10-18T05:55:27.181Z",
+  "sourceSha": "13c4a5bd2ce1db266db753cf0ab543f30f3db405",
+  "createdAt": "2026-10-18T06:04:41.442Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,33 +10,21 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.38.0",
-      "baselineRef": "v1.38.0",
-      "reserved": "1.38.1",
-      "commits": ["f197e1422486394963198bea440d3bcda8a121fa"],
+      "published": "1.38.1",
+      "baselineRef": "v1.38.1",
+      "reserved": "1.38.2",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "1.38.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "v1.38.1",
-      "notes": [
-        {
-          "sha": "f197e1422486394963198bea440d3bcda8a121fa",
-          "subject": "fix(tools): accept authorised direct calls to deferred native tools",
-          "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "desktop": {
       "published": "0.26.1",
       "baselineRef": "desktop-v0.26.1",
-      "reserved": "0.26.1",
+      "reserved": "0.26.2",
       "commits": ["f197e1422486394963198bea440d3bcda8a121fa"],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -45,7 +33,7 @@
       "version": "0.26.2",
       "effectiveBump": "patch",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "desktop-v0.26.2",
       "notes": [
@@ -83,10 +71,10 @@
     }
   },
   "decisions": {
-    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+    "f197e1422486394963198bea440d3bcda8a121fa": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
+      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -127,6 +115,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The optional TypeSafe Jev shadow reviewer now sees up to 32 recorded human answers instead of 8, and judges each command step individually so harmless helpers and read-only gh queries no longer count as incomplete human evidence.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5d0a1a9639a4a96c03dc812fe57791ed47469a50": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop app updates now fully clean up the old app bundle and clear stale applied-update records, so a leftover backup no longer blocks later updates.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -191,14 +187,6 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Approve for Me now reviews unapproved MCP tool calls and unseen public network destinations with Guardian, optionally letting TypeSafe Jev allow confident cases first, with human fallback for risky, denied or unavailable reviews.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f197e1422486394963198bea440d3bcda8a121fa": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Models can now call deferred native tools directly by exact name without going through call_native_tool, using the same validation and approval checks, instead of getting an error.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
