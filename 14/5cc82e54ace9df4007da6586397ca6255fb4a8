@@ -1,0 +1,104 @@
+packages/protocol/src/toolResult.ts
+  h_e08a86bb3a33a2 78-209,233
+src/agent/types.ts
+  h_e08a86bb3a33a2 170
+src/agent/persistenceContracts.ts
+  h_e08a86bb3a33a2 92
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 99-100,225-232
+src/integrations/DiffViewProvider.test.ts
+  h_e08a86bb3a33a2 946-993
+src/approvals/networkApprovalReview.test.ts
+  h_e08a86bb3a33a2 145,172-173,193
+  h_e08a86bb3a33a2 170-171,174
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 6497-6500,6606-6607,6627-6629,6633-6642,6690-6695,6746-6748,6763-6825,6827-6837
+  h_e08a86bb3a33a2 6689,6743-6745,6749,6826
+src/core/capabilities/editReview.ts
+  h_e08a86bb3a33a2 120-122
+src/approvals/networkApprovalReview.ts
+  h_e08a86bb3a33a2 56,144,147,159,165,174,212,227
+src/agent/ActivityTraceRecorder.test.ts
+  h_e08a86bb3a33a2 25-114
+src/core/editDurability.test.ts
+  h_e08a86bb3a33a2 238-319
+src/integrations/DiffViewProvider.ts
+  h_e08a86bb3a33a2 177-179
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 97-98,117
+src/agent/AgentSession.ts
+  h_e08a86bb3a33a2 1230
+src/tools/writeFile.ts
+  h_e08a86bb3a33a2 198
+  s_03988d540a029a::t_38479527b3916e 197,199
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 172-175,1921,1923-1937,1942,1948-1949,1972,1992,1995,1997-2008,2023,2034,2064-2076,2087,2098,2100,2104-2106,2108-2111,2362-2394,2426-2428,2833-2835,2842-2853
+  s_03988d540a029a::t_9a70a3e1bae114 171,176,1971,1973,1996,2101-2103,2836-2841
+src/agent/ActivityTraceRecorder.ts
+  h_e08a86bb3a33a2 12-13,435-437,897-899
+  h_e08a86bb3a33a2 11,14
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 805,3286,3461,3495,4071
+packages/protocol/src/toolResult.test.ts
+  h_e08a86bb3a33a2 8-10,70,76-138
+  s_03988d540a029a::t_9b97ae0a01dca3 139-140
+src/approvals/actionApprovalReview.ts
+  h_e08a86bb3a33a2 255,432,460-461
+  s_75035c33ee0a81::t_a5edab69734e44 457-459,462
+src/tools/writeFile.test.ts
+  h_e08a86bb3a33a2 12,573-622
+  s_03988d540a029a::t_a3756ff1e3e354 623
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 100-101,3536-3556,3618,3620-3621,3683,3711-3728,3730,3734-3735,3740,3760-3761,3773-3774,3899-3910,3920-3924,3929,3983,4003,4027,4036,4051,4073,4084-4085,4102-4103,4112,4123-4124
+  s_ac8797724de4a4::t_4f67fabd4d94a3 3736-3739,3741
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 596-772
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 8647-8718,8927-8960
+src/core/editDurability.ts
+  h_e08a86bb3a33a2 55-57,157,166-200,206-209,343-344
+  h_e08a86bb3a33a2 158
+src/core/sessionActivityDiagnostics.ts
+  h_e08a86bb3a33a2 18
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "145cc82e54ace9df4007da6586397ca6255fb4a8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_03988d540a029a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "25660c46-c4c5-4ae7-b6e1-8ecfa0b8a7c8",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_75035c33ee0a81": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e91518b6-d8b5-4199-965b-258a214864b0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_ac8797724de4a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68ec3f39-29f4-4484-ab95-6c23be14bb38",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
