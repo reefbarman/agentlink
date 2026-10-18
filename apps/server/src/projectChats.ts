@@ -9,6 +9,7 @@ import { modelKey, type AskAgentBridge } from "./askAgentBridge.js";
 import type { AssistantServerAuth } from "./assistantServer.js";
 import { writeFileAtomic } from "./atomicFile.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
+import { currentModels, type ModelChoices } from "./liveModels.js";
 import { readProjectFile } from "./projectFiles.js";
 import {
   PROJECT_ID_PATTERN,
@@ -20,7 +21,6 @@ import {
   type CloneRepository,
   type ProjectCatalog,
 } from "./projectCatalog.js";
-import type { AssistantServerModelChoice } from "./serverConfig.js";
 
 /**
  * Projects for the chat app. Each project has its own chat bridge (chats,
@@ -42,7 +42,7 @@ export interface ProjectChatsOptions {
   readonly catalog: ProjectCatalog;
   /** Bridges of the projects that opened at startup. */
   readonly bridges: ReadonlyMap<string, AskAgentBridge>;
-  readonly models: readonly AssistantServerModelChoice[];
+  readonly models: ModelChoices;
   /** Open a newly created project (workspace host, routes, bridge). */
   readonly openProject: (
     entry: AssistantProjectEntry,
@@ -65,7 +65,8 @@ export interface ProjectChats {
 export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
   const { catalog } = options;
   const bridges = new Map(options.bridges);
-  const modelKeys = new Set(options.models.map((model) => modelKey(model)));
+  const modelKeys = () =>
+    new Set(currentModels(options.models).map((model) => modelKey(model)));
   let closed = false;
 
   const available = () =>
@@ -232,7 +233,7 @@ export function createProjectChats(options: ProjectChatsOptions): ProjectChats {
         patch.defaultModel = null;
       } else if (
         typeof body.defaultModel === "string" &&
-        modelKeys.has(body.defaultModel)
+        modelKeys().has(body.defaultModel)
       ) {
         patch.defaultModel = body.defaultModel;
       } else {

@@ -27,6 +27,7 @@ import {
   createServerCodexRuntime,
   describeCodexSignIn,
   hasCodexProvider,
+  serverCredentialsDirectory,
 } from "./codexSignIn.js";
 import {
   canExecuteOnCommandWorker,
@@ -73,6 +74,7 @@ import {
   resolveWorkspaceProviders,
   usesLocalCa,
   type AssistantServerConfig,
+  type AssistantServerModelChoice,
 } from "./serverConfig.js";
 import { openFileSessionEventLog } from "./FileSessionEventLog.js";
 import { openSessionApprovalModes } from "./SessionApprovalModes.js";
@@ -94,6 +96,17 @@ import {
   personaInstructions,
 } from "./persona.js";
 import { createPersonaRoutes } from "./personaRoutes.js";
+import { onboardingFeatures, openOnboardingStore } from "./onboarding.js";
+import { liveModelReference } from "./liveModels.js";
+import {
+  MANAGED_OPENAI_PROVIDER_ID,
+  managedOpenAiProviderConfig,
+  openAiExternallyManaged,
+  openManagedProviders,
+} from "./managedProviders.js";
+import { createOnboardingRoutes } from "./onboardingRoutes.js";
+import { createProviderRoutes } from "./providerRoutes.js";
+import { createManagedProviderRoutes } from "./managedProviderRoutes.js";
 import { createStorageRoutes, measureStorage } from "./storageRoutes.js";
 import { removeTaskData } from "./taskDataDeletion.js";
 import { openAssistantMemory } from "./assistantMemory.js";
@@ -259,6 +272,21 @@ export function serverEventLogDirectory(config: AssistantServerConfig): string {
 /** The Assistant's persona, time zone and quiet hours. */
 export function serverPersonaFile(config: AssistantServerConfig): string {
   return path.join(config.dataRoot, "settings", "persona.json");
+}
+
+/** First-run setup progress (written first by the guided installer). */
+export function serverOnboardingFile(config: AssistantServerConfig): string {
+  return path.join(config.dataRoot, "settings", "onboarding.json");
+}
+
+/**
+ * Model providers set up in the browser. The guided installer creates it,
+ * which is the opt-in; without it only `server.json` configures providers.
+ */
+export function serverModelProvidersFile(
+  config: AssistantServerConfig,
+): string {
+  return path.join(config.dataRoot, "settings", "model-providers.json");
 }
 
 /** Per-session approval modes (which sessions ask for everything). */
@@ -945,6 +973,73 @@ export async function startAssistantService(
     await certificates?.stop();
     throw error;
   });
+  // First-run setup progress; an unreadable file stops the server.
+  const onboarding = await openOnboardingStore({
+    file: serverOnboardingFile(config),
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  // The OpenAI API key and default model chosen in the browser. A missing
+  // or unusable key is reported, never fatal: management and recovery
+  // start without one.
+  const configuredChoices = configuredModels(config);
+  const managedOpenAi = managedOpenAiProviderConfig(
+    serverCredentialsDirectory(config),
+  );
+  const externallyManaged = openAiExternallyManaged(config.providers);
+  const managedChoices = externallyManaged
+    ? []
+    : configuredModels({ providers: [managedOpenAi] });
+  const sameModel =
+    (model: AgentModelReference) =>
+    (choice: AgentModelReference): boolean =>
+      choice.providerId === model.providerId &&
+      choice.modelId === model.modelId;
+  const managedProviders = await openManagedProviders({
+    settingsFile: serverModelProvidersFile(config),
+    credentialsDirectory: serverCredentialsDirectory(config),
+    externallyManaged,
+    isKnownModel: (model) =>
+      configuredChoices.some(sameModel(model)) ||
+      managedChoices.some(sameModel(model)),
+    log,
+  }).catch(async (error: unknown) => {
+    await eventLog.close();
+    await certificates?.stop();
+    throw error;
+  });
+  if (managedProviders.offered) {
+    // Always registered, so a key saved later works without a restart:
+    // the key is read on every request, and a request without one fails.
+    providers.push({
+      type: "openai",
+      id: MANAGED_OPENAI_PROVIDER_ID,
+      ...(managedOpenAi.displayName
+        ? { displayName: managedOpenAi.displayName }
+        : {}),
+      modelIds: managedChoices.map((choice) => choice.modelId),
+      resolveApiKey: () => managedProviders.resolveOpenAiKey(),
+    });
+  }
+  /**
+   * The models chats, tasks, jobs and editors may use right now: the
+   * configured ones plus OpenAI's once a key is saved. A chosen OpenAI
+   * default stays listed without a key, so new chats on it fail clearly
+   * instead of quietly using another provider.
+   */
+  const availableModels = (): AssistantServerModelChoice[] => {
+    const choices = [...configuredChoices];
+    if (!managedProviders.offered) return choices;
+    if (managedProviders.hasOpenAiKey()) return [...choices, ...managedChoices];
+    const chosen = managedProviders.selectedDefault();
+    const kept = chosen ? managedChoices.find(sameModel(chosen)) : undefined;
+    return kept ? [...choices, kept] : choices;
+  };
+  /** The owner's choice from Setup, otherwise `server.json`'s. */
+  const currentDefaultModel = (): AgentModelReference =>
+    managedProviders.selectedDefault() ?? config.defaultModel;
   /** The persona block for a chat, read each turn. */
   const personaBlock = (kind: "owner" | "task") =>
     personaInstructions(persona.get(), kind, Date.now());
@@ -1207,7 +1302,7 @@ export async function startAssistantService(
               return taskRunner.continueTask(...args);
             },
           },
-          models: configuredModels(config),
+          models: availableModels,
         })
       : undefined;
     // Read-only snapshots for read_repository, fetched by the publisher with
@@ -1301,7 +1396,7 @@ export async function startAssistantService(
         },
         projectIds: () => [...bridges.keys()],
         projectLabel: (projectId) => catalog.get(projectId)?.label,
-        models: configuredModels(config),
+        models: availableModels,
         // The owner's, as set in Settings.
         get defaultTimeZone() {
           return persona.get().timeZone;
@@ -1325,7 +1420,9 @@ export async function startAssistantService(
         storageKey: project.id,
         ownerId,
         providers,
-        defaultModel: config.defaultModel,
+        // Live: copied into the engine once, but read on every turn, so a
+        // default chosen in Setup applies to chats without their own model.
+        defaultModel: liveModelReference(currentDefaultModel),
         promptIdentity: { role: "a personal assistant" },
         turnLimits: SESSION_TURN_LIMITS,
         // The todo list, for Auto Continue; no ask_user (approval cards and
@@ -1447,8 +1544,12 @@ export async function startAssistantService(
       projects: hosts.map(({ id, host }) => mountFor(id, host)),
       authorizeProject: (request) => authorizeProject(request),
       models: {
-        available: configuredModels(config),
-        defaultModel: config.defaultModel,
+        get available() {
+          return availableModels();
+        },
+        get defaultModel() {
+          return currentDefaultModel();
+        },
         ...(config.modelRoles ? { roles: config.modelRoles } : {}),
       },
       eventLog,
@@ -1459,7 +1560,7 @@ export async function startAssistantService(
     });
     agentNotifier = routes;
     const resolveModel = (key: string) => {
-      const model = configuredModels(config).find(
+      const model = availableModels().find(
         (choice) => modelKey(choice) === key,
       );
       return model
@@ -1525,8 +1626,12 @@ export async function startAssistantService(
         operations: routes.operations,
         events: routes.events,
         models: {
-          available: configuredModels(config),
-          defaultModel: config.defaultModel,
+          get available() {
+            return availableModels();
+          },
+          get defaultModel() {
+            return currentDefaultModel();
+          },
         },
         defaults: () => projectDefaults(projectId),
         stateFile: serverAskAgentStateFile(
@@ -1605,7 +1710,7 @@ export async function startAssistantService(
     const chat = createProjectChats({
       catalog,
       bridges,
-      models: configuredModels(config),
+      models: availableModels,
       log,
       ...(config.projectsRoot ? { clone: createGitCloner(gitOptions) } : {}),
       openProject: async (entry) => {
@@ -2184,7 +2289,8 @@ export async function startAssistantService(
                   projectRoot: path.dirname(task.workspace),
                   commandRoot: task.workspace,
                   shell: config.commandWorker?.shell ?? "/bin/bash",
-                  defaultModel: config.defaultModel,
+                  // As it is when the runner starts.
+                  defaultModel: currentDefaultModel(),
                   ...(config.modelRoles
                     ? {
                         modelRoles: Object.fromEntries(
@@ -2267,13 +2373,16 @@ export async function startAssistantService(
             },
             ownerId: () => server?.store.ownerId,
             resolveModel,
-            defaultModel: config.defaultModel,
+            // Read when a task starts without its own model.
+            get defaultModel() {
+              return currentDefaultModel();
+            },
             // Reviews go to another provider: Codex work is reviewed by
             // Claude (through Meridian) and the reverse.
             reviewModel: (implementer) =>
               pickReviewModel(implementer, {
                 roleModel: config.modelRoles?.review,
-                available: configuredModels(config),
+                available: availableModels(),
               }),
             repositories: repositorySettings,
             connections: githubConnections,
@@ -2356,7 +2465,16 @@ export async function startAssistantService(
           editorAgentLinkSettings({
             baseUrl: `http://${modelsHost}:${modelsPort}/editor-models/${token}/v1`,
             backends: editorBackends,
-            models: configuredModels(config),
+            // The editor's default is its first model: the current default.
+            // An editor already open keeps the list it started with.
+            models: (() => {
+              const current = currentDefaultModel();
+              const models = availableModels();
+              return [
+                ...models.filter(sameModel(current)),
+                ...models.filter((model) => !sameModel(current)(model)),
+              ];
+            })(),
             noProxy: [modelsHost],
           }),
         noProxy: [modelsHost],
@@ -2397,7 +2515,7 @@ export async function startAssistantService(
       isOwner: (auth) =>
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
-      models: configuredModels(config),
+      models: availableModels,
       ...(taskEditors && config.editor
         ? { editors: { port: config.editor.port, editors: taskEditors } }
         : {}),
@@ -2409,7 +2527,7 @@ export async function startAssistantService(
         server !== undefined &&
         auth.principal.subjectId === server.store.ownerId,
       hasProject: (projectId) => bridges.has(projectId),
-      models: configuredModels(config),
+      models: availableModels,
       // The owner's, as set in Settings.
       get defaultTimeZone() {
         return persona.get().timeZone;
@@ -2443,6 +2561,73 @@ export async function startAssistantService(
         quietPush.reschedule();
         assistantChanged();
       },
+    });
+    const onboardingRoutes = createOnboardingRoutes({
+      store: onboarding,
+      facts: async () => {
+        const accounts = codex
+          ? await codex.manager.listAccounts().catch(() => [])
+          : [];
+        let backup: {
+          configured: boolean;
+          lastSuccessAt?: number;
+          failing?: boolean;
+          reachable?: boolean;
+        } = { configured: false };
+        if (backupClient) {
+          const status = await backupClient.status().catch(() => undefined);
+          const success = status?.lastSuccess?.at;
+          const failure = status?.lastFailure?.at;
+          backup = {
+            configured: true,
+            reachable: status !== undefined,
+            ...(success !== undefined ? { lastSuccessAt: success } : {}),
+            failing:
+              status === undefined ||
+              (failure !== undefined &&
+                (success === undefined || failure > success)),
+          };
+        }
+        return {
+          model: {
+            codexAvailable: codex !== undefined,
+            codexSignedIn: accounts.length > 0,
+            otherProviders: config.providers.filter(
+              (provider) => provider.type !== "codex",
+            ).length,
+            openAiKeyAvailable: managedProviders.offered,
+            openAiKeySaved: managedProviders.hasOpenAiKey(),
+          },
+          backup,
+          features: onboardingFeatures(config),
+        };
+      },
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
+    const providerRoutes = createProviderRoutes({
+      codex,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+      onSignedIn: () => assistantChanged(),
+      log,
+    });
+    const managedProviderRoutes = createManagedProviderRoutes({
+      providers: managedProviders,
+      openAiModels: managedChoices,
+      availableModels,
+      defaultModel: currentDefaultModel,
+      isOwner: (auth) =>
+        server !== undefined &&
+        auth.principal.subjectId === server.store.ownerId,
+    });
+    // A saved or removed key, or a new default: every open chat offers the
+    // current models at once (new requests already read the key live).
+    managedProviders.onChange(() => {
+      for (const bridge of bridges.values()) bridge.modelsChanged();
+      assistantChanged();
     });
     const storageRoutes = createStorageRoutes({
       isOwner: (auth) =>
@@ -2543,6 +2728,9 @@ export async function startAssistantService(
         (await taskRoutes.handleRequest(request, response, auth)) ||
         (await inboxRoutes.handleRequest(request, response, auth)) ||
         (await personaRoutes.handleRequest(request, response, auth)) ||
+        (await onboardingRoutes.handleRequest(request, response, auth)) ||
+        (await providerRoutes.handleRequest(request, response, auth)) ||
+        (await managedProviderRoutes.handleRequest(request, response, auth)) ||
         (await storageRoutes.handleRequest(request, response, auth)) ||
         (await memoryRoutes.handleRequest(request, response, auth)) ||
         (await updateRoutes.handleRequest(request, response, auth)) ||
@@ -2720,7 +2908,7 @@ export async function startAssistantService(
       const editorsForModels = taskEditors;
       editorModels = await startEditorModelServer({
         backends: editorBackends,
-        models: () => configuredModels(config),
+        models: availableModels,
         authorize: (token) => editorsForModels.modelAccess(token),
         listen: { host: "0.0.0.0", port: config.editor.modelsPort },
         log,

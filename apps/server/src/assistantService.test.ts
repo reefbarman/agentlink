@@ -352,6 +352,398 @@ describe("assistant service updater wiring", () => {
   }, 30_000);
 });
 
+describe("assistant service first-run setup wiring", () => {
+  it("opens setup from the installer marker and starts ChatGPT sign-in through the service's own runtime", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-setup-"));
+    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    await fs.mkdir(path.join(root, "data", "settings"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "data", "settings", "onboarding.json"),
+      '{"schemaVersion": 1, "revision": 0, "freshInstall": true, "steps": {}}\n',
+      { mode: 0o600 },
+    );
+    const certificate = createTestCertificate();
+    await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+    await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+      mode: 0o600,
+    });
+    const port = await freePort();
+    const origin = `https://localhost:${port}`;
+    const config = parseAssistantServerConfig(
+      {
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [origin],
+        tls: { certFile: "server.crt", keyFile: "server.key" },
+        defaultModel: { providerId: "local", modelId: "fixture" },
+        providers: [
+          { type: "codex" },
+          {
+            type: "openai-compatible",
+            id: "local",
+            baseURL: "http://127.0.0.1:9/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture",
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+          },
+        ],
+        projects: [{ id: "home", root: "projects/home" }],
+      },
+      root,
+    );
+    const service = await startAssistantService({
+      config,
+      log: () => undefined,
+    });
+    cleanup.push(() => service.close());
+    const { code } = service.server.store.createPairing();
+    const paired = await httpsRequest({
+      port,
+      ca: certificate.cert,
+      method: "POST",
+      path: "/api/auth/pairings/redeem",
+      headers: { origin },
+      body: { code, deviceLabel: "Owner" },
+    });
+    const cookie = sessionCookieFrom(paired);
+    const request = (input: {
+      path: string;
+      method?: string;
+      body?: unknown;
+      origin?: string;
+    }) =>
+      httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: input.method,
+        path: input.path,
+        body: input.body,
+        headers: {
+          cookie,
+          ...(input.method && input.method !== "GET"
+            ? { origin: input.origin ?? origin }
+            : {}),
+        },
+      });
+    await expect(request({ path: "/api/onboarding" })).resolves.toMatchObject({
+      status: 200,
+      body: {
+        openSetup: true,
+        // Operator models are usable, but setup was never finished.
+        status: "setup-incomplete",
+        facts: {
+          model: {
+            codexAvailable: true,
+            codexSignedIn: false,
+            otherProviders: 1,
+          },
+          backup: { configured: false },
+          features: expect.objectContaining({
+            editor: expect.stringMatching(/^(on|off|needs-runners)$/u),
+            browser: expect.stringMatching(/^(on|off|needs-runners)$/u),
+          }),
+        },
+      },
+    });
+    await expect(
+      request({ path: "/api/providers/codex" }),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { available: true, accounts: [], pending: null },
+    });
+    const started = await request({
+      path: "/api/providers/codex/sign-in",
+      method: "POST",
+      body: {},
+    });
+    expect(started.status).toBe(200);
+    expect(
+      new URL(
+        (started.body as { authorizeUrl: string }).authorizeUrl,
+      ).searchParams.get("redirect_uri"),
+    ).toBe("http://localhost:1455/auth/callback");
+    await expect(
+      request({
+        path: "/api/providers/codex/sign-in",
+        method: "POST",
+        body: {},
+        origin: "https://attacker.example",
+      }),
+    ).resolves.toMatchObject({ status: 403 });
+    await expect(
+      request({
+        path: "/api/onboarding",
+        method: "PATCH",
+        body: { expectedRevision: 0, dismiss: true },
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { openSetup: false } });
+  }, 30_000);
+});
+
+describe("assistant service managed OpenAI key", () => {
+  it("offers a key saved in the browser to the running service's chats, rotates and removes it live, and keeps it across a restart", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-openai-"));
+    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+    await fs.mkdir(path.join(root, "data", "settings"), { recursive: true });
+    // What the guided installer writes: the opt-in, with no key.
+    await fs.writeFile(
+      path.join(root, "data", "settings", "model-providers.json"),
+      '{"schemaVersion": 1, "revision": 0}\n',
+      { mode: 0o600 },
+    );
+    const certificate = createTestCertificate();
+    await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+    await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+      mode: 0o600,
+    });
+    // Requests to OpenAI are answered here, as an invalid key would be.
+    const realFetch = globalThis.fetch;
+    const openAiCalls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          input instanceof Request ? input.url : new URL(String(input)).href;
+        if (new URL(url).hostname !== "api.openai.com") {
+          return realFetch(input, init);
+        }
+        const headers = new Headers(
+          input instanceof Request ? input.headers : init?.headers,
+        );
+        openAiCalls.push(headers.get("authorization") ?? "");
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Incorrect API key provided",
+              type: "invalid_request_error",
+              code: "invalid_api_key",
+            },
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+    cleanup.push(async () => {
+      vi.unstubAllGlobals();
+    });
+    const port = await freePort();
+    const origin = `https://localhost:${port}`;
+    const config = parseAssistantServerConfig(
+      {
+        schemaVersion: 1,
+        dataRoot: "data",
+        listen: { host: "127.0.0.1", port },
+        publicOrigins: [origin],
+        tls: { certFile: "server.crt", keyFile: "server.key" },
+        defaultModel: { providerId: "codex", modelId: "gpt-6.1-sol" },
+        providers: [{ type: "codex" }],
+        projects: [{ id: "home", root: "projects/home" }],
+      },
+      root,
+    );
+    let service = await startAssistantService({
+      config,
+      log: () => undefined,
+    });
+    cleanup.push(() => service.close());
+    const { code } = service.server.store.createPairing();
+    const cookie = sessionCookieFrom(
+      await httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: "POST",
+        path: "/api/auth/pairings/redeem",
+        headers: { origin },
+        body: { code, deviceLabel: "Owner" },
+      }),
+    );
+    const request = (input: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }) =>
+      httpsRequest({
+        port,
+        ca: certificate.cert,
+        method: input.method,
+        path: input.path,
+        body: input.body,
+        headers: {
+          cookie,
+          ...(input.method && input.method !== "GET" ? { origin } : {}),
+        },
+      });
+    type Status = {
+      revision: number;
+      openai: { state: string; label?: string };
+      openAiModels: Array<{ providerId: string; modelId: string }>;
+      availableModels: Array<{ providerId: string; modelId: string }>;
+      defaultModel: { providerId: string; modelId: string };
+    };
+    const status = async () =>
+      (await request({ path: "/api/providers/openai" })).body as Status;
+    const chatModels = async () =>
+      (
+        (await request({ path: "/api/ask-agent/models" })).body as {
+          models: Array<{ id: string }>;
+        }
+      ).models.map((model) => model.id);
+    const sendInNewChat = async (text: string) => {
+      await request({
+        path: "/api/ask-agent/session/new",
+        method: "POST",
+        body: {},
+      });
+      void request({
+        path: "/api/ask-agent/send",
+        method: "POST",
+        body: { text },
+      }).catch(() => undefined);
+    };
+
+    const initial = await status();
+    expect(initial.openai.state).toBe("not-set");
+    expect(initial.availableModels.every((m) => m.providerId === "codex")).toBe(
+      true,
+    );
+    const first = initial.openAiModels[0]!;
+    const model = { providerId: first.providerId, modelId: first.modelId };
+    expect(model.providerId).toBe("openai");
+    expect((await chatModels()).some((id) => id.startsWith("openai/"))).toBe(
+      false,
+    );
+    // Choosing OpenAI before a key is saved is refused.
+    await expect(
+      request({
+        path: "/api/providers/default-model",
+        method: "PUT",
+        body: { expectedRevision: initial.revision, model },
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "model_not_available" },
+    });
+
+    const firstKey = `sk-first-${"a".repeat(32)}`;
+    const saved = await request({
+      path: "/api/providers/openai/key",
+      method: "PUT",
+      body: { expectedRevision: initial.revision, apiKey: firstKey },
+    });
+    expect(saved.status).toBe(200);
+    expect(JSON.stringify(saved.body)).not.toContain(firstKey);
+    expect((saved.body as Status).openai).toMatchObject({
+      state: "saved",
+      label: "sk-…aaaa",
+    });
+    // Saving sends nothing to OpenAI.
+    expect(openAiCalls).toEqual([]);
+    const keyFile = path.join(root, "data", "credentials", "openai-api-key");
+    expect((await fs.stat(keyFile)).mode & 0o777).toBe(0o600);
+    expect(
+      await fs.readFile(
+        path.join(root, "data", "settings", "model-providers.json"),
+        "utf8",
+      ),
+    ).not.toContain("sk-");
+    // The running server offers OpenAI's models at once.
+    expect(await chatModels()).toContain(`openai/${model.modelId}`);
+    const chosen = await request({
+      path: "/api/providers/default-model",
+      method: "PUT",
+      body: { expectedRevision: (saved.body as Status).revision, model },
+    });
+    expect(chosen).toMatchObject({
+      status: 200,
+      body: { defaultModel: model, defaultModelSource: "setup" },
+    });
+    await expect(request({ path: "/api/onboarding" })).resolves.toMatchObject({
+      body: { facts: { model: { openAiKeySaved: true } } },
+    });
+
+    // A new chat uses the chosen model with the saved key.
+    await sendInNewChat("Hello");
+    await vi.waitFor(
+      () => expect(openAiCalls).toContain(`Bearer ${firstKey}`),
+      {
+        timeout: 20_000,
+        interval: 50,
+      },
+    );
+
+    // A replaced key is used by the next request, without a restart.
+    const secondKey = `sk-second-${"b".repeat(32)}`;
+    const rotated = await request({
+      path: "/api/providers/openai/key",
+      method: "PUT",
+      body: {
+        expectedRevision: (chosen.body as Status).revision,
+        apiKey: secondKey,
+      },
+    });
+    expect(rotated.status).toBe(200);
+    await sendInNewChat("Hello again");
+    await vi.waitFor(
+      () => expect(openAiCalls).toContain(`Bearer ${secondKey}`),
+      { timeout: 20_000, interval: 50 },
+    );
+    const snapshot = await request({ path: "/api/ask-agent/session" });
+    expect(JSON.stringify(snapshot.body)).not.toContain(secondKey);
+
+    // A stale tab cannot remove it.
+    await expect(
+      request({
+        path: "/api/providers/openai/key",
+        method: "DELETE",
+        body: { expectedRevision: (chosen.body as Status).revision },
+      }),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: "providers_changed" },
+    });
+
+    // The key survives a restart, with the chosen default.
+    await service.close();
+    service = await startAssistantService({ config, log: () => undefined });
+    const restarted = await status();
+    expect(restarted.openai).toMatchObject({
+      state: "saved",
+      label: "sk-…bbbb",
+    });
+    expect(restarted.defaultModel).toEqual(model);
+
+    // Removed: no request carries a key, and the chosen default stays (new
+    // chats on it fail clearly rather than quietly using ChatGPT).
+    const removed = await request({
+      path: "/api/providers/openai/key",
+      method: "DELETE",
+      body: { expectedRevision: restarted.revision },
+    });
+    expect(removed).toMatchObject({
+      status: 200,
+      body: { openai: { state: "not-set" }, defaultModel: model },
+    });
+    await expect(fs.stat(keyFile)).rejects.toThrow();
+    const models = await chatModels();
+    expect(models.filter((id) => id.startsWith("openai/"))).toEqual([
+      `openai/${model.modelId}`,
+    ]);
+    const callsBefore = openAiCalls.length;
+    await sendInNewChat("Still there?");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(openAiCalls).toHaveLength(callsBefore);
+  }, 60_000);
+});
+
 describe("assistant service chat-created jobs", () => {
   it("creates a job a chat proposed only once the owner approves its card", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-jobs-"));

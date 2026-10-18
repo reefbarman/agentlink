@@ -626,4 +626,77 @@ describe("deployment files", () => {
       ).resolves.toMatchObject({ stdout: expect.stringContaining("OK") });
     }
   });
+
+  it("documents a release-install restore with the names the installer actually uses", async () => {
+    const read = (...parts: string[]) =>
+      fs.readFile(path.join(deploy, ...parts), "utf8");
+    const readme = await fs.readFile(
+      path.join(deploy, "..", "README.md"),
+      "utf8",
+    );
+    const start = readme.indexOf("**Restoring a release installation.**");
+    expect(start).toBeGreaterThan(-1);
+    const section = readme.slice(start, readme.indexOf("**Pruning.**", start));
+    const installer = await read("install.sh");
+    const witness = await read("container", "witness", "compose.yaml");
+    const backup = await read("container", "compose.backup.yaml");
+    const packager = await fs.readFile(
+      path.join(
+        deploy,
+        "..",
+        "..",
+        "..",
+        "scripts",
+        "package-assistant-release.mjs",
+      ),
+      "utf8",
+    );
+    const updater = await fs.readFile(
+      path.join(import.meta.dirname, "assistantUpdater.ts"),
+      "utf8",
+    );
+
+    // Folder layout: DEPLOY, DEPLOY-witness and DEPLOY-updater.
+    expect(installer).toContain('witness="$deploy-witness"');
+    expect(installer).toContain('updater="$deploy-updater"');
+    expect(installer).toMatch(
+      /deploy="\$\{AGENTLINK_DEPLOY:-\$HOME\/agentlink-assistant\}"/u,
+    );
+    expect(section).toContain("~/agentlink-assistant-witness");
+    expect(section).toContain("agentlink-assistant-updater");
+    expect(section).not.toContain("~/agentlink-witness");
+
+    // The store's network, as the witness creates it and the sidecar joins it.
+    const network = /networks:\s*\n\s*witness:\s*\n\s*name: (\S+)/u.exec(
+      witness,
+    )?.[1];
+    expect(network).toBe("agentlink-witness");
+    expect(backup).toContain(`name: ${network}`);
+    expect(section).toContain(`--network ${network}`);
+
+    // The pinned image key in the release manifest, not a mutable local tag.
+    expect(packager).toContain('backup: ["BACKUP_IMAGE", "agentlink-backup"]');
+    expect(installer).toMatch(/BACKUP_IMAGE\) target=backup/u);
+    expect(section).toContain("s/^BACKUP_IMAGE=//p");
+    expect(section).not.toContain("agentlink-backup:local");
+
+    // The secrets the installer writes, and the guard and job label it checks.
+    expect(installer).toContain("backup-password");
+    expect(installer).toContain('> "$deploy/secrets/backup-repository"');
+    expect(section).toContain("secrets/backup-repository");
+    expect(section).toContain("secrets/backup-password");
+    expect(installer).toContain("LOCK_NAME=.deployment-mutation-lock");
+    expect(section).toContain(".deployment-mutation-lock");
+    expect(updater).toContain('const LABEL = "io.agentlink.updater.operation"');
+    expect(section).toContain("label=io.agentlink.updater.operation");
+
+    // The commands are valid shell, including macOS's Bash 3.2.
+    const script = /```sh\n([\s\S]*?)```/u.exec(section)?.[1];
+    expect(script).toBeDefined();
+    for (const shell of ["bash", "/bin/bash"]) {
+      await expect(
+        execFileAsync(shell, ["-n", "-c", script!]),
+      ).resolves.toBeDefined();
+    }
+  });
 });

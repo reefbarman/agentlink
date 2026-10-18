@@ -14,6 +14,7 @@ import {
   type JobChangeDisplay,
 } from "./jobChangeDisplay.js";
 import { jobRunnableError, modelsByKey } from "./jobRoutes.js";
+import { currentModels, type ModelChoices } from "./liveModels.js";
 import type { JobRunner } from "./jobRunner.js";
 import {
   MIN_INTERVAL_MINUTES,
@@ -33,7 +34,6 @@ import {
   type JobStore,
 } from "./jobStore.js";
 import { SESSION_APPROVAL_MODES } from "./SessionApprovalModes.js";
-import type { AssistantServerModelChoice } from "./serverConfig.js";
 import {
   BRIEFING_SECTIONS,
   DEFAULT_BRIEFING_WORDS,
@@ -92,7 +92,7 @@ export interface JobToolsOptions {
   /** Projects open on this server. */
   readonly projectIds: () => readonly string[];
   readonly projectLabel?: (projectId: string) => string | undefined;
-  readonly models: readonly AssistantServerModelChoice[];
+  readonly models: ModelChoices;
   /** For daily and weekly schedules that name no time zone. */
   readonly defaultTimeZone: string;
   /** After a job is created, changed or deleted. */
@@ -125,7 +125,7 @@ type PreparedChange =
 export function createJobTools(options: JobToolsOptions): JobTools {
   const { store, runner } = options;
   const now = options.now ?? Date.now;
-  const models = modelsByKey(options.models);
+  const models = () => modelsByKey(currentModels(options.models));
   const hasProject = (projectId: string) =>
     options.projectIds().includes(projectId);
   const projectName = (projectId: string) => {
@@ -158,7 +158,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
         return 'timeZone must be an IANA name such as "Australia/Sydney"';
       case "model_invalid":
       case "model_not_available":
-        return `model must be one of: ${[...models.keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it to use the project's default`;
+        return `model must be one of: ${[...models().keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it to use the project's default`;
       case "reasoning_effort_invalid":
       case "reasoning_effort_not_available":
         return "that reasoning effort is not offered for this model; omit it to use the default";
@@ -207,7 +207,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     readonly model?: string;
     readonly reasoningEffort?: string;
   }) => {
-    const error = jobRunnableError(fields, { hasProject, models });
+    const error = jobRunnableError(fields, { hasProject, models: models() });
     if (error) throw new JobInputError(error);
   };
 
@@ -495,7 +495,10 @@ export function createJobTools(options: JobToolsOptions): JobTools {
   const stillApplies = (change: PreparedChange): string | undefined => {
     if (change.action === "create") {
       if (store.list().length >= MAX_JOBS) return explain("job_limit_reached");
-      const error = jobRunnableError(change.fields, { hasProject, models });
+      const error = jobRunnableError(change.fields, {
+        hasProject,
+        models: models(),
+      });
       return error ? explain(error, change.fields.projectId) : undefined;
     }
     const current = store.get(change.jobId);
@@ -505,7 +508,7 @@ export function createJobTools(options: JobToolsOptions): JobTools {
     if (change.action === "update") {
       const error = jobRunnableError(merged(current, change.patch), {
         hasProject,
-        models,
+        models: models(),
       });
       return error ? explain(error) : undefined;
     }

@@ -11,6 +11,7 @@ import {
   type JobDefinition,
   type JobStore,
 } from "./jobStore.js";
+import { currentModels, type ModelChoices } from "./liveModels.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 
 /**
@@ -36,7 +37,7 @@ export interface JobRoutesOptions {
   readonly isOwner: (auth: AssistantServerAuth) => boolean;
   /** Whether a project is open on this server. */
   readonly hasProject: (projectId: string) => boolean;
-  readonly models: readonly AssistantServerModelChoice[];
+  readonly models: ModelChoices;
   /** For daily and weekly schedules that name no time zone. */
   readonly defaultTimeZone: string;
   /** What a watch has seen, shown with it. */
@@ -110,7 +111,8 @@ export function modelsByKey(
 export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
   const { store, runner } = options;
   const now = options.now ?? Date.now;
-  const models = modelsByKey(options.models);
+  // Read on each check: a provider set up while running is offered at once.
+  const models = () => modelsByKey(currentModels(options.models));
 
   const describe = (job: JobDefinition) => {
     const runs = store.runs(job.id);
@@ -132,7 +134,7 @@ export function createJobRoutes(options: JobRoutesOptions): JobRoutes {
   }) => {
     const error = jobRunnableError(fields, {
       hasProject: options.hasProject,
-      models,
+      models: models(),
     });
     if (error) throw new HttpError(400, error);
   };

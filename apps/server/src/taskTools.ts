@@ -13,8 +13,8 @@ import type { GitHubConnectionStore } from "./githubConnections.js";
 import type { RepositoryDirectory } from "./githubRepositories.js";
 import { HttpError } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
+import { currentModels, type ModelChoices } from "./liveModels.js";
 import { CONNECTION_ID_PATTERN } from "./publisherVault.js";
-import type { AssistantServerModelChoice } from "./serverConfig.js";
 import {
   parseValidationCommands,
   type RepositorySettingsStore,
@@ -69,7 +69,7 @@ export interface TaskToolsOptions {
   readonly directory?: Pick<RepositoryDirectory, "resolveConnection">;
   readonly connections?: Pick<GitHubConnectionStore, "get">;
   readonly runner: Pick<TaskRunner, "create" | "continueTask">;
-  readonly models: readonly AssistantServerModelChoice[];
+  readonly models: ModelChoices;
   readonly now?: () => number;
   /**
    * Whether a chat runs without asking (Auto-run). In such a chat, work on
@@ -114,7 +114,7 @@ const HERE_PROPERTY = {
 
 export function createTaskTools(options: TaskToolsOptions): TaskTools {
   const { store, runner } = options;
-  const models = modelsByKey(options.models);
+  const models = () => modelsByKey(currentModels(options.models));
   const now = options.now ?? Date.now;
   const accountName = (connectionId: string) => {
     const connection = options.connections?.get(connectionId);
@@ -134,7 +134,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
         return "baseBranch must be a plain branch name, for example main or release/1.2";
       case "model_invalid":
       case "model_not_available":
-        return `model must be one of: ${[...models.keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it for the server's default`;
+        return `model must be one of: ${[...models().keys()].slice(0, MAX_LISTED_MODELS).join(", ")}; omit it for the server's default`;
       case "task_field_unknown":
         return "unknown field";
       case "validation_invalid":
@@ -172,7 +172,7 @@ export function createTaskTools(options: TaskToolsOptions): TaskTools {
   };
 
   const check = (request: TaskRequest) => {
-    const modelError = taskModelError(request.model, models);
+    const modelError = taskModelError(request.model, models());
     if (modelError) throw new HttpError(400, modelError);
     if (store.list().length >= MAX_TASKS) {
       throw new HttpError(409, "task_limit_reached");

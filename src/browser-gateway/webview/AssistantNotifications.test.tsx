@@ -394,13 +394,15 @@ describe("AssistantHub notification links", () => {
     // Stripped before anything else, so the reload does not repeat it.
     expect(window.location.search).toBe("");
     await waitFor(() => expect(reloadPage).toHaveBeenCalledOnce());
-    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+    // The hub's independent setup-status read is not part of the link flow.
+    const linkCalls = calls.filter((call) => call.path !== "/api/onboarding");
+    expect(linkCalls.map((call) => `${call.method} ${call.path}`)).toEqual([
       "POST /api/inbox/read",
       "GET /api/ask-agent/projects",
       "POST /api/ask-agent/projects/select",
     ]);
-    expect(calls[0]!.body).toEqual({ ids: ["e1"] });
-    expect(calls[2]!.body).toEqual({ projectId: "work", sessionId: "s9" });
+    expect(linkCalls[0]!.body).toEqual({ ids: ["e1"] });
+    expect(linkCalls[2]!.body).toEqual({ projectId: "work", sessionId: "s9" });
     expect(loadSession).not.toHaveBeenCalled();
   });
 });

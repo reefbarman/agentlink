@@ -168,6 +168,10 @@ export interface AskAgentBridgeOptions {
   readonly projectId: string;
   readonly operations: AssistantSessionOperations;
   readonly events: SessionEventHub;
+  /**
+   * Read on each use (the object may have getters), so a provider set up
+   * while the server runs is offered after `modelsChanged()`.
+   */
   readonly models: {
     readonly available: readonly AssistantServerModelChoice[];
     readonly defaultModel: AgentModelReference;
@@ -327,6 +331,8 @@ export interface AskAgentBridge {
   noteWork(originWorkspaceSessionId: string, text: string): void;
   /** Republish the snapshot (the inbox or jobs changed). */
   refresh(): void;
+  /** The available models or the default changed: offer the current ones. */
+  modelsChanged(): void;
   close(): Promise<void>;
 }
 
@@ -414,9 +420,8 @@ export async function createAskAgentBridge(
   const now = options.now ?? Date.now;
   const theme = options.theme ?? BAKED_BROWSER_GATEWAY_THEME;
   const { operations, projectId } = options;
-  const modelsByKey = new Map(
-    options.models.available.map((model) => [modelKey(model), model]),
-  );
+  const modelsByKey = () =>
+    new Map(options.models.available.map((model) => [modelKey(model), model]));
   const state = await readState(options.stateFile);
   /** The project a workspace session belongs to: this one, or a link's. */
   const projectOf = (workspaceSessionId: string) =>
@@ -465,38 +470,40 @@ export async function createAskAgentBridge(
     },
   });
   const store = controller.sessionStore;
-  store.updateAvailableModels(
-    options.models.available.map((model) => ({
-      id: modelKey(model),
-      displayName: model.displayName ?? model.modelId,
-      provider: model.providerId,
-      ...(model.providerDisplayName
-        ? { providerDisplayName: model.providerDisplayName }
-        : {}),
-      contextWindow: model.contextWindow ?? 200_000,
-      ...(model.maxInputTokens === undefined
-        ? {}
-        : { maxInputTokens: model.maxInputTokens }),
-      supportsToolUse: true,
-      ...(model.supportsImages === undefined
-        ? {}
-        : { supportsImages: model.supportsImages }),
-      ...(model.reasoningEfforts?.length
-        ? {
-            reasoningEfforts: [...model.reasoningEfforts],
-            ...(model.defaultReasoningEffort
-              ? { defaultReasoningEffort: model.defaultReasoningEffort }
-              : {}),
-          }
-        : {}),
-      authenticated: true,
-    })),
-  );
+  const offerModels = () =>
+    store.updateAvailableModels(
+      options.models.available.map((model) => ({
+        id: modelKey(model),
+        displayName: model.displayName ?? model.modelId,
+        provider: model.providerId,
+        ...(model.providerDisplayName
+          ? { providerDisplayName: model.providerDisplayName }
+          : {}),
+        contextWindow: model.contextWindow ?? 200_000,
+        ...(model.maxInputTokens === undefined
+          ? {}
+          : { maxInputTokens: model.maxInputTokens }),
+        supportsToolUse: true,
+        ...(model.supportsImages === undefined
+          ? {}
+          : { supportsImages: model.supportsImages }),
+        ...(model.reasoningEfforts?.length
+          ? {
+              reasoningEfforts: [...model.reasoningEfforts],
+              ...(model.defaultReasoningEffort
+                ? { defaultReasoningEffort: model.defaultReasoningEffort }
+                : {}),
+            }
+          : {}),
+        authenticated: true,
+      })),
+    );
+  offerModels();
   /** Select the project's default model and thinking level. */
   const applyDefaults = () => {
     const defaults = options.defaults?.();
     const model =
-      defaults?.model && modelsByKey.has(modelKey(defaults.model))
+      defaults?.model && modelsByKey().has(modelKey(defaults.model))
         ? defaults.model
         : options.models.defaultModel;
     store.setModel(modelKey(model));
@@ -1200,7 +1207,7 @@ export async function createAskAgentBridge(
   };
 
   const selectedModel = (): AgentModelReference => {
-    const choice = modelsByKey.get(store.getModel());
+    const choice = modelsByKey().get(store.getModel());
     return choice
       ? { providerId: choice.providerId, modelId: choice.modelId }
       : options.models.defaultModel;
@@ -1208,7 +1215,7 @@ export async function createAskAgentBridge(
 
   /** The thinking level picked in the UI, if the selected model has one. */
   const selectedEffort = (): CoreReasoningEffort | undefined => {
-    const choice = modelsByKey.get(modelKey(selectedModel()));
+    const choice = modelsByKey().get(modelKey(selectedModel()));
     const effort = store.getReasoningEffort();
     return choice?.reasoningEfforts?.includes(effort) ? effort : undefined;
   };
@@ -3020,6 +3027,14 @@ export async function createAskAgentBridge(
       await operations
         .cancel(auth, projectOf(workspaceSessionId), workspaceSessionId)
         .catch(() => undefined);
+    },
+    modelsChanged() {
+      if (closed) return;
+      const picked = store.getModel();
+      offerModels();
+      // The picked model went away (its key was removed): use the default.
+      if (!modelsByKey().has(picked)) applyDefaults();
+      if (sse.size > 0) void publishNow().catch(() => undefined);
     },
     refresh() {
       if (closed || sse.size === 0) return;

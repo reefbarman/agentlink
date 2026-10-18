@@ -4,6 +4,7 @@ import type { AssistantServerAuth } from "./assistantServer.js";
 import type { CheckpointStatus } from "./auditCheckpoint.js";
 import { HttpError, readJsonBody, sendJson } from "./httpJson.js";
 import { modelsByKey } from "./jobRoutes.js";
+import { currentModels, type ModelChoices } from "./liveModels.js";
 import { singleHeader } from "./requestGuard.js";
 import type { AssistantServerModelChoice } from "./serverConfig.js";
 import type { GitHubConnectionStore } from "./githubConnections.js";
@@ -76,7 +77,7 @@ export interface TaskRoutesOptions {
   readonly audit?: Pick<TaskAudit, "entries" | "request" | "verify">;
   /** The audit checkpoints' status, when they are running. */
   readonly checkpoints?: () => CheckpointStatus | undefined;
-  readonly models: readonly AssistantServerModelChoice[];
+  readonly models: ModelChoices;
   /** Browser editors for task folders, when configured. */
   readonly editors?: TaskEditorRoutes;
   readonly now?: () => number;
@@ -117,7 +118,7 @@ export function taskModelError(
 export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
   const { store, repositories } = options;
   const now = options.now ?? Date.now;
-  const models = modelsByKey(options.models);
+  const models = () => modelsByKey(currentModels(options.models));
 
   const requireRunner = () => {
     if (!options.runner) throw new HttpError(409, "tasks_disabled");
@@ -228,7 +229,7 @@ export function createTaskRoutes(options: TaskRoutesOptions): TaskRoutes {
         auth.signal,
       );
       const taskRequest = parseTaskRequest(body);
-      const modelError = taskModelError(taskRequest.model, models);
+      const modelError = taskModelError(taskRequest.model, models());
       if (modelError) throw new HttpError(400, modelError);
       await requireValid(auth);
       const created = await runner.create(taskRequest);

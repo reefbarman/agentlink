@@ -81,6 +81,30 @@ interface AssistantModelOption {
 }
 
 const ERROR_TEXT: Record<string, string> = {
+  onboarding_changed:
+    "Setup changed on another device or tab. It has been reloaded; try again.",
+  codex_unavailable:
+    "This server has no ChatGPT provider; its models are set up by its operator.",
+  codex_sign_in_pending_elsewhere:
+    "A ChatGPT sign-in started on another device is still waiting. Finish or cancel it there, or wait ten minutes.",
+  codex_sign_in_not_pending:
+    "That sign-in has expired or was already used. Start again.",
+  codex_sign_in_address_invalid:
+    "Paste the whole address the sign-in tab ended on. It starts with http://localhost:1455/auth/callback.",
+  codex_sign_in_state_mismatch:
+    "That address is from a different sign-in. Start again and use the newest link.",
+  codex_sign_in_failed:
+    "ChatGPT sign-in did not finish. Start again; each link works once.",
+  api_key_invalid:
+    "That does not look like an OpenAI API key. Keys start with sk- and have no spaces.",
+  providers_changed:
+    "Model settings changed on another device or tab. They have been reloaded; try again.",
+  provider_externally_managed:
+    "OpenAI is set up by the server's operator in server.json, so it cannot be changed here.",
+  providers_unavailable:
+    "This installation does not set up models in the browser; its operator does that in server.json.",
+  provider_save_failed:
+    "The key could not be saved. The previous setting is unchanged.",
   project_name_required: "Give the project a name.",
   project_name_too_long: "That name is too long.",
   repository_url_invalid:

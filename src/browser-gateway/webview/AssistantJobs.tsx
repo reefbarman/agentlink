@@ -3,6 +3,13 @@ import { BackupSettings } from "./AssistantBackups";
 import { GitHubPanel } from "./AssistantGitHub";
 import { McpPanel, signInReturnNotice } from "./AssistantMcp";
 import { MemoryPanel } from "./AssistantMemory";
+import {
+  SetupPanel,
+  loadOnboarding,
+  patchOnboarding,
+  setupStatusLabel,
+  type OnboardingState,
+} from "./AssistantOnboarding";
 import { SettingsPanel } from "./AssistantSettings";
 import { OPEN_TASK_EVENT, TasksPanel } from "./AssistantTasks";
 import {
@@ -561,8 +568,63 @@ export function AssistantHub({
   const notice = maintenanceNotice(maintenance);
   // Back from an MCP server's sign-in page: show how it went.
   const [view, setView] = useState<
-    "jobs" | "inbox" | "github" | "tasks" | "mcp" | "memory" | "settings" | null
+    | "jobs"
+    | "inbox"
+    | "github"
+    | "tasks"
+    | "mcp"
+    | "memory"
+    | "settings"
+    | "setup"
+    | null
   >(() => (signInReturnNotice(window.location.search) ? "mcp" : null));
+  // First-run setup: opens by itself once on a fresh install; otherwise
+  // available from the Setup button. Hidden if the server has no setup
+  // routes or this device is not the owner's.
+  const [setup, setSetup] = useState<OnboardingState | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadOnboarding().then(
+      (state) => {
+        if (cancelled) return;
+        setSetup(state);
+        if (state.openSetup) {
+          setView((current) => current ?? "setup");
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const [setupNotice, setSetupNotice] = useState<string | null>(null);
+  const closeSetup = (state: OnboardingState | null) => {
+    setView(null);
+    setSetupNotice(null);
+    // Closing an automatically opened setup means "later", not "every load".
+    if (state?.openSetup && state.record) {
+      const dismiss = (revision: number) =>
+        patchOnboarding(revision, { dismiss: true });
+      void dismiss(state.record.revision)
+        .catch(async () => {
+          // Another tab may have moved setup on: retry once from its state.
+          const fresh = await loadOnboarding();
+          if (!fresh.openSetup || !fresh.record) return fresh;
+          return await dismiss(fresh.record.revision);
+        })
+        .then(setSetup)
+        .catch(() =>
+          setSetupNotice(
+            "Could not record that setup was closed, so it may open again next time. Setup in the toolbar has it.",
+          ),
+        );
+      return;
+    }
+    void loadOnboarding()
+      .then(setSetup)
+      .catch(() => undefined);
+  };
   const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const openChat = async (projectId: string, sessionId: string) => {
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
@@ -683,10 +745,33 @@ export function AssistantHub({
           <i class="codicon codicon-settings-gear" aria-hidden="true" />
           <span>Settings</span>
         </button>
+        {setup && (
+          <button
+            type="button"
+            class="assistant-hub-button"
+            aria-haspopup="dialog"
+            aria-label={`Setup: ${setupStatusLabel(setup.status)}`}
+            title={`Setup: ${setupStatusLabel(setup.status)}`}
+            onClick={() => setView("setup")}
+          >
+            <i class="codicon codicon-checklist" aria-hidden="true" />
+            <span>Setup</span>
+            {setup.status !== "ready" && (
+              <span class="assistant-hub-badge" aria-hidden="true">
+                !
+              </span>
+            )}
+          </button>
+        )}
       </nav>
       {notice && (
         <p class="assistant-maintenance" role="status">
           <i class="codicon codicon-sync" aria-hidden="true" /> {notice}
+        </p>
+      )}
+      {setupNotice && (
+        <p class="assistant-maintenance" role="status">
+          <i class="codicon codicon-warning" aria-hidden="true" /> {setupNotice}
         </p>
       )}
       {view === "jobs" && (
@@ -718,6 +803,16 @@ export function AssistantHub({
       )}
       {view === "github" && <GitHubPanel onClose={() => setView(null)} />}
       {view === "settings" && <SettingsPanel onClose={() => setView(null)} />}
+      {view === "setup" && (
+        <SetupPanel
+          {...(setup ? { initial: setup } : {})}
+          onClose={closeSetup}
+          openPanel={(panel) => {
+            closeSetup(null);
+            setView(panel);
+          }}
+        />
+      )}
       {view === "memory" && (
         <MemoryPanel onClose={() => setView(null)} openChat={openChat} />
       )}

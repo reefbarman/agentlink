@@ -326,7 +326,7 @@ jobs:
         run: |
           {
             node scripts/release-coordinator.mjs notes --unit assistant --version "$RELEASE_VERSION" && printf '\n' || true
-            printf '%s\n' 'Experimental Linux/macOS Docker deployment. Review the install.sh asset before running it with install --version X.Y.Z --origin https://HOST:8443. Requires Docker Engine 28+ / Docker Desktop and Compose; certificate trust and model sign-in remain explicit owner steps. The initial updater changes images only, not deployment templates. Keep the backup password off-host.'
+            printf '%s\n' 'Experimental Linux/macOS Docker deployment. Review the install.sh asset, run its read-only diagnose command, then install with install --version X.Y.Z --origin https://HOST:8443. Requires a local rootful Docker Engine 28+ with Compose v2 on Linux, or Docker Desktop on Apple Silicon; certificate trust, pairing and model sign-in remain explicit owner steps. Managed installations update from Settings > Updates, which replaces images and management templates together in one backed-up transaction with rollback. Keep the backup password off-host.'
             printf '\nGuide: https://github.com/reefbarman/agentlink/blob/assistant-v%s/apps/server/README.md#guided-release-installation-preview\n' "$RELEASE_VERSION"
           } > notes.md
           node scripts/release-publish.mjs \

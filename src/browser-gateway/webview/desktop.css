@@ -3440,6 +3440,56 @@ html.quick-ask-document body {
   background: var(--ag-panel);
 }
 
+.browser-shell.browser-shell-desktop .assistant-setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-steps li.current button {
+  color: var(--ag-accent-text);
+  font-weight: 700;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-instructions {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-instructions textarea {
+  width: 100%;
+  font-family: var(--ag-mono, monospace);
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-alternative {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ag-border);
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-alternative h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-alternative label {
+  display: grid;
+  gap: 4px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-alternative input,
+.browser-shell.browser-shell-desktop .assistant-setup-alternative select {
+  width: 100%;
+  min-width: 0;
+}
+
 .browser-shell.browser-shell-desktop .assistant-panel-notice {
   margin: 0;
   padding: 10px 12px;

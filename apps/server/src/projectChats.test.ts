@@ -41,6 +41,7 @@ function fakeBridge(projectId: string): AskAgentBridge {
     detachWork: vi.fn(),
     noteWork: vi.fn(),
     refresh: vi.fn(),
+    modelsChanged: vi.fn(),
     close: vi.fn(async () => undefined),
   };
 }
