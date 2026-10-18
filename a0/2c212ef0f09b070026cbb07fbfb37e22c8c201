@@ -1,0 +1,38 @@
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 206-207,218,239-241,274,285,296,302,306-313,338,348-349
+  s_0c4257378842ed::t_34ca8ff49b17a3 337,339,345-347,350
+apps/server/src/runnerManager.ts
+  h_e08a86bb3a33a2 41,437-442,495-496,498,512-514,745-746
+apps/server/src/taskEditors.ts
+  h_e08a86bb3a33a2 33-34,55-61,152-154,160,170,213-216
+  s_0c4257378842ed::t_19bd362ffdef45 54
+apps/server/src/editorProxy.test.ts
+  h_e08a86bb3a33a2 17,80,185,188,210,222,236,299
+apps/server/src/editorProxy.ts
+  h_e08a86bb3a33a2 23-25,29-30,74-75,146-147,179-180,187,195-199,249,289
+  s_0c4257378842ed::t_722a8e4435b648 143-145,148,185-186,188
+apps/server/src/taskEditors.test.ts
+  h_e08a86bb3a33a2 33,41,134-140,143-144
+  s_0c4257378842ed::t_80bff0dc633c12 38-40,42-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a02c212ef0f09b070026cbb07fbfb37e22c8c201",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0c4257378842ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52ad7d7e-188e-4af3-a27f-dbf7a623078e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
