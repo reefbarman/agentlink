@@ -273,13 +273,18 @@ jobs:
             arm64=$(tr -d '\n' < "digests/assistant-digest-${target}-arm64/digest.txt")
             tag="ghcr.io/reefbarman/${image}:assistant-v${RELEASE_VERSION}"
             mkdir -p "manifest-digests/$target"
-            metadata="manifest-digests/$target/metadata.json"
             docker buildx imagetools create \
-              --metadata-file "$metadata" \
               --tag "$tag" \
               "$tag-amd64@$amd64" \
               "$tag-arm64@$arm64"
-            node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const metadata = JSON.parse(readFileSync(process.argv[1], "utf8")); if (!/^sha256:[0-9a-f]{64}$/.test(metadata["containerimage.digest"] ?? "")) throw new Error("invalid manifest digest"); writeFileSync(process.argv[2], metadata["containerimage.digest"]);' "$metadata" "manifest-digests/$target/digest.txt"
+            # imagetools create does not reliably record the pushed index
+            # digest in --metadata-file, so read it back from the registry.
+            digest=$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "invalid manifest digest for $tag: '$digest'" >&2
+              exit 1
+            fi
+            printf '%s' "$digest" > "manifest-digests/$target/digest.txt"
           done
       - uses: actions/upload-artifact@v6
         with:
