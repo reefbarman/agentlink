@@ -957,6 +957,81 @@ describe(
       });
     });
 
+    it("retires an update's rollback point when a feature changes, so rollback stops nothing (update, enable editor, rollback)", () => {
+      const f = installed();
+      // A browser update to this release added compose.editor.yaml, which
+      // had no earlier copy: its rollback would remove it.
+      const previous = join(f.deploy, ".upgrade-assets-previous");
+      mkdirSync(previous);
+      copyFileSync(
+        join(f.deploy, "compose.yaml"),
+        join(previous, "compose.yaml"),
+      );
+      writeFileSync(
+        join(previous, ".files"),
+        "compose.yaml\ncompose.editor.yaml\n",
+      );
+      writeFileSync(
+        join(f.deploy, ".upgrade-state"),
+        "status=done\nstarted=2026-10-18T00:00:00Z\ncommit=aaaaaaaa\nsnapshot=abcdef12\nrelease=0\nassets=1\n",
+      );
+
+      const enabled = f.run(["enable", "editor", "--yes"]);
+      expect(enabled.status).toBe(0);
+      expect(enabled.stdout).toContain(
+        "The last update can no longer be rolled back",
+      );
+      expect(f.read(".upgrade-state")).toContain("status=retired\n");
+      expect(f.read(".upgrade-state")).toContain("snapshot=abcdef12\n");
+      const env = f.read(".env");
+      expect(env).toContain(":compose.editor.yaml\n");
+
+      const rollback = () => {
+        rmSync(f.log, { force: true });
+        return spawnSync(
+          process.env.AGENTLINK_TEST_BASH ?? "bash",
+          [join(f.deploy, "upgrade.sh"), "--deploy", f.deploy, "rollback"],
+          {
+            encoding: "utf8",
+            timeout: 15_000,
+            env: {
+              ...process.env,
+              PATH: `${join(f.root, "bin")}:${process.env.PATH}`,
+              TEST_LOG: f.log,
+              TEST_ASSETS: f.assets,
+              HOME: f.root,
+              DOCKER_HOST: "",
+              TEST_EXISTING_IMAGES: "1",
+            },
+          },
+        );
+      };
+      const expectNothingStopped = () => {
+        expect(f.compose("stop")).toEqual([]);
+        expect(f.compose("up")).toEqual([]);
+        expect(f.read(".env")).toBe(env);
+        expect(existsSync(join(f.deploy, "compose.editor.yaml"))).toBe(true);
+      };
+      const retired = rollback();
+      expect(retired.status).not.toBe(0);
+      expect(retired.stderr).toContain("can no longer be rolled back");
+      expect(retired.stdout).not.toContain("AGENTLINK_UPDATE_PHASE");
+      expectNothingStopped();
+
+      // Even a rollback point that was not retired never removes a
+      // template the current .env uses.
+      writeFileSync(
+        join(f.deploy, ".upgrade-state"),
+        f.read(".upgrade-state").replace("status=retired", "status=done"),
+      );
+      const active = rollback();
+      expect(active.status).not.toBe(0);
+      expect(active.stderr).toContain(
+        "would remove compose.editor.yaml, which COMPOSE_FILE in .env uses now",
+      );
+      expectNothingStopped();
+    });
+
     it("accepts only the fixed feature names", () => {
       const f = installed();
       for (const name of [

@@ -336,11 +336,30 @@ restore_assets() {
   done < "$deploy_dir/.upgrade-assets-previous/.files"
 }
 
+# Before anything stops: restoring the templates must not remove one that the
+# current .env uses (one added by the update and turned on afterwards).
+check_assets_restorable() {
+  [ "${assets_upgrade:-0}" = 1 ] || return 0
+  [ -f "$deploy_dir/.upgrade-assets-previous/.files" ] || fail "previous templates are missing; nothing was stopped"
+  local active name
+  active=":$(sed -n 's/^COMPOSE_FILE=//p' "$deploy_dir/.env" 2> /dev/null | sed -n '$p'):"
+  while IFS= read -r name; do
+    asset_allowed "$name" || fail "invalid previous asset name"
+    [ "$name" != compose.updater.yaml ] || continue
+    [ ! -f "$deploy_dir/.upgrade-assets-previous/$name" ] || continue
+    case "$active" in
+      *":$name:"*) fail "rolling back would remove $name, which COMPOSE_FILE in .env uses now; nothing was stopped. To go back, restore a backup (see Backups in the README)" ;;
+    esac
+  done < "$deploy_dir/.upgrade-assets-previous/.files"
+}
+
 rollback() {
   transaction_active=0
   drain_active=0
   read_state
   [ "$status" != preparing ] || fail "the update stopped before switching images; there is no complete recovery point for that attempt"
+  [ "$status" != retired ] || fail "the last update can no longer be rolled back: an optional feature was turned on or off with install.sh after it, and its recovery point does not include that change. Nothing was stopped. To go back, restore a backup (see Backups in the README)"
+  check_assets_restorable
   progress rolling_back
   say "Rolling back the upgrade to ${commit:-the new version} started $started"
   for target in $TARGETS; do

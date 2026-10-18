@@ -442,7 +442,7 @@ deployment_states_ok() {
   if [ -e "$deploy/.upgrade-state" ]; then
     status=$(sed -n 's/^status=//p' "$deploy/.upgrade-state" 2>/dev/null || true)
     case "$status" in
-      done | rolled-back) ;;
+      done | rolled-back | retired) ;;
       *) fail "the last update or rollback is not settled (status ${status:-unreadable}); follow the update recovery steps in the README first" ;;
     esac
   fi
@@ -523,10 +523,23 @@ restore_recovery_set() {
     rm -f "$file" || return 1
   fi
 }
+# The last update's rollback point holds the templates and images from before
+# that update, but not this change to .env and server.json: rolling it back
+# afterwards could remove a template the new .env needs. Retire it before
+# anything changes; upgrade.sh rollback then refuses with nothing stopped.
+retire_update_rollback() {
+  local status
+  [ -f "$deploy/.upgrade-state" ] || return 0
+  status=$(sed -n 's/^status=//p' "$deploy/.upgrade-state")
+  case "$status" in done | rolled-back) ;; *) return 0 ;; esac
+  sed 's/^status=.*$/status=retired/' "$deploy/.upgrade-state" | replace_file "$deploy/.upgrade-state"
+  say 'The last update can no longer be rolled back (with upgrade.sh rollback or in the browser): it was made before this change. To go back to before it, restore the backup just taken (see Backups in the README).'
+}
 begin_transaction() {
   lifecycle_action=$1
   journal_id="$(date +%s)-$$"
   save_recovery_set
+  retire_update_rollback
   journal prepared
 }
 # The task containers the runner manager started: labelled
