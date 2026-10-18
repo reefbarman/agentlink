@@ -1,0 +1,51 @@
+# SearXNG beside the assistant, for `web_search` with models other than
+# Codex (Codex models use Codex's own hosted search). Use it as an overlay,
+# for example with
+#   COMPOSE_FILE=compose.yaml:compose.searxng.yaml
+# in .env (append :compose.meridian.yaml if you use Meridian too), and set
+#   "web": { "searxngUrl": "http://searxng:8080" }
+# in server.json.
+#
+# One-time setup:
+#   mkdir -p searxng
+#   cp searxng.settings.example.yml searxng/settings.yml
+#   echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> .env
+#
+# SearXNG is never published on the host or the LAN: only the assistant
+# reaches it, on this project's private network. Commands on the command
+# worker cannot reach it. It needs the JSON output format, which the
+# example settings enable.
+
+services:
+  assistant:
+    depends_on:
+      searxng:
+        condition: service_started
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      # The image's entrypoint drops from root to its own user.
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in .env}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    # No `ports:`. Nothing outside this compose project can connect.
+    expose:
+      - "8080"
+    mem_limit: 512m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -7,8 +7,62 @@ import {
   type WorkspaceCommandLaunch,
   WorkspaceCommandSupervisor,
 } from "./commandSupervisor.js";
+import {
+  WorkspaceProcessLaunchError,
+  type WorkspaceExecutionBackend,
+  type WorkspaceProcessExit,
+  type WorkspaceProcessLaunch,
+  type WorkspaceProcessSignal,
+} from "./workspaceExecutionBackend.js";
 
-async function fixture(options: { maxRetainedOutputBytes?: number } = {}) {
+function fakeBackend(
+  options: {
+    readonly launchError?: string;
+    readonly earlyOutput?: string;
+  } = {},
+) {
+  const launches: WorkspaceProcessLaunch[] = [];
+  const signals: WorkspaceProcessSignal[] = [];
+  let exit!: (result: WorkspaceProcessExit) => void;
+  const backend: WorkspaceExecutionBackend = {
+    launchProcess(launch) {
+      launches.push(launch);
+      if (options.earlyOutput) {
+        launch.onOutput("stdout", Buffer.from(options.earlyOutput));
+      }
+      const exited = new Promise<WorkspaceProcessExit>((resolve) => {
+        exit = resolve;
+      });
+      const started = options.launchError
+        ? Promise.reject(new WorkspaceProcessLaunchError(options.launchError))
+        : Promise.resolve();
+      if (options.launchError) exit({ exitCode: -2 });
+      return {
+        pid: options.launchError ? undefined : 4242,
+        started,
+        exited,
+        signal(signal) {
+          signals.push(signal);
+          exit({ signal });
+          return true;
+        },
+      };
+    },
+  };
+  return {
+    backend,
+    launches,
+    signals,
+    exit: (result: WorkspaceProcessExit) => exit(result),
+  };
+}
+
+async function fixture(
+  options: {
+    maxRetainedOutputBytes?: number;
+    executionBackend?: WorkspaceExecutionBackend;
+  } = {},
+) {
   const parent = await fs.mkdtemp(
     path.join(os.tmpdir(), "workspace-command-supervisor-"),
   );
@@ -72,6 +126,59 @@ describe("WorkspaceCommandSupervisor", () => {
         test.launch("process.exit(7)"),
       );
       expect(failed).toMatchObject({ state: "failed", exitCode: 7 });
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
+
+  it("forgets a deleted session's commands and output, not while running", async () => {
+    const fake = fakeBackend();
+    const test = await fixture({ executionBackend: fake.backend });
+    try {
+      const running = await test.supervisor.launchBackground(
+        test.launch("marker-6620", {
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        }),
+      );
+      await expect(
+        test.supervisor.forgetSessions(["session-a"]),
+      ).rejects.toThrow("command_running");
+      fake.exit({ exitCode: 0 });
+      await vi.waitFor(() =>
+        expect(test.supervisor.list({ ownerId: "owner-a" })[0]?.state).toBe(
+          "completed",
+        ),
+      );
+      await test.supervisor.launchBackground(
+        test.launch("kept", {
+          sessionId: "session-b",
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        }),
+      );
+      fake.exit({ exitCode: 0 });
+      await vi.waitFor(() =>
+        expect(
+          test.supervisor
+            .list({ ownerId: "owner-a" })
+            .every((record) => record.state === "completed"),
+        ).toBe(true),
+      );
+      await test.supervisor.forgetSessions(["session-a"]);
+      expect(
+        test.supervisor
+          .list({ ownerId: "owner-a" })
+          .map((record) => record.sessionId),
+      ).toEqual(["session-b"]);
+      expect(running.commandId).toBeDefined();
+      const state = await fs.readFile(
+        path.join(test.parent, "state", "commands.json"),
+        "utf8",
+      );
+      expect(state).not.toContain("marker-6620");
+      expect(state).toContain("kept");
     } finally {
       await test.supervisor.close();
       await fs.rm(test.parent, { recursive: true, force: true });
@@ -363,5 +470,98 @@ describe("WorkspaceCommandSupervisor", () => {
       await test.supervisor.close();
       await fs.rm(test.parent, { recursive: true, force: true });
     }
+  });
+
+  describe("with an injected execution backend", () => {
+    it("forwards the exact prepared launch and retains reported output", async () => {
+      const fake = fakeBackend({ earlyOutput: "early " });
+      const test = await fixture({ executionBackend: fake.backend });
+      try {
+        const launch = test.launch("ignored-by-fake", {
+          environmentKeys: ["FIXTURE"],
+          environment: { FIXTURE: "value" },
+        });
+        const running = await test.supervisor.launchBackground({
+          ...launch,
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        });
+        expect(running).toMatchObject({ state: "running", pid: 4242 });
+        expect(fake.launches).toHaveLength(1);
+        expect(fake.launches[0]!.request).toEqual({
+          schemaVersion: 1,
+          operationId: launch.commandId,
+          ownerId: "owner-a",
+          sessionId: "session-a",
+          turnId: "turn-a",
+          policyFingerprint: "policy-a",
+          operationDigest: launch.operationDigest,
+          executable: process.execPath,
+          args: ["-e", "ignored-by-fake"],
+          cwd: test.parent,
+          environment: { FIXTURE: "value" },
+        });
+        fake.launches[0]!.onOutput("stderr", Buffer.from("late"));
+        fake.exit({ exitCode: 0 });
+        await vi.waitFor(() => {
+          expect(test.supervisor.list({ ownerId: "owner-a" })[0]?.state).toBe(
+            "completed",
+          );
+        });
+        const observed = test.supervisor.observe(launch.commandId, {
+          ownerId: "owner-a",
+        });
+        expect(observed.output).toEqual([
+          { stream: "stdout", offset: 0, text: "early " },
+          { stream: "stderr", offset: 6, text: "late" },
+        ]);
+      } finally {
+        await test.supervisor.close();
+        await fs.rm(test.parent, { recursive: true, force: true });
+      }
+    });
+
+    it("stops through the backend and records cancellation", async () => {
+      const fake = fakeBackend();
+      const test = await fixture({ executionBackend: fake.backend });
+      try {
+        const launch = test.launch("ignored", {
+          mode: "background",
+          concurrentEditingAcknowledged: true,
+        });
+        await test.supervisor.launchBackground(launch);
+        const stopped = await test.supervisor.stop(launch.commandId, {
+          ownerId: "owner-a",
+        });
+        expect(fake.signals).toEqual(["SIGTERM"]);
+        expect(stopped).toMatchObject({
+          state: "cancelled",
+          signal: "SIGTERM",
+        });
+      } finally {
+        await test.supervisor.close();
+        await fs.rm(test.parent, { recursive: true, force: true });
+      }
+    });
+
+    it("maps a backend launch failure to a coded failed record", async () => {
+      const fake = fakeBackend({ launchError: "worker_unavailable" });
+      const test = await fixture({ executionBackend: fake.backend });
+      try {
+        const launch = test.launch("ignored");
+        await expect(test.supervisor.launchForeground(launch)).rejects.toThrow(
+          "command_launch_failed:worker_unavailable",
+        );
+        expect(test.supervisor.list({ ownerId: "owner-a" })).toEqual([
+          expect.objectContaining({
+            commandId: launch.commandId,
+            state: "failed",
+          }),
+        ]);
+      } finally {
+        await test.supervisor.close();
+        await fs.rm(test.parent, { recursive: true, force: true });
+      }
+    });
   });
 });

@@ -5,14 +5,21 @@ import {
   type AgentPrincipal,
   type AgentTurnAttachment,
   type AgentTurnEvent,
+  type AgentTurnInput,
+  type AgentTurnInterjection,
   type AgentTurnResult,
+  type AuthorizeToolCallRequest,
+  type CoreModelMessage,
   type CoreReasoningEffort,
   type HostTool,
+  type HostToolResolver,
+  type TurnExecutionLimits,
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
   createFileNodeHostPersistence,
   createNodeHostAgent,
+  createNodeHostLocalFileSystem,
 } from "@agentlink/node-host";
 import { randomBytes } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
@@ -25,6 +32,7 @@ import {
 import {
   readWorkspaceBackgroundSessionIds,
   WorkspaceBackgroundSupervisor,
+  type WorkspaceBackgroundChange,
 } from "./backgroundSupervisor.js";
 import { createWorkspaceBackgroundTools } from "./backgroundTools.js";
 import {
@@ -81,20 +89,91 @@ import {
   resolveWorkspaceProject,
   type WorkspaceProjectIdentity,
 } from "./projectIdentity.js";
-import { composeWorkspacePromptProfile } from "./promptProfile.js";
+import {
+  composeWorkspaceIdentity,
+  composeWorkspacePromptProfile,
+  validateWorkspacePromptIdentity,
+  type WorkspacePromptIdentity,
+} from "./promptProfile.js";
+import type { WorkspaceExecutionBackend } from "./workspaceExecutionBackend.js";
+
+/** Background lifecycles that keep their parent session from being deleted. */
+const ACTIVE_BACKGROUND: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "awaiting_approval",
+]);
+
+function isSessionNotFound(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "session_not_found"
+  );
+}
+
+/** What a host's `instructions` function knows about the turn. */
+export interface WorkspaceHostInstructionsRequest {
+  readonly sessionId: string;
+  /** A background child's turn (its input was written by its parent). */
+  readonly background: boolean;
+  /** The session's messages before this turn. */
+  readonly messages: readonly CoreModelMessage[];
+  /** The input that starts this turn, when the engine reports it. */
+  readonly input: AgentTurnInput | undefined;
+}
 
 export interface CreateWorkspaceHostOptions {
   readonly projectRoot: string;
   readonly dataRoot: string;
+  /**
+   * A stable name for this project's state (sessions, commands, background
+   * agents) under `dataRoot/projects/`. Without it the project is known by
+   * its folder's path, device and inode, so a restored, copied or moved
+   * folder starts with no history. Hosts that keep their own catalogue of
+   * projects pass its ID: letters, digits, `.`, `_` and `-`. The key is
+   * also the sessions' principal, so state kept under the folder identity
+   * is not carried over when a key is first given.
+   */
+  readonly storageKey?: string;
   readonly ownerId: string;
   readonly providers: readonly WorkspaceProviderConfig[];
   readonly defaultModel: AgentModelReference;
   readonly defaultReasoningEffort?: CoreReasoningEffort;
   readonly requestLimits?: WorkspaceModelRequestLimits;
-  readonly instructions?: string;
+  /**
+   * How much one turn may do (model calls, tool calls, elapsed time, tool
+   * output replayed). Without it, the core's defaults for headless turns
+   * apply, which suit short tasks only.
+   */
+  readonly turnLimits?: TurnExecutionLimits;
+  /**
+   * Host instructions appended to every prompt. A function is read for
+   * each turn, so a host's settings apply without reopening the project,
+   * and can add context for that turn (its input and earlier messages).
+   */
+  readonly instructions?:
+    | string
+    | ((
+        request: WorkspaceHostInstructionsRequest,
+      ) => string | undefined | Promise<string | undefined>);
+  /**
+   * Optional assistant identity. When set, prompts lead with
+   * `You are AgentLink, <role>.` for foreground and background sessions.
+   */
+  readonly promptIdentity?: WorkspacePromptIdentity;
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
+  /**
+   * Where project file access, search, git status and `execute_command`
+   * processes run. Defaults to this machine. Supplying one with commands
+   * enabled requires an explicit `commands.resolveEnvironment` so the host
+   * process environment is never forwarded implicitly. Project identity,
+   * ownership, language services, MCP servers and artifacts still run on
+   * the host; a backend is not an isolation boundary by itself.
+   */
+  readonly executionBackend?: WorkspaceExecutionBackend;
   readonly files?: {
     readonly enabled: true;
     readonly approvalPolicy?: WorkspaceFileApprovalPolicy;
@@ -104,6 +183,13 @@ export interface CreateWorkspaceHostOptions {
   readonly commands?: {
     readonly enabled: true;
     readonly shellExecutable?: string;
+    /**
+     * Absolute folder inside the project that commands are confined to
+     * (their default and allowed working directories). Defaults to the
+     * project root.
+     */
+    readonly root?: string;
+    /** Required when a top-level `executionBackend` is supplied. */
     readonly resolveEnvironment?: () =>
       | NodeJS.ProcessEnv
       | Promise<NodeJS.ProcessEnv>;
@@ -118,10 +204,25 @@ export interface CreateWorkspaceHostOptions {
   readonly background?: {
     readonly enabled: true;
     readonly maxActiveChildren?: number;
+    /**
+     * Named models a parent can request with `model_role` when it spawns a
+     * child, for example `review`. Children otherwise use the parent's model.
+     */
+    readonly modelRoles?: Readonly<Record<string, AgentModelReference>>;
+    /**
+     * A child's commands and file writes use its parent's session grant, so
+     * they run without asking when the parent's would. Off by default: every
+     * child command and write pauses for the foreground. Children stay inside
+     * their file scopes, protected paths and command rules still apply, and
+     * MCP calls still ask.
+     */
+    readonly inheritSessionGrants?: boolean;
     readonly onApprovalAvailable?: (request: {
       readonly parentSessionId: string;
       readonly childSessionId: string;
     }) => void;
+    /** Lifecycle, phase, or current-tool changes of a child (no output text). */
+    readonly onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
   };
   readonly sessionInteractions?: CreateWorkspaceSessionInteractionToolsOptions;
   readonly sharedMcp?: Omit<CreateWorkspaceSharedMcpToolsOptions, "secret"> & {
@@ -139,7 +240,73 @@ export interface CreateWorkspaceHostOptions {
       request: { readonly sessionId: string; readonly turnId: string },
     ) => boolean | Promise<boolean>;
   };
+  /**
+   * Extra host-built tools offered every turn, after the built-in ones (for
+   * example web tools). They must not need authorization: they run without
+   * the owner's approval, so only read-only tools belong here.
+   */
+  readonly hostTools?: HostToolResolver;
+  /**
+   * Host-built tools that always need the owner's approval, whatever the
+   * session's approval mode (for example scheduling a job).
+   */
+  readonly approvalHostTools?: WorkspaceApprovalHostTools;
+  /**
+   * The private cause of a failed turn, before it is replaced by the safe
+   * public error in events. The host decides what, if anything, to keep.
+   */
+  readonly onTurnError?: (report: {
+    readonly sessionId: string;
+    readonly turnId: string;
+    readonly error: unknown;
+    readonly publicError: { readonly code: string; readonly message: string };
+  }) => void;
 }
+
+/**
+ * Tools whose every call is checked and described by the host, then
+ * approved or denied by the owner. The host can refuse a call, and can
+ * allow one only when `prepare` says so for a foreground session (for
+ * example repeat work the owner already approved); a background child's
+ * call always goes to the owner.
+ */
+export interface WorkspaceApprovalHostTools {
+  /** Names of the tools `resolveTools` offers, known before any turn. */
+  readonly toolNames: readonly string[];
+  /** Each tool must have `authorization: "required"`. */
+  readonly resolveTools: HostToolResolver;
+  /**
+   * Check a call and describe it for the approval card. `preparedInput`,
+   * when given, is what runs after approval, unchanged.
+   */
+  readonly prepare: (
+    request: AuthorizeToolCallRequest,
+  ) => WorkspaceHostToolApproval | Promise<WorkspaceHostToolApproval>;
+  /** Before an approved call runs: whether it still applies. */
+  readonly validatePending?: (request: {
+    readonly sessionId: string;
+    readonly toolName: string;
+    readonly input: Readonly<Record<string, unknown>>;
+  }) =>
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: string }
+    | Promise<
+        { readonly ok: true } | { readonly ok: false; readonly reason: string }
+      >;
+}
+
+export type WorkspaceHostToolApproval =
+  | { readonly decision: "deny"; readonly reason: string }
+  | {
+      /**
+       * `allow` runs the call without a card, with `preparedInput`. In a
+       * background child it is shown to the owner as `require_user`.
+       */
+      readonly decision: "require_user" | "allow";
+      readonly summary: string;
+      readonly displayContent?: unknown;
+      readonly preparedInput?: Readonly<Record<string, unknown>>;
+    };
 
 export interface WorkspaceHostSession {
   readonly sessionId: string;
@@ -174,6 +341,14 @@ export interface WorkspaceHost {
   listBackgroundAgents(
     parentSessionId: string,
   ): ReturnType<WorkspaceBackgroundSupervisor["list"]>;
+  /**
+   * Read a background child's transcript through its parent. Throws
+   * `background_child_not_owned` unless the child belongs to that parent.
+   */
+  readBackgroundAgentSession(
+    parentSessionId: string,
+    childSessionId: string,
+  ): ReturnType<AgentEngine["sessions"]["hydrate"]>;
   listBackgroundApprovals(
     parentSessionId: string,
   ): ReturnType<WorkspaceBackgroundSupervisor["listPendingApprovals"]>;
@@ -218,10 +393,7 @@ export interface WorkspaceHost {
   resumeInteraction(
     sessionId: string,
     decision: "allow" | "deny",
-    options?: {
-      readonly signal?: AbortSignal;
-      readonly onEvent?: (event: AgentTurnEvent) => void;
-    },
+    options?: WorkspaceResumeInteractionOptions,
   ): Promise<AgentTurnResult>;
   runTurn(
     sessionId: string,
@@ -230,6 +402,8 @@ export interface WorkspaceHost {
       readonly attachments?: readonly AgentTurnAttachment[];
       readonly signal?: AbortSignal;
       readonly onEvent?: (event: AgentTurnEvent) => void;
+      /** Messages the user sent while the turn runs, admitted into it. */
+      readonly takeInterjections?: () => readonly AgentTurnInterjection[];
     },
   ): Promise<AgentTurnResult>;
   cancel(sessionId: string, reason?: string): Promise<void>;
@@ -238,12 +412,29 @@ export interface WorkspaceHost {
 export async function createWorkspaceHost(
   options: CreateWorkspaceHostOptions,
 ): Promise<WorkspaceHost> {
-  const project = await resolveWorkspaceProject(options.projectRoot);
+  if (options.promptIdentity) {
+    validateWorkspacePromptIdentity(options.promptIdentity);
+  }
+  if (
+    options.executionBackend &&
+    options.commands &&
+    !options.commands.resolveEnvironment
+  ) {
+    throw new Error(
+      "A command execution backend requires an explicit resolveEnvironment",
+    );
+  }
+  const resolved = await resolveWorkspaceProject(options.projectRoot);
+  const project: WorkspaceProjectIdentity =
+    options.storageKey === undefined
+      ? resolved
+      : { ...resolved, id: validStorageKey(options.storageKey) };
   const principal: AgentPrincipal = {
     tenantId: "local",
     subjectId: project.id,
   };
   const projectDataRoot = path.join(options.dataRoot, "projects", project.id);
+
   const backgroundStateDirectory = path.join(projectDataRoot, "background");
   const durableBackgroundSessionIds = await readWorkspaceBackgroundSessionIds(
     backgroundStateDirectory,
@@ -260,9 +451,12 @@ export async function createWorkspaceHost(
     options.commands ||
     options.mcp ||
     options.sharedMcp ||
-    options.background
+    options.background ||
+    options.approvalHostTools
       ? await readOrCreateApprovalKey(projectDataRoot)
       : undefined;
+  const approvalHostTools = options.approvalHostTools;
+  const approvalToolNames = new Set(approvalHostTools?.toolNames ?? []);
   const responsesConversationStates = new Map<
     string,
     ResponsesConversationState
@@ -298,17 +492,36 @@ export async function createWorkspaceHost(
     limits: options.requestLimits,
   });
   const mutations = new WorkspaceMutationCoordinator();
+  const hostFileSystem =
+    options.executionBackend?.fileSystem ?? createNodeHostLocalFileSystem();
   let backgroundSupervisor: WorkspaceBackgroundSupervisor | undefined;
+  const inheritSessionGrants =
+    options.background?.inheritSessionGrants === true;
+  /** A child's grant check asks about its parent; others are unchanged. */
+  const grantRequest = <T extends { readonly sessionId: string }>(
+    request: T,
+  ): T => {
+    const parentSessionId = backgroundSupervisor?.getRecordForSession(
+      request.sessionId,
+    )?.parentSessionId;
+    return parentSessionId
+      ? { ...request, sessionId: parentSessionId }
+      : request;
+  };
   const supervisor = options.commands
     ? await WorkspaceCommandSupervisor.create({
         stateDirectory: path.join(projectDataRoot, "commands"),
         ownerId: commandOwnerId,
+        executionBackend: options.executionBackend,
       })
     : undefined;
   const commandTools =
     options.commands && supervisor
       ? await createWorkspaceCommandTools({
           projectRoot: project.root,
+          ...(options.commands.root
+            ? { commandRoot: options.commands.root }
+            : {}),
           ownerId: commandOwnerId,
           supervisor,
           mutations,
@@ -316,10 +529,18 @@ export async function createWorkspaceHost(
           shellExecutable: options.commands.shellExecutable,
           environmentDigestSecret: approvalSecret!,
           resolveEnvironment: options.commands.resolveEnvironment,
-          hasSessionGrant: options.commands.hasSessionGrant,
+          hasSessionGrant:
+            inheritSessionGrants && options.commands.hasSessionGrant
+              ? (proposal, request) =>
+                  options.commands!.hasSessionGrant!(
+                    proposal,
+                    grantRequest(request),
+                  )
+              : options.commands.hasSessionGrant,
           requiresApproval: (_proposal, request) =>
+            !inheritSessionGrants &&
             backgroundSupervisor?.getRecordForSession(request.sessionId) !==
-            undefined,
+              undefined,
           resolveBackgroundOwnerSessionId: (request) =>
             backgroundSupervisor?.getRecordForSession(request.sessionId)
               ?.parentSessionId,
@@ -336,6 +557,7 @@ export async function createWorkspaceHost(
         projectId: project.id,
         maxActiveChildren: options.background.maxActiveChildren,
         onApprovalAvailable: options.background.onApprovalAvailable,
+        onAgentChanged: options.background.onAgentChanged,
         createChildSession: async (request) => {
           const parent = await engine.sessions.read({
             principal,
@@ -375,6 +597,7 @@ export async function createWorkspaceHost(
             project.root,
             parentScopes,
             request.scopes,
+            hostFileSystem,
           );
         },
         runTurn: async (sessionId, text, runOptions) => {
@@ -414,6 +637,9 @@ export async function createWorkspaceHost(
         supervisor: backgroundSupervisor,
         isForegroundSession: (sessionId) =>
           backgroundSupervisor.getRecordForSession(sessionId) === undefined,
+        ...(options.background?.modelRoles
+          ? { modelRoles: options.background.modelRoles }
+          : {}),
       })
     : undefined;
   const sharedMcpOptions = options.sharedMcp;
@@ -487,6 +713,7 @@ export async function createWorkspaceHost(
         project.root,
         parentScopes,
         childScopes,
+        hostFileSystem,
       ))
         ? childScopes
         : [];
@@ -506,9 +733,12 @@ export async function createWorkspaceHost(
     relativePath: string,
   ): Promise<boolean> => {
     const scopes = await resolveHostFileScopes(request);
-    return await workspaceFileScopesContain(project.root, scopes, [
-      { path: relativePath, kind: "file", access: "read" },
-    ]);
+    return await workspaceFileScopesContain(
+      project.root,
+      scopes,
+      [{ path: relativePath, kind: "file", access: "read" }],
+      hostFileSystem,
+    );
   };
   const languageTools = languageService
     ? createManagedTypeScriptTools({
@@ -520,9 +750,26 @@ export async function createWorkspaceHost(
   const fileTools = options.files
     ? createWorkspaceFileTools({
         projectRoot: project.root,
-        approvalPolicy: options.files.approvalPolicy,
+        // Unless the host lets children inherit it, a background child never
+        // has a session grant: its writes pause for the foreground, like its
+        // commands and MCP calls.
+        approvalPolicy: options.files.approvalPolicy?.hasSessionGrant
+          ? {
+              hasSessionGrant: (proposal, request) =>
+                (inheritSessionGrants ||
+                  backgroundSupervisor?.getRecordForSession(
+                    request.sessionId,
+                  ) === undefined) &&
+                options.files!.approvalPolicy!.hasSessionGrant!(
+                  proposal,
+                  grantRequest(request),
+                ),
+            }
+          : options.files.approvalPolicy,
         resolveScopes: resolveHostFileScopes,
         ripgrepExecutable: options.files.ripgrepExecutable,
+        executionBackend: options.executionBackend,
+        processOwnerId: commandOwnerId,
         enrichContext: languageService
           ? async (request, relativePath, signal) => {
               const filePath = path.join(project.root, relativePath);
@@ -599,9 +846,12 @@ export async function createWorkspaceHost(
                   access: "read_write" as const,
                 },
               ];
-          return await workspaceFileScopesContain(project.root, parentScopes, [
-            { path: relativePath, kind: "file", access: "read_write" },
-          ]);
+          return await workspaceFileScopesContain(
+            project.root,
+            parentScopes,
+            [{ path: relativePath, kind: "file", access: "read_write" }],
+            hostFileSystem,
+          );
         },
         mutations,
       })
@@ -610,7 +860,11 @@ export async function createWorkspaceHost(
     ? createWorkspaceSessionInteractionTools(options.sessionInteractions)
     : undefined;
   const interactionTokens =
-    options.files || options.commands || options.mcp || options.sharedMcp
+    options.files ||
+    options.commands ||
+    options.mcp ||
+    options.sharedMcp ||
+    approvalHostTools
       ? createTurnInteractionTokenService({
           secret: approvalSecret!,
         })
@@ -622,6 +876,13 @@ export async function createWorkspaceHost(
     defaultModel: options.defaultModel,
     defaultReasoningEffort: options.defaultReasoningEffort,
     maxOutputTokens: 4_096,
+    ...(options.turnLimits ? { limits: options.turnLimits } : {}),
+    ...(options.onTurnError
+      ? {
+          onTurnError: ({ sessionId, turnId, error, publicError }) =>
+            options.onTurnError?.({ sessionId, turnId, error, publicError }),
+        }
+      : {}),
     ...(fileTools ||
     commandTools ||
     artifactTools ||
@@ -629,7 +890,9 @@ export async function createWorkspaceHost(
     sharedMcpTools ||
     backgroundTools ||
     languageTools ||
-    sessionInteractionTools
+    sessionInteractionTools ||
+    options.hostTools ||
+    approvalHostTools
       ? {
           tools: {
             resolveTools: async (request) => {
@@ -657,6 +920,15 @@ export async function createWorkspaceHost(
                   ...(sessionInteractionTools
                     ? await sessionInteractionTools.resolveTools(request)
                     : []),
+                  ...(options.hostTools
+                    ? requireUnauthorizedTools(await options.hostTools(request))
+                    : []),
+                  ...(approvalHostTools
+                    ? requireApprovalTools(
+                        await approvalHostTools.resolveTools(request),
+                        approvalToolNames,
+                      )
+                    : []),
                 ];
                 return shared
                   ? {
@@ -683,6 +955,39 @@ export async function createWorkspaceHost(
             interactions: persistence.interactions,
             interactionTokens,
             authorizeToolCall: async (request) => {
+              // Refused, allowed by the host for a foreground session when
+              // `prepare` says so, or the owner decides.
+              if (
+                approvalHostTools &&
+                approvalToolNames.has(request.toolName)
+              ) {
+                const approval = await approvalHostTools.prepare(request);
+                if (
+                  approval.decision === "allow" &&
+                  backgroundSupervisor?.getRecordForSession(
+                    request.sessionId,
+                  ) === undefined
+                ) {
+                  return {
+                    decision: "allow" as const,
+                    ...(approval.preparedInput
+                      ? { preparedInput: approval.preparedInput }
+                      : {}),
+                  };
+                }
+                return approval.decision !== "deny"
+                  ? {
+                      decision: "require_user" as const,
+                      summary: approval.summary,
+                      ...(approval.displayContent !== undefined
+                        ? { displayContent: approval.displayContent }
+                        : {}),
+                      ...(approval.preparedInput
+                        ? { preparedInput: approval.preparedInput }
+                        : {}),
+                    }
+                  : { decision: "deny" as const, reason: approval.reason };
+              }
               if (request.toolName === "execute_command") {
                 return commandTools
                   ? await commandTools.authorizeToolCall(request)
@@ -701,12 +1006,14 @@ export async function createWorkspaceHost(
                       reason: "MCP tool policy or configuration changed",
                     };
                   }
-                  if (policy === "allow") {
-                    return { decision: "allow" as const };
-                  }
                   const child = backgroundSupervisor?.getRecordForSession(
                     request.sessionId,
                   );
+                  // A background child never inherits a global allow: its
+                  // MCP calls are external effects the foreground approves.
+                  if (policy === "allow" && !child) {
+                    return { decision: "allow" as const };
+                  }
                   if (
                     !child &&
                     (await options.sharedMcp?.hasSessionGrant?.(
@@ -771,7 +1078,7 @@ export async function createWorkspaceHost(
           ? resolvedArtifacts
           : resolvedArtifacts?.instructions;
       return [
-        "You are AgentLink's standalone local coding assistant.",
+        composeWorkspaceIdentity(options.promptIdentity),
         `The canonical project root is ${project.root}.`,
         composeWorkspacePromptProfile(model),
         options.files
@@ -785,17 +1092,33 @@ export async function createWorkspaceHost(
           : "Instruction and skill artifacts are not enabled.",
         options.mcp || options.sharedMcp
           ? "MCP servers are unsandboxed external capabilities. Discovery requires foreground launch or destination trust, and MCP tool calls follow host authorization and configured policy."
-          : "MCP tools are not enabled.",
+          : approvalToolNames.has("call_mcp_tool")
+            ? "The host provides the owner's MCP servers: list their tools with find_mcp_tools, then call one with call_mcp_tool. Each call follows the owner's per-tool policy and may wait for the owner's approval."
+            : "MCP tools are not enabled.",
         options.languageIntelligence
           ? "Optional TypeScript/JavaScript diagnostics, symbols, definition, references, and hover are available through an explicitly installed unsandboxed language server. Treat unavailable, warming, stale, and failed states as incomplete analysis, never as zero findings."
           : "Managed TypeScript/JavaScript intelligence is not enabled.",
         options.background
           ? backgroundSupervisor?.getRecordForSession(request.session.sessionId)
             ? "You are a one-level background child. Work only within your assigned file scopes. You cannot delegate. Commands, MCP calls, and writes may pause for foreground human approval."
-            : "You may delegate up to two one-level background writers with explicit disjoint write paths, then observe, steer, wait for, or stop them."
+            : `You may delegate up to two one-level background children with explicit read paths and disjoint write paths (none for a read-only reviewer), then observe, steer, wait for, or stop them.${
+                options.background.modelRoles?.review
+                  ? ' For a review, spawn a read-only child with model_role "review".'
+                  : ""
+              }`
           : "Background writers are not enabled.",
         artifactInstructions,
-        options.instructions,
+        typeof options.instructions === "function"
+          ? await options.instructions({
+              sessionId: request.session.sessionId,
+              background:
+                backgroundSupervisor?.getRecordForSession(
+                  request.session.sessionId,
+                ) !== undefined,
+              messages: request.session.messages,
+              input: request.input,
+            })
+          : options.instructions,
       ]
         .filter(Boolean)
         .join("\n\n");
@@ -816,7 +1139,13 @@ export async function createWorkspaceHost(
   ): Promise<
     { readonly ok: true } | { readonly ok: false; reason: string }
   > => {
-    if (!fileTools && !commandTools && !mcpTools && !sharedMcpTools) {
+    if (
+      !fileTools &&
+      !commandTools &&
+      !mcpTools &&
+      !sharedMcpTools &&
+      !approvalHostTools
+    ) {
       return { ok: false, reason: "Approval tools are not enabled" };
     }
     const pending = await engine.sessions.inspect({ principal, sessionId });
@@ -855,6 +1184,15 @@ export async function createWorkspaceHost(
       input: call.input,
       displayContent: stored.record.request.displayContent,
     };
+    if (approvalHostTools && approvalToolNames.has(call.name)) {
+      return approvalHostTools.validatePending
+        ? await approvalHostTools.validatePending({
+            sessionId,
+            toolName: call.name,
+            input: call.input,
+          })
+        : { ok: true };
+    }
     if (isWorkspaceSharedMcpToolApproval(validationRequest.displayContent)) {
       return sharedMcpTools &&
         sameWorkspaceSharedMcpToolApproval(
@@ -948,6 +1286,16 @@ export async function createWorkspaceHost(
     isBackgroundSession,
     listBackgroundAgents(parentSessionId) {
       return backgroundSupervisor?.list(parentSessionId) ?? [];
+    },
+    async readBackgroundAgentSession(parentSessionId, childSessionId) {
+      const owned = (backgroundSupervisor?.list(parentSessionId) ?? []).some(
+        (record) => record.childSessionId === childSessionId,
+      );
+      if (!owned) throw new Error("background_child_not_owned");
+      return await engine.sessions.hydrate({
+        principal,
+        sessionId: childSessionId,
+      });
     },
     listBackgroundApprovals(parentSessionId) {
       return backgroundSupervisor?.listPendingApprovals(parentSessionId) ?? [];
@@ -1048,9 +1396,41 @@ export async function createWorkspaceHost(
     },
     async deleteSession(sessionId) {
       assertForegroundSession(sessionId);
+      // Checked before anything changes: a running child or command keeps
+      // the whole session. A running turn is refused by the engine itself.
+      const children = backgroundSupervisor?.list(sessionId) ?? [];
+      if (children.some((child) => ACTIVE_BACKGROUND.has(child.lifecycle))) {
+        throw new Error("background_child_running");
+      }
+      const sessionIds = [
+        sessionId,
+        ...children.map((child) => child.childSessionId),
+      ];
+      if (
+        supervisor &&
+        sessionIds.some((id) =>
+          supervisor
+            .list({ ownerId: commandOwnerId, sessionId: id })
+            .some((record) => record.state === "running"),
+        )
+      ) {
+        throw new Error("command_running");
+      }
       await engine.sessions.delete({ principal, sessionId });
       disposeResponsesConversationState(sessionId);
       await sharedMcpTools?.closeSession(sessionId);
+      // Its background children: their records, then their sessions.
+      for (const childSessionId of (await backgroundSupervisor?.forgetParent(
+        sessionId,
+      )) ?? []) {
+        await engine.sessions
+          .delete({ principal, sessionId: childSessionId })
+          .catch((error: unknown) => {
+            if (!isSessionNotFound(error)) throw error;
+          });
+        disposeResponsesConversationState(childSessionId);
+      }
+      await supervisor?.forgetSessions(sessionIds);
     },
     async recoverInterrupted(sessionId) {
       assertForegroundSession(sessionId);
@@ -1087,6 +1467,9 @@ export async function createWorkspaceHost(
           modelRequest: {
             conversationState: getResponsesConversationState(sessionId),
           },
+          ...(runOptions.takeInterjections
+            ? { takeInterjections: runOptions.takeInterjections }
+            : {}),
         },
       );
       return await collectTurn(stream, runOptions.onEvent);
@@ -1117,6 +1500,23 @@ function serializeMcpToolExecution(
   };
 }
 
+export interface WorkspaceResumeInteractionOptions {
+  readonly signal?: AbortSignal;
+  readonly onEvent?: (event: AgentTurnEvent) => void;
+  /** Messages the user sent while the turn runs, admitted into it. */
+  readonly takeInterjections?: () => readonly AgentTurnInterjection[];
+  /**
+   * The exact interaction the decision answers. When set, the resume fails
+   * with code `stale_interaction` unless it is still the pending interaction,
+   * and the engine's resume is bound to it (and its session revision), so a
+   * decision can never apply to a replacement request.
+   */
+  readonly expected?: {
+    readonly interactionId: string;
+    readonly interactionRevision: string;
+  };
+}
+
 async function resumeWorkspaceInteraction(
   engine: AgentEngine,
   principal: AgentPrincipal,
@@ -1125,10 +1525,7 @@ async function resumeWorkspaceInteraction(
   revalidatePendingInteraction: (
     sessionId: string,
   ) => Promise<{ readonly ok: true } | { readonly ok: false; reason: string }>,
-  runOptions: {
-    readonly signal?: AbortSignal;
-    readonly onEvent?: (event: AgentTurnEvent) => void;
-  },
+  runOptions: WorkspaceResumeInteractionOptions,
   conversationState: ResponsesConversationState,
 ): Promise<AgentTurnResult> {
   const pending = await engine.sessions.inspect({ principal, sessionId });
@@ -1137,6 +1534,19 @@ async function resumeWorkspaceInteraction(
   }
   if (pending.summary.runState.phase !== "suspended") {
     throw new Error(`Session ${sessionId} is not suspended`);
+  }
+  const expected = runOptions.expected;
+  if (
+    expected &&
+    (pending.pendingInteraction.request.interactionId !==
+      expected.interactionId ||
+      pending.pendingInteraction.interactionRevision !==
+        expected.interactionRevision)
+  ) {
+    throw Object.assign(
+      new Error(`Session ${sessionId} has a different pending interaction`),
+      { code: "stale_interaction" },
+    );
   }
   if (decision === "allow") {
     const current = await revalidatePendingInteraction(sessionId);
@@ -1163,6 +1573,9 @@ async function resumeWorkspaceInteraction(
     {
       signal: runOptions.signal,
       modelRequest: { conversationState },
+      ...(runOptions.takeInterjections
+        ? { takeInterjections: runOptions.takeInterjections }
+        : {}),
     },
   );
   return await collectTurn(stream, runOptions.onEvent);
@@ -1177,6 +1590,13 @@ async function collectTurn(
     if (next.done) return next.value;
     onEvent?.(next.value);
   }
+}
+
+function validStorageKey(key: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(key)) {
+    throw new Error(`Invalid project storage key: ${JSON.stringify(key)}`);
+  }
+  return key;
 }
 
 async function readOrCreateApprovalKey(
@@ -1224,4 +1644,32 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error
     ? String((error as { code?: unknown }).code)
     : undefined;
+}
+
+/** Host-supplied extra tools run unapproved, so none may ask for approval. */
+function requireApprovalTools(
+  tools: readonly HostTool[],
+  names: ReadonlySet<string>,
+): readonly HostTool[] {
+  for (const tool of tools) {
+    if (tool.authorization !== "required" || !names.has(tool.definition.name)) {
+      throw new Error(
+        `Host tool "${tool.definition.name}" must need authorization and be named in approvalHostTools.toolNames`,
+      );
+    }
+  }
+  return tools;
+}
+
+function requireUnauthorizedTools(
+  tools: readonly HostTool[],
+): readonly HostTool[] {
+  for (const tool of tools) {
+    if (tool.authorization !== "none") {
+      throw new Error(
+        `Host tool "${tool.definition.name}" needs authorization; hostTools cannot offer it`,
+      );
+    }
+  }
+  return tools;
 }

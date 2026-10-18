@@ -1,6 +1,7 @@
 import {
   AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX,
   AGENTLINK_DESKTOP_OWNER_ID,
+  type DesktopAssistantState,
   type DesktopBridge,
   type DesktopQuickAskSubmission,
   type DesktopRemoteState,
@@ -46,6 +47,25 @@ if (process.isMainFrame) {
       ipcRenderer.on("agentlink:remote:state", handler);
       return () =>
         ipcRenderer.removeListener("agentlink:remote:state", handler);
+    },
+    retryAssistant: () => ipcRenderer.send("agentlink:assistant:retry"),
+    onAssistantState: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        state: DesktopAssistantState,
+      ): void => {
+        listener({
+          status: state.status,
+          origin: state.origin,
+          pinned: state.pinned === true,
+          ...(state.error === "certificate" || state.error === "load"
+            ? { error: state.error }
+            : {}),
+        });
+      };
+      ipcRenderer.on("agentlink:assistant:state", handler);
+      return () =>
+        ipcRenderer.removeListener("agentlink:assistant:state", handler);
     },
     openSettings: () => ipcRenderer.send("agentlink:open-settings"),
     submitQuickAsk: (submission) =>

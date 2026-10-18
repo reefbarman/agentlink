@@ -137,6 +137,22 @@ export interface AgentTurnRunOptions {
   readonly maxModelOutputBytes?: number;
   /** Optional maximum UTF-8 bytes retained in the producer/consumer event queue. */
   readonly maxQueuedEventBytes?: number;
+  /**
+   * Messages the user sent while the turn runs (queued input that steers it).
+   * Called wherever the model can hear more: once every result of an
+   * assistant turn is in, and before the turn would otherwise end. Return the
+   * messages to admit now, oldest first; each becomes its own user message.
+   * Anything never taken stays with the caller, typically to start the next
+   * turn.
+   */
+  readonly takeInterjections?: () => readonly AgentTurnInterjection[];
+}
+
+/** A message the user sent into a running turn. */
+export interface AgentTurnInterjection {
+  /** Caller-chosen id, echoed by the `user.interjected` event. */
+  readonly id: string;
+  readonly text: string;
 }
 
 /**
@@ -257,6 +273,12 @@ export type AgentTurnEvent =
     })
   | (AgentTurnEventBase & {
       readonly type: "text.delta";
+      readonly text: string;
+    })
+  | (AgentTurnEventBase & {
+      /** A queued message was admitted into the running turn. */
+      readonly type: "user.interjected";
+      readonly interjectionId: string;
       readonly text: string;
     })
   | (AgentTurnEventBase & {

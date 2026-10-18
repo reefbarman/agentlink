@@ -36,7 +36,10 @@ const messages: ChatMessage[] = [
   },
 ];
 
-function renderTranscript(workspaceActionsEnabled: boolean) {
+function renderTranscript(
+  workspaceActionsEnabled: boolean,
+  fleetActionsEnabled?: boolean,
+) {
   const callbacks = {
     onOpenFile: vi.fn(),
     onOpenImageInEditor: vi.fn(),
@@ -55,6 +58,7 @@ function renderTranscript(workspaceActionsEnabled: boolean) {
       streaming={false}
       sessions={[]}
       workspaceActionsEnabled={workspaceActionsEnabled}
+      {...(fleetActionsEnabled === undefined ? {} : { fleetActionsEnabled })}
       {...callbacks}
     />,
   );
@@ -105,5 +109,23 @@ describe("BrowserBackgroundTranscript", () => {
     ).toBeNull();
     expect(callbacks.onOpenFile).not.toHaveBeenCalled();
     expect(callbacks.onOpenImageInEditor).not.toHaveBeenCalled();
+  });
+
+  it("opens file links for the Assistant without VS Code-hosted actions", () => {
+    const callbacks = renderTranscript(false, true);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Tools / }));
+    fireEvent.click(screen.getByRole("button", { name: /read_file/i }));
+    fireEvent.click(
+      screen.getAllByRole("link", { name: "src/index.ts:12" })[0]!,
+    );
+    expect(callbacks.onOpenFile).toHaveBeenCalledWith("src/index.ts", 12);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open read_file result image 1" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Open image in editor" }),
+    ).toBeNull();
   });
 });

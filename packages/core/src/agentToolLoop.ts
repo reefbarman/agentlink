@@ -19,9 +19,12 @@ import {
  * Intentionally minimal. This captures the loop *shape* shared by lightweight,
  * single-model-client surfaces (e.g. the browser-gateway Ask Agent). It is NOT
  * meant to host the full VS Code project agent loop, which interleaves
- * condensation, credential refresh, queued-message interjection, and
- * parallel/approval-gated tool dispatch into the same loop and streams an event
+ * condensation and credential refresh into the same loop and streams an event
  * union rather than returning a value — concerns that don't fit this contract.
+ *
+ * Queued user messages (interjections) are admitted the way the VS Code agent
+ * admits them: drained oldest first once every result of an assistant turn is
+ * in, and before the turn would end, each as its own user message.
  *
  * Execution is unbounded by default for backward compatibility. Callers may
  * provide neutral model/tool/time/result-byte limits and cancellation through
@@ -123,6 +126,19 @@ export interface AgentToolLoopHandlers<
    * bounded execution terminates with a limit/cancellation error.
    */
   onIterationMessagesComplete?(messages: readonly CoreModelMessage[]): void;
+  /**
+   * Observe the iteration sequence when a model call fails with an error
+   * other than a limit or cancellation. It is complete up to that call,
+   * including user messages admitted for it that the model never answered.
+   */
+  onModelCallFailed?(messages: readonly CoreModelMessage[]): void;
+  /**
+   * User messages to admit now (queued input that steers the turn), oldest
+   * first. Called once every result of an assistant turn is in, and before
+   * the turn would end; returning any keeps the turn going so the model
+   * answers them. Each is fed as its own user message.
+   */
+  takeInterjections?(): readonly CoreModelMessage[];
   /** Finalize a turn that produced assistant text. */
   finishSuccess(text: string, outcome?: TOutcome): TResult;
   /** Finalize a turn where the model finished without any text. */
@@ -144,6 +160,12 @@ export async function runAgentToolLoop<
   const execution = new TurnExecutionTracker(handlers.execution);
   let pendingToolCalls: readonly AgentToolLoopCall[] | undefined =
     handlers.initialToolCalls;
+  const admitInterjections = (): boolean => {
+    if (handlers.execution?.signal?.aborted) return false;
+    const admitted = handlers.takeInterjections?.() ?? [];
+    for (const message of admitted) iterationMessages.push(message);
+    return admitted.length > 0;
+  };
 
   try {
     for (;;) {
@@ -155,26 +177,36 @@ export async function runAgentToolLoop<
         execution.beginModelCall();
         let reportedModelAttempts = 0;
         const textBeforeModelCall = assistantText;
-        result = await handlers.callModel({
-          iterationMessages,
-          toolMessages,
-          onText: (delta) => {
-            assistantText += delta;
-          },
-          onTextReset: () => {
-            assistantText = textBeforeModelCall;
-          },
-          onModelCallAttempt: () => {
-            reportedModelAttempts += 1;
-            if (
-              handlers.modelCallAccounting === "handler" &&
-              reportedModelAttempts > 1
-            ) {
-              execution.beginModelCall();
-            }
-          },
-          signal: handlers.execution?.signal,
-        });
+        try {
+          result = await handlers.callModel({
+            iterationMessages,
+            toolMessages,
+            onText: (delta) => {
+              assistantText += delta;
+            },
+            onTextReset: () => {
+              assistantText = textBeforeModelCall;
+            },
+            onModelCallAttempt: () => {
+              reportedModelAttempts += 1;
+              if (
+                handlers.modelCallAccounting === "handler" &&
+                reportedModelAttempts > 1
+              ) {
+                execution.beginModelCall();
+              }
+            },
+            signal: handlers.execution?.signal,
+          });
+        } catch (error) {
+          if (
+            !(error instanceof TurnExecutionLimitError) &&
+            !(error instanceof TurnExecutionCancelledError)
+          ) {
+            handlers.onModelCallFailed?.(iterationMessages);
+          }
+          throw error;
+        }
         if (!assistantText && result.text) {
           assistantText = result.text;
         }
@@ -185,6 +217,8 @@ export async function runAgentToolLoop<
       }
 
       if (result.toolCalls.length === 0) {
+        // A queued message takes priority over ending the turn.
+        if (admitInterjections()) continue;
         handlers.onIterationMessagesComplete?.(iterationMessages);
         const finalText = result.text || assistantText;
         return finalText
@@ -281,6 +315,7 @@ export async function runAgentToolLoop<
           );
         }
       }
+      admitInterjections();
     }
   } catch (error) {
     if (

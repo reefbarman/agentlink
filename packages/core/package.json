@@ -172,6 +172,18 @@
         "default": "./dist/cjs/hostTools.cjs"
       }
     },
+    "./memory": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/memory.d.ts",
+        "default": "./dist/memory.js"
+      },
+      "require": {
+        "types": "./dist/cjs/memory.d.cts",
+        "default": "./dist/cjs/memory.cjs"
+      }
+    },
     "./mcp-credentials": {
       "browser": null,
       "edge": null,

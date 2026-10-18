@@ -23,6 +23,13 @@ export interface ReleaseUpdateCache {
   checkedAt: number | null;
   retryAt: number | null;
   discovery: ReleaseDiscovery;
+  error?: string;
+  includePreviews?: boolean;
+}
+
+export interface ReleaseUpdatePreferences {
+  automaticChecks: boolean;
+  includePreviews: boolean;
 }
 
 export class ReleaseUpdateStore {
@@ -41,14 +48,17 @@ export class ReleaseUpdateStore {
   async readCache(): Promise<ReleaseUpdateCache | null> {
     const value = (await this.readJson(
       "cache",
-      512 * 1024,
+      this.identity.product === "assistant" ? 2 * 1024 * 1024 : 512 * 1024,
     )) as ReleaseUpdateCache | null;
     if (
       !value ||
       value.schemaVersion !== 1 ||
       !validTimestamp(value.lastAttemptAt) ||
       !(value.checkedAt === null || validTimestamp(value.checkedAt)) ||
-      !(value.retryAt === null || validTimestamp(value.retryAt))
+      !(value.retryAt === null || validTimestamp(value.retryAt)) ||
+      (value.error !== undefined && !isReleaseCheckError(value.error)) ||
+      (value.includePreviews !== undefined &&
+        typeof value.includePreviews !== "boolean")
     )
       return null;
     const discovery = value.discovery;
@@ -56,13 +66,21 @@ export class ReleaseUpdateStore {
       !discovery ||
       typeof discovery.complete !== "boolean" ||
       !Array.isArray(discovery.records) ||
-      discovery.records.length > 100 ||
+      discovery.records.length >
+        (this.identity.product === "assistant" ? 8 : 100) ||
       !Array.isArray(discovery.unverifiedVersions) ||
       discovery.unverifiedVersions.length > 1000 ||
       !discovery.unverifiedVersions.every(
         (version) =>
           typeof version === "string" && parseReleaseVersion(version),
-      )
+      ) ||
+      (discovery.unverifiedPreviewVersions !== undefined &&
+        (!Array.isArray(discovery.unverifiedPreviewVersions) ||
+          discovery.unverifiedPreviewVersions.length > 1000 ||
+          !discovery.unverifiedPreviewVersions.every(
+            (version) =>
+              typeof version === "string" && parseReleaseVersion(version),
+          )))
     )
       return null;
     for (const record of discovery.records) {
@@ -79,11 +97,32 @@ export class ReleaseUpdateStore {
         record.assets.length > 100 ||
         !record.assets.every(
           (asset) => typeof asset === "string" && asset.length < 200,
-        )
+        ) ||
+        (record.notes !== undefined &&
+          (typeof record.notes !== "string" || record.notes.length > 32_000))
       )
         return null;
     }
     return value;
+  }
+
+  async readPreferences(): Promise<ReleaseUpdatePreferences | null> {
+    const value = (await this.readJson(
+      "preferences",
+      1024,
+    )) as ReleaseUpdatePreferences | null;
+    return value &&
+      typeof value.automaticChecks === "boolean" &&
+      typeof value.includePreviews === "boolean"
+      ? {
+          automaticChecks: value.automaticChecks,
+          includePreviews: value.includePreviews,
+        }
+      : null;
+  }
+
+  async writePreferences(preferences: ReleaseUpdatePreferences): Promise<void> {
+    await this.writeJson("preferences", preferences);
   }
 
   async readDismissal(): Promise<string | null> {
@@ -181,6 +220,19 @@ export class ReleaseUpdateStore {
       await unlink(temporary).catch(() => undefined);
     }
   }
+}
+
+export function isReleaseCheckError(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    [
+      "release_check_failed",
+      "release_rate_limited",
+      "release_check_timeout",
+      "release_check_cancelled",
+      "release_metadata_unavailable",
+    ].includes(value)
+  );
 }
 
 function validTimestamp(value: unknown): value is number {

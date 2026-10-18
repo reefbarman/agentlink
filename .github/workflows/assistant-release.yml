@@ -1,0 +1,337 @@
+name: Assistant Release
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and release
+        required: true
+        type: string
+      version:
+        description: Assistant version (must match apps/server/package.json at ref)
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Assistant version (must match apps/server/package.json)
+        required: true
+        type: string
+      ref:
+        description: Commit or ref to build (defaults to selected branch head)
+        required: false
+        type: string
+      publish:
+        description: Publish images to GHCR and assets to a GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - id: source
+        name: Resolve exact source commit
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - name: Verify Assistant release version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: test "$(node -p 'require("./apps/server/package.json").version')" = "$REQUESTED_VERSION"
+      - run: npm run lint
+      - run: npm test
+      - name: Build shared server bundle once
+        env:
+          AGENTLINK_BUILD_COMMIT: ${{ steps.source.outputs.commit }}
+        run: npm run build
+      - name: Verify shared bundle identity
+        env:
+          AGENTLINK_BUILD_COMMIT: ${{ steps.source.outputs.commit }}
+        run: node --input-type=module -e 'import { readFileSync } from "node:fs"; const bundle = readFileSync("apps/server/dist/agentlink-server.js", "utf8"); if (!bundle.includes(process.env.AGENTLINK_BUILD_COMMIT.slice(0, 12))) throw new Error("server bundle does not contain the exact source commit identity");'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: assistant-server-bundle
+          path: apps/server/dist/agentlink-server.js
+          if-no-files-found: error
+
+  editor-package:
+    needs: verify
+    name: Package editor extension (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - name: Package architecture-specific editor extension
+        env:
+          AGENTLINK_BUILD_COMMIT: ${{ needs.verify.outputs.commit }}
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: npm run package -- "apps/server/dist/agentlink-editor-${AGENTLINK_VSCE_TARGET}.vsix"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: assistant-editor-${{ matrix.target }}
+          path: apps/server/dist/agentlink-editor-${{ matrix.target }}.vsix
+          if-no-files-found: error
+
+  image:
+    needs: [verify, editor-package]
+    name: Build ${{ matrix.target }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: assistant
+            image: agentlink-assistant
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: assistant
+            image: agentlink-assistant
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: command-worker
+            image: agentlink-command-worker
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: command-worker
+            image: agentlink-command-worker
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: publisher
+            image: agentlink-publisher
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: publisher
+            image: agentlink-publisher
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: backup
+            image: agentlink-backup
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: backup
+            image: agentlink-backup
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: editor
+            image: agentlink-editor
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: editor
+            image: agentlink-editor
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: browser
+            image: agentlink-browser
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: browser
+            image: agentlink-browser
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - target: updater
+            image: agentlink-updater
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - target: updater
+            image: agentlink-updater
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: assistant-server-bundle
+          path: apps/server/dist
+      - uses: actions/download-artifact@v7
+        if: matrix.target == 'editor'
+        with:
+          name: assistant-editor-linux-${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
+          path: apps/server/dist
+      - name: Place matching editor extension at the Dockerfile input path
+        if: matrix.target == 'editor'
+        env:
+          EDITOR_TARGET: ${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
+        run: mv "apps/server/dist/agentlink-editor-linux-${EDITOR_TARGET}.vsix" apps/server/dist/agentlink-editor.vsix
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and optionally publish single-architecture image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/server
+          file: apps/server/deploy/container/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          push: ${{ inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/reefbarman/${{ matrix.image }}:assistant-v${{ inputs.version }}-${{ matrix.arch }}
+      - name: Save image digest before upload
+        if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
+        run: echo '${{ steps.build.outputs.digest }}' > "${{ runner.temp }}/digest.txt"
+      - uses: actions/upload-artifact@v6
+        if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
+        with:
+          name: assistant-digest-${{ matrix.target }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digest.txt
+          if-no-files-found: error
+
+  manifest:
+    needs: [verify, image]
+    if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: assistant-digest-*
+          path: digests
+          merge-multiple: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Combine architecture images into multi-architecture manifests
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          targets=(assistant command-worker publisher backup editor browser updater)
+          for target in "${targets[@]}"; do
+            case "$target" in
+              command-worker) image=agentlink-command-worker ;;
+              *) image="agentlink-$target" ;;
+            esac
+            amd64=$(tr -d '\n' < "digests/assistant-digest-${target}-amd64/digest.txt")
+            arm64=$(tr -d '\n' < "digests/assistant-digest-${target}-arm64/digest.txt")
+            tag="ghcr.io/reefbarman/${image}:assistant-v${RELEASE_VERSION}"
+            mkdir -p "manifest-digests/$target"
+            metadata="manifest-digests/$target/metadata.json"
+            docker buildx imagetools create \
+              --metadata-file "$metadata" \
+              --tag "$tag" \
+              "$tag-amd64@$amd64" \
+              "$tag-arm64@$arm64"
+            node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const metadata = JSON.parse(readFileSync(process.argv[1], "utf8")); if (!/^sha256:[0-9a-f]{64}$/.test(metadata["containerimage.digest"] ?? "")) throw new Error("invalid manifest digest"); writeFileSync(process.argv[2], metadata["containerimage.digest"]);' "$metadata" "manifest-digests/$target/digest.txt"
+          done
+      - uses: actions/upload-artifact@v6
+        with:
+          name: assistant-manifest-digests
+          path: manifest-digests/*/digest.txt
+          if-no-files-found: error
+
+  release:
+    needs: [verify, manifest]
+    if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-assistant
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: assistant-manifest-digests
+          path: digests
+      - name: Build release digest mapping and assets
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const targets = ["assistant", "command-worker", "publisher", "backup", "editor", "browser", "updater"];
+            const mapping = Object.fromEntries(targets.map((target) => [
+              target,
+              readFileSync(`digests/${target}/digest.txt`, "utf8").trim(),
+            ]));
+            writeFileSync("digests.json", JSON.stringify(mapping));
+          '
+          node scripts/package-assistant-release.mjs \
+            --version "$RELEASE_VERSION" \
+            --commit "$RELEASE_COMMIT" \
+            --digests digests.json \
+            --out assistant-release
+      - name: Publish Assistant GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          {
+            node scripts/release-coordinator.mjs notes --unit assistant --version "$RELEASE_VERSION" && printf '\n' || true
+            printf '%s\n' 'Experimental Linux/macOS Docker deployment. Review the install.sh asset, run its read-only diagnose command, then install with install --version X.Y.Z --origin https://HOST:8443. Requires a local rootful Docker Engine 28+ with Compose v2 on Linux, or Docker Desktop on Apple Silicon; certificate trust, pairing and model sign-in remain explicit owner steps. Managed installations update from Settings > Updates, which replaces images and management templates together in one backed-up transaction with rollback. Keep the backup password off-host.'
+            printf '\nGuide: https://github.com/reefbarman/agentlink/blob/assistant-v%s/apps/server/README.md#guided-release-installation-preview\n' "$RELEASE_VERSION"
+          } > notes.md
+          node scripts/release-publish.mjs \
+            --tag "assistant-v${RELEASE_VERSION}" \
+            --target "$RELEASE_COMMIT" \
+            --title "AgentLink Assistant v${RELEASE_VERSION}" \
+            --notes-file notes.md \
+            --dir assistant-release --prerelease

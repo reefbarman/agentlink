@@ -23,7 +23,11 @@ export interface WorkspaceSessionInteractionSnapshot {
 }
 
 export interface CreateWorkspaceSessionInteractionToolsOptions {
-  readonly askQuestion: (
+  /**
+   * Answers `ask_user`. Without it only `todo_write` is offered, for hosts
+   * with no way to put a question to the user.
+   */
+  readonly askQuestion?: (
     request: WorkspaceQuestionRequest,
     context: { readonly sessionId: string; readonly signal?: AbortSignal },
   ) => Promise<string>;
@@ -47,8 +51,9 @@ export function createWorkspaceSessionInteractionTools(
   ): WorkspaceSessionInteractionSnapshot => ({
     todos: structuredClone(todos.get(sessionId) ?? []),
   });
+  const { askQuestion } = options;
   const resolveTools: HostToolResolver = async (request) => [
-    createAskUserTool(request, options),
+    ...(askQuestion ? [createAskUserTool(request, askQuestion)] : []),
     createTodoWriteTool(request, todos, options),
   ];
   return { resolveTools, snapshot };
@@ -56,7 +61,9 @@ export function createWorkspaceSessionInteractionTools(
 
 function createAskUserTool<TPrincipal extends AgentPrincipal>(
   discovery: HostToolResolveRequest<TPrincipal>,
-  options: CreateWorkspaceSessionInteractionToolsOptions,
+  askQuestion: NonNullable<
+    CreateWorkspaceSessionInteractionToolsOptions["askQuestion"]
+  >,
 ): HostTool<TPrincipal> {
   return defineTool({
     name: "ask_user",
@@ -114,7 +121,7 @@ function createAskUserTool<TPrincipal extends AgentPrincipal>(
           : {}),
       };
       try {
-        const answer = await options.askQuestion(request, {
+        const answer = await askQuestion(request, {
           sessionId: context.sessionId,
           signal: context.signal,
         });

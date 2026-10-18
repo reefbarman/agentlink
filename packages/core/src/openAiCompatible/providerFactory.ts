@@ -56,6 +56,8 @@ export interface CreateOpenAiCompatibleProviderOptions {
   allowInsecureHttp?: boolean;
   auxiliaryModel?: string;
   supportsStoreFalse?: boolean;
+  /** Send each conversation ID as `x-session-affinity` for Meridian resume. */
+  meridianSessionAffinity?: boolean;
   models: OpenAiCompatibleProviderModel[];
   fetch?: OpenAiCompatibleFetch;
 }
@@ -84,6 +86,7 @@ export function createOpenAICompatibleProvider(
     allowInsecureHttp: options.allowInsecureHttp,
     auxiliaryModel: options.auxiliaryModel,
     supportsStoreFalse: options.supportsStoreFalse,
+    meridianSessionAffinity: options.meridianSessionAffinity,
     models: options.models.map((model) => ({
       id: model.id,
       model: model.model ?? model.id,

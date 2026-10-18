@@ -88,6 +88,8 @@ const CORE_MODULES = [
     identityExports: [
       "createEmbeddedAgentWebHandler",
       "parseEmbeddedAgentRequest",
+      "projectEmbeddedAgentSessionSnapshot",
+      "projectEmbeddedAgentTurnEvent",
     ],
     loadEsm: () => import("@agentlink/core/embedded-agent-web"),
   },
@@ -153,6 +155,21 @@ const CORE_MODULES = [
     declarationDependencies: ["modelAuthProvider", "modelIdentity"],
     identityExports: ["CoreModelBackendRegistry", "DefaultCoreModelRuntime"],
     loadEsm: () => import("@agentlink/core/model-runtime"),
+  },
+  {
+    exportPath: "memory",
+    fileName: "memory",
+    declarationDependencies: [
+      "memory/AutonomousMemoryService",
+      "memory/InMemoryMemoryRepository",
+      "memory/memoryPolicy",
+    ],
+    identityExports: [
+      "AutonomousMemoryService",
+      "InMemoryMemoryRepository",
+      "renderMemoryEvidence",
+    ],
+    loadEsm: () => import("@agentlink/core/memory"),
   },
   {
     exportPath: "native-web-tools",
@@ -342,6 +359,37 @@ const CORE_COMPATIBILITY_FACADES = [
     path: "src/core/agentToolLoop.ts",
     exportPath: "@agentlink/core/agent-tool-loop",
     importerBaseline: [],
+  },
+  {
+    path: "src/core/memory/AutonomousMemoryService.ts",
+    exportPath: "@agentlink/core/memory",
+    importerBaseline: [
+      "src/core/memory/InMemoryMemoryRepository.contract.test.ts",
+      "src/core/memory/legacyMemoryImport.test.ts",
+      "src/storage/retrieval/AutonomousMemoryToolProvider.ts",
+      "src/storage/retrieval/LanceDbMemoryRepository.contract.test.ts",
+      "src/storage/retrieval/fixtures/lanceDbMemoryProcessFixture.ts",
+      "src/storage/retrieval/sharedMemoryStoreMigration.test.ts",
+      "src/test/memoryServiceContract.ts",
+    ],
+  },
+  {
+    path: "src/core/memory/InMemoryMemoryRepository.ts",
+    exportPath: "@agentlink/core/memory",
+    importerBaseline: [
+      "src/core/memory/InMemoryMemoryRepository.contract.test.ts",
+      "src/core/memory/legacyMemoryImport.test.ts",
+    ],
+  },
+  {
+    path: "src/core/memory/memoryPolicy.ts",
+    exportPath: "@agentlink/core/memory",
+    importerBaseline: [
+      "src/agent/sessionHandoff.ts",
+      "src/core/session/DerivedSessionRetrievalService.ts",
+      "src/storage/retrieval/AutonomousMemoryToolProvider.ts",
+      "src/storage/retrieval/LanceDbMemoryRepository.ts",
+    ],
   },
   {
     path: "src/core/modelAuthProvider.ts",

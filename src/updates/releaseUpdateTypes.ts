@@ -1,4 +1,4 @@
-export type ReleaseProduct = "vscode" | "desktop" | "cli";
+export type ReleaseProduct = "vscode" | "desktop" | "cli" | "assistant";
 export type ReleaseChannel = "stable" | "preview";
 
 export interface ReleaseUpdateMetadata {
@@ -18,6 +18,7 @@ export interface ReleaseUpdateIdentity {
   vscodeVersion?: string;
   hostLabel?: string;
   development: boolean;
+  includePreviews?: boolean;
 }
 
 export interface ReleaseUpdateCandidate {
@@ -27,6 +28,7 @@ export interface ReleaseUpdateCandidate {
   target: string;
   releaseUrl: string;
   instructionsUrl: string;
+  notes?: string;
 }
 
 export interface ReleaseUpdateState {
@@ -47,6 +49,8 @@ export interface ReleaseUpdateState {
   candidate: ReleaseUpdateCandidate | null;
   dismissedVersion: string | null;
   stale: boolean;
+  history?: ReleaseUpdateCandidate[];
+  error?: string;
 }
 
 export interface HostReleaseUpdateStatus {

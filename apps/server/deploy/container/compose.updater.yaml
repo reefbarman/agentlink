@@ -1,0 +1,74 @@
+# Standalone update supervisor. Run as its own Compose project, never merge
+# this file into the Assistant's Compose stack: it must survive app restarts.
+# The installer writes .env with immutable UPDATER_IMAGE and exact host paths.
+name: agentlink-updater
+
+services:
+  updater:
+    image: ${UPDATER_IMAGE:-agentlink-updater:local}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 128
+    command:
+      - updater
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7900"
+      - --deploy-root
+      - ${AGENTLINK_DEPLOY_DIRECTORY:?Set the fixed deployment path}
+      - --updater-root
+      - ${AGENTLINK_UPDATER_DIRECTORY:?Set the fixed updater path}
+      - --token-file
+      - /run/secrets/updater-token
+      - --job-image
+      - ${UPDATER_IMAGE:-agentlink-updater:local}
+    volumes:
+      - type: bind
+        source: ${AGENTLINK_DEPLOY_DIRECTORY:?Set the fixed deployment path}
+        target: ${AGENTLINK_DEPLOY_DIRECTORY:?Set the fixed deployment path}
+      - type: bind
+        source: ${AGENTLINK_UPDATER_DIRECTORY:?Set the fixed updater path}
+        target: ${AGENTLINK_UPDATER_DIRECTORY:?Set the fixed updater path}
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - source: updater_token
+        target: updater-token
+    networks:
+      control:
+        aliases: [updater]
+      egress: {}
+    expose:
+      - "7900"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  control:
+    name: agentlink-updater-control
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  egress:
+    name: agentlink-updater-egress
+
+secrets:
+  updater_token:
+    file: ./updater-token

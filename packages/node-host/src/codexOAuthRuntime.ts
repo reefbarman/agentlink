@@ -7,6 +7,7 @@ import {
   CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
   CodexOAuthManager,
   type CodexOAuthAccountInfo,
+  type CodexOAuthStateStorage,
 } from "./codexOAuthManager.js";
 import {
   createKeychainSecretStorage,
@@ -16,6 +17,11 @@ import {
 export interface CreateCodexOAuthRuntimeOptions {
   log?: (message: string) => void;
   keychain?: Omit<KeychainSecretStorageOptions, "account">;
+  /**
+   * Store sign-in state here instead of the shared OS keychain, for hosts
+   * without one (for example a headless server). `keychain` is then ignored.
+   */
+  storage?: CodexOAuthStateStorage;
 }
 
 export interface CodexOAuthRuntime<TContext = unknown> {
@@ -29,10 +35,13 @@ export function createCodexOAuthRuntime<TContext = unknown>(
 ): CodexOAuthRuntime<TContext> {
   const manager = new CodexOAuthManager(options.log);
   let initializationError: unknown;
-  const initialized = createKeychainSecretStorage({
-    ...options.keychain,
-    account: CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
-  })
+  const storage = options.storage
+    ? Promise.resolve(options.storage)
+    : createKeychainSecretStorage({
+        ...options.keychain,
+        account: CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
+      });
+  const initialized = storage
     .then((storage) => manager.initializeStorage(storage))
     .catch((error: unknown) => {
       initializationError = error;

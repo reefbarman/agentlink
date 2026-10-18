@@ -15,6 +15,12 @@ export interface OpenAtLoginStatus {
   requiresApproval: boolean;
 }
 
+export interface DesktopAssistantSettings {
+  origin: string;
+  defaultOrigin: string;
+  caFingerprint256: string | null;
+}
+
 export interface DesktopOAuthAccount {
   id: string;
   label: string;
@@ -53,6 +59,13 @@ contextBridge.exposeInMainWorld("agentlinkDesktop", {
     accelerator: string | null,
   ): Promise<QuickAskShortcutStatus> =>
     ipcRenderer.invoke("agentlink:quick-ask:shortcut:set", accelerator),
+  assistantSettings: (): Promise<DesktopAssistantSettings> =>
+    ipcRenderer.invoke("agentlink:assistant:get"),
+  setAssistantSettings: (update: {
+    origin: string;
+    caPem?: string | null;
+  }): Promise<DesktopAssistantSettings> =>
+    ipcRenderer.invoke("agentlink:assistant:set", update),
   openAtLogin: (): Promise<OpenAtLoginStatus> =>
     ipcRenderer.invoke("agentlink:open-at-login:get"),
   setOpenAtLogin: (enabled: boolean): Promise<OpenAtLoginStatus> =>

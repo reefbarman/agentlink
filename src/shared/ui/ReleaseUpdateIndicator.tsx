@@ -26,6 +26,7 @@ const productNames = {
   vscode: "AgentLink for VS Code",
   desktop: "AgentLink Desktop",
   cli: "AgentLink CLI",
+  assistant: "Assistant",
 };
 const statusLabels: Record<ReleaseUpdateState["status"], string> = {
   idle: "Not checked yet.",

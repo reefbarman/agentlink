@@ -1213,7 +1213,7 @@
   },
   "scripts": {
     "build": "npm run build:workspaces && npm run telemetry:inventory:generate && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build:cjs --workspace packages/node-host && npm run build --workspace apps/desktop && npm run build --workspace apps/cli",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build:cjs --workspace packages/node-host && npm run build --workspace apps/desktop && npm run build --workspace apps/cli && npm run build --workspace apps/server",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
@@ -1247,7 +1247,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run build:workspaces || e=1; npm run docs:check || e=1; npm run telemetry:inventory:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
-    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/package-voice-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/jev-replay.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/generate-release-update.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-assistant-release.test.mjs scripts/assistant-deployment-assets.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/package-voice-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/jev-replay.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/generate-release-update.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
     "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "vendor:core-sdk": "npm run build:workspaces && node scripts/vendor-agentlink-sdk.mjs",
@@ -1314,6 +1314,7 @@
   "devDependencies": {
     "@agentlink/cli": "0.23.0",
     "@agentlink/desktop": "0.27.0",
+    "@agentlink/server": "0.1.0",
     "@anthropic-ai/sandbox-runtime": "0.0.79",
     "@electron/osx-sign": "2.7.1",
     "@testing-library/preact": "^3.2.4",

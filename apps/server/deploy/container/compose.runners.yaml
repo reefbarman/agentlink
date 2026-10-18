@@ -1,0 +1,116 @@
+# Session runners: each coding task's session (its agent loop, file tools
+# and commands) runs in its own container, which sees only that task's
+# folder and its own data folder, with its own memory, CPU and process
+# limits. Model calls and web tools go back to the assistant, so no
+# sign-in, token or key enters a runner. Chats stay in the assistant.
+#
+# The runner manager is the only service with the Docker socket (which is
+# root-equivalent); the assistant asks it to start and stop runners and
+# nothing else. Runners use the command worker image.
+#
+# Once, in the deploy directory:
+#   openssl rand -hex 32 > secrets/runner-manager-token
+#   chmod 600 secrets/runner-manager-token
+#   mkdir -p data/runners   # before the first `up`, owned by you
+# .env: COMPOSE_FILE=compose.yaml:compose.runners.yaml (append others you use)
+# server.json:
+#   "runners": { "manager": { "host": "runner-manager", "port": 7700,
+#                "token": { "file": "/run/secrets/runner-manager-token" } } }
+#
+# .env settings (all optional): AGENTLINK_RUNNER_MEMORY / AGENTLINK_RUNNER_CPUS
+# / AGENTLINK_RUNNER_PIDS, each runner's limits (default 2g, 2, 512).
+#
+# Docker Desktop (the Mac mini) works the same way: its socket is also at
+# /var/run/docker.sock inside containers.
+
+services:
+  assistant:
+    networks:
+      - runners
+      - runner-manager
+    secrets:
+      - source: runner_manager_token
+        target: runner-manager-token
+    depends_on:
+      runner-manager:
+        condition: service_started
+
+  # Runners reach the internet only through the egress gateway, with their
+  # task's network preset.
+  egress-gateway:
+    networks:
+      - runners
+
+  runner-manager:
+    image: agentlink-command-worker:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    # Root only to open the Docker socket; no capabilities beyond reading
+    # the task and data folders it checks.
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    entrypoint: ["agentlink-server", "runner-manager"]
+    command:
+      - --token-file
+      - /run/secrets/runner-manager-token
+      - --image
+      - agentlink-command-worker:local
+      - --network
+      - agentlink-runners
+      - --projects-root
+      - /srv/agentlink/projects
+      - --data-root
+      - /var/lib/agentlink/runners
+      - --user
+      - ${AGENTLINK_UID:-1000}:${AGENTLINK_GID:-1000}
+      - --memory
+      - ${AGENTLINK_RUNNER_MEMORY:-2g}
+      - --cpus
+      - ${AGENTLINK_RUNNER_CPUS:-2}
+      - --pids
+      - ${AGENTLINK_RUNNER_PIDS:-512}
+    # Reached only by the assistant, on a network runners are not on.
+    networks:
+      - runner-manager
+    expose:
+      - "7700"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only, at the assistant's paths: to check the folders it is
+      # asked to mount and find them on the Docker host.
+      - ./projects:/srv/agentlink/projects:ro
+      - ./data/runners:/var/lib/agentlink/runners:ro
+    secrets:
+      - source: runner_manager_token
+        target: runner-manager-token
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  # Runners, the assistant (model and tool calls) and the egress gateway.
+  runners:
+    name: agentlink-runners
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  runner-manager:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+
+secrets:
+  runner_manager_token:
+    file: ./secrets/runner-manager-token

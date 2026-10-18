@@ -148,6 +148,13 @@ import {
   type BrowserGatewayAskAgentWebPolicyCache,
 } from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
+import {
+  AGENTLINK_ICON_PATH,
+  AGENTLINK_ICON_SIZES,
+  AGENTLINK_ICON_SVG_PATH,
+  renderBrowserGatewayIndexHtml,
+  renderBrowserGatewayPairingHtml,
+} from "../browserGatewayPages.js";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type {
@@ -547,9 +554,6 @@ const CORE_HOST_KINDS = new Set<CoreHostKind>([
   "server",
   "test",
 ]);
-const AGENTLINK_ICON_PATH = "/agentlink-icon.png";
-const AGENTLINK_ICON_SVG_PATH = "/agentlink-icon.svg";
-const AGENTLINK_ICON_SIZES = "256x256";
 
 function logHelper(message: string): void {
   process.stderr.write(`[browser-gateway-helper] ${message}\n`);
@@ -755,40 +759,6 @@ function writeHtml(
     ...headers,
   });
   res.end(body);
-}
-
-function htmlEscape(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function cssValueEscape(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "")
-    .replace(/}/g, "")
-    .replace(/<\//g, "<\\/");
-}
-
-function renderThemeStyleTag(theme: BrowserGatewayThemeSnapshot): string {
-  const declarations = Object.entries(theme.cssVariables)
-    .filter(
-      ([key, value]) =>
-        /^--vscode-[A-Za-z0-9_.-]+$/.test(key) &&
-        value.trim() &&
-        !/url\s*\(/i.test(value),
-    )
-    .map(([key, value]) => `    ${key}: ${cssValueEscape(value.trim())};`);
-  const colorScheme =
-    theme.colorScheme === "light" || theme.colorScheme === "hc-light"
-      ? "light"
-      : "dark";
-  declarations.unshift(`    color-scheme: ${colorScheme};`);
-  return `<style id="agentlink-initial-theme">\n  :root {\n${declarations.join("\n")}\n  }\n</style>`;
 }
 
 function isLoopbackAddress(addr: string | undefined): boolean {
@@ -11699,149 +11669,21 @@ export class BrowserGatewayHelper {
     dataPlaneMode: BrowserGatewayDataPlaneMode,
     askAgentOnly = false,
   ): string {
-    const assetVersion = encodeURIComponent(this.options.helperVersion);
-    return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="application-name" content="AgentLink Remote">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="AgentLink">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#4EC9B0">
-  <title>AgentLink Browser Gateway</title>
-  ${renderThemeStyleTag(initialTheme)}
-  <link rel="icon" type="image/svg+xml" href="${AGENTLINK_ICON_SVG_PATH}?v=${assetVersion}">
-  <link rel="icon" type="image/png" sizes="${AGENTLINK_ICON_SIZES}" href="${AGENTLINK_ICON_PATH}?v=${assetVersion}">
-  <link rel="apple-touch-icon" sizes="${AGENTLINK_ICON_SIZES}" href="/apple-touch-icon.png?v=${assetVersion}">
-  <link rel="manifest" href="/site.webmanifest?v=${assetVersion}">
-  <link rel="stylesheet" href="/codicon.css?v=${assetVersion}">
-  <link rel="stylesheet" href="/browser-gateway.css?v=${assetVersion}">
-</head>
-<body>
-  <div id="root"></div>
-  <script>
-    window.__AGENTLINK_BROWSER_GATEWAY__ = {
-      authToken: "",
-      currentInstanceId: ${JSON.stringify(currentInstanceId)},
-      workspaceName: ${JSON.stringify(workspaceName)},
-      routeByInstance: true,
-      askAgentOnly: ${JSON.stringify(askAgentOnly)},
-      initialTheme: ${JSON.stringify(initialTheme)},
-      dataPlaneMode: ${JSON.stringify(dataPlaneMode)}
-    };
-  </script>
-  <script type="module" src="/browser-gateway.js?v=${assetVersion}"></script>
-</body>
-</html>`;
+    return renderBrowserGatewayIndexHtml({
+      assetVersion: this.options.helperVersion,
+      config: {
+        currentInstanceId,
+        workspaceName,
+        routeByInstance: true,
+        askAgentOnly,
+        initialTheme,
+        dataPlaneMode,
+      },
+    });
   }
 
   private renderPairingHtml(errorMessage: string | null): string {
-    const errorBlock = errorMessage
-      ? `<p class="pair-error" role="alert">${htmlEscape(errorMessage)}</p>`
-      : "";
-    return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pair with AgentLink</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      background: #1e1e1e;
-      color: #d4d4d4;
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
-    }
-    .pair-card {
-      background: #252526;
-      border: 1px solid #3c3c3c;
-      border-radius: 12px;
-      padding: 32px 28px;
-      max-width: 420px;
-      width: 100%;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.35);
-    }
-    .pair-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      color: #4EC9B0;
-      margin-bottom: 18px;
-    }
-    .pair-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: #4EC9B0; }
-    h1 { margin: 0 0 6px; font-size: 20px; }
-    p { margin: 8px 0 16px; line-height: 1.5; font-size: 14px; color: #bbb; }
-    .pair-error {
-      background: rgba(244, 71, 71, 0.12);
-      border: 1px solid rgba(244, 71, 71, 0.4);
-      color: #f48771;
-      padding: 10px 12px;
-      border-radius: 8px;
-      font-size: 13px;
-    }
-    form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
-    input[name="code"] {
-      font-size: 32px;
-      letter-spacing: 8px;
-      text-align: center;
-      padding: 14px;
-      border-radius: 10px;
-      border: 1px solid #3c3c3c;
-      background: #1e1e1e;
-      color: #d4d4d4;
-      font-family: "SF Mono", Menlo, Consolas, monospace;
-    }
-    input[name="code"]:focus {
-      outline: none;
-      border-color: #4EC9B0;
-      box-shadow: 0 0 0 3px rgba(78,201,176,0.2);
-    }
-    button {
-      font-size: 15px;
-      padding: 12px;
-      border-radius: 10px;
-      border: 0;
-      background: #4EC9B0;
-      color: #111;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button:hover { background: #5ed7bf; }
-    .pair-footnote { margin-top: 12px; font-size: 12px; color: #888; }
-  </style>
-</head>
-<body>
-  <main class="pair-card">
-    <div class="pair-brand"><span class="dot"></span>AgentLink</div>
-    <h1>Pair this device</h1>
-    <p>Enter the 6-digit code shown in AgentLink on your computer. Codes expire after a few minutes.</p>
-    ${errorBlock}
-    <form method="post" action="/pair" autocomplete="off" novalidate>
-      <input
-        name="code"
-        inputmode="numeric"
-        pattern="[0-9]{6}"
-        maxlength="6"
-        placeholder="000000"
-        autofocus
-        required
-      />
-      <button type="submit">Pair device</button>
-    </form>
-    <div class="pair-footnote">After pairing, this browser stays signed in until you revoke it from the AgentLink chat.</div>
-  </main>
-</body>
-</html>`;
+    return renderBrowserGatewayPairingHtml({ errorMessage });
   }
 }
 

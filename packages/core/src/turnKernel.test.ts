@@ -556,6 +556,89 @@ describe("headless E4 turn kernel", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("authorizes pending calls again even when an older continuation lists them as authorized", async () => {
+    const backend = new ScriptedBackend([
+      toolTurn([
+        { id: "call-a", name: "update_record" },
+        { id: "call-b", name: "update_record" },
+      ]),
+      finalTurn("Updated"),
+    ]);
+    const repository = new InMemoryInteractionRepository();
+    const tokens = createTurnInteractionTokenService({
+      secret: "s".repeat(32),
+      now: () => 100,
+      createResponseId: () => "response-legacy",
+    });
+    const handler = vi.fn(async (_input: Record<string, unknown>) => ({
+      modelContent: "updated",
+    }));
+    const authorizeToolCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        decision: "require_user",
+        summary: "Approve updating this record?",
+      })
+      .mockResolvedValue({
+        decision: "allow",
+        preparedInput: { query: "host prepared" },
+      });
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => [
+        defineTool({
+          name: "update_record",
+          description: "Update a tenant record",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+            additionalProperties: false,
+          },
+          effect: "write",
+          authorization: "required",
+          handler,
+        }),
+      ],
+      authorizeToolCall,
+      interactions: repository,
+      interactionTokens: tokens,
+      createInteractionId: () => "interaction-legacy",
+      now: () => 100,
+    });
+
+    await collect(kernel.runTurn(prepared()));
+    expect(repository.record?.continuation.pendingToolCalls).toHaveLength(2);
+    // As written by a kernel that recorded authorizations by id.
+    (
+      repository.record!.continuation as unknown as {
+        authorizedToolCallIds: string[];
+      }
+    ).authorizedToolCallIds = ["call-b"];
+
+    const resume = {
+      interactionId: "interaction-legacy",
+      interactionRevision: "interaction-revision-1",
+      principal: { tenantId: "tenant-a", subjectId: "subject-a" },
+      sessionId: "session-1",
+      turnId: "turn-1",
+      expectedSessionRevision: "session-revision-2",
+      decision: "allow" as const,
+    };
+    await collect(
+      kernel.resumeInteraction({
+        ...resume,
+        responseToken: await kernel.issueInteractionResponseToken(resume),
+      }),
+    );
+
+    expect(authorizeToolCall).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([input]) => input)).toEqual([
+      { query: "call-a" },
+      { query: "host prepared" },
+    ]);
+  });
+
   it("persists and executes host-prepared private input without exposing it", async () => {
     const backend = new ScriptedBackend([
       toolTurn([{ id: "call-prepared", name: "run_prepared" }]),
@@ -655,6 +738,45 @@ describe("headless E4 turn kernel", () => {
       { operationId: "opaque-1", secret: "private launch value" },
       expect.any(Object),
     );
+  });
+
+  it("authorizes every call even when a provider reuses a tool call id", async () => {
+    const backend = new ScriptedBackend([
+      toolTurn([{ id: "call-reused", name: "run_prepared" }]),
+      toolTurn([{ id: "call-reused", name: "run_prepared" }]),
+      finalTurn("Done"),
+    ]);
+    let authorizations = 0;
+    const authorizeToolCall = vi.fn(async () => ({
+      decision: "allow" as const,
+      preparedInput: { operation: ++authorizations },
+    }));
+    const handler = vi.fn(async (_input: Record<string, unknown>) => ({
+      modelContent: "ran",
+    }));
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => [
+        defineTool({
+          name: "run_prepared",
+          description: "Run a host-prepared operation",
+          inputSchema: { type: "object", additionalProperties: true },
+          effect: "write",
+          authorization: "required",
+          handler,
+        }),
+      ],
+      authorizeToolCall,
+      now: () => 100,
+    });
+
+    await collect(kernel.runTurn(prepared()));
+
+    expect(authorizeToolCall).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([input]) => input)).toEqual([
+      { operation: 1 },
+      { operation: 2 },
+    ]);
   });
 
   it("binds Zod defaults and transforms to approval, durable continuation, and resumed execution", async () => {
@@ -1908,6 +2030,85 @@ describe("headless E4 turn kernel", () => {
         message: "Turn execution failed",
       },
     });
+    expect(JSON.stringify({ events, result })).not.toContain("private.example");
+  });
+
+  it("keeps an admitted steering message when the model call for it fails", async () => {
+    // One tool turn, then no scripted turn remains: the next call throws.
+    const backend = new ScriptedBackend([
+      toolTurn([{ id: "call-1", name: "lookup" }]),
+    ]);
+    const queue: Array<{ id: string; text: string }> = [];
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      tools: [
+        tool("lookup", async () => {
+          // Sent by the owner while the tool ran.
+          queue.push({ id: "i1", text: "Use the blue logo." });
+          return { modelContent: "ok" };
+        }),
+      ],
+    });
+    const states: Array<{ messages: readonly CoreModelMessage[] }> = [];
+
+    const { events, result } = await collect(
+      kernel.runTurn(prepared(), {
+        signal: new AbortController().signal,
+        takeInterjections: () => queue.splice(0),
+        onDurableState: (state) => states.push(state),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "user.interjected",
+        text: "Use the blue logo.",
+      }),
+    );
+    expect(backend.requests).toHaveLength(2);
+    // Saved with the turn, not dropped with the failed call.
+    expect(states.at(-1)!.messages.at(-1)).toEqual({
+      role: "user",
+      content: "Use the blue logo.",
+    });
+  });
+
+  it("reports the private cause of a failed turn to the host only", async () => {
+    const cause = new Error("upstream said no: private.example");
+    class FailingBackend extends ScriptedBackend {
+      // oxlint-disable-next-line require-yield
+      override async *stream(): AsyncGenerator<CoreModelStreamEvent> {
+        throw cause;
+      }
+    }
+    const reports: Array<{ error: unknown; code: string; turnId: string }> = [];
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(new FailingBackend([])),
+      onTurnError: (report) => {
+        reports.push({
+          error: report.error,
+          code: report.publicError.code,
+          turnId: report.turnId,
+        });
+        // A failing observer cannot change the outcome.
+        throw new Error("observer broke");
+      },
+    });
+
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "turn_execution_failed" },
+    });
+    expect(reports).toEqual([
+      {
+        error: cause,
+        code: "turn_execution_failed",
+        turnId: (result as { turnId: string }).turnId,
+      },
+    ]);
     expect(JSON.stringify({ events, result })).not.toContain("private.example");
   });
 

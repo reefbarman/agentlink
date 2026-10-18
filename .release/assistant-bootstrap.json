@@ -1,0 +1,7 @@
+{
+  "unit": "assistant",
+  "version": "0.0.0",
+  "commit": "e20770e5c70e0bb7e76143f005874485fd032f80",
+  "published": false,
+  "note": "No Assistant image or release has been published. This is the pre-Assistant main baseline used to plan the first assistant-v* release, with apps/server/package.json reserving 0.1.0. The planner ignores this record once an assistant-v* release exists. Publication still requires the coordinator's normal CI and publish gates."
+}

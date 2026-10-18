@@ -436,6 +436,23 @@ function reduceTurnEvent(
         revision,
         transcript: appendAssistantDelta(state.transcript, event),
       };
+    case "user.interjected":
+      return {
+        ...state,
+        revision,
+        transcript: [
+          ...state.transcript.map((message) =>
+            message.streaming ? { ...message, streaming: false } : message,
+          ),
+          {
+            id: `${event.sessionId}:user:${event.turnId}:${event.sequence}`,
+            role: "user",
+            text: event.text,
+            turnId: event.turnId,
+            streaming: false,
+          },
+        ],
+      };
     case "tool.requested":
       return {
         ...state,
@@ -561,10 +578,15 @@ function appendAssistantDelta(
   transcript: readonly StandaloneTranscriptMessage[],
   event: Extract<AgentTurnEvent, { type: "text.delta" }>,
 ): readonly StandaloneTranscriptMessage[] {
-  const index = transcript.findIndex(
-    (message) =>
-      message.role === "assistant" && message.turnId === event.turnId,
-  );
+  // The turn's latest message: after a user interjection, the reply that
+  // follows it is a new assistant message.
+  let index = -1;
+  for (let at = transcript.length - 1; at >= 0; at -= 1) {
+    if (transcript[at]!.turnId === event.turnId) {
+      if (transcript[at]!.role === "assistant") index = at;
+      break;
+    }
+  }
   if (index >= 0) {
     const existing = transcript[index]!;
     return [

@@ -40,6 +40,42 @@ function reduce(
 }
 
 describe("embedded agent transport", () => {
+  it("starts the reply below a message the user sent into the turn", async () => {
+    const state = reduce([
+      event(0, { type: "turn.started" }),
+      event(1, { type: "text.delta", text: "Working" }),
+      event(2, {
+        type: "user.interjected",
+        interjectionId: "queued-1",
+        text: "use blue",
+      }),
+      event(3, { type: "text.delta", text: "Switched" }),
+    ]);
+    expect(state.blocks).toEqual([
+      { type: "text", text: "Working" },
+      { type: "text", text: "Switched" },
+    ]);
+    // And the event survives the wire.
+    const frame = `${JSON.stringify({
+      schemaVersion: 1,
+      type: "event",
+      event: event(2, {
+        type: "user.interjected",
+        interjectionId: "queued-1",
+        text: "use blue",
+      }),
+    })}\n`;
+    const frames = [];
+    for await (const decoded of decodeEmbeddedAgentNdjson(
+      new Response(frame).body!,
+    )) {
+      frames.push(decoded);
+    }
+    expect(frames).toMatchObject([
+      { type: "event", event: { type: "user.interjected", text: "use blue" } },
+    ]);
+  });
+
   it("preserves ordered text and tool blocks and renders denial neutrally", () => {
     const state = reduce([
       event(0, { type: "turn.started" }),

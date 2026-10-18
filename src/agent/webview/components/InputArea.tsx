@@ -269,6 +269,12 @@ interface InputAreaProps {
   onSignIn?: ModelSelectorProps["onSignIn"];
   agentWriteApproval?: WriteApprovalSelection;
   onSetAgentWriteApproval?: (mode: WriteApprovalSelection) => void;
+  /**
+   * A host's per-chat choice (the Assistant): work on its own, or ask before
+   * every edit and command. Shown only when the handler is provided.
+   */
+  sessionApprovalMode?: "autonomous" | "ask";
+  onSetSessionApprovalMode?: (mode: "autonomous" | "ask") => void;
   commandApprovalPolicy?: CommandApprovalPolicy;
   configuredCommandApprovalPolicy?: Exclude<
     CommandApprovalPolicy,
@@ -332,6 +338,8 @@ export function InputArea({
   onSignIn,
   agentWriteApproval = "prompt",
   onSetAgentWriteApproval,
+  sessionApprovalMode = "autonomous",
+  onSetSessionApprovalMode,
   commandApprovalPolicy = "safe",
   configuredCommandApprovalPolicy = "safe",
   onSetCommandApprovalPolicy,
@@ -1874,6 +1882,31 @@ export function InputArea({
                 current={agentWriteApproval}
                 onSelect={onSetAgentWriteApproval}
               />
+            )}
+            {!contextMode && onSetSessionApprovalMode && (
+              <ToolbarControlButton
+                active={sessionApprovalMode === "ask"}
+                aria-pressed={sessionApprovalMode === "ask"}
+                className="session-approval-toggle"
+                onClick={() =>
+                  onSetSessionApprovalMode(
+                    sessionApprovalMode === "ask" ? "autonomous" : "ask",
+                  )
+                }
+                title={
+                  sessionApprovalMode === "ask"
+                    ? "Ask first is on: every file edit and command in this chat waits for your approval. Click to let it work on its own."
+                    : "This chat works on its own: edits and commands in the project run without asking (protected files, background commands and background agents still ask). Click to approve every change yourself."
+                }
+                type="button"
+              >
+                <i
+                  class={`codicon codicon-${sessionApprovalMode === "ask" ? "shield" : "zap"}`}
+                />
+                <span>
+                  {sessionApprovalMode === "ask" ? "Ask first" : "Auto-run"}
+                </span>
+              </ToolbarControlButton>
             )}
             {!contextMode && onSetCommandApprovalPolicy && (
               <ToolbarControlButton

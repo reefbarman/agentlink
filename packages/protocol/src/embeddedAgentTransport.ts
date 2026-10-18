@@ -76,6 +76,14 @@ export interface EmbeddedAgentTurnResult {
   readonly interaction?: EmbeddedAgentInteraction;
 }
 
+/** Token use of one model request, as the provider reported it. */
+export interface EmbeddedAgentUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheCreationTokens?: number;
+}
+
 export interface EmbeddedAgentTurnEventBase {
   readonly schemaVersion: 1;
   readonly sessionId: string;
@@ -108,6 +116,12 @@ export type EmbeddedAgentTurnEvent =
     })
   | (EmbeddedAgentTurnEventBase & {
       readonly type: "text.delta";
+      readonly text: string;
+    })
+  | (EmbeddedAgentTurnEventBase & {
+      /** A message the user sent while the turn ran was admitted into it. */
+      readonly type: "user.interjected";
+      readonly interjectionId: string;
       readonly text: string;
     })
   | (EmbeddedAgentTurnEventBase & {
@@ -147,7 +161,12 @@ export type EmbeddedAgentTurnEvent =
       readonly sessionRevision: string;
     })
   | (EmbeddedAgentTurnEventBase & {
-      readonly type: "usage.updated" | "execution.updated";
+      /** One model request finished; `usage` is that request's. */
+      readonly type: "usage.updated";
+      readonly usage?: EmbeddedAgentUsage;
+    })
+  | (EmbeddedAgentTurnEventBase & {
+      readonly type: "execution.updated";
     })
   | (EmbeddedAgentTurnEventBase & {
       readonly type:
@@ -880,6 +899,12 @@ export function reduceEmbeddedAgentTurnEvent(
       };
     case "text.delta":
       return { ...base, blocks: appendText(base.blocks, event.text) };
+    case "user.interjected":
+      // The user's own message; surfaces show it where they keep the
+      // transcript. The assistant's reply continues in a new text block.
+      return base.blocks.at(-1)?.type === "text"
+        ? { ...base, blocks: [...base.blocks, { type: "text", text: "" }] }
+        : base;
     case "tool.requested":
       return {
         ...base,
@@ -976,9 +1001,10 @@ function isEmbeddedAgentTurnEvent(
   }
   switch (value.type) {
     case "turn.started":
-    case "usage.updated":
     case "execution.updated":
       return true;
+    case "usage.updated":
+      return value.usage === undefined || isEmbeddedAgentUsage(value.usage);
     case "model.resolved":
       return isModelReference(value.model);
     case "thinking.started":
@@ -997,6 +1023,10 @@ function isEmbeddedAgentTurnEvent(
       );
     case "text.delta":
       return typeof value.text === "string";
+    case "user.interjected":
+      return (
+        isNonEmptyString(value.interjectionId) && typeof value.text === "string"
+      );
     case "tool.requested":
     case "tool.started":
     case "tool.completed":
@@ -1023,6 +1053,19 @@ function isEmbeddedAgentTurnEvent(
     default:
       return false;
   }
+}
+
+function isEmbeddedAgentUsage(value: unknown): value is EmbeddedAgentUsage {
+  const count = (field: unknown) =>
+    typeof field === "number" && Number.isFinite(field) && field >= 0;
+  return (
+    isRecord(value) &&
+    count(value.inputTokens) &&
+    count(value.outputTokens) &&
+    (value.cacheReadTokens === undefined || count(value.cacheReadTokens)) &&
+    (value.cacheCreationTokens === undefined ||
+      count(value.cacheCreationTokens))
+  );
 }
 
 function isEmbeddedAgentTurnResult(

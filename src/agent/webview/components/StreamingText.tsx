@@ -235,13 +235,14 @@ function addCodeBlockCopyButtons(container: HTMLElement) {
 
 function addExternalLinkFlourishes(container: HTMLElement) {
   container.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((link) => {
-    let protocol: string;
-    try {
-      protocol = new URL(link.href).protocol;
-    } catch {
-      return;
-    }
-    if (protocol !== "http:" && protocol !== "https:") return;
+    // The href as written: `link.href` resolves a relative file path against
+    // the page, which in a browser makes it look like an http(s) link too.
+    if (!/^https?:\/\//iu.test(link.getAttribute("href") ?? "")) return;
+
+    // Web links open in a new tab, so the chat stays open in the browser
+    // surfaces (VS Code's webview opens them externally either way).
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
 
     const icon = document.createElement("span");
     icon.className =

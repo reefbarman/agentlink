@@ -20,6 +20,11 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_TASK_BYTES = 8 * 1024;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_STEERING_MESSAGES = 8;
+/**
+ * Tool names come from the model before the engine checks them, so only
+ * identifier-shaped names are recorded; anything else is reported unnamed.
+ */
+const REPORTABLE_TOOL_NAME = /^[A-Za-z0-9_.:-]{1,128}$/u;
 
 export type WorkspaceBackgroundLifecycle =
   | "queued"
@@ -166,6 +171,12 @@ export interface CreateWorkspaceBackgroundSupervisorOptions {
     readonly parentSessionId: string;
     readonly childSessionId: string;
   }) => void;
+  /**
+   * Called synchronously after a child's lifecycle, phase, or current tool
+   * changes. Output deltas alone never fire it. Listener failures are ignored
+   * so a subscriber cannot break supervision.
+   */
+  readonly onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
   readonly runTurn: (
     childSessionId: string,
     message: string,
@@ -188,10 +199,21 @@ export interface CreateWorkspaceBackgroundSupervisorOptions {
   ) => Promise<void>;
 }
 
+export interface WorkspaceBackgroundChange {
+  readonly parentSessionId: string;
+  readonly childSessionId: string;
+  readonly lifecycle: WorkspaceBackgroundLifecycle;
+  readonly phase: BackgroundAgentRuntimePhase;
+  readonly resultState: BackgroundResultState;
+  readonly currentTool?: string;
+}
+
 interface LiveBackgroundChild {
   readonly controller: AbortController;
   running?: Promise<void>;
   streamedOutput: boolean;
+  /** Tool calls started but not yet completed or failed, in start order. */
+  readonly activeTools: Map<string, string | undefined>;
 }
 
 interface PendingHostApproval {
@@ -299,9 +321,8 @@ export class WorkspaceBackgroundSupervisor {
         MAX_MESSAGE_BYTES,
         "message",
       );
-      if (request.writeScopes.length === 0) {
-        throw new Error("background_write_scope_required");
-      }
+      // No write scopes makes a read-only child (for example a reviewer):
+      // `assertWriteAllowed` refuses every write it attempts.
       const scopes = await this.resolveScopes(
         request.readScopes,
         request.writeScopes,
@@ -555,6 +576,27 @@ export class WorkspaceBackgroundSupervisor {
     return cloneRecord(this.requireOwned(request));
   }
 
+  /**
+   * Forget every child of a foreground session that is being deleted: their
+   * records and queued steering leave memory and the state file. Refused
+   * while any of them is still running. Returns the children's session IDs,
+   * which the caller deletes from the session store.
+   */
+  async forgetParent(parentSessionId: string): Promise<readonly string[]> {
+    const children = [...this.records.values()].filter(
+      (record) => record.parentSessionId === parentSessionId,
+    );
+    if (children.some(isActive)) throw new Error("background_child_running");
+    for (const child of children) {
+      this.records.delete(child.childSessionId);
+      this.steering.delete(child.childSessionId);
+      this.live.delete(child.childSessionId);
+      this.notifyWaiters(child.childSessionId);
+    }
+    if (children.length > 0) await this.persist();
+    return children.map((child) => child.childSessionId);
+  }
+
   assertWriteAllowed(sessionId: string, relativePath: string): boolean {
     const child = this.records.get(sessionId);
     if (child) {
@@ -612,6 +654,7 @@ export class WorkspaceBackgroundSupervisor {
     const live = existing ?? {
       controller: new AbortController(),
       streamedOutput: false,
+      activeTools: new Map<string, string | undefined>(),
     };
     this.live.set(childSessionId, live);
     const running = this.executeRun(
@@ -647,10 +690,14 @@ export class WorkspaceBackgroundSupervisor {
   ): Promise<void> {
     const record = this.requireRecord(childSessionId);
     const live = this.live.get(childSessionId);
-    if (live) live.streamedOutput = false;
+    if (live) {
+      live.streamedOutput = false;
+      live.activeTools.clear();
+    }
     this.update(childSessionId, {
       lifecycle: "running",
       phase: "waiting_for_provider",
+      currentTool: undefined,
       startedAt: record.startedAt ?? this.now(),
     });
     await this.persist();
@@ -738,15 +785,34 @@ export class WorkspaceBackgroundSupervisor {
   }
 
   private captureEvent(childSessionId: string, event: AgentTurnEvent): void {
+    // A stopped run may still deliver late events; terminal state is final.
+    if (isTerminal(this.records.get(childSessionId))) return;
+    const live = this.live.get(childSessionId);
     if (event.type === "text.delta") {
-      const live = this.live.get(childSessionId);
       if (live) live.streamedOutput = true;
       this.appendOutput(childSessionId, event.text);
-      this.update(childSessionId, { phase: "responding" });
+      this.update(childSessionId, {
+        phase: "responding",
+        currentTool: undefined,
+      });
     } else if (event.type === "tool.started") {
+      const toolName = REPORTABLE_TOOL_NAME.test(event.toolName)
+        ? event.toolName
+        : undefined;
+      live?.activeTools.set(event.toolCallId, toolName);
       this.update(childSessionId, {
         phase: "executing_tool",
-        currentTool: event.toolName,
+        currentTool: toolName,
+      });
+    } else if (
+      event.type === "tool.completed" ||
+      event.type === "tool.failed"
+    ) {
+      live?.activeTools.delete(event.toolCallId);
+      const remaining = [...(live?.activeTools.values() ?? [])];
+      this.update(childSessionId, {
+        phase: remaining.length > 0 ? "executing_tool" : "waiting_for_provider",
+        currentTool: remaining.at(-1),
       });
     } else if (event.type === "model.resolved") {
       this.update(childSessionId, { phase: "waiting_for_provider" });
@@ -792,11 +858,31 @@ export class WorkspaceBackgroundSupervisor {
     patch: Partial<WorkspaceBackgroundRecord>,
   ): void {
     const current = this.requireRecord(childSessionId);
-    this.records.set(childSessionId, {
+    const next: WorkspaceBackgroundRecord = {
       ...current,
       ...patch,
       updatedAt: this.now(),
-    });
+    };
+    this.records.set(childSessionId, next);
+    if (
+      this.options.onAgentChanged &&
+      (next.lifecycle !== current.lifecycle ||
+        next.phase !== current.phase ||
+        next.currentTool !== current.currentTool)
+    ) {
+      try {
+        this.options.onAgentChanged({
+          parentSessionId: next.parentSessionId,
+          childSessionId,
+          lifecycle: next.lifecycle,
+          phase: next.phase,
+          resultState: next.resultState,
+          ...(next.currentTool ? { currentTool: next.currentTool } : {}),
+        });
+      } catch {
+        // Subscribers are best effort; supervision must not depend on them.
+      }
+    }
   }
 
   private requireOwned(
