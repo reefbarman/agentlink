@@ -208,12 +208,13 @@ export function proxyAuthorizationHeader(
 }
 
 /**
- * The gateway's tunnel check: the signed policy in the credentials, or for
- * a request without credentials the gateway's own list (as
- * `dependencies`). Bad credentials are refused, never treated as absent.
- * A request without credentials that the list refuses is challenged (407)
- * rather than refused outright, so a client that only sends credentials
- * when asked (Chromium, for browser research) retries with its policy.
+ * The gateway's tunnel check when it has a policy key: only the signed
+ * policy in the credentials decides. A request without credentials is
+ * always challenged (407), never given the dependency list: otherwise a
+ * command in an Off project could drop the credentials from its proxy URL
+ * and still reach the package registries. A client that only sends
+ * credentials when asked (Chromium, for browser research) retries with its
+ * policy. Bad credentials are refused, never treated as absent.
  */
 export function egressPolicyAuthorizer(
   key: Buffer,
@@ -224,6 +225,13 @@ export function egressPolicyAuthorizer(
 }) => EgressAuthorization {
   return ({ hostname, proxyAuthorization }) => {
     const policy = verifyNetworkPolicyHeader(key, proxyAuthorization);
+    if (policy === undefined) {
+      return {
+        allowed: false,
+        status: 407,
+        reason: "proxy credentials are required",
+      };
+    }
     if (policy === "invalid") {
       return {
         allowed: false,
@@ -231,19 +239,9 @@ export function egressPolicyAuthorizer(
         reason: "the proxy credentials are not valid",
       };
     }
-    const decision = networkPolicyAllows(
-      policy ?? { preset: "dependencies", allow: [] },
-      hostname,
-      dependencies,
-    );
+    const decision = networkPolicyAllows(policy, hostname, dependencies);
     if (decision.allowed) return decision;
-    return {
-      allowed: false,
-      status: policy ? 403 : 407,
-      reason: policy
-        ? decision.reason
-        : "not on the AgentLink egress allowlist",
-    };
+    return { allowed: false, status: 403, reason: decision.reason };
   };
 }
 

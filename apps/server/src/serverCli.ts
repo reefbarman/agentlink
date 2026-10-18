@@ -213,8 +213,9 @@ Commands:
                    variable (host names or *.domain wildcards).
                    --policy-key-file (or AGENTLINK_EGRESS_POLICY_KEY_FILE)
                    names the key the server signs per-project network
-                   policies with; requests carrying one follow it, and
-                   requests without credentials keep this allowlist.
+                   policies with; requests must then carry one (any other
+                   request gets a 407), and this allowlist is what the
+                   Dependencies preset allows.
                    --no-default-allow drops the built-in set. Anything else,
                    plain HTTP, IP addresses, ports other than 443, and names
                    that resolve to private addresses are refused with a 403

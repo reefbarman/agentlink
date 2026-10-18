@@ -144,27 +144,37 @@ req.end();
 egress() { compose exec -T command-worker node -e "$probe" "$1" "${2:-}"; }
 # A project's signed network policy, as the assistant puts it in the
 # proxy credentials (the key is passed in for this check only).
+# "header" prints a Proxy-Authorization value, "url" a proxy URL with it.
 signed() {
   compose exec -T -e "KEY=$(cat "$work/secrets/egress-policy-key")" command-worker node -e '
 const crypto = require("crypto");
 const user = "alnp1." + Buffer.from(JSON.stringify({ p: process.argv[1], a: [] })).toString("base64url");
 const pass = crypto.createHmac("sha256", Buffer.from(process.env.KEY.trim(), "hex")).update(user).digest("base64url");
-console.log("Basic " + Buffer.from(user + ":" + pass).toString("base64"));
-' "$1"
+if (process.argv[2] === "url") console.log("http://" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) + "@egress-gateway:3128");
+else console.log("Basic " + Buffer.from(user + ":" + pass).toString("base64"));
+' "$1" "${2:-header}"
 }
+dependencies_policy="$(signed dependencies)"
 allowed=""
 for _ in $(seq 1 15); do
-  allowed="$(egress registry.npmjs.org:443)"
+  allowed="$(egress registry.npmjs.org:443 "$dependencies_policy")"
   case "$allowed" in "200 "*) break ;; esac
   sleep 1
 done
 case "$allowed" in "200 "*) ;; *) fail "gateway did not open a tunnel to npm: $allowed" ;; esac
-pass "gateway tunnels to an allowlisted registry"
-for target in example.com:443 assistant:8443 meridian:3456 registry.npmjs.org:80 1.1.1.1:443; do
+pass "gateway tunnels to an allowlisted registry with a signed policy"
+# Without credentials nothing gets through, not even the dependency hosts:
+# an Off project's command must not be able to drop its credentials.
+for target in registry.npmjs.org:443 example.com:443 assistant:8443 1.1.1.1:443; do
   result="$(egress "$target")"
+  case "$result" in "407 "*) ;; *) fail "gateway did not challenge an unsigned request to $target: $result" ;; esac
+done
+pass "gateway challenges every request without credentials (407)"
+for target in example.com:443 assistant:8443 meridian:3456 registry.npmjs.org:80 1.1.1.1:443; do
+  result="$(egress "$target" "$dependencies_policy")"
   case "$result" in "403 "*) ;; *) fail "gateway allowed $target: $result" ;; esac
 done
-case "$(egress example.com:443)" in *example.com*) ;; *) fail "the refusal does not name the host" ;; esac
+case "$(egress example.com:443 "$dependencies_policy")" in *example.com*) ;; *) fail "the refusal does not name the host" ;; esac
 pass "gateway refuses unlisted hosts, sibling containers, other ports and IP addresses, naming the host"
 open_policy="$(signed open)"
 case "$(egress example.com:443 "$open_policy")" in "200 "*) ;; *) fail "the open-web policy did not reach example.com" ;; esac
@@ -178,7 +188,7 @@ pass "a signed off policy blocks even the dependency hosts"
 forged="Basic $(printf '%s' 'alnp1.eyJwIjoib3BlbiIsImEiOltdfQ:forged' | base64 | tr -d '\n')"
 case "$(egress example.com:443 "$forged")" in "407 "*) ;; *) fail "the gateway accepted a forged policy" ;; esac
 pass "the gateway rejects a policy that is not signed with its key (407)"
-version="$(compose exec -T -e HOME=/tmp -e HTTPS_PROXY=http://egress-gateway:3128 \
+version="$(compose exec -T -e HOME=/tmp -e "HTTPS_PROXY=$(signed dependencies url)" \
   -e npm_config_update_notifier=false \
   command-worker npm view --cache /tmp/npm-cache esbuild@0.25.0 version)"
 [ "$version" = "0.25.0" ] || fail "npm through the gateway failed: $version"

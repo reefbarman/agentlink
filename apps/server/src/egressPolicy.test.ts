@@ -209,14 +209,21 @@ describe("egress gateway with per-project policies", () => {
         as({ preset: "dependencies", allow: [] }),
       ),
     ).toBe("HTTP/1.1 200 Connection Established");
-    // No credentials: the gateway's own list, as before.
-    expect(await connect(gateway.port, "registry.npmjs.org:443")).toBe(
-      "HTTP/1.1 200 Connection Established",
-    );
-    // Challenged, so a browser that only answers a challenge can retry.
-    expect(await connect(gateway.port, "news.example.net:443")).toBe(
-      "HTTP/1.1 407 Blocked news.example.net: not on the AgentLink egress allowlist",
-    );
+    // An Off project's command that drops its credentials gets nothing,
+    // not even the dependency hosts: every unsigned request is challenged,
+    // so a browser that only answers a challenge can retry with its policy.
+    for (const target of ["registry.npmjs.org:443", "news.example.net:443"]) {
+      expect(await connect(gateway.port, target)).toBe(
+        `HTTP/1.1 407 Blocked ${target.split(":")[0]}: proxy credentials are required`,
+      );
+    }
+    expect(
+      await connect(
+        gateway.port,
+        "registry.npmjs.org:443",
+        as({ preset: "off", allow: [] }),
+      ),
+    ).toMatch(/^HTTP\/1\.1 403 Blocked/u);
     // Open web never reaches an address literal either.
     expect(await connect(gateway.port, "192.168.50.221:443", open)).toMatch(
       /^HTTP\/1\.1 403 Blocked/u,
