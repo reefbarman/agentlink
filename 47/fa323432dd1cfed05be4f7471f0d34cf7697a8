@@ -1,0 +1,39 @@
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 942-950
+packages/core/src/agentToolLoop.test.ts
+  h_e08a86bb3a33a2 384-422
+packages/core/src/agentToolLoop.ts
+  h_e08a86bb3a33a2 130-134,180,200-209
+  s_204d0fd335b0cf::t_9f0a8e5167e288 129,181-199
+packages/core/src/turnKernel.test.ts
+  s_0c4257378842ed::t_a7b220a4f4d0bf 2036-2076
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "47fa323432dd1cfed05be4f7471f0d34cf7697a8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0c4257378842ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52ad7d7e-188e-4af3-a27f-dbf7a623078e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_204d0fd335b0cf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bffc1fc1-d5f0-42d2-b657-665b478fd1bf",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
