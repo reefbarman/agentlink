@@ -1,0 +1,25 @@
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 3564-3568,3570,3575-3639,3654-3666,3668,3671,3683,3706,3711-3712,3717-3736
+  s_bed82f14df0433::t_eccc7e7be0f257 3640-3643,3647-3648,3667,3670,3673,3684-3685,3690-3691,3700-3703,3707-3708,3713-3714,3737-3738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c90adcdca4821021cf438e636e37c26022fa5824",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_bed82f14df0433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3feae47-36fe-458e-a5b5-a123a8e5a9e2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
