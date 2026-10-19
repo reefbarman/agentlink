@@ -37,7 +37,7 @@ src/browser-gateway/browserGatewayPages.ts
 resources/builtin-skills/documentation/references/getting-started.md
   h_e08a86bb3a33a2 65
 CHANGELOG.md
-  h_e08a86bb3a33a2 5
+  h_e08a86bb3a33a2 5-6
 apps/server/src/accessPages.ts
   h_e08a86bb3a33a2 130
 apps/desktop/src/assistantPreload.ts
