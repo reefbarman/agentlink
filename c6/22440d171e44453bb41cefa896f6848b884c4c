@@ -1,0 +1,94 @@
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 2530-2587
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 88
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 37,2421-2422,2430-2440
+  s_674a24c95c8c2a::t_f9d2ff919347c2 2420,2423,2441
+src/agent/ChatTabHostCoordinator.ts
+  h_e08a86bb3a33a2 10,49,106,115-116
+  s_0b5d8caa69962f::t_f140a3f032b37e 114,117
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 291-294,6384-6387,6391,6428-6442
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 80,3744-3751,4272-4276
+src/agent/forkUserMessage.test.ts
+  h_e08a86bb3a33a2 1-89
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 78-82,5204-5205,5216-5217,8051-8063,8085-8087,8160-8162,8234-8241
+  s_0b5d8caa69962f::t_dc5f600765aa8e 5203,5206,5214-5215,5218,8084,8088
+src/agent/ChatTabHostCoordinator.test.ts
+  h_e08a86bb3a33a2 10,83,132,138-157
+  s_0b5d8caa69962f::t_c071b0b9455110 158-159
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 5946-5980
+src/agent/webview/components/ChatView.tsx
+  h_e08a86bb3a33a2 18,91,131,455
+src/shared/editInFork.ts
+  h_e08a86bb3a33a2 1-46
+src/agent/forkUserMessage.ts
+  h_e08a86bb3a33a2 1-82
+src/shared/editInFork.test.ts
+  h_e08a86bb3a33a2 1-43
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 9976,10981-11052
+  s_293b2d6e44d0cc::t_ca855a685e4230 11053-11054
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_e08a86bb3a33a2 28,67-68,630-656,841-845,1002,1083,1106-1107,1131-1148
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 166-167,192,445-456
+src/agent/webview/components/TranscriptMessageList.test.ts
+  h_e08a86bb3a33a2 2137-2203
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 126,2321-2322,5676-5678,5680,5703-5704,5713,5738,5772-5778,5782-5784,10274-10278
+  s_0b5d8caa69962f::t_be5a5bce1f9eb4 2320,2323-2324,5675,5679,5699-5702,5705
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/release-notes.md
+  s_3da66def81f26b::t_f6c5307742ee86 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c622440d171e44453bb41cefa896f6848b884c4c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0b5d8caa69962f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9bdbb3b6-413b-48b3-ab2a-9933b5def13c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_293b2d6e44d0cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b66d21ab-b0e3-441d-b967-7dc85feaff45",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_3da66def81f26b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5f90fe5b-2497-4c84-b5a9-34e98fd221ad",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_674a24c95c8c2a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6385a191-d403-423b-8ea1-1e5e586d9c44",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
