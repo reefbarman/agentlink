@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "afc6dd932fef8e0c714ad47ef855545324685eb1",
-  "createdAt": "2026-10-19T00:56:01.243Z",
+  "sourceSha": "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
+  "createdAt": "2026-10-19T01:11:27.061Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.40.0",
-      "baselineRef": "v1.40.0",
-      "reserved": "1.40.3",
-      "commits": ["afc6dd932fef8e0c714ad47ef855545324685eb1"],
+      "published": "1.41.0",
+      "baselineRef": "v1.41.0",
+      "reserved": "1.41.0",
+      "commits": ["974a85c526a5bbcf09537e2ae2c35c4443d82aca"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.41.0",
+      "version": "1.42.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.41.0",
+      "tag": "v1.42.0",
       "notes": [
         {
-          "sha": "afc6dd932fef8e0c714ad47ef855545324685eb1",
-          "subject": "feat(chat): fork a conversation into a new tab with /fork",
-          "summary": "Adds a /fork slash command that copies an idle chat's transcript, mode, model and skills into a new independent tab, in VS Code chat and the browser workspace via a new /api/tabs/fork route.PR-free of approvals and checkpoints.</parameter>",
+          "sha": "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
+          "subject": "feat(chat): fork an in-progress chat with /fork",
+          "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.28.0",
-      "baselineRef": "desktop-v0.28.0",
-      "reserved": "0.28.0",
-      "commits": ["afc6dd932fef8e0c714ad47ef855545324685eb1"],
+      "published": "0.29.0",
+      "baselineRef": "desktop-v0.29.0",
+      "reserved": "0.29.0",
+      "commits": ["974a85c526a5bbcf09537e2ae2c35c4443d82aca"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.29.0",
+      "version": "0.30.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.29.0",
+      "tag": "desktop-v0.30.0",
       "notes": [
         {
-          "sha": "afc6dd932fef8e0c714ad47ef855545324685eb1",
-          "subject": "feat(chat): fork a conversation into a new tab with /fork",
-          "summary": "Adds a /fork slash command that copies an idle chat's transcript, mode, model and skills into a new independent tab, in VS Code chat and the browser workspace via a new /api/tabs/fork route.PR-free of approvals and checkpoints.</parameter>",
+          "sha": "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
+          "subject": "feat(chat): fork an in-progress chat with /fork",
+          "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
           "breaking": false
         }
       ]
@@ -82,26 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.1.0",
-      "baselineRef": "assistant-v0.1.0",
-      "reserved": "0.1.0",
-      "commits": ["afc6dd932fef8e0c714ad47ef855545324685eb1"],
+      "published": "0.2.0",
+      "baselineRef": "assistant-v0.2.0",
+      "reserved": "0.2.0",
+      "commits": ["974a85c526a5bbcf09537e2ae2c35c4443d82aca"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.2.0",
-      "intentFile": ".release/intents/assistant.json",
+      "tag": "assistant-v0.3.0",
       "notes": [
         {
-          "sha": "afc6dd932fef8e0c714ad47ef855545324685eb1",
-          "subject": "feat(chat): fork a conversation into a new tab with /fork",
-          "summary": "Adds a /fork slash command that copies an idle chat's transcript, mode, model and skills into a new independent tab, in VS Code chat and the browser workspace via a new /api/tabs/fork route.PR-free of approvals and checkpoints.</parameter>",
+          "sha": "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
+          "subject": "feat(chat): fork an in-progress chat with /fork",
+          "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
           "breaking": false
         }
       ]
@@ -112,6 +111,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Adds a /fork slash command that copies an idle chat's transcript, mode, model and skills into a new independent tab, in VS Code chat and the browser workspace via a new /api/tabs/fork route.PR-free of approvals and checkpoints.</parameter>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "974a85c526a5bbcf09537e2ae2c35c4443d82aca": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

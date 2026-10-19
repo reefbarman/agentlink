@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.42.0
+
 - `/fork` now works while a chat is still running. The original keeps going, and the fork is the chat as if it had been stopped at that moment: streamed text and finished tool results are kept, and tools still running are marked as interrupted. Picking `/fork` from the command menu now runs it straight away.
 
 ## 1.41.0
