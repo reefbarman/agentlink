@@ -288,6 +288,10 @@ import {
   migrateLegacyTodoContinuationTurnIndex,
   TODO_AUTO_CONTINUE_PROMPT,
 } from "@agentlink/protocol/todo-continuation";
+import {
+  resolveForkUserMessageIndex,
+  type ForkSessionOptions,
+} from "./forkUserMessage.js";
 import type { HookRuntime } from "../core/hooks/HookRuntime.js";
 import {
   buildDeterministicSessionHandoffMarkdown,
@@ -6377,9 +6381,14 @@ export class AgentSessionManager {
    * state, queued messages, checkpoints, handoff lineage, fleet metadata,
    * approval authority or the human decision record, so nothing that resumes
    * or authorizes work travels with the copied history.
+   *
+   * With `beforeUserMessage`, the fork keeps only the history before that
+   * visible user message so the user can edit and resend it. Workspace files
+   * are never touched; checkpoint revert remains the way to restore them.
    */
   async forkSession(
     sourceSessionId: string,
+    options: ForkSessionOptions = {},
   ): Promise<
     | { ok: true; session: AgentSession }
     | { ok: false; code: string; message: string }
@@ -6416,6 +6425,21 @@ export class AgentSessionManager {
       record.messages,
       stoppedRunState,
     ).messages;
+    if (options.beforeUserMessage) {
+      const cutIndex = resolveForkUserMessageIndex(
+        record.messages,
+        options.beforeUserMessage,
+      );
+      if (cutIndex === undefined) {
+        return {
+          ok: false,
+          code: "fork_message_not_found",
+          message:
+            "That message could not be matched in this conversation. Reload the chat and try again.",
+        };
+      }
+      record.messages = record.messages.slice(0, cutIndex);
+    }
     record.summary.messageCount = record.messages.length;
 
     const forkId = randomId();

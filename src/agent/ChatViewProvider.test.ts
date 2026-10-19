@@ -9973,6 +9973,7 @@ describe("chat tab host routing", () => {
       close: vi.fn(),
       loadSession: vi.fn(),
       reorder: vi.fn(),
+      forkTab: vi.fn(),
     };
     const chatTabController = {
       getFocusedTabId: vi.fn(() => "tab-1"),
@@ -10975,6 +10976,80 @@ describe("chat tab host routing", () => {
       "modes",
       "commands",
     ]);
+  });
+
+  it("forks before an edited user message and restores it into the fork's composer", async () => {
+    const { coordinator, handle, postMessage, provider } =
+      await makeTabRoutingProvider();
+    const publicationOrder: string[] = [];
+    coordinator.forkTab.mockResolvedValueOnce({
+      ok: true,
+      tab: { id: "tab-2" },
+      session: { id: "fork-1" },
+    });
+    const internals = provider as unknown as {
+      sendChatWorkspaceUpdate(): void;
+      postSessionLoaded(session: unknown, options: unknown): void;
+      sendInitialState(): void;
+      sendModelsUpdate(): Promise<void>;
+      sendModesUpdate(): Promise<void>;
+      sendSlashCommands(): Promise<void>;
+    };
+    internals.sendChatWorkspaceUpdate = vi.fn();
+    internals.postSessionLoaded = vi.fn(() => publicationOrder.push("session"));
+    internals.sendInitialState = vi.fn();
+    internals.sendModelsUpdate = vi.fn(async () => undefined);
+    internals.sendModesUpdate = vi.fn(async () => undefined);
+    internals.sendSlashCommands = vi.fn(async () => {
+      publicationOrder.push("commands");
+    });
+    postMessage.mockImplementation((message: { type?: string }) => {
+      if (message.type === "agentInjectPrompt") publicationOrder.push("inject");
+    });
+
+    await handle({
+      command: "chatTabFork",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      editInFork: {
+        userMessagesAfter: 2,
+        expectedText: "[Attached: src/a.ts]\nFix the parser",
+        prompt: "Fix the parser",
+        attachments: ["src/a.ts"],
+      },
+    });
+
+    expect(coordinator.forkTab).toHaveBeenCalledWith(
+      { controllerEpoch: "epoch-1", tabId: "tab-1", sessionId: "session-1" },
+      {},
+      {
+        beforeUserMessage: {
+          userMessagesAfter: 2,
+          expectedText: "[Attached: src/a.ts]\nFix the parser",
+        },
+      },
+    );
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentInjectPrompt",
+      prompt: "Fix the parser",
+      attachments: ["src/a.ts"],
+    });
+    expect(publicationOrder).toEqual(["session", "commands", "inject"]);
+  });
+
+  it("rejects an invalid edit-in-fork request without forking", async () => {
+    const { coordinator, handle } = await makeTabRoutingProvider();
+
+    await handle({
+      command: "chatTabFork",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      editInFork: { userMessagesAfter: -1, expectedText: "x", prompt: "x" },
+    });
+
+    expect(coordinator.forkTab).not.toHaveBeenCalled();
   });
 
   it("rejects omitted or stale tab identity with the latest snapshot", async () => {

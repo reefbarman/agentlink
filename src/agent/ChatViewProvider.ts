@@ -75,6 +75,11 @@ import type {
 import type { AgentSession } from "./AgentSession.js";
 import type { ChatTabController } from "./ChatTabController.js";
 import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
+import { toForkSessionOptions } from "./forkUserMessage.js";
+import {
+  parseEditInForkRequest,
+  type EditInForkRequest,
+} from "../shared/editInFork.js";
 import type { ChatPaneConnection } from "./ChatPaneConnection.js";
 import type { ChatPaneLease } from "./ChatPaneAuthorityController.js";
 import type { ChatTabPanelHost } from "./ChatTabPanelHost.js";
@@ -5195,7 +5200,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public async submitBrowserForkTab(address: ChatTabActionAddress): Promise<{
+  public async submitBrowserForkTab(
+    address: ChatTabActionAddress,
+    editInFork?: EditInForkRequest,
+  ): Promise<{
     ok: boolean;
     sessionId?: string;
     projectId?: string;
@@ -5203,9 +5211,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     controllerEpoch?: string;
     reason?: string;
   }> {
-    const result = await this.chatTabHostCoordinator?.forkTab(address, {
-      focus: false,
-    });
+    const result = await this.chatTabHostCoordinator?.forkTab(
+      address,
+      { focus: false },
+      toForkSessionOptions(editInFork),
+    );
     if (!result) return { ok: false, reason: "tab_host_unavailable" };
     if (!result.ok) {
       return {
@@ -8038,6 +8048,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const tabIds = Array.isArray(msg.tabIds)
       ? msg.tabIds.filter((value): value is string => typeof value === "string")
       : [];
+    const editInFork =
+      command === "chatTabFork" && msg.editInFork !== undefined
+        ? parseEditInForkRequest(msg.editInFork)
+        : undefined;
+    if (command === "chatTabFork" && msg.editInFork !== undefined) {
+      if (!editInFork) {
+        this.log("[chat-tabs] edit-in-fork rejected: invalid request");
+        vscode.window.showWarningMessage(
+          "Could not edit this message in a fork: the request was invalid.",
+        );
+        return;
+      }
+    }
 
     const result =
       command === "chatTabFocus"
@@ -8058,7 +8081,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 : command === "chatTabReorder" && Array.isArray(msg.tabIds)
                   ? await coordinator.reorder(address, tabIds)
                   : command === "chatTabFork"
-                    ? await coordinator.forkTab(address)
+                    ? await coordinator.forkTab(
+                        address,
+                        {},
+                        toForkSessionOptions(editInFork),
+                      )
                     : null;
 
     if (!result) {
@@ -8130,7 +8157,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (result.reason === "fork_failed") {
         this.log(`[chat-tabs] fork failed: ${result.message}`);
         vscode.window.showWarningMessage(
-          `Could not fork this chat: ${result.message}`,
+          editInFork
+            ? `Could not edit this message in a fork: ${result.message}`
+            : `Could not fork this chat: ${result.message}`,
         );
         return;
       }
@@ -8202,6 +8231,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.sendModelsUpdate();
     await this.sendModesUpdate();
     await this.sendSlashCommands();
+    if (editInFork) {
+      // The fork is now the focused tab, so this lands in its composer.
+      this.postMessage({
+        type: "agentInjectPrompt",
+        prompt: editInFork.prompt,
+        attachments: editInFork.attachments,
+      } as ExtensionToWebview);
+    }
   }
 
   private sendBgSessionsUpdate(): void {

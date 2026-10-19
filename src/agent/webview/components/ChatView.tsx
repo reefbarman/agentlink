@@ -15,6 +15,7 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ComponentChildren } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
+import type { EditInForkRequest } from "../../../shared/editInFork";
 import type { OpenImageInEditor } from "./ImagePreview";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { useAutoScroll } from "./useAutoScroll";
@@ -87,6 +88,7 @@ interface ChatViewProps {
     checkpointId: string,
     scope: "turn" | "all",
   ) => void;
+  onEditUserMessageInFork?: (request: EditInForkRequest) => void;
   onRetry?: () => void;
   onSignIn?: () => void;
   onSignInAnotherAccount?: () => void;
@@ -126,6 +128,7 @@ export function ChatView({
   onOpenSpecialBlockPanel,
   onRevertCheckpoint,
   onViewCheckpointDiff,
+  onEditUserMessageInFork,
   onRetry,
   onSignIn,
   onSignInAnotherAccount,
@@ -449,6 +452,7 @@ export function ChatView({
             onFinalMarkerContinue={onFinalMarkerContinue}
             onRevertCheckpoint={onRevertCheckpoint}
             onViewCheckpointDiff={onViewCheckpointDiff}
+            onEditUserMessageInFork={onEditUserMessageInFork}
             streamingMetrics={streamingMetrics}
             streamingMetricsSurface={streamingMetricsSurface}
             streamingMetricsScope={streamingMetricsScope}

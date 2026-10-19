@@ -2134,3 +2134,70 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
     cleanup();
   });
 });
+
+describe("edit in fork", () => {
+  const user = (id: string, content: string, badge?: "rejection") =>
+    ({
+      id,
+      role: "user",
+      content,
+      timestamp: 1,
+      blocks: [],
+      ...(badge ? { badge } : {}),
+    }) as ChatMessage;
+  const assistant = (id: string): ChatMessage => ({
+    id,
+    role: "assistant",
+    content: "",
+    timestamp: 1,
+    blocks: [{ type: "text", text: `Reply ${id}` }],
+  });
+
+  it("addresses the clicked message by later user messages, skipping annotations", () => {
+    cleanup();
+    const onEdit = vi.fn();
+    render(
+      h(TranscriptMessageList, {
+        messages: [
+          user("u1", "[Attached: src/a.ts]\nFix the parser"),
+          assistant("a1"),
+          user("note", "Denied", "rejection"),
+          user("u2", "Add tests"),
+          assistant("a2"),
+          user("u3", "Ship it"),
+        ],
+        streaming: false,
+        onEditUserMessageInFork: onEdit,
+      }),
+    );
+
+    const buttons = screen.getAllByRole("button", {
+      name: "Edit this message in a new fork",
+    });
+    // Annotation rows are UI-only, so they get no edit button.
+    expect(buttons).toHaveLength(3);
+    fireEvent.click(buttons[0]);
+
+    expect(onEdit).toHaveBeenCalledWith({
+      userMessagesAfter: 2,
+      expectedText: "[Attached: src/a.ts]\nFix the parser",
+      prompt: "Fix the parser",
+      attachments: ["src/a.ts"],
+    });
+    cleanup();
+  });
+
+  it("hides the edit action when the surface does not support it", () => {
+    cleanup();
+    render(
+      h(TranscriptMessageList, {
+        messages: [user("u1", "Hello")],
+        streaming: false,
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Edit this message in a new fork" }),
+    ).toBeNull();
+    cleanup();
+  });
+});

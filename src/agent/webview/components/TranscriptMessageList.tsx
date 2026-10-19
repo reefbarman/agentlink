@@ -25,6 +25,7 @@ import type {
   StreamingBaselineMetrics,
   StreamingBaselineSurface,
 } from "../../../shared/streamingBaselineMetrics";
+import type { EditInForkRequest } from "../../../shared/editInFork";
 
 interface TranscriptMessageListProps {
   messages: ChatMessage[];
@@ -63,6 +64,8 @@ interface TranscriptMessageListProps {
     checkpointId: string,
     scope: "turn" | "all",
   ) => void;
+  /** Fork the chat before a user message and restore it for editing. */
+  onEditUserMessageInFork?: (request: EditInForkRequest) => void;
   streamingMetrics?: StreamingBaselineMetrics;
   streamingMetricsSurface?: Extract<
     StreamingBaselineSurface,
@@ -624,6 +627,33 @@ interface TranscriptRowActions {
   onFinalMarkerContinue?: (prompt: string) => void;
   onRevertCheckpoint?: (sessionId: string, checkpointId: string) => void;
   onViewCheckpointDiff?: TranscriptMessageListProps["onViewCheckpointDiff"];
+  onEditInFork?: (
+    message: ChatMessage,
+    edit: { prompt: string; attachments: string[] },
+  ) => void;
+}
+
+/** User rows that correspond to a real user message the agent received. */
+function isEditableUserMessage(message: ChatMessage): boolean {
+  return message.role === "user" && !message.badge && !message.coordination;
+}
+
+/**
+ * Number of real user messages after `target` in the rendered transcript.
+ * Annotation rows are UI-only and have no transcript counterpart.
+ */
+export function countUserMessagesAfter(
+  messages: readonly ChatMessage[],
+  target: ChatMessage,
+): number | undefined {
+  const index = messages.indexOf(target);
+  if (index === -1) return undefined;
+  let count = 0;
+  for (let i = index + 1; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role === "user" && !message.badge) count++;
+  }
+  return count;
 }
 
 interface MemoizedTranscriptRowProps {
@@ -808,6 +838,11 @@ function renderTranscriptRow({
             ? (prompt) => actions.onFinalMarkerContinue?.(prompt)
             : undefined
         }
+        onEditInFork={
+          isEditableUserMessage(message) && actions.onEditInFork
+            ? (edit) => actions.onEditInFork?.(sourceMessage, edit)
+            : undefined
+        }
       />
     </Fragment>
   );
@@ -964,6 +999,7 @@ function rowActionAvailability(
       message.checkpointId &&
       actions.onViewCheckpointDiff,
     ),
+    editInFork: Boolean(isEditableUserMessage(message) && actions.onEditInFork),
   };
 }
 
@@ -1044,6 +1080,7 @@ export function TranscriptMessageList({
   onFinalMarkerContinue,
   onRevertCheckpoint,
   onViewCheckpointDiff,
+  onEditUserMessageInFork,
   streamingMetrics,
   streamingMetricsSurface,
   streamingMetricsScope = sessionId ?? "transcript",
@@ -1066,6 +1103,8 @@ export function TranscriptMessageList({
     }
   }
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const actionsRef = useRef<TranscriptRowActions>({});
   // Preact renders synchronously, so memoized rows can safely read the latest
   // callbacks from this stable carrier without callback identity waking them.
@@ -1089,6 +1128,24 @@ export function TranscriptMessageList({
     onFinalMarkerContinue,
     onRevertCheckpoint,
     onViewCheckpointDiff,
+    onEditInFork: onEditUserMessageInFork
+      ? (
+          message: ChatMessage,
+          edit: { prompt: string; attachments: string[] },
+        ) => {
+          const userMessagesAfter = countUserMessagesAfter(
+            messagesRef.current,
+            message,
+          );
+          if (userMessagesAfter === undefined) return;
+          onEditUserMessageInFork({
+            userMessagesAfter,
+            expectedText: message.content,
+            prompt: edit.prompt,
+            attachments: edit.attachments,
+          });
+        }
+      : undefined,
   });
   const actions = actionsRef.current;
   const lastMessageHasError = Boolean(lastMessage?.error);

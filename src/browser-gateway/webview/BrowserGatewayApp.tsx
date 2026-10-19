@@ -123,6 +123,7 @@ import {
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
+import type { EditInForkRequest } from "../../shared/editInFork";
 import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   isWriteApprovalSelection,
@@ -2316,10 +2317,11 @@ export function BrowserGatewayApp({
   const [localDismissedQuestionId, setLocalDismissedQuestionId] = useState<
     string | null
   >(null);
-  const [composerInjection, setComposerInjection] = useState<{
-    type: "context";
-    context: string;
-  } | null>(null);
+  const [composerInjection, setComposerInjection] = useState<
+    | { type: "context"; context: string }
+    | { type: "prompt"; prompt: string; attachments: string[] }
+    | null
+  >(null);
   const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
     useState<ReadonlySet<string>>(() => new Set());
   const [autoContinueStopReasons, setAutoContinueStopReasons] = useState<
@@ -5670,8 +5672,12 @@ export function BrowserGatewayApp({
     await openTabFromSource(instanceId, workspace, sourceTab, "new");
   }
 
-  /** Copy the browser-selected chat into a new VS Code tab and select it. */
-  function handleForkTab(): void {
+  /**
+   * Copy the browser-selected chat into a new VS Code tab and select it. With
+   * `editInFork`, the copy stops before that user message and the message is
+   * restored into the composer for editing.
+   */
+  function handleForkTab(editInFork?: EditInForkRequest): void {
     const instanceId = selectedTabId;
     const workspace =
       snapshotCacheRef.current.get(instanceId)?.snapshot.session.chatWorkspace;
@@ -5690,7 +5696,13 @@ export function BrowserGatewayApp({
       setModeStatus("No active chat is loaded to fork.");
       return;
     }
-    void openTabFromSource(instanceId, workspace, sourceTab, "fork");
+    void openTabFromSource(
+      instanceId,
+      workspace,
+      sourceTab,
+      "fork",
+      editInFork,
+    );
   }
 
   async function openTabFromSource(
@@ -5698,6 +5710,7 @@ export function BrowserGatewayApp({
     workspace: BrowserGatewayChatWorkspaceSummary,
     sourceTab: { tabId: string; sessionId: string | null },
     action: "new" | "fork",
+    editInFork?: EditInForkRequest,
   ): Promise<void> {
     if (newTabPendingRef.current) return;
     newTabPendingRef.current = true;
@@ -5722,6 +5735,7 @@ export function BrowserGatewayApp({
               tabId: sourceTab.tabId,
               sessionId: sourceTab.sessionId,
             },
+            ...(action === "fork" && editInFork ? { editInFork } : {}),
           }),
         },
       );
@@ -5755,10 +5769,19 @@ export function BrowserGatewayApp({
       });
       setOwnerSnapshotRevision((revision) => revision + 1);
       handleLogicalTabSelect(instanceId, nextWorkspace, nextTab);
+      if (action === "fork" && editInFork) {
+        setComposerInjection({
+          type: "prompt",
+          prompt: editInFork.prompt,
+          attachments: editInFork.attachments,
+        });
+      }
     } catch (error) {
       const message =
         action === "fork"
-          ? `Unable to fork this chat: ${String(error)}`
+          ? editInFork
+            ? `Unable to edit this message in a fork: ${String(error)}`
+            : `Unable to fork this chat: ${String(error)}`
           : `Unable to create a new tab: ${String(error)}`;
       setNewTabError(message);
       if (action === "fork") setModeStatus(message);
@@ -10248,6 +10271,11 @@ export function BrowserGatewayApp({
                         }}
                         onRevertCheckpoint={handleRevertCheckpoint}
                         onViewCheckpointDiff={handleViewCheckpointDiff}
+                        onEditUserMessageInFork={
+                          isAskAgentSelected || !foreground?.sessionId
+                            ? undefined
+                            : handleForkTab
+                        }
                         streamingMetrics={streamingBaselineMetrics}
                         streamingMetricsSurface="browser-webview"
                         streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}

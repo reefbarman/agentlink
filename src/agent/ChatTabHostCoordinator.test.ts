@@ -7,6 +7,7 @@ import {
 } from "./ChatTabController.js";
 import type { ChatTabActionAddress } from "@agentlink/protocol/chat-workspace";
 import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
+import type { ForkSessionOptions } from "./forkUserMessage.js";
 import type { SessionInfo } from "./types.js";
 
 function createWorkspaceState(): ChatTabWorkspaceState {
@@ -79,6 +80,7 @@ function createHarness() {
     forkSession: vi.fn(
       async (
         sourceId: string,
+        _options?: ForkSessionOptions,
       ): Promise<
         | { ok: true; session: AgentSession }
         | { ok: false; code: string; message: string }
@@ -127,10 +129,32 @@ describe("ChatTabHostCoordinator", () => {
       tab: { id: "tab-2", sessionId: "fork-of-session-1" },
       session: { id: "fork-of-session-1" },
     });
-    expect(harness.manager.forkSession).toHaveBeenCalledWith("session-1");
+    expect(harness.manager.forkSession).toHaveBeenCalledWith("session-1", {});
     expect(harness.tabs.getTab("tab-1")?.sessionId).toBe("session-1");
     expect(harness.tabs.getFocusedTab().id).toBe("tab-2");
     expect(harness.manager.switchTo).toHaveBeenCalledWith("fork-of-session-1");
+  });
+
+  it("forwards the edit-in-fork cut point to the session manager", async () => {
+    const harness = createHarness();
+    const first = session("session-1");
+    harness.sessions.set(first.id, first);
+    await harness.tabs.bindFocusedSession(first.id);
+    const forkOptions: ForkSessionOptions = {
+      beforeUserMessage: { userMessagesAfter: 2, expectedText: "Try again" },
+    };
+
+    const result = await harness.coordinator.forkTab(
+      harness.address(),
+      {},
+      forkOptions,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(harness.manager.forkSession).toHaveBeenCalledWith(
+      "session-1",
+      forkOptions,
+    );
   });
 
   it("does not create a tab when the fork fails or the tab has no session", async () => {

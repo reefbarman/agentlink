@@ -163,6 +163,8 @@ interface MessageBubbleProps {
   onStopBackground?: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
   onFinalMarkerContinue?: (prompt: string) => void;
+  /** Fork the chat before this user message and restore it for editing. */
+  onEditInFork?: (edit: { prompt: string; attachments: string[] }) => void;
 }
 
 export function MessageBubble({
@@ -187,6 +189,7 @@ export function MessageBubble({
   onStopBackground,
   onOpenTranscript,
   onFinalMarkerContinue,
+  onEditInFork,
 }: MessageBubbleProps) {
   const citations = useMemo(
     () => getProviderCitations(message.blocks),
@@ -439,6 +442,18 @@ export function MessageBubble({
           <UserText text={cleanText} onOpenFile={onOpenFile} />
         </div>
         {activationCards}
+        {onEditInFork && (
+          <button
+            class="edit-in-fork-button"
+            onClick={() =>
+              onEditInFork({ prompt: cleanText, attachments: files })
+            }
+            title="Edit in a new fork (this chat and your files stay as they are)"
+            aria-label="Edit this message in a new fork"
+          >
+            <i class="codicon codicon-edit" />
+          </button>
+        )}
         <CopyButton text={message.content} />
       </div>
     );

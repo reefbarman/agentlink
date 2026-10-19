@@ -2527,6 +2527,64 @@ describe("AgentSessionManager host injection", () => {
     }
   });
 
+  it("forks before an addressed user message for editing", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-fork-"));
+    const { AgentSession } =
+      await vi.importActual<typeof import("./AgentSession.js")>(
+        "./AgentSession.js",
+      );
+    const host = {
+      createSession: AgentSession.create,
+      config: {
+        resolveModelForMode: (_mode: string, fallback: string) => fallback,
+        resolveReasoningEffortForMode: () => "high" as const,
+        getCondenseThresholdForModel: () => 0.73,
+        getBackgroundAgentSettings: () => ({}),
+      },
+    };
+    try {
+      const manager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        new SessionStore(workspace),
+        undefined,
+        undefined,
+        { host },
+      );
+      const source = await manager.createSession("code");
+      source.addUserMessage("First ask");
+      source.appendAssistantTurn([{ type: "text", text: "First answer" }]);
+      source.addUserMessage("expanded agent input", {
+        displayText: "Second ask",
+      });
+      source.appendAssistantTurn([{ type: "text", text: "Second answer" }]);
+      source.addUserMessage("Third ask");
+      const sourceMessages = source.getAllMessages();
+
+      const result = await manager.forkSession(source.id, {
+        beforeUserMessage: { userMessagesAfter: 1, expectedText: "Second ask" },
+      });
+
+      if (!result.ok) throw new Error(result.message);
+      expect(result.session.getAllMessages()).toEqual(
+        sourceMessages.slice(0, 2),
+      );
+      expect(source.getAllMessages()).toEqual(sourceMessages);
+
+      const stale = await manager.forkSession(source.id, {
+        beforeUserMessage: { userMessagesAfter: 0, expectedText: "Gone" },
+      });
+      expect(stale).toMatchObject({
+        ok: false,
+        code: "fork_message_not_found",
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("persists foreground reasoning effort changes immediately", async () => {
     const savedRecords: PersistedSessionRecord[] = [];
     const store = {

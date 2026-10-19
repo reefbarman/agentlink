@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- You can now edit one of your earlier messages in a fork. Hover the message and click the pencil: a new tab opens with the chat up to just before that message and its text back in the composer, so the wrong instruction and everything after it drop out of context. The original chat and your workspace files are left as they are. Works in VS Code chat and browser workspace tabs.
+
 ## 1.43.3
 
 - The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.

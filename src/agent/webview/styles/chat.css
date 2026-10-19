@@ -5943,6 +5943,41 @@ body.chat-activity-shelf-resizing * {
   color: var(--vscode-terminal-ansiGreen, #4ec9b0);
 }
 
+/* Sits just left of the user message copy button and shares its styling. */
+.edit-in-fork-button {
+  position: absolute;
+  bottom: 4px;
+  right: 30px;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-foreground);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+  font-size: 12px;
+}
+
+.user-message:hover .edit-in-fork-button,
+.edit-in-fork-button:focus-visible {
+  opacity: 1;
+}
+
+.edit-in-fork-button:hover {
+  background: var(
+    --vscode-button-secondaryBackground,
+    var(--vscode-sideBar-background)
+  );
+  border-color: var(--vscode-focusBorder);
+}
+
 /* ── Checkpoint Row ── */
 
 .checkpoint-row {

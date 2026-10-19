@@ -34,6 +34,7 @@ import {
 } from "./browserGatewayRequestTrust.js";
 
 import { loadAskAgentMcpConfigs } from "../agent/mcpConfig.js";
+import { parseEditInForkRequest } from "../shared/editInFork.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type {
   BrowserGatewayService,
@@ -2416,14 +2417,28 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await readJsonBody(req)) as { selection?: unknown };
+    const body = (await readJsonBody(req)) as {
+      selection?: unknown;
+      editInFork?: unknown;
+    };
     const selection = this.parseOptionalChatTabSelection(body?.selection, res);
     if (selection === false) return;
     if (!selection?.sessionId) {
       this.writeJson(res, 400, { error: "invalid_selection" });
       return;
     }
-    const result = await this.chatViewProvider.submitBrowserForkTab(selection);
+    const editInFork =
+      body.editInFork === undefined
+        ? undefined
+        : parseEditInForkRequest(body.editInFork);
+    if (body.editInFork !== undefined && !editInFork) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserForkTab(
+      selection,
+      editInFork,
+    );
     this.writeJson(
       res,
       result.ok ? 200 : 409,

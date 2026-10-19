@@ -7,6 +7,7 @@ import {
   type ChatTabDestructiveAction,
 } from "@agentlink/protocol/chat-workspace";
 import type { SessionInfo } from "./types.js";
+import type { ForkSessionOptions } from "./forkUserMessage.js";
 
 export type ChatTabHostActionResult =
   | { ok: true; tab: ChatTab; session?: AgentSession }
@@ -45,6 +46,7 @@ interface ChatTabHostSessionManager {
   hydratePersistedSession(sessionId: string): Promise<AgentSession | null>;
   forkSession(
     sourceSessionId: string,
+    options?: ForkSessionOptions,
   ): Promise<
     | { ok: true; session: AgentSession }
     | { ok: false; code: string; message: string }
@@ -101,6 +103,7 @@ export class ChatTabHostCoordinator {
   async forkTab(
     address: ChatTabActionAddress,
     options: { focus?: boolean } = {},
+    forkOptions: ForkSessionOptions = {},
   ): Promise<ChatTabHostActionResult> {
     const validated = this.tabs.validateAction(address);
     if (!validated.ok) return validated;
@@ -108,7 +111,10 @@ export class ChatTabHostCoordinator {
       return { ok: false, reason: "session_not_found" };
     }
 
-    const forked = await this.sessions.forkSession(validated.tab.sessionId);
+    const forked = await this.sessions.forkSession(
+      validated.tab.sessionId,
+      forkOptions,
+    );
     if (!forked.ok) {
       return { ok: false, reason: "fork_failed", message: forked.message };
     }

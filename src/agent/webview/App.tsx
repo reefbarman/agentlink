@@ -77,6 +77,7 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import type { EditInForkRequest } from "../../shared/editInFork";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../sessionHandoff";
 
@@ -3740,6 +3741,14 @@ export function App({
     [vscodeApi],
   );
 
+  const handleEditUserMessageInFork = useCallback(
+    (editInFork: EditInForkRequest) => {
+      setChatTabFailure(null);
+      vscodeApi.postMessage({ command: "chatTabFork", editInFork });
+    },
+    [vscodeApi],
+  );
+
   const handleRevertCheckpoint = useCallback(
     (sessionId: string, checkpointId: string) => {
       vscodeApi.postMessage({
@@ -4260,6 +4269,11 @@ export function App({
                 onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
                 onRevertCheckpoint={handleRevertCheckpoint}
                 onViewCheckpointDiff={handleViewCheckpointDiff}
+                onEditUserMessageInFork={
+                  state.chatState.sessionId
+                    ? handleEditUserMessageInFork
+                    : undefined
+                }
                 onRetry={handleRetry}
                 onSignIn={handleErrorSignIn}
                 onSignInAnotherAccount={handleErrorSignInAnotherAccount}
