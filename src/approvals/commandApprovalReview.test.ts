@@ -899,6 +899,32 @@ describe("command review context", () => {
     });
   });
 
+  it("keeps long instructions intact for the extended window", () => {
+    const pasted = `implement this spec\n${"step detail. ".repeat(1_200)}`;
+    const latest = `now ship it ${"carefully ".repeat(250)}`;
+    const messages: import("../agent/types.js").AgentMessage[] = [
+      typed(pasted, "input-1"),
+      { role: "assistant", content: "Done." },
+      typed(latest, "input-2"),
+    ];
+    const built = buildCommandReviewContextWithMetadata(messages, "session");
+    expect(built.extendedHumanAuthority.latestUserInstruction).toBe(
+      latest.trim(),
+    );
+    const restored = built.extendedHumanAuthority.context
+      .filter((entry) => entry.humanDecisionEvidence)
+      .map((entry) => JSON.parse(entry.content));
+    expect(restored).toEqual([{ humanInstruction: pasted.trim() }]);
+    expect(built.extendedHumanAuthority.humanAuthority).toMatchObject({
+      state: "complete",
+      omittedCount: 0,
+    });
+    // The shared window still clips the long latest entry for the Guardian.
+    expect(
+      built.context.find((entry) => entry.directUserInstruction)?.content,
+    ).not.toBe(latest.trim());
+  });
+
   it("restores earlier typed instructions into the extended window only", () => {
     const messages: import("../agent/types.js").AgentMessage[] = [
       typed("plan only, do not push yet", "input-1"),

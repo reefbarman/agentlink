@@ -92,6 +92,12 @@ export interface CommandApprovalReviewInput {
 export interface ExtendedHumanAuthority {
   context: CommandReviewContextEntry[];
   humanAuthority: GuardianEvidenceCoverage;
+  /**
+   * Full text of the newest direct human input (queued input first). The
+   * recent window clips long entries in the middle, so this is the copy a
+   * reviewer can trust as complete.
+   */
+  latestUserInstruction?: string;
 }
 
 export interface CommandReviewContextEntry {
@@ -112,6 +118,8 @@ interface HumanDecisionBudget {
    * reads only decisions plus the latest instruction sees all of them.
    */
   restoreAllInstructions?: boolean;
+  /** Largest restored instruction kept intact; longer ones become markers. */
+  maxInstructionLength?: number;
 }
 
 const PRIMARY_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
@@ -123,6 +131,8 @@ export const EXTENDED_HUMAN_DECISION_BUDGET: HumanDecisionBudget = {
   maxEntries: 32,
   maxLength: 32_000,
   restoreAllInstructions: true,
+  // Long pasted plans or specs are common first instructions.
+  maxInstructionLength: 20_000,
 };
 
 const HUMAN_DECISION_OMITTED_CONTENT = JSON.stringify({
@@ -934,9 +944,19 @@ export function buildCommandReviewContextWithMetadata(
       ? 1
       : 0);
   const extendedOmitted = Math.max(0, authoritySourceCount - extendedIncluded);
+  const latestQueued = [...queuedHumanInputs]
+    .reverse()
+    .find((input) => input.trim());
+  const latestTextIndex = latestTextInstructionIndex(messages);
+  const latestUserInstruction =
+    latestQueued?.trim() ??
+    (latestTextIndex >= 0
+      ? contentText(messages[latestTextIndex]!.content).trim()
+      : undefined);
   return {
     extendedHumanAuthority: {
       context: extendedContext,
+      ...(latestUserInstruction !== undefined ? { latestUserInstruction } : {}),
       humanAuthority: {
         state:
           humanDecisionRecord?.incomplete || extendedOmitted > 0
@@ -1115,6 +1135,8 @@ function selectHumanDecisions(
     budget.restoreAllInstructions
       ? inputId === latestInputId
       : inWindow.has(inputId);
+  const maxInstructionLength =
+    budget.maxInstructionLength ?? MAX_CONTEXT_ENTRY_LENGTH;
   if (record) {
     const located = locateRecordSources(messages);
     for (const recorded of record.entries) {
@@ -1130,7 +1152,7 @@ function selectHumanDecisions(
         candidates.set(key, {
           role: "user",
           content:
-            content.length <= MAX_CONTEXT_ENTRY_LENGTH
+            content.length <= maxInstructionLength
               ? content
               : safeJson({
                   recordSequence: recorded.sequence,
@@ -1166,7 +1188,7 @@ function selectHumanDecisions(
       candidates.set(key, {
         role: "user",
         content:
-          content.length <= MAX_CONTEXT_ENTRY_LENGTH
+          content.length <= maxInstructionLength
             ? content
             : safeJson({
                 evidenceOmitted:

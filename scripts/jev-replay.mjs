@@ -478,6 +478,12 @@ function buildStoredReview(modules, redact, session, messages, record, index) {
     );
   const stored = redactReviewContext(context, redact);
   const extended = redactReviewContext(extendedHumanAuthority.context, redact);
+  // A latest instruction with likely secrets is left out; replay then falls
+  // back to the window copy, which redactReviewContext already handled.
+  const latest =
+    extendedHumanAuthority.latestUserInstruction !== undefined
+      ? redact(extendedHumanAuthority.latestUserInstruction)
+      : undefined;
   const objective = modules.selectCommandReviewObjective(slice);
   const safeObjective = objective ? redact(objective.trim()) : undefined;
   return {
@@ -498,6 +504,9 @@ function buildStoredReview(modules, redact, session, messages, record, index) {
       extendedHumanAuthority: {
         context: extended.context,
         humanAuthority: extendedHumanAuthority.humanAuthority,
+        ...(latest && !latest.redacted
+          ? { latestUserInstruction: latest.text }
+          : {}),
       },
     },
     redacted:

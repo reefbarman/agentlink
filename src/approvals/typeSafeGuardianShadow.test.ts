@@ -1084,6 +1084,56 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       ).toEqual(answers.map((_, index) => `answer-${index}`));
     });
 
+    it("trusts the host's full latest instruction beyond the window cap", async () => {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async () => typeSafeResponse());
+      const reviewer = createTypeSafeGuardianShadowReviewer({
+        getConfig: () => ({ enabled: true }),
+        getApiKey: async () => "typesafe-key",
+        fetch,
+        readGitEnvironment: async () => undefined,
+      });
+      const long = `run the tests ${"and check the output ".repeat(80)}`.trim();
+      const run = async (withHostCopy: boolean) => {
+        const input = reviewInput("ls src");
+        input.context = [
+          { role: "user", content: long, directUserInstruction: true },
+        ];
+        input.evidenceMetadata = {
+          humanAuthority: {
+            state: "complete",
+            reasons: [],
+            sourceCount: 1,
+            includedCount: 1,
+            omittedCount: 0,
+          },
+          scripts: {
+            state: "complete",
+            reasons: [],
+            sourceCount: 0,
+            includedCount: 0,
+            omittedCount: 0,
+          },
+        };
+        if (withHostCopy) {
+          input.extendedHumanAuthority = {
+            context: input.context,
+            humanAuthority: input.evidenceMetadata.humanAuthority!,
+            latestUserInstruction: long,
+          };
+        }
+        return reviewer.review(input);
+      };
+      expect(long.length).toBeGreaterThan(1_200);
+      expect((await run(false)).authorizationEvidence).toBe("truncated");
+      const result = await run(true);
+      expect(result.authorizationEvidence).toBe("complete");
+      expect(result.observation?.assessment).toBe("eligible");
+      const body = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body));
+      expect(body.state.action.latestUserInstruction).toBe(long);
+    });
+
     it("still counts as incomplete when a newer answer was omitted", async () => {
       const newerOmitted = JSON.stringify({
         evidenceOmitted:
@@ -1376,6 +1426,9 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     `gh api repos/owner/repo/commits/${sha1}`,
     "ls /workspace/project/src/browser-gateway/webview/components/transcript/items",
     "git switch -c tristan-guardian-shadow-tuning-for-jev-model-improvements",
+    "cp server/migrations/20250101120000_add-user-org-index.sql /tmp/old.sql",
+    "git rm -q server/migrations/20250101120000_directory_source_backfill.sql",
+    `docker pull ghcr.io/acme/collector:0.8.7-pg18-bookworm@sha256:${"9f3a".repeat(16)}`,
   ])("does not redact ordinary command text: %s", async (command) => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -1399,6 +1452,8 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     ["mysql -u root -pS3cretPass mydb", "S3cretPass"],
     [`curl -H "X-App-Key: ${sha1}" https://example.com`, sha1],
     [`deploy --target prod ${"Zx9Qw4".repeat(8)}`, "Zx9Qw4".repeat(8)],
+    [`deploy --key ${"Ab3dE5".repeat(4)}-${"Kq7Lm2".repeat(4)}`, "Ab3dE5"],
+    [`run --token ${"a1b2c3d4".repeat(6)}`, "a1b2c3d4".repeat(6)],
   ])("still redacts credential-shaped values: %s", async (command, secret) => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -1439,6 +1494,8 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       expect(body.state.action.command).toBe(
         "cat ~/project/notes.txt /Users/testers/other.txt",
       );
+      // Writing the home directory as ~ does not make the command inexact.
+      expect(body.state.action.commandExact).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }
