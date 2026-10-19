@@ -24,6 +24,7 @@ import {
   truncateToolText,
 } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
+import { getCondensePreparation } from "./condensePreparation.js";
 import { buildModeInstructionBlock } from "./systemPrompt.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { SkillEntry } from "./skillLoader.js";
@@ -8897,6 +8898,112 @@ describe("AgentEngine", () => {
         expect(blocks[0]?.text).toContain("Ship the current step");
         expect(blocks[0]?.text).not.toContain("stale deterministic sections");
         expect(blocks[1]?.text).toBe("## Conversation Summary\n\nprose");
+      });
+
+      it("starts a preparation from the real turn loop after a tool batch in the prepare band", async () => {
+        mockPreparedSummary();
+        let streamCount = 0;
+        const provider = makeMockProvider();
+        provider.stream = async function* () {
+          streamCount += 1;
+          if (streamCount === 1) {
+            yield {
+              type: "content_blocks",
+              blocks: [
+                {
+                  type: "tool_use",
+                  id: "call-read",
+                  name: "read_file",
+                  input: { path: "a.ts" },
+                },
+              ],
+            };
+            yield {
+              type: "usage",
+              inputTokens: PREPARE_BAND_TOKENS,
+              outputTokens: 5,
+            };
+            yield { type: "done" };
+            return;
+          }
+          yield* makeProviderStream({ text: "done" });
+        };
+        const engine = new AgentEngine(makeRegistry(provider));
+        engine.setToolRuntime({
+          listTools: () => [
+            {
+              name: "read_file",
+              description: "read file",
+              input_schema: { type: "object" },
+            },
+          ],
+          isParallelSafe: () => false,
+          executeTool: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        });
+        const session = await makeSession();
+        session.addUserMessage("original task");
+
+        const events = await collectEvents(engine.run(session));
+
+        expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+        const call = mocks.mockSummarizeConversation.mock.calls[0]![0];
+        expect(call.signal).toBeInstanceOf(AbortSignal);
+        // The snapshot ends on the tool-result carrier, so no tool call is
+        // split from its result.
+        const snapshot = call.messages as AgentMessage[];
+        const last = snapshot.at(-1)!;
+        expect(last.role).toBe("user");
+        expect((last.content as Array<{ type: string }>)[0]?.type).toBe(
+          "tool_result",
+        );
+        // Preparing never condenses on its own.
+        expect(events.some((event) => event.type === "condense")).toBe(false);
+        expect(getCondensePreparation(session).hasTask).toBe(true);
+      });
+
+      it("cancels an in-flight preparation and summarizes from scratch on a manual condense", async () => {
+        let prepSignal: AbortSignal | undefined;
+        mocks.mockSummarizeConversation.mockImplementationOnce(
+          (options: { signal?: AbortSignal }) => {
+            prepSignal = options.signal;
+            return new Promise(() => {});
+          },
+        );
+        const provider = makeMockProvider();
+        const engine = new AgentEngine(makeRegistry(provider));
+        const session = await makeSession();
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+        (engine as unknown as Armable).armCondensePreparation(
+          session,
+          provider,
+          session.model,
+          undefined,
+        );
+        await vi.waitFor(() => {
+          expect(prepSignal).toBeDefined();
+        });
+        mockPreparedSummary();
+
+        const events = await collectEvents(
+          engine.condenseSession(session, false, provider),
+        );
+
+        expect(prepSignal?.aborted).toBe(true);
+        expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(2);
+        expect(
+          mocks.mockSummarizeConversation.mock.calls[1]![0].signal,
+        ).toBeUndefined();
+        const condense = events.find(
+          (event): event is Extract<AgentEvent, { type: "condense" }> =>
+            event.type === "condense",
+        );
+        expect(condense?.timing?.trigger).toBe("manual");
+        expect(condense?.timing?.preparedReused).toBeUndefined();
+        expect(getCondensePreparation(session).hasTask).toBe(false);
       });
 
       it("does not prepare when only one provider slot is free", async () => {
