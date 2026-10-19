@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.44.5
+
 - Prose in `text`, `plaintext`, `txt`, `markdown` or `md` code blocks now wraps in VS Code chat. Previously each paragraph stayed on one line and was cut off by the sidebar, so a prompt or note was hard to read without scrolling sideways. Other code blocks still keep their original lines, and the copy button still copies the original text.
 
 ## 1.44.4

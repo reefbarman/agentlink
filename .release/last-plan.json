@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
-  "createdAt": "2026-10-19T05:06:39.124Z",
+  "sourceSha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
+  "createdAt": "2026-10-19T06:33:37.267Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.44.3",
-      "baselineRef": "v1.44.3",
-      "reserved": "1.44.3",
-      "commits": ["f9fcb0053b83eace0d01fa8ad4438704497c2710"],
+      "published": "1.44.4",
+      "baselineRef": "v1.44.4",
+      "reserved": "1.44.4",
+      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.44.4",
+      "version": "1.44.5",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.4",
+      "tag": "v1.44.5",
       "notes": [
         {
-          "sha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
-          "subject": "fix(skills): keep going when an active skill changes mid-turn",
-          "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
+          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
+          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
+          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.32.3",
-      "baselineRef": "desktop-v0.32.3",
-      "reserved": "0.32.3",
-      "commits": ["f9fcb0053b83eace0d01fa8ad4438704497c2710"],
+      "published": "0.32.4",
+      "baselineRef": "desktop-v0.32.4",
+      "reserved": "0.32.4",
+      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.32.4",
+      "version": "0.32.5",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.4",
+      "tag": "desktop-v0.32.5",
       "notes": [
         {
-          "sha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
-          "subject": "fix(skills): keep going when an active skill changes mid-turn",
-          "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
+          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
+          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
+          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
           "breaking": false
         }
       ]
@@ -85,13 +85,25 @@
       "published": "0.4.3",
       "baselineRef": "assistant-v0.4.3",
       "reserved": "0.4.3",
-      "commits": [],
+      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.4.4",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.4.4",
+      "notes": [
+        {
+          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
+          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
+          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -99,6 +111,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d0f11986e40842ce19335a6b22cfe6754a5ff16b": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
