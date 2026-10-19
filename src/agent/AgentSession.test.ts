@@ -825,7 +825,7 @@ describe("AgentSession", () => {
       },
     );
 
-    it("retains the committed skill policy and persistent drift marker until new user input", async () => {
+    it("keeps enforcing the committed skill policy without interrupting when the catalogue changes mid-turn", async () => {
       const original = makeSkillEntry("safe-review", "a".repeat(64), [
         "read_file",
       ]);
@@ -852,8 +852,18 @@ describe("AgentSession", () => {
       expect(session.getLoadedSkills()).toEqual([original.name]);
       expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
       expect(session.isSkillActive(original.id)).toBe(true);
-      expect(session.takeActiveSkillCatalogDrift()).toBe("safe-review");
-      expect(session.takeActiveSkillCatalogDrift()).toBe("safe-review");
+      expect(session.takeActiveSkillCatalogDrift()).toBeUndefined();
+
+      // Reloading the changed revision mid-turn must not broaden the snapshot.
+      expect(
+        session.trackLoadedSkill({
+          id: changed.id,
+          name: changed.name,
+          revision: changed.revision,
+          skillPath: changed.skillPath,
+        }),
+      ).toBe(true);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
 
       session.addUserMessage("continue under the current catalogue");
       expect(session.takeActiveSkillCatalogDrift()).toBeUndefined();

@@ -1479,35 +1479,19 @@ export class AgentSession {
     this.skillDiagnostics = diagnostics.map((diagnostic) => ({
       ...diagnostic,
     }));
-    const previouslyAdvertisedById = new Map(
-      Array.from(this.advertisedSkills.values()).map((skill) => [
-        skill.id,
-        skill,
-      ]),
-    );
     this.advertisedSkills = new Map(
       skills.map((skill) => [skill.skillPath, skill]),
     );
-    const nextById = new Map(skills.map((skill) => [skill.id, skill]));
-    for (const skillId of this.activeSkillIds) {
-      const previous = previouslyAdvertisedById.get(skillId);
-      const next = nextById.get(skillId);
-      if (
-        !previous ||
-        !next?.enabled ||
-        next.name !== previous.name ||
-        next.revision !== previous.revision
-      ) {
-        // Keep the committed restrictive snapshot until new human input.
-        // Catalogue refresh must not silently broaden this turn's authority.
-        this.activeSkillCatalogDrift ??= previous?.name ?? skillId;
-      }
-    }
+    // Active skills keep enforcing the snapshot committed at activation
+    // (`activeSkillEntries`) until new human input, so a catalogue refresh
+    // (e.g. a `git pull` that edits SKILL.md) can neither broaden this turn's
+    // authority nor needs to interrupt it.
   }
 
   /**
-   * Name of an active skill whose catalogue entry changed since activation,
-   * retained across retries. Only a new user turn can resolve it.
+   * Name of a restored active skill whose committed policy could not be
+   * re-verified against the current catalogue. Its restrictions are not
+   * enforced, so the engine stops until a new user turn resolves it.
    */
   takeActiveSkillCatalogDrift(): string | undefined {
     return this.activeSkillCatalogDrift;
@@ -1637,7 +1621,11 @@ export class AgentSession {
     }
     this.loadedSkills.add(advertised.name);
     this.activeSkillIds.add(advertised.id);
-    this.activeSkillEntries.set(advertised.id, advertised);
+    // Reloading a skill whose catalogue entry changed mid-turn must not
+    // replace the committed snapshot with a possibly broader revision.
+    if (!this.activeSkillEntries.has(advertised.id)) {
+      this.activeSkillEntries.set(advertised.id, advertised);
+    }
     return true;
   }
 

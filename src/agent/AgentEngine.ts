@@ -1322,7 +1322,7 @@ export class AgentEngine {
         if (driftedSkill) {
           yield {
             type: "error",
-            error: `The active ${driftedSkill} skill changed or was disabled during this turn. AgentLink stopped before the next model request so the skill's restrictions are not silently dropped. Send a new message to continue.`,
+            error: `The active ${driftedSkill} skill changed or was disabled since this session was saved, so its restrictions could not be restored. AgentLink stopped before the next model request so they are not silently dropped. Send a new message to continue.`,
             retryable: false,
             code: "skill_catalog_drift",
           };
