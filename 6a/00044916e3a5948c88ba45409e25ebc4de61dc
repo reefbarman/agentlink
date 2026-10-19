@@ -1,0 +1,33 @@
+src/agent/condensePreparation.test.ts
+  h_e08a86bb3a33a2 298-315
+src/agent/condensePreparation.ts
+  s_f3ff8eabffc5c3::t_c3e6de5cabbec9 262,266
+  h_e08a86bb3a33a2 242-246,254-259,263-265
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6a00044916e3a5948c88ba45409e25ebc4de61dc",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f3ff8eabffc5c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d79fb39c-cc34-4dee-8cff-03ea3b0ad60b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
