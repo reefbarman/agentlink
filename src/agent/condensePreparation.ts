@@ -239,6 +239,11 @@ export class CondensePreparation {
  * The prepared result covers the snapshot (originals tagged with the summary's
  * condenseParent, then the summary). Messages appended since stay untagged
  * after the summary, so getEffectiveHistory keeps them verbatim.
+ *
+ * The tagged originals are copies taken when the summary finished. The session
+ * still updates some messages in place afterwards (final-status markers,
+ * runtime error details), so rebuild each copy from the live object and keep
+ * only the condense tag from the prepared result.
  */
 export function mergePreparedSummary(
   prepared: SummarizeResult,
@@ -246,9 +251,19 @@ export function mergePreparedSummary(
   live: readonly AgentMessage[],
   prevInputTokens: number,
 ): SummarizeResult {
+  const covered = prepared.messages.slice(0, snapshot.length).map((copy, i) => {
+    const current = live[i]!;
+    return copy === current || copy.condenseParent === current.condenseParent
+      ? current
+      : { ...current, condenseParent: copy.condenseParent };
+  });
   return {
     ...prepared,
-    messages: [...prepared.messages, ...live.slice(snapshot.length)],
+    messages: [
+      ...covered,
+      ...prepared.messages.slice(snapshot.length),
+      ...live.slice(snapshot.length),
+    ],
     prevInputTokens,
   };
 }

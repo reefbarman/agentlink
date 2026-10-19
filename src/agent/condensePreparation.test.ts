@@ -295,4 +295,22 @@ describe("mergePreparedSummary", () => {
     expect(merged.messages.at(-1)).toBe(tail);
     expect(merged.prevInputTokens).toBe(500);
   });
+
+  it("rebuilds covered messages from live objects updated in place after preparation", () => {
+    const first = message("task");
+    const reply = message("reply", "assistant");
+    const snapshot = [first, reply];
+    const prepared = summaryResult(snapshot);
+    // e.g. setFinalMarker mutates the latest assistant message in place.
+    reply.uiHint = { finalMarker: { status: "completed" } } as never;
+
+    const merged = mergePreparedSummary(prepared, snapshot, snapshot, 1);
+
+    expect(merged.messages[0]).toBe(first);
+    expect(merged.messages[1]).toMatchObject({
+      condenseParent: "summary-1",
+      uiHint: { finalMarker: { status: "completed" } },
+    });
+    expect(merged.messages[2]?.isSummary).toBe(true);
+  });
 });
