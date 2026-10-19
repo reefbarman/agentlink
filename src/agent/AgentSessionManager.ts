@@ -4,6 +4,7 @@ import {
   BUDGET_EVIDENCE_DIGEST_MARKER,
   buildBudgetEvidenceDigest,
 } from "./background/budgetEvidenceDigest.js";
+import { getCondensePreparation } from "./condensePreparation.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
@@ -4741,6 +4742,16 @@ export class AgentSessionManager {
 
   updateConfig(config: Partial<AgentConfig>): void {
     Object.assign(this.config, config);
+    // An off switch must reach sessions that are already open, and stop any
+    // summary they are preparing.
+    if (config.backgroundCondense !== undefined) {
+      for (const session of this.sessions.values()) {
+        session.backgroundCondense = config.backgroundCondense;
+        if (!config.backgroundCondense) {
+          getCondensePreparation(session).cancel(true);
+        }
+      }
+    }
   }
 
   refreshAgentMaxTokens(): void {
@@ -6738,6 +6749,7 @@ export class AgentSessionManager {
             maxTokens: fg.maxTokens,
             thinkingBudget: fg.thinkingBudget,
             autoCondense: fg.autoCondense,
+            backgroundCondense: fg.backgroundCondense,
             autoCondenseThreshold: fg.autoCondenseThreshold,
             codexStatefulResponses: fg.codexStatefulResponses,
             codexStoreResponses: fg.codexStoreResponses,

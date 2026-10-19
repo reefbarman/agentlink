@@ -1489,6 +1489,8 @@ export async function activate(
     thinkingBudget: agentConfiguration.get<number>("thinkingBudget") ?? 10000,
     showThinking: agentConfiguration.get<boolean>("showThinking") ?? true,
     autoCondense: agentConfiguration.get<boolean>("autoCondense") ?? true,
+    backgroundCondense:
+      agentConfiguration.get<boolean>("backgroundCondense") ?? true,
     autoCondenseThreshold: getConfiguredBaseThresholdForModel(
       startupAgentConfiguration,
       startupModel,
@@ -3482,6 +3484,7 @@ export async function activate(
         e.affectsConfiguration("agentlink.thinkingBudget") ||
         e.affectsConfiguration("agentlink.showThinking") ||
         e.affectsConfiguration("agentlink.autoCondense") ||
+        e.affectsConfiguration("agentlink.backgroundCondense") ||
         e.affectsConfiguration("agentlink.codexStatefulResponses") ||
         e.affectsConfiguration("agentlink.codexStoreResponses") ||
         e.affectsConfiguration("agentlink.codexProMode") ||
@@ -3502,6 +3505,7 @@ export async function activate(
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
           showThinking: windowConfig.get<boolean>("showThinking") ?? true,
           autoCondense: config.get<boolean>("autoCondense") ?? true,
+          backgroundCondense: config.get<boolean>("backgroundCondense") ?? true,
 
           codexStatefulResponses:
             config.get<boolean>("codexStatefulResponses") ?? true,

@@ -24,6 +24,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "modelPromptProfiles",
   "thinkingBudget",
   "autoCondense",
+  "backgroundCondense",
 
   "writeRules",
 

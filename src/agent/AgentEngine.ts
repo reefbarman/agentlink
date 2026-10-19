@@ -96,7 +96,13 @@ import {
 import {
   summarizeConversation,
   injectSyntheticToolResults,
+  rebindSummaryRuntimeContext,
+  type SummarizeResult,
 } from "./condense.js";
+import {
+  getCondensePreparation,
+  getPrepareThresholdTokens,
+} from "./condensePreparation.js";
 import type {
   ModelProvider,
   ContentBlock,
@@ -1588,6 +1594,14 @@ export class AgentEngine {
           );
           if (condensed) retainedToolResults.clear();
           if (signal.aborted) break;
+        } else {
+          this.armCondensePreparation(
+            session,
+            provider,
+            activeModel,
+            preservedContext,
+            projectedRequestLedger,
+          );
         }
         if (
           session.hasPendingInterjections &&
@@ -3573,6 +3587,16 @@ export class AgentEngine {
             },
           );
           if (condensed) retainedToolResults.clear();
+        } else if (
+          !signal.aborted &&
+          session.modelSelectionRevision === requestModelSelectionRevision
+        ) {
+          this.armCondensePreparation(
+            session,
+            provider,
+            activeModel,
+            preservedContext,
+          );
         }
 
         // Inject any pending user interjections between tool batches,
@@ -3909,6 +3933,102 @@ export class AgentEngine {
       buildToolContextBreakdown(tools ? [...tools] : undefined).estimatedTokens,
       0,
     );
+  }
+
+  /**
+   * Start summarizing a transcript snapshot in the background once usage is
+   * within the prepare lead of the auto-condense threshold. The threshold
+   * condense reuses it when still valid (see condensePreparation.ts). Never
+   * throws: preparation is an optimization, not part of the turn.
+   */
+  private armCondensePreparation(
+    session: AgentSession,
+    provider: ModelProvider,
+    activeModel: string,
+    preservedContext: PreservedRuntimeContext | undefined,
+    projectedLedger?: Readonly<ContextLedgerSnapshot>,
+  ): void {
+    try {
+      if (
+        !session.autoCondense ||
+        !session.backgroundCondense ||
+        session.lastInputTokens === 0 ||
+        hasUnansweredUserTurn(session)
+      ) {
+        return;
+      }
+      const budget = getCondenseBudgetSnapshot(
+        session,
+        provider,
+        activeModel,
+        projectedLedger,
+      );
+      if (budget.triggerReason !== null) return;
+      const applyTokens = Math.min(
+        budget.softThresholdBudget,
+        budget.hardBudget,
+      );
+      const prepareTokens = getPrepareThresholdTokens(
+        applyTokens,
+        budget.maxInputTokens,
+      );
+      if (budget.usedTokens < prepareTokens) return;
+      // The summary holds a provider slot until it finishes and is never
+      // preempted. Leave at least one slot free so it cannot delay the
+      // user's next request (for example with provider.maxConcurrentRequests=1).
+      if (this.registry.requestScheduler.availableCapacity(provider.id) < 2) {
+        return;
+      }
+
+      const systemPrompt = session.systemPrompt;
+      const filesRead = [...session.filesRead];
+      const composeFilesRead = [...session.composeFilesRead];
+      const cwd = session.requireProjectRoot();
+      const prevInputTokens = session.lastInputTokens;
+      const started = getCondensePreparation(session).arm({
+        messages: session.getAllMessages(),
+        providerId: provider.id,
+        model: activeModel,
+        usedTokens: budget.usedTokens,
+        start: async (snapshot, signal) => {
+          // Background, not maintenance: maintenance waits for a fully idle
+          // provider, which a busy session rarely has before the threshold.
+          const permit = await this.registry.requestScheduler.acquire(
+            provider.id,
+            "background",
+            signal,
+          );
+          try {
+            return await summarizeConversation(
+              {
+                messages: snapshot,
+                provider,
+                activeModel,
+                systemPrompt,
+                isAutomatic: true,
+                filesRead,
+                composeFilesRead,
+                cwd,
+                preservedContext,
+                signal,
+              },
+              prevInputTokens,
+            );
+          } finally {
+            permit.release();
+          }
+        },
+      });
+      if (started) {
+        this.log?.(
+          `[condense] preparing summary in background at ${budget.usedTokens} tokens (prepare=${prepareTokens}, apply=${applyTokens})`,
+        );
+      }
+    } catch (err) {
+      this.log?.(
+        `[condense] background preparation skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   isOverCondenseThreshold(
@@ -4279,6 +4399,8 @@ export class AgentEngine {
     const condenseStartedAt = Date.now();
     let providerQueueMs = 0;
     let summarizeMs = 0;
+    let preparationWaitMs: number | undefined;
+    let preparationRejection: string | undefined;
     const buildTiming = (): CondenseTiming => ({
       trigger: opts?.trigger ?? (isAutomatic ? "automatic" : "manual"),
       isAutomatic,
@@ -4286,6 +4408,13 @@ export class AgentEngine {
       totalMs: Date.now() - condenseStartedAt,
       providerQueueMs,
       summarizeMs,
+      ...(preparationWaitMs !== undefined
+        ? {
+            preparedReused: preparationRejection === undefined,
+            preparationWaitMs,
+            ...(preparationRejection ? { preparationRejection } : {}),
+          }
+        : {}),
     });
     const hookRuntime = opts?.hookRuntime;
     const hookTurnId = opts?.hookTurnId ?? "";
@@ -4311,101 +4440,144 @@ export class AgentEngine {
     const resolvedProvider =
       provider ?? this.registry.resolveProvider(activeModel);
 
-    const providerQueueStartedAt = Date.now();
-    const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
-      resolvedProvider.id,
-      opts?.isBackground ? "background" : "interactive",
-    );
-    const permitPromise = this.registry.requestScheduler.acquire(
-      resolvedProvider.id,
-      opts?.isBackground ? "background" : "interactive",
-      opts?.signal,
-    );
-    if (!opts?.isBackground) {
-      opts?.onProviderAdmissionPhase?.(
-        schedulerQueued ? "queued_for_provider" : "running",
+    // Threshold condenses can reuse a summary prepared in the background.
+    // Every other condense (manual, recovery) supersedes any preparation.
+    const preparation = getCondensePreparation(session);
+    let preparedResult: SummarizeResult | undefined;
+    if (opts?.trigger === "threshold" && session.backgroundCondense) {
+      const budget = getCondenseBudgetSnapshot(
+        session,
+        resolvedProvider,
+        activeModel,
       );
-    }
-    const permit = await permitPromise;
-    providerQueueMs = Date.now() - providerQueueStartedAt;
-    if (!opts?.isBackground) {
-      opts?.onProviderAdmissionPhase?.("running");
+      const taken = await preparation.take({
+        readMessages: () => session.getAllMessages(),
+        providerId: resolvedProvider.id,
+        model: activeModel,
+        usedTokens: budget.usedTokens,
+        applyTokens: Math.min(budget.softThresholdBudget, budget.hardBudget),
+        signal: opts?.signal,
+      });
+      if (taken.result && taken.snapshot) {
+        // Report the same provider-measured baseline as a foreground condense,
+        // and replace the tool/skill/TODO context captured at preparation
+        // time with the context current now.
+        const reported = { ...taken.result, prevInputTokens };
+        preparedResult = preservedContext
+          ? rebindSummaryRuntimeContext(
+              reported,
+              taken.snapshot,
+              preservedContext,
+            )
+          : reported;
+      }
+      preparationWaitMs = taken.waitMs;
+      preparationRejection = taken.rejection;
+    } else {
+      preparation.cancel(false);
     }
 
-    const condenseInputMessages = [...session.getAllMessages()];
+    let condenseInputMessages: AgentMessage[];
     const requestAttributionEvents: Array<
       Extract<AgentEvent, { type: "request_context_attribution" }>
     > = [];
     let result: Awaited<ReturnType<typeof summarizeConversation>> | undefined;
     let summarizeError: unknown;
     let summarizeThrew = false;
-    const summarizeStartedAt = Date.now();
-    try {
-      result = await summarizeConversation(
-        {
-          messages: condenseInputMessages,
-          provider: resolvedProvider,
-          activeModel,
-          systemPrompt: session.systemPrompt,
-          isAutomatic,
-          filesRead: [...session.filesRead],
-          composeFilesRead: [...session.composeFilesRead],
-          cwd: session.requireProjectRoot(),
-          preservedContext,
-          onProviderRequest: (request) => {
-            requestAttributionEvents.push({
-              type: "request_context_attribution",
-              requestId: request.requestId,
-              requestKind: "condense",
-              model: request.model,
-              providerId: resolvedProvider.id,
-              mode: session.mode,
-              promptProfile: session.promptProfile.profile,
-              background: session.background,
-              estimatedInputTokens: request.estimatedInputTokens,
-              // Condense converts tool carriers into bounded summary-source text,
-              // so original call-level detail would not describe this request exactly.
-              toolResultContextAttributions: [],
-              omittedToolResultContextAttributions: 0,
-              pinnedMemoryTokens: 0,
-              retrievedMemoryTokens: 0,
-            });
-          },
-          onProviderRequestComplete: ({ requestId, usage }) => {
-            if (!usage) return;
-            const request = requestAttributionEvents.find(
-              (event) => event.requestId === requestId,
-            );
-            if (!request) return;
-            const cacheReadTokens = usage.cacheReadTokens ?? 0;
-            const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
-            request.completedUsage = {
-              inputTokens:
-                usage.inputTokens + cacheReadTokens + cacheCreationTokens,
-              uncachedInputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              cacheReadTokens,
-              cacheCreationTokens,
-              ...(usage.inputTokenBreakdownReported !== undefined
-                ? {
-                    inputTokenBreakdownReported:
-                      usage.inputTokenBreakdownReported,
-                  }
-                : {}),
-              ...(usage.estimated !== undefined
-                ? { usageEstimated: usage.estimated }
-                : {}),
-            };
-          },
-        },
-        prevInputTokens,
+    if (preparedResult) {
+      condenseInputMessages = [...session.getAllMessages()];
+      result = preparedResult;
+    } else {
+      const providerQueueStartedAt = Date.now();
+      const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
+        resolvedProvider.id,
+        opts?.isBackground ? "background" : "interactive",
       );
-    } catch (error) {
-      summarizeThrew = true;
-      summarizeError = error;
-    } finally {
-      summarizeMs = Date.now() - summarizeStartedAt;
-      permit.release();
+      const permitPromise = this.registry.requestScheduler.acquire(
+        resolvedProvider.id,
+        opts?.isBackground ? "background" : "interactive",
+        opts?.signal,
+      );
+      if (!opts?.isBackground) {
+        opts?.onProviderAdmissionPhase?.(
+          schedulerQueued ? "queued_for_provider" : "running",
+        );
+      }
+      const permit = await permitPromise;
+      providerQueueMs = Date.now() - providerQueueStartedAt;
+      if (!opts?.isBackground) {
+        opts?.onProviderAdmissionPhase?.("running");
+      }
+
+      condenseInputMessages = [...session.getAllMessages()];
+      const summarizeStartedAt = Date.now();
+      try {
+        result = await summarizeConversation(
+          {
+            messages: condenseInputMessages,
+            provider: resolvedProvider,
+            activeModel,
+            systemPrompt: session.systemPrompt,
+            isAutomatic,
+            filesRead: [...session.filesRead],
+            composeFilesRead: [...session.composeFilesRead],
+            cwd: session.requireProjectRoot(),
+            preservedContext,
+            onProviderRequest: (request) => {
+              requestAttributionEvents.push({
+                type: "request_context_attribution",
+                requestId: request.requestId,
+                requestKind: "condense",
+                model: request.model,
+                providerId: resolvedProvider.id,
+                mode: session.mode,
+                promptProfile: session.promptProfile.profile,
+                background: session.background,
+                estimatedInputTokens: request.estimatedInputTokens,
+                // Condense converts tool carriers into bounded summary-source text,
+                // so original call-level detail would not describe this request exactly.
+                toolResultContextAttributions: [],
+                omittedToolResultContextAttributions: 0,
+                pinnedMemoryTokens: 0,
+                retrievedMemoryTokens: 0,
+              });
+            },
+            onProviderRequestComplete: ({ requestId, usage }) => {
+              if (!usage) return;
+              const request = requestAttributionEvents.find(
+                (event) => event.requestId === requestId,
+              );
+              if (!request) return;
+              const cacheReadTokens = usage.cacheReadTokens ?? 0;
+              const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
+              request.completedUsage = {
+                inputTokens:
+                  usage.inputTokens + cacheReadTokens + cacheCreationTokens,
+                uncachedInputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cacheReadTokens,
+                cacheCreationTokens,
+                ...(usage.inputTokenBreakdownReported !== undefined
+                  ? {
+                      inputTokenBreakdownReported:
+                        usage.inputTokenBreakdownReported,
+                    }
+                  : {}),
+                ...(usage.estimated !== undefined
+                  ? { usageEstimated: usage.estimated }
+                  : {}),
+              };
+            },
+          },
+          prevInputTokens,
+        );
+      } catch (error) {
+        summarizeThrew = true;
+        summarizeError = error;
+      } finally {
+        summarizeMs = Date.now() - summarizeStartedAt;
+        permit.release();
+      }
     }
 
     for (const event of requestAttributionEvents) yield event;
@@ -4453,6 +4625,7 @@ export class AgentEngine {
     session.replaceMessages(messagesWithUiHints, {
       preserveHumanDecisionRecord: true,
     });
+    preparation.cancel(true);
     const projection = buildPostCondenseProjection(
       session,
       resolvedProvider,

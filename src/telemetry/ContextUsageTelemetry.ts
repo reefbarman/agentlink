@@ -53,6 +53,16 @@ export interface CondenseTiming {
   providerQueueMs: number;
   /** Time spent in the summarization request(s), including shrink retries. */
   summarizeMs: number;
+  /**
+   * Set on threshold condenses when background preparation is enabled: whether
+   * a summary prepared in the background was installed instead of summarizing
+   * in the foreground.
+   */
+  preparedReused?: boolean;
+  /** Time the turn waited for an in-flight background preparation. */
+  preparationWaitMs?: number;
+  /** Why a preparation was not reused ("none" means none was prepared). */
+  preparationRejection?: string;
 }
 
 export type ContextUsageRecord =

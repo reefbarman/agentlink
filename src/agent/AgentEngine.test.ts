@@ -96,12 +96,17 @@ vi.mock("./systemPrompt.js", () => ({
     ),
 }));
 
-vi.mock("./condense.js", () => ({
-  summarizeConversation: mocks.mockSummarizeConversation,
-  getEffectiveHistory: mocks.mockGetEffectiveHistory,
-  injectSyntheticToolResults: mocks.mockInjectSyntheticToolResults,
-  enforceToolResultAdjacency: mocks.mockEnforceToolResultAdjacency,
-}));
+vi.mock("./condense.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./condense.js")>("./condense.js");
+  return {
+    summarizeConversation: mocks.mockSummarizeConversation,
+    getEffectiveHistory: mocks.mockGetEffectiveHistory,
+    injectSyntheticToolResults: mocks.mockInjectSyntheticToolResults,
+    enforceToolResultAdjacency: mocks.mockEnforceToolResultAdjacency,
+    rebindSummaryRuntimeContext: actual.rebindSummaryRuntimeContext,
+  };
+});
 
 const TEST_MODEL = "claude-sonnet-4-6";
 
@@ -8683,6 +8688,263 @@ describe("AgentEngine", () => {
           }),
         }),
       );
+    });
+
+    describe("background preparation", () => {
+      type Armable = {
+        armCondensePreparation(
+          session: AgentSession,
+          provider: ModelProvider,
+          model: string,
+          preservedContext: undefined,
+        ): void;
+      };
+      // TEST_CAPABILITIES: 191,808 usable input; threshold 0.9 applies at
+      // 172,627 and the 19,180-token lead prepares from 153,447.
+      const PREPARE_BAND_TOKENS = 160_000;
+      const OVER_THRESHOLD_TOKENS = 175_000;
+
+      function mockPreparedSummary() {
+        mocks.mockSummarizeConversation.mockImplementation(
+          async (options: { messages: AgentMessage[] }) => ({
+            messages: [
+              ...options.messages.map((message, index) =>
+                index === 0
+                  ? message
+                  : { ...message, condenseParent: "prepared" },
+              ),
+              {
+                role: "user",
+                content: "prepared summary",
+                isSummary: true,
+              },
+            ],
+            summary: "prepared summary",
+            prevInputTokens: PREPARE_BAND_TOKENS,
+            newInputTokens: 1_000,
+          }),
+        );
+      }
+
+      it("installs the prepared summary at the threshold and keeps later messages verbatim", async () => {
+        mockPreparedSummary();
+        const provider = makeMockProvider();
+        const engine = new AgentEngine(makeRegistry(provider));
+        const session = await makeSession();
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+
+        (engine as unknown as Armable).armCondensePreparation(
+          session,
+          provider,
+          session.model,
+          undefined,
+        );
+        await vi.waitFor(() => {
+          expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+        });
+        const prepareCall = mocks.mockSummarizeConversation.mock.calls[0]![0];
+        expect(prepareCall.messages).toHaveLength(2);
+        expect(prepareCall.signal).toBeInstanceOf(AbortSignal);
+
+        session.addUserMessage("follow-up after the snapshot");
+        const followUp = session.getAllMessages().at(-1);
+        session.lastInputTokens = OVER_THRESHOLD_TOKENS;
+
+        const events = await collectEvents(
+          engine.condenseSession(
+            session,
+            true,
+            provider,
+            undefined,
+            session.model,
+            { trigger: "threshold" },
+          ),
+        );
+
+        expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+        const condense = events.find(
+          (event): event is Extract<AgentEvent, { type: "condense" }> =>
+            event.type === "condense",
+        );
+        expect(condense?.timing).toMatchObject({
+          trigger: "threshold",
+          preparedReused: true,
+          summarizeMs: 0,
+          preparationWaitMs: expect.any(Number),
+        });
+        expect(condense?.prevInputTokens).toBe(OVER_THRESHOLD_TOKENS);
+        const messages = session.getAllMessages();
+        expect(messages.at(-1)).toBe(followUp);
+        expect(messages.at(-1)?.condenseParent).toBeUndefined();
+        expect(messages.at(-2)).toMatchObject({
+          isSummary: true,
+          content: "prepared summary",
+        });
+      });
+
+      it("falls back to a foreground condense when the transcript was rewritten", async () => {
+        mockPreparedSummary();
+        const provider = makeMockProvider();
+        const engine = new AgentEngine(makeRegistry(provider));
+        const session = await makeSession();
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+        (engine as unknown as Armable).armCondensePreparation(
+          session,
+          provider,
+          session.model,
+          undefined,
+        );
+        await vi.waitFor(() => {
+          expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+        });
+
+        // A rewind replaces the transcript with different message objects.
+        session.replaceMessages(
+          session.getAllMessages().map((message) => ({ ...message })),
+        );
+        session.lastInputTokens = OVER_THRESHOLD_TOKENS;
+        const events = await collectEvents(
+          engine.condenseSession(
+            session,
+            true,
+            provider,
+            undefined,
+            session.model,
+            { trigger: "threshold" },
+          ),
+        );
+
+        expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(2);
+        const condense = events.find(
+          (event): event is Extract<AgentEvent, { type: "condense" }> =>
+            event.type === "condense",
+        );
+        expect(condense?.timing).toMatchObject({
+          preparedReused: false,
+          preparationRejection: "transcript_changed",
+        });
+      });
+
+      it("replaces runtime context captured at preparation with the current tools and TODOs", async () => {
+        mocks.mockSummarizeConversation.mockImplementation(
+          async (options: { messages: AgentMessage[] }) => ({
+            messages: [
+              ...options.messages,
+              {
+                role: "user",
+                isSummary: true,
+                preservedContext: { toolNames: ["old_tool"], todos: [] },
+                content: [
+                  { type: "text", text: "stale deterministic sections" },
+                  { type: "text", text: "## Conversation Summary\n\nprose" },
+                ],
+              },
+            ],
+            summary: "prose",
+            prevInputTokens: PREPARE_BAND_TOKENS,
+            newInputTokens: 1_000,
+          }),
+        );
+        const provider = makeMockProvider();
+        const engine = new AgentEngine(makeRegistry(provider));
+        const session = await makeSession();
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+        (engine as unknown as Armable).armCondensePreparation(
+          session,
+          provider,
+          session.model,
+          undefined,
+        );
+        await vi.waitFor(() => {
+          expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+        });
+        session.lastInputTokens = OVER_THRESHOLD_TOKENS;
+        const current = {
+          toolNames: ["read_file"],
+          todos: [
+            {
+              id: "t1",
+              content: "Ship the current step",
+              activeForm: "Shipping the current step",
+              status: "in_progress" as const,
+            },
+          ],
+        };
+
+        await collectEvents(
+          engine.condenseSession(
+            session,
+            true,
+            provider,
+            current,
+            session.model,
+            { trigger: "threshold" },
+          ),
+        );
+
+        const summary = session
+          .getAllMessages()
+          .find((message) => message.isSummary);
+        expect(summary?.preservedContext).toEqual(current);
+        const blocks = summary?.content as Array<{ text: string }>;
+        expect(blocks[0]?.text).toContain("read_file");
+        expect(blocks[0]?.text).toContain("Ship the current step");
+        expect(blocks[0]?.text).not.toContain("stale deterministic sections");
+        expect(blocks[1]?.text).toBe("## Conversation Summary\n\nprose");
+      });
+
+      it("does not prepare when only one provider slot is free", async () => {
+        mockPreparedSummary();
+        const provider = makeMockProvider();
+        const registry = makeRegistry(provider);
+        registry.requestScheduler.setMaxConcurrentPerProvider(1);
+        const engine = new AgentEngine(registry);
+        const session = await makeSession();
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+
+        (engine as unknown as Armable).armCondensePreparation(
+          session,
+          provider,
+          session.model,
+          undefined,
+        );
+
+        expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
+      });
+
+      it("does not prepare when background condense is turned off or usage is below the band", async () => {
+        mockPreparedSummary();
+        const provider = makeMockProvider();
+        const engine = new AgentEngine(makeRegistry(provider));
+        const session = await makeSession({
+          ...testConfig,
+          backgroundCondense: false,
+        });
+        session.addUserMessage("original task");
+        session.appendAssistantTurn([{ type: "text", text: "working" }]);
+        session.lastInputTokens = PREPARE_BAND_TOKENS;
+        const arm = () =>
+          (engine as unknown as Armable).armCondensePreparation(
+            session,
+            provider,
+            session.model,
+            undefined,
+          );
+        arm();
+        session.backgroundCondense = true;
+        session.lastInputTokens = 100_000;
+        arm();
+
+        expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
+      });
     });
   });
 });

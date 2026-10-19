@@ -91,6 +91,17 @@ export class ModelRequestScheduler {
     );
   }
 
+  /** Free provider slots after active and already-queued requests. */
+  availableCapacity(providerId: string): number {
+    const queue = this.queues.get(providerId);
+    return Math.max(
+      0,
+      this.maxConcurrentPerProvider -
+        (queue?.active ?? 0) -
+        (queue?.pending.length ?? 0),
+    );
+  }
+
   acquire(
     providerId: string,
     priority: ModelRequestPriority,

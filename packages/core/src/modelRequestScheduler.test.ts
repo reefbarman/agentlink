@@ -127,6 +127,20 @@ describe("ModelRequestScheduler", () => {
     third.release();
   });
 
+  it("reports free slots after active and queued requests", async () => {
+    const scheduler = new ModelRequestScheduler(2);
+    expect(scheduler.availableCapacity("codex")).toBe(2);
+    const first = await scheduler.acquire("codex", "background");
+    expect(scheduler.availableCapacity("codex")).toBe(1);
+    const second = await scheduler.acquire("codex", "background");
+    const queued = scheduler.acquire("codex", "interactive");
+    expect(scheduler.availableCapacity("codex")).toBe(0);
+    first.release();
+    second.release();
+    (await queued).release();
+    expect(scheduler.availableCapacity("codex")).toBe(2);
+  });
+
   it("lets active work finish when the live limit is lowered", async () => {
     const scheduler = new ModelRequestScheduler(2);
     const first = await scheduler.acquire("codex", "background");

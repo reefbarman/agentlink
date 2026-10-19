@@ -399,4 +399,52 @@ test("summarizes condense timing by trigger and isolates foreground turn blockin
   assert.equal(legacy.totalMs.samples, 1);
   assert.equal(legacy.totalMs.p50, 5_000);
   assert.equal(legacy.summarizeMs.samples, 0);
+  assert.equal(timing.preparation.eligible, 0);
+});
+
+test("reports background preparation reuse and rejection reasons", () => {
+  const condense = (overrides) => ({
+    kind: "condense",
+    sessionId: "s",
+    model: "m",
+    trigger: "threshold",
+    isAutomatic: true,
+    background: false,
+    providerQueueMs: 0,
+    summarizeMs: 0,
+    ...overrides,
+  });
+  const { preparation } = summarize(
+    [
+      condense({ totalMs: 300, preparedReused: true, preparationWaitMs: 0 }),
+      condense({
+        totalMs: 9_000,
+        preparedReused: true,
+        preparationWaitMs: 8_500,
+      }),
+      condense({
+        totalMs: 40_000,
+        preparedReused: false,
+        preparationWaitMs: 0,
+        preparationRejection: "none",
+      }),
+      condense({
+        totalMs: 41_000,
+        preparedReused: false,
+        preparationWaitMs: 0,
+        preparationRejection: "transcript_changed",
+      }),
+      condense({ totalMs: 39_000 }),
+    ],
+    5,
+  ).condenseTiming;
+
+  assert.equal(preparation.eligible, 4);
+  assert.equal(preparation.reused, 2);
+  assert.deepEqual(preparation.rejections, {
+    none: 1,
+    transcript_changed: 1,
+  });
+  assert.equal(preparation.reusedTotalMs.max, 9_000);
+  assert.equal(preparation.waitMs.p90, 8_500);
 });

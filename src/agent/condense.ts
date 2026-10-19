@@ -595,6 +595,8 @@ export interface SummarizeOptions {
   composeFilesRead?: string[];
   cwd?: string;
   preservedContext?: PreservedRuntimeContext;
+  /** Cancels the summarization request (used by background preparation). */
+  signal?: AbortSignal;
   onProviderRequest?: (request: {
     requestId: string;
     model: string;
@@ -1214,8 +1216,15 @@ export async function summarizeConversation(
       | undefined;
 
     for (const model of modelCandidates) {
+      if (options.signal?.aborted) {
+        return { text: "", error: "Condensing was cancelled" };
+      }
+      const controller = new AbortController();
+      const abortFromCaller = () => controller.abort();
+      options.signal?.addEventListener("abort", abortFromCaller, {
+        once: true,
+      });
       try {
-        const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), CONDENSE_TIMEOUT_MS);
         try {
           const estimatedInputTokens = estimateCondenseInputTokens({
@@ -1255,7 +1264,9 @@ export async function summarizeConversation(
         if (err instanceof DOMException && err.name === "AbortError") {
           return {
             text: "",
-            error: `Condensing timed out after ${CONDENSE_TIMEOUT_MS / 1000}s`,
+            error: options.signal?.aborted
+              ? "Condensing was cancelled"
+              : `Condensing timed out after ${CONDENSE_TIMEOUT_MS / 1000}s`,
           };
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -1285,6 +1296,8 @@ export async function summarizeConversation(
             ...lastErrorMeta,
           };
         }
+      } finally {
+        options.signal?.removeEventListener("abort", abortFromCaller);
       }
     }
 
@@ -1462,4 +1475,40 @@ export async function summarizeConversation(
       }),
     },
   };
+}
+
+/**
+ * A summary prepared in the background captured the runtime context (tools,
+ * MCP servers, active skills, authoritative TODO state) from when it started.
+ * Re-render that deterministic block and the summary's preservedContext with
+ * the context current at install time; the model-written prose is unchanged.
+ */
+export function rebindSummaryRuntimeContext(
+  result: SummarizeResult,
+  snapshot: readonly AgentMessage[],
+  preservedContext: PreservedRuntimeContext,
+): SummarizeResult {
+  const summaryIndex = snapshot.length;
+  const summary = result.messages[summaryIndex];
+  if (!summary?.isSummary || !Array.isArray(summary.content)) return result;
+  const [firstBlock, ...rest] = summary.content;
+  if (firstBlock?.type !== "text") return result;
+
+  const toSummarize = getMessagesSinceLastSummary([...snapshot]);
+  const userMessages = extractCanonicalUserMessages(toSummarize);
+  const pendingTasks = extractPendingTasksHeuristic(toSummarize);
+  const sections = renderDeterministicSections({
+    userMessages,
+    pendingTasks,
+    resumeAnchor: extractCondenseResumeAnchor({ userMessages, pendingTasks }),
+    recallAnchors: extractCondenseRecallAnchors(toSummarize),
+    preservedContext,
+  });
+  const messages = [...result.messages];
+  messages[summaryIndex] = {
+    ...summary,
+    preservedContext,
+    content: [{ type: "text", text: sections } satisfies TextBlock, ...rest],
+  };
+  return { ...result, messages };
 }

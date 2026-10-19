@@ -202,6 +202,8 @@ export class AgentSession {
   /** Speed choice; premium tiers apply only on models that support them. */
   serviceTier: CoreServiceTierSelection;
   autoCondense: boolean;
+  /** Prepare the auto-condense summary in the background before the threshold. */
+  backgroundCondense: boolean;
   autoCondenseThreshold: number;
   codexStatefulResponses: boolean;
   codexStoreResponses: boolean;
@@ -411,6 +413,7 @@ export class AgentSession {
     this.desiredReasoningEffort = "high";
     this.serviceTier = "standard";
     this.autoCondense = opts.config.autoCondense ?? true;
+    this.backgroundCondense = opts.config.backgroundCondense ?? true;
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
     this.codexStoreResponses = opts.config.codexStoreResponses ?? false;

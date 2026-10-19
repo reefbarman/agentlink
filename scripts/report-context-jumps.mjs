@@ -369,7 +369,29 @@ export function summarizeCondenseTiming(condenses, failures) {
   const thresholdBlocking = turnBlocking.filter(
     (event) => event.trigger === "threshold",
   );
+  // Background preparation fields exist only when the feature was enabled.
+  const prepared = [...condenses, ...failures].filter(
+    (event) => typeof event.preparedReused === "boolean",
+  );
+  const rejections = {};
+  for (const event of prepared) {
+    if (event.preparedReused) continue;
+    const reason = event.preparationRejection ?? "unknown";
+    rejections[reason] = (rejections[reason] ?? 0) + 1;
+  }
+  const reused = prepared.filter((event) => event.preparedReused === true);
   return {
+    preparation: {
+      eligible: prepared.length,
+      reused: reused.length,
+      rejections,
+      reusedTotalMs: distribution(
+        reused.map((event) => finiteMs(event.totalMs)),
+      ),
+      waitMs: distribution(
+        reused.map((event) => finiteMs(event.preparationWaitMs)),
+      ),
+    },
     groups: [...groups.values()]
       .map((group) => ({
         group: group.group,
@@ -569,6 +591,19 @@ function printCondenseTiming(timing) {
     );
   line("turn blocked (fg auto, all)", blocking.all);
   line("turn blocked (fg threshold)", blocking.threshold);
+  const preparation = timing.preparation;
+  if (preparation.eligible > 0) {
+    line("prepared summary reused", preparation.reusedTotalMs);
+    line("  waited for preparation", preparation.waitMs);
+    const rejected = Object.entries(preparation.rejections)
+      .sort(([, a], [, b]) => b - a)
+      .map(([reason, count]) => `${reason}=${fmt(count)}`)
+      .join(" ");
+    console.log(
+      `  background preparation: reused ${fmt(preparation.reused)}/${fmt(preparation.eligible)} threshold condenses` +
+        (rejected ? `  not reused: ${rejected}` : ""),
+    );
+  }
   console.log("");
   for (const group of timing.groups) {
     const d = group.totalMs;

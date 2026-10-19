@@ -1145,6 +1145,12 @@
           "default": true,
           "description": "Automatically condense the conversation context when the context window fills up."
         },
+        "agentlink.backgroundCondense": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": true,
+          "description": "Experimental: prepare the auto-condense summary in the background shortly before the condense threshold, so condensing does not pause the turn. Messages added after the summary started are kept verbatim. Turn off to always condense in the foreground."
+        },
         "agentlink.modelCondenseThresholds": {
           "scope": "application",
           "type": "object",

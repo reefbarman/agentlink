@@ -10,6 +10,7 @@ import {
   AgentSessionManager,
   recoverInterruptedRunMessages,
 } from "./AgentSessionManager.js";
+import { getCondensePreparation } from "./condensePreparation.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import { SkillSelectionError } from "./explicitSkillSelection.js";
 import { SessionStore } from "./SessionStore.js";
@@ -221,6 +222,33 @@ describe("AgentSessionManager host injection", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("applies the background condense switch to open sessions and stops their preparation", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const preparation = getCondensePreparation(session);
+    preparation.arm({
+      providerId: "p",
+      model: "m",
+      messages: [{ role: "user", content: "task" }],
+      usedTokens: 1,
+      start: () => new Promise(() => {}),
+    });
+    expect(preparation.hasTask).toBe(true);
+
+    mgr.updateConfig({ backgroundCondense: false });
+
+    expect(session.backgroundCondense).toBe(false);
+    expect(preparation.hasTask).toBe(false);
+    mgr.updateConfig({ backgroundCondense: true });
+    expect(session.backgroundCondense).toBe(true);
   });
 
   it.each([false, true])(

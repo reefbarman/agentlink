@@ -226,6 +226,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           maxTokens: base.maxTokens,
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
           autoCondense: config.get<boolean>("autoCondense") ?? true,
+          backgroundCondense: config.get<boolean>("backgroundCondense") ?? true,
           codexStatefulResponses:
             config.get<boolean>("codexStatefulResponses") ?? true,
           codexStoreResponses:

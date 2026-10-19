@@ -404,6 +404,8 @@ export interface AgentConfig {
   thinkingBudget: number;
   showThinking: boolean;
   autoCondense: boolean;
+  /** Prepare the auto-condense summary in the background (default true). */
+  backgroundCondense?: boolean;
   autoCondenseThreshold: number; // 0–1, e.g. 0.9 = 90%
   codexStatefulResponses?: boolean;
   codexStoreResponses?: boolean;
