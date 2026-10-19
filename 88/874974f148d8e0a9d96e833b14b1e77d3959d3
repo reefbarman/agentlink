@@ -1,0 +1,31 @@
+packages/node-host/src/McpClientHub.ts
+  h_e08a86bb3a33a2 1102-1112,1606-1607
+  s_07b8e8ebc3bad6::t_47d5b79f52ab29 1082,1113,1608
+src/agent/McpClientHub.test.ts
+  h_e08a86bb3a33a2 1153-1183
+CHANGELOG.md
+  h_e08a86bb3a33a2 9
+resources/builtin-skills/documentation/references/release-notes.md
+  s_07b8e8ebc3bad6::t_75098091c22309 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88874974f148d8e0a9d96e833b14b1e77d3959d3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_07b8e8ebc3bad6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52f4d718-e178-4c0e-a924-410bdc67026b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
