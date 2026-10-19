@@ -3594,6 +3594,37 @@ html.quick-ask-document body {
   overflow-wrap: anywhere;
 }
 
+/* Why a setup action is unavailable, just above its button. */
+.browser-shell.browser-shell-desktop .assistant-setup-hint {
+  margin: 0;
+  color: var(--ag-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* A confirmation checkbox inside a description (backup password). */
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  label.assistant-job-enabled {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--ag-text);
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  label.assistant-job-enabled
+  input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--ag-accent);
+  cursor: pointer;
+}
+
 @media (max-width: 600px) {
   .browser-shell.browser-shell-desktop
     .assistant-settings-described-list

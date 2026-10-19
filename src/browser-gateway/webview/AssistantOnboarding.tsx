@@ -1036,6 +1036,13 @@ function SummaryStep({
           </li>
         )}
       </ul>
+      {(!modelReady || (backup.configured && !passwordSaved)) && (
+        <p class="assistant-setup-hint">
+          Finishing needs a model connection
+          {backup.configured ? " and the backup password saved" : ""}. You can
+          close this and come back from Setup.
+        </p>
+      )}
       <footer class="assistant-settings-actions">
         <button
           class="primary"
@@ -1048,13 +1055,6 @@ function SummaryStep({
           Finish setup
         </button>
       </footer>
-      {(!modelReady || (backup.configured && !passwordSaved)) && (
-        <p class="assistant-panel-empty">
-          Finishing needs a model connection
-          {backup.configured ? " and the backup password saved" : ""}. You can
-          close this and come back from Setup.
-        </p>
-      )}
     </section>
   );
 }
