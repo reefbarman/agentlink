@@ -3315,6 +3315,11 @@ export function App({
           });
           break;
 
+        case "fork":
+          setChatTabFailure(null);
+          vscodeApi.postMessage({ command: "chatTabFork" });
+          break;
+
         case "mode": {
           const slug = args.trim();
           if (slug) handleSwitchMode(slug);

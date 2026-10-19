@@ -144,6 +144,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "fork",
+    description:
+      "Copy this conversation into a new tab to take it in a different direction",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "context-doctor",
     description: "Show a read-only context allocation and retention report",
     source: "builtin",

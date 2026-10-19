@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/fork` copies the current chat into a new tab, so you can use the same context for something else while the original stays untouched. The fork keeps the transcript, mode, model and loaded skills, but starts with default approval settings, no checkpoints and no handoff lineage. It works in VS Code chat and browser workspace tabs.
+
 ## 1.40.0
 
 - AgentLink Assistant installer: turn the optional **Edit task workspaces** (`editor`) and **Research with a browser** (`browser`) features on or off with `install.sh enable|disable editor|browser`, list them with `install.sh capabilities`, and stop the whole installation with `install.sh uninstall` (undo with `resume`). Changes use the release's own hash-checked template and pinned image, drain work and take a backup first, and put the previous configuration back if the Assistant does not start. Uninstall removes only the Assistant's own containers and networks and deletes nothing: configuration, secrets, data and backups stay, and removing them for good is left to you. Browser updates and these commands share a deployment guard, so they never overlap; an interrupted change blocks both until `install.sh recover` puts the saved configuration back. **Setup → Connections** shows each feature's state and the command to run, but cannot change it. Needs a release with `"lifecycleProtocol": 1` in its deployment metadata. Turning a feature on or off retires the last update's rollback point and says so, because rolling that update back afterwards could remove a template the new configuration uses; rollback then refuses with nothing stopped, and going back past it means restoring a backup.

@@ -5617,17 +5617,52 @@ export function BrowserGatewayApp({
     instanceId: string,
     workspace: BrowserGatewayChatWorkspaceSummary,
   ): Promise<void> {
-    if (newTabPendingRef.current) return;
     const sourceTab =
       workspace.tabs.find((tab) => tab.tabId === workspace.focusedTabId) ??
       workspace.tabs[0];
     if (!sourceTab) return;
+    await openTabFromSource(instanceId, workspace, sourceTab, "new");
+  }
+
+  /** Copy the browser-selected chat into a new VS Code tab and select it. */
+  function handleForkTab(): void {
+    const instanceId = selectedTabId;
+    const workspace =
+      snapshotCacheRef.current.get(instanceId)?.snapshot.session.chatWorkspace;
+    const current = selectedLogicalTabRef.current;
+    const sourceTab =
+      workspace &&
+      current?.instanceId === instanceId &&
+      current.controllerEpoch === workspace.controllerEpoch
+        ? workspace.tabs.find(
+            (tab) =>
+              tab.tabId === current.tabId &&
+              tab.sessionId === current.sessionId,
+          )
+        : undefined;
+    if (!workspace || !sourceTab?.sessionId) {
+      setModeStatus("No active chat is loaded to fork.");
+      return;
+    }
+    void openTabFromSource(instanceId, workspace, sourceTab, "fork");
+  }
+
+  async function openTabFromSource(
+    instanceId: string,
+    workspace: BrowserGatewayChatWorkspaceSummary,
+    sourceTab: { tabId: string; sessionId: string | null },
+    action: "new" | "fork",
+  ): Promise<void> {
+    if (newTabPendingRef.current) return;
     newTabPendingRef.current = true;
     setNewTabPendingInstance(instanceId);
     setNewTabError(null);
     try {
       const response = await fetch(
-        buildApiPathForInstance("/api/tabs/new", instanceId),
+        buildApiPathForInstance(
+          action === "fork" ? "/api/tabs/fork" : "/api/tabs/new",
+          instanceId,
+        ),
         {
           method: "POST",
           credentials: "same-origin",
@@ -5675,7 +5710,12 @@ export function BrowserGatewayApp({
       setOwnerSnapshotRevision((revision) => revision + 1);
       handleLogicalTabSelect(instanceId, nextWorkspace, nextTab);
     } catch (error) {
-      setNewTabError(`Unable to create a new tab: ${String(error)}`);
+      const message =
+        action === "fork"
+          ? `Unable to fork this chat: ${String(error)}`
+          : `Unable to create a new tab: ${String(error)}`;
+      setNewTabError(message);
+      if (action === "fork") setModeStatus(message);
     } finally {
       newTabPendingRef.current = false;
       setNewTabPendingInstance(null);
@@ -7583,6 +7623,13 @@ export function BrowserGatewayApp({
         return;
       case "handoff":
         if (!isAskAgentSelected) prepareSessionHandoff();
+        return;
+      case "fork":
+        if (isAskAgentSelected) {
+          setModeStatus("Fork is available for VS Code workspace chats.");
+        } else {
+          handleForkTab();
+        }
         return;
       case "environment":
         setEnvironmentPanelOpen(true);

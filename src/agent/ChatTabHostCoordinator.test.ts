@@ -76,6 +76,18 @@ function createHarness() {
       async (id: string) => sessions.get(id) ?? null,
     ),
     loadPersistedSession: vi.fn(async (id: string) => sessions.get(id) ?? null),
+    forkSession: vi.fn(
+      async (
+        sourceId: string,
+      ): Promise<
+        | { ok: true; session: AgentSession }
+        | { ok: false; code: string; message: string }
+      > => {
+        const forked = session(`fork-of-${sourceId}`);
+        sessions.set(forked.id, forked);
+        return { ok: true, session: forked };
+      },
+    ),
     stopSessionAndWait: vi.fn(async () => []),
     switchTo: vi.fn(),
   };
@@ -102,6 +114,50 @@ function createHarness() {
 }
 
 describe("ChatTabHostCoordinator", () => {
+  it("forks the addressed tab's session into a new focused tab", async () => {
+    const harness = createHarness();
+    const first = session("session-1");
+    harness.sessions.set(first.id, first);
+    await harness.tabs.bindFocusedSession(first.id);
+
+    const result = await harness.coordinator.forkTab(harness.address());
+
+    expect(result).toMatchObject({
+      ok: true,
+      tab: { id: "tab-2", sessionId: "fork-of-session-1" },
+      session: { id: "fork-of-session-1" },
+    });
+    expect(harness.manager.forkSession).toHaveBeenCalledWith("session-1");
+    expect(harness.tabs.getTab("tab-1")?.sessionId).toBe("session-1");
+    expect(harness.tabs.getFocusedTab().id).toBe("tab-2");
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("fork-of-session-1");
+  });
+
+  it("does not create a tab when the fork fails or the tab has no session", async () => {
+    const harness = createHarness();
+    expect(await harness.coordinator.forkTab(harness.address())).toEqual({
+      ok: false,
+      reason: "session_not_found",
+    });
+
+    const first = session("session-1");
+    harness.sessions.set(first.id, first);
+    await harness.tabs.bindFocusedSession(first.id);
+    harness.manager.forkSession.mockResolvedValueOnce({
+      ok: false,
+      code: "session_busy",
+      message: "busy",
+    });
+
+    expect(await harness.coordinator.forkTab(harness.address())).toEqual({
+      ok: false,
+      reason: "fork_failed",
+      message: "busy",
+    });
+    expect(harness.tabs.getLayout().tabs).toHaveLength(1);
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
+  });
+
   it("creates and focuses the new tab before creating its session", async () => {
     const harness = createHarness();
     const first = session("session-1");

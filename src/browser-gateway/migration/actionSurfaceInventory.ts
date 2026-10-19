@@ -333,6 +333,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/tabs/new",
     "Creates a VS Code-owned chat tab without changing local focus; requires a tab-create command before Stage 5.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/tabs/fork",
+    "Copies a chat into a new VS Code-owned tab without changing local focus; requires a tab-fork command before Stage 5.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",

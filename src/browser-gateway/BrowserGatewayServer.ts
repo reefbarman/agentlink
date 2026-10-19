@@ -650,6 +650,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/tabs/fork"),
+        ({ req, res }) => this.handleTabForkAction(req, res),
+        json("tab fork action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/session/new"),
         ({ req, res }) => this.handleSessionNewAction(req, res),
         json("session new action failed"),
@@ -2394,6 +2400,30 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body.mode,
       projectId,
     );
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleTabForkAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as { selection?: unknown };
+    const selection = this.parseOptionalChatTabSelection(body?.selection, res);
+    if (selection === false) return;
+    if (!selection?.sessionId) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserForkTab(selection);
     this.writeJson(
       res,
       result.ok ? 200 : 409,

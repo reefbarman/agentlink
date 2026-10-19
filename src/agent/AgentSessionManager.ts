@@ -6369,6 +6369,118 @@ export class AgentSessionManager {
   }
 
   /**
+   * Copy an idle chat session's transcript and settings into a new,
+   * independent session that is not made the foreground session. The fork
+   * starts without run state, checkpoints, handoff lineage, fleet metadata,
+   * approval authority or the human decision record, so nothing that resumes
+   * or authorizes work travels with the copied history.
+   */
+  async forkSession(
+    sourceSessionId: string,
+  ): Promise<
+    | { ok: true; session: AgentSession }
+    | { ok: false; code: string; message: string }
+  > {
+    const source = this.sessions.get(sourceSessionId);
+    if (!source || source.background) {
+      return {
+        ok: false,
+        code: "session_not_found",
+        message: "Only an open chat session can be forked.",
+      };
+    }
+    if (
+      source.status !== "idle" ||
+      source.runState ||
+      source.hasPendingInterjections ||
+      source.hasQueuedUiMessages
+    ) {
+      return {
+        ok: false,
+        code: "session_busy",
+        message:
+          "Wait for the current session activity to finish before forking.",
+      };
+    }
+    if (!this.persistence) {
+      return {
+        ok: false,
+        code: "persistence_unavailable",
+        message: "Forking requires session history storage.",
+      };
+    }
+    if (!(await this.saveSessionNow(source.id))) {
+      return {
+        ok: false,
+        code: "source_persist_failed",
+        message: "The session could not be saved before forking.",
+      };
+    }
+    const sourceRead = await this.persistence.readSession(source.id);
+    if (!sourceRead.ok) {
+      return {
+        ok: false,
+        code: "source_unavailable",
+        message: "The session could not be read from session history.",
+      };
+    }
+
+    const forkId = randomId();
+    const now = Date.now();
+    const record = structuredClone(sourceRead.value);
+    const {
+      runState: _runState,
+      fleet: _fleet,
+      lineage: _lineage,
+      revertPending: _revertPending,
+      humanDecisionRecord: _humanDecisionRecord,
+      commandApprovalPolicy: _commandApprovalPolicy,
+      approvalPolicy: _approvalPolicy,
+      approvalReviewer: _approvalReviewer,
+      executionPreset: _executionPreset,
+      ...metadata
+    } = record.metadata;
+    const forkRecord: PersistedSessionRecord = {
+      ...record,
+      summary: {
+        ...record.summary,
+        id: forkId,
+        title: `Fork: ${source.title}`,
+        createdAt: now,
+        lastActiveAt: now,
+        background: false,
+      },
+      transcriptRevision: undefined,
+      metadata: {
+        ...metadata,
+        checkpointState: metadata.checkpointState
+          ? { ...metadata.checkpointState, checkpoints: [] }
+          : undefined,
+      },
+    };
+    const saved = await this.persistence.saveSession({
+      session: forkRecord,
+      expectedRevision: null,
+    });
+    if (!saved.ok) {
+      return {
+        ok: false,
+        code: "fork_save_failed",
+        message: "The forked session could not be saved.",
+      };
+    }
+    const fork = await this.hydratePersistedSession(forkId);
+    if (!fork) {
+      return {
+        ok: false,
+        code: "fork_restore_failed",
+        message: "The forked session could not be opened.",
+      };
+    }
+    return { ok: true, session: fork };
+  }
+
+  /**
    * Resolve only the direct predecessor recorded on a successor's durable
    * lineage. This intentionally ignores model-supplied IDs and never restores
    * or selects the predecessor as the foreground session.

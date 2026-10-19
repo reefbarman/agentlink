@@ -2405,6 +2405,70 @@ describe("AgentSessionManager host injection", () => {
     }
   });
 
+  it("forks a session into an independent copy without carrying authority or lineage", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-fork-"));
+    const { AgentSession } =
+      await vi.importActual<typeof import("./AgentSession.js")>(
+        "./AgentSession.js",
+      );
+    const host = {
+      createSession: AgentSession.create,
+      config: {
+        resolveModelForMode: (_mode: string, fallback: string) => fallback,
+        resolveReasoningEffortForMode: () => "high" as const,
+        getCondenseThresholdForModel: () => 0.73,
+        getBackgroundAgentSettings: () => ({}),
+      },
+    };
+    try {
+      const manager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        new SessionStore(workspace),
+        undefined,
+        undefined,
+        { host },
+      );
+      const source = await manager.createSession("code");
+      source.title = "Original work";
+      source.addUserMessage("Investigate the parser");
+      source.lineage = { schemaVersion: 1, suggestion: { acceptedAt: 1 } };
+
+      (source as { status: string }).status = "streaming";
+      await expect(manager.forkSession(source.id)).resolves.toMatchObject({
+        ok: false,
+        code: "session_busy",
+      });
+      (source as { status: string }).status = "idle";
+
+      const result = await manager.forkSession(source.id);
+
+      if (!result.ok) throw new Error(result.message);
+      const fork = result.session;
+      expect(fork.id).not.toBe(source.id);
+      expect(fork.title).toBe("Fork: Original work");
+      expect(fork.getAllMessages()).toEqual(source.getAllMessages());
+      expect(manager.getForegroundSession()?.id).toBe(source.id);
+
+      fork.addUserMessage("Now try a different approach");
+      expect(source.getAllMessages()).toHaveLength(1);
+
+      const disk = await new SessionStore(workspace).readSession(fork.id);
+      if (!disk.ok) throw new Error("Expected persisted fork");
+      expect(disk.value.metadata.lineage).toBeUndefined();
+      expect(disk.value.metadata.runState).toBeUndefined();
+      expect(disk.value.metadata.humanDecisionRecord).toBeUndefined();
+      expect(disk.value.metadata.commandApprovalPolicy).toBeUndefined();
+      expect(disk.value.metadata.checkpointState?.checkpoints ?? []).toEqual(
+        [],
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("persists foreground reasoning effort changes immediately", async () => {
     const savedRecords: PersistedSessionRecord[] = [];
     const store = {

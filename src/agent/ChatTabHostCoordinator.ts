@@ -28,7 +28,8 @@ export type ChatTabHostActionResult =
         | "session_not_found"
         | "binding_conflict"
         | "invalid_order";
-    };
+    }
+  | { ok: false; reason: "fork_failed"; message: string };
 
 interface ChatTabHostSessionManager {
   getSession(sessionId: string): AgentSession | undefined;
@@ -42,6 +43,12 @@ interface ChatTabHostSessionManager {
     },
   ): Promise<AgentSession>;
   hydratePersistedSession(sessionId: string): Promise<AgentSession | null>;
+  forkSession(
+    sourceSessionId: string,
+  ): Promise<
+    | { ok: true; session: AgentSession }
+    | { ok: false; code: string; message: string }
+  >;
   loadPersistedSession(sessionId: string): Promise<AgentSession | null>;
   stopSessionAndWait(sessionId: string): Promise<string[]>;
   switchTo(sessionId: string): void;
@@ -85,6 +92,33 @@ export class ChatTabHostCoordinator {
       this.sessions.switchTo(session.id);
     }
     return { ok: true, tab: bound, session };
+  }
+
+  /**
+   * Copy the addressed tab's session into a new session and open it in a new
+   * focused tab. The source tab and session are left untouched.
+   */
+  async forkTab(
+    address: ChatTabActionAddress,
+    options: { focus?: boolean } = {},
+  ): Promise<ChatTabHostActionResult> {
+    const validated = this.tabs.validateAction(address);
+    if (!validated.ok) return validated;
+    if (!validated.tab.sessionId) {
+      return { ok: false, reason: "session_not_found" };
+    }
+
+    const forked = await this.sessions.forkSession(validated.tab.sessionId);
+    if (!forked.ok) {
+      return { ok: false, reason: "fork_failed", message: forked.message };
+    }
+    const tab = await this.tabs.createTab(null, options);
+    const bound = await this.ensureBinding(tab.id, null, forked.session.id);
+    if (!bound) return { ok: false, reason: "binding_conflict" };
+    if (options.focus !== false && this.tabs.getFocusedTabId() === tab.id) {
+      this.sessions.switchTo(forked.session.id);
+    }
+    return { ok: true, tab: bound, session: forked.session };
   }
 
   async newChat(

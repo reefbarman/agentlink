@@ -5195,6 +5195,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  public async submitBrowserForkTab(address: ChatTabActionAddress): Promise<{
+    ok: boolean;
+    sessionId?: string;
+    projectId?: string;
+    tabId?: string;
+    controllerEpoch?: string;
+    reason?: string;
+  }> {
+    const result = await this.chatTabHostCoordinator?.forkTab(address, {
+      focus: false,
+    });
+    if (!result) return { ok: false, reason: "tab_host_unavailable" };
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason:
+          result.reason === "fork_failed" ? result.message : result.reason,
+      };
+    }
+    if (!result.session) return { ok: false, reason: "session_not_found" };
+    this.log(
+      `Forked tab created from browser: ${result.tab.id} (source: ${address.sessionId})`,
+    );
+    return {
+      ok: true,
+      sessionId: result.session.id,
+      projectId: result.session.projectScope.projectId,
+      tabId: result.tab.id,
+      controllerEpoch: address.controllerEpoch,
+    };
+  }
+
   public async submitBrowserNewSession(
     _mode?: string,
     projectId?: string,
@@ -8025,7 +8057,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   })
                 : command === "chatTabReorder" && Array.isArray(msg.tabIds)
                   ? await coordinator.reorder(address, tabIds)
-                  : null;
+                  : command === "chatTabFork"
+                    ? await coordinator.forkTab(address)
+                    : null;
 
     if (!result) {
       this.rejectChatTabAction(command, "invalid_address", address);
@@ -8091,6 +8125,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         result.reason === "invalid_address"
       ) {
         this.rejectChatTabAction(command, result.reason, address);
+        return;
+      }
+      if (result.reason === "fork_failed") {
+        this.log(`[chat-tabs] fork failed: ${result.message}`);
+        vscode.window.showWarningMessage(
+          `Could not fork this chat: ${result.message}`,
+        );
         return;
       }
       const snapshot = this.getChatWorkspaceViewSnapshot();
@@ -8380,6 +8421,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "chatTabClose":
       case "chatTabLoadSession":
       case "chatTabReorder":
+      case "chatTabFork":
         await this.handleChatTabAction(String(msg.command), msg);
         break;
       case "chatTabPopOut":
