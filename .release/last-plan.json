@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c90adcdca4821021cf438e636e37c26022fa5824",
-  "createdAt": "2026-10-19T02:15:54.356Z",
+  "sourceSha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
+  "createdAt": "2026-10-19T02:28:20.093Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.43.0",
-      "baselineRef": "v1.43.0",
-      "reserved": "1.43.0",
-      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
+      "published": "1.43.1",
+      "baselineRef": "v1.43.1",
+      "reserved": "1.43.1",
+      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.43.1",
+      "version": "1.43.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.43.1",
+      "tag": "v1.43.2",
       "notes": [
         {
-          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
-          "subject": "fix(assistant): style setup step buttons, footers and fields",
-          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
+          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
+          "subject": "fix(assistant): lay out setup description rows without overlap",
+          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.31.0",
-      "baselineRef": "desktop-v0.31.0",
-      "reserved": "0.31.0",
-      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
+      "published": "0.31.1",
+      "baselineRef": "desktop-v0.31.1",
+      "reserved": "0.31.1",
+      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.31.1",
+      "version": "0.31.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.31.1",
+      "tag": "desktop-v0.31.2",
       "notes": [
         {
-          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
-          "subject": "fix(assistant): style setup step buttons, footers and fields",
-          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
+          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
+          "subject": "fix(assistant): lay out setup description rows without overlap",
+          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.3.0",
-      "baselineRef": "assistant-v0.3.0",
-      "reserved": "0.3.0",
-      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
+      "published": "0.3.1",
+      "baselineRef": "assistant-v0.3.1",
+      "reserved": "0.3.1",
+      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.3.1",
+      "tag": "assistant-v0.3.2",
       "notes": [
         {
-          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
-          "subject": "fix(assistant): style setup step buttons, footers and fields",
-          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
+          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
+          "subject": "fix(assistant): lay out setup description rows without overlap",
+          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
           "breaking": false
         }
       ]
@@ -135,6 +135,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ee8ba062163fa706c875804c9fe295b3e84347a3": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

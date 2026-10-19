@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.43.2
+
+- Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.
+
 ## 1.43.1
 
 - Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.
