@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.16.0 — 2026-10-19
+
+- Auto-condense now prepares the conversation summary in the background shortly before the threshold, so condensing no longer pauses the turn; it can be disabled with the new agentlink.backgroundCondense setting.
+
 ## 0.15.2 — 2026-10-19
 
 - MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.

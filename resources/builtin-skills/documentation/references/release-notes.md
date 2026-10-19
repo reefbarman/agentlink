@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.46.0
+
 - Automatic condensing should usually no longer pause the turn. Shortly before the condense point, AgentLink now writes the summary in the background while the agent keeps working, then swaps it in when the point is reached, keeping everything added since then word for word. Until now every automatic condense blocked the turn while the summary was written: about 40 seconds typically and up to 3 minutes. If the conversation was rewound or edited, or the model changed, it condenses the old way. This is experimental and on by default; turn off `agentlink.backgroundCondense` to go back to foreground condensing.
 - The condense timing section of `npm run telemetry:context` now also shows how often a background summary was reused, how long the turn waited for one, and why a summary wasn't used.
 
