@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
-  "createdAt": "2026-10-19T06:33:37.267Z",
+  "sourceSha": "ac28345945f9e0b8c35a5d97b663036a2bbd5cfb",
+  "createdAt": "2026-10-19T23:11:30.722Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.44.4",
-      "baselineRef": "v1.44.4",
-      "reserved": "1.44.4",
-      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
+      "published": "1.44.5",
+      "baselineRef": "v1.44.5",
+      "reserved": "1.44.5",
+      "commits": ["ac28345945f9e0b8c35a5d97b663036a2bbd5cfb"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.44.5",
-      "effectiveBump": "patch",
+      "version": "1.45.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.5",
+      "tag": "v1.45.0",
       "notes": [
         {
-          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
-          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
-          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
+          "sha": "ac28345945f9e0b8c35a5d97b663036a2bbd5cfb",
+          "subject": "feat(telemetry): record condense timing and turn blocking",
+          "summary": "Context telemetry now records condense timing, trigger and foreground/background status, adds condense_failed records for failed condenses, and the telemetry:context report gains a condense timing section.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.32.4",
-      "baselineRef": "desktop-v0.32.4",
-      "reserved": "0.32.4",
-      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
+      "published": "0.32.5",
+      "baselineRef": "desktop-v0.32.5",
+      "reserved": "0.32.5",
+      "commits": ["ac28345945f9e0b8c35a5d97b663036a2bbd5cfb"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.32.5",
-      "effectiveBump": "patch",
+      "version": "0.33.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.5",
+      "tag": "desktop-v0.33.0",
       "notes": [
         {
-          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
-          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
-          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
+          "sha": "ac28345945f9e0b8c35a5d97b663036a2bbd5cfb",
+          "subject": "feat(telemetry): record condense timing and turn blocking",
+          "summary": "Context telemetry now records condense timing, trigger and foreground/background status, adds condense_failed records for failed condenses, and the telemetry:context report gains a condense timing section.}]}</br>",
           "breaking": false
         }
       ]
@@ -82,28 +82,16 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.4.3",
-      "baselineRef": "assistant-v0.4.3",
-      "reserved": "0.4.3",
-      "commits": ["d0f11986e40842ce19335a6b22cfe6754a5ff16b"],
+      "published": "0.4.4",
+      "baselineRef": "assistant-v0.4.4",
+      "reserved": "0.4.4",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.4.4",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.4.4",
-      "notes": [
-        {
-          "sha": "d0f11986e40842ce19335a6b22cfe6754a5ff16b",
-          "subject": "fix(chat): wrap prose code blocks in VS Code chat",
-          "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -119,6 +107,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Prose code blocks (text, plaintext, markdown) in the chat now wrap instead of scrolling sideways in the narrow sidebar, while real code keeps its line layout.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ac28345945f9e0b8c35a5d97b663036a2bbd5cfb": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Context telemetry now records condense timing, trigger and foreground/background status, adds condense_failed records for failed condenses, and the telemetry:context report gains a condense timing section.}]}</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
