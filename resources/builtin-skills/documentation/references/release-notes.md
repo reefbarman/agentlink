@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- An MCP server whose tool list fails right after connecting (for example a 401 from `tools/list`) no longer shows as connected with zero tools. It now goes through the usual sign-in and retry handling, and if that fails it shows as an error with the reason, which `find_mcp_tools` reports. Servers that don't support tools at all still connect normally.
+
 ## 1.44.1
 
 - Jev no longer treats ordinary command text as a possible secret. Timestamped file names such as `migrations/20250101120000_add-user-index.sql` and image digests such as `@sha256:…` were redacted, and any command containing your home folder counted as altered because the path is shown as `~`. Either made the review ineligible. In recent Jev traffic, 21 of the 22 commands Jev saw as altered were one of these; the remaining one was over the size limit. Random-looking tokens, keys and passwords are still redacted.

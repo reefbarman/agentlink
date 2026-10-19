@@ -1150,6 +1150,37 @@ describe("McpClientHub protocol correctness", () => {
     expect(statusChange).toHaveBeenCalled();
   });
 
+  it("does not report connected with an empty catalog when the initial tools/list fails", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      mocks.listTools.mockRejectedValue(new Error("tools/list rejected"));
+      await hub.connect([config]);
+
+      expect(hub.getToolNames()).toEqual([]);
+      expect(hub.getServerInfos()[0]).toMatchObject({
+        name: "fixture",
+        status: "error",
+        error: expect.stringContaining("tools/list rejected"),
+      });
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays connected when a server does not implement tools/list", async () => {
+    mocks.listTools.mockRejectedValue(
+      new McpError(ErrorCode.MethodNotFound, "Method not found"),
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+
+    expect(hub.getServerInfos()[0]?.status).toBe("connected");
+    expect(hub.getToolNames()).toEqual([]);
+    await hub.disconnectAll();
+  });
+
   it("coalesces a notification during refresh into one follow-up", async () => {
     const hub = new McpClientHub(new FakeMemento());
     await hub.connect([config]);

@@ -1079,6 +1079,7 @@ export class McpClientHub {
     entry: ConnectedServer,
     kind: McpCatalogKind,
     publish: boolean,
+    options: { failOnError?: boolean } = {},
   ): Promise<boolean> {
     try {
       const catalog = await this.loadCatalog(entry, kind);
@@ -1098,6 +1099,18 @@ export class McpClientHub {
       if (publish) this.onStatusChange?.(this.getServerInfos());
       return true;
     } catch (error) {
+      // An initial tools/list failure (for example a 401 after the handshake)
+      // must fail the connection rather than report "connected" with an
+      // empty catalog. Servers without tools support answer MethodNotFound.
+      if (
+        options.failOnError &&
+        !(error instanceof McpError && error.code === ErrorCode.MethodNotFound)
+      ) {
+        this.log(
+          `[mcp:${entry.name}] initial ${kind} catalog failed: ${this.describeError(error)}`,
+        );
+        throw error;
+      }
       this.log(
         `[mcp:${entry.name}] failed to refresh ${kind} catalog; retaining previous snapshot: ${this.describeError(error)}`,
       );
@@ -1590,7 +1603,9 @@ export class McpClientHub {
 
       await Promise.all(
         (["tools", "resources", "prompts"] as const).map((kind) =>
-          this.refreshCatalog(entry, kind, false),
+          this.refreshCatalog(entry, kind, false, {
+            failOnError: kind === "tools",
+          }),
         ),
       );
 
