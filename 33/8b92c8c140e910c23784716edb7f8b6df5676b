@@ -16,7 +16,7 @@ packages/core/src/modelRequestScheduler.ts
 src/agent/AgentSession.ts
   h_e08a86bb3a33a2 205-206,416
 CHANGELOG.md
-  h_e08a86bb3a33a2 5,11
+  h_e08a86bb3a33a2 5-7,10-11
 packages/core/src/modelRequestScheduler.test.ts
   h_e08a86bb3a33a2 130-143
 src/agent/AgentEngine.ts
