@@ -1,0 +1,38 @@
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 140
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+scripts/jev-replay.mjs
+  s_5aff53537940d6::t_0f3bb542c4dfdb 481-486,507-509
+src/approvals/commandApprovalReview.test.ts
+  s_5aff53537940d6::t_9be783a2559305 902-927
+src/approvals/commandApprovalReview.ts
+  s_5aff53537940d6::t_d503ca76e08cb5 95-100,121-122,134-135,947-955,959,1138-1139,1155,1191
+src/approvals/typeSafeGuardianShadow.test.ts
+  s_5aff53537940d6::t_c8a5289538c296 1087-1136,1429-1431,1455-1456,1497-1498
+src/approvals/typeSafeGuardianShadow.ts
+  s_5aff53537940d6::t_97edf0214fa536 41,91-97,135-140,146,1024-1027,1030-1032,1046-1050,1640-1649,1651-1657,1664-1665,1678-1681
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_5aff53537940d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2e4c6040-0bc3-4ec4-b210-1419becee087",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
