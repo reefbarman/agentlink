@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c29a228a6fb04607e4e05a73f91445eb224b2a58",
-  "createdAt": "2026-10-19T01:46:49.984Z",
+  "sourceSha": "c90adcdca4821021cf438e636e37c26022fa5824",
+  "createdAt": "2026-10-19T02:15:54.356Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.42.0",
-      "baselineRef": "v1.42.0",
-      "reserved": "1.42.0",
-      "commits": ["c29a228a6fb04607e4e05a73f91445eb224b2a58"],
+      "published": "1.43.0",
+      "baselineRef": "v1.43.0",
+      "reserved": "1.43.0",
+      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.43.0",
-      "effectiveBump": "minor",
+      "version": "1.43.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.43.0",
+      "tag": "v1.43.1",
       "notes": [
         {
-          "sha": "c29a228a6fb04607e4e05a73f91445eb224b2a58",
-          "subject": "feat(desktop): draw the Assistant into the desktop's own sidebar and chrome",
-          "summary": "The Desktop Assistant view now draws inside the desktop's own sidebar and title bar (violet theme, shared sidebar width, title-bar reload button) instead of showing a second title bar and sidebar, with a fallback for sign-in and older servers; pairing page spacing is also tidied.",
+          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
+          "subject": "fix(assistant): style setup step buttons, footers and fields",
+          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.30.0",
-      "baselineRef": "desktop-v0.30.0",
-      "reserved": "0.30.0",
-      "commits": ["c29a228a6fb04607e4e05a73f91445eb224b2a58"],
+      "published": "0.31.0",
+      "baselineRef": "desktop-v0.31.0",
+      "reserved": "0.31.0",
+      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.31.0",
-      "effectiveBump": "minor",
+      "version": "0.31.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.31.0",
+      "tag": "desktop-v0.31.1",
       "notes": [
         {
-          "sha": "c29a228a6fb04607e4e05a73f91445eb224b2a58",
-          "subject": "feat(desktop): draw the Assistant into the desktop's own sidebar and chrome",
-          "summary": "The Desktop Assistant view now draws inside the desktop's own sidebar and title bar (violet theme, shared sidebar width, title-bar reload button) instead of showing a second title bar and sidebar, with a fallback for sign-in and older servers; pairing page spacing is also tidied.",
+          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
+          "subject": "fix(assistant): style setup step buttons, footers and fields",
+          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
           "breaking": false
         }
       ]
@@ -82,34 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.2.0",
-      "baselineRef": "assistant-v0.2.0",
+      "published": "0.3.0",
+      "baselineRef": "assistant-v0.3.0",
       "reserved": "0.3.0",
-      "commits": [
-        "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
-        "c29a228a6fb04607e4e05a73f91445eb224b2a58"
-      ],
+      "commits": ["c90adcdca4821021cf438e636e37c26022fa5824"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.3.0",
-      "effectiveBump": "minor",
+      "version": "0.3.1",
+      "effectiveBump": "patch",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.3.0",
+      "tag": "assistant-v0.3.1",
       "notes": [
         {
-          "sha": "974a85c526a5bbcf09537e2ae2c35c4443d82aca",
-          "subject": "feat(chat): fork an in-progress chat with /fork",
-          "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
-          "breaking": false
-        },
-        {
-          "sha": "c29a228a6fb04607e4e05a73f91445eb224b2a58",
-          "subject": "feat(desktop): draw the Assistant into the desktop's own sidebar and chrome",
-          "summary": "The Desktop Assistant view now draws inside the desktop's own sidebar and title bar (violet theme, shared sidebar width, title-bar reload button) instead of showing a second title bar and sidebar, with a fallback for sign-in and older servers; pairing page spacing is also tidied.",
+          "sha": "c90adcdca4821021cf438e636e37c26022fa5824",
+          "subject": "fix(assistant): style setup step buttons, footers and fields",
+          "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
           "breaking": false
         }
       ]
@@ -136,6 +127,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The Desktop Assistant view now draws inside the desktop's own sidebar and title bar (violet theme, shared sidebar width, title-bar reload button) instead of showing a second title bar and sidebar, with a fallback for sign-in and older servers; pairing page spacing is also tidied.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c90adcdca4821021cf438e636e37c26022fa5824": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

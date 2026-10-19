@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.43.1
+
+- Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.
+
 ## 1.43.0
 
 - Desktop: the Assistant view now looks like part of the app instead of a window inside it. Choosing **Assistant** turns the window violet and moves the Assistant's projects, Jobs/Inbox/Tasks buttons and chats into the Desktop sidebar, with the view switcher still at its top; the Assistant's own title bar is gone, and its **More** menu floats at the top right. The title bar's sidebar button and your chosen sidebar width carry over. Needs an Assistant from this release; older ones, and the sign-in page, show beside Desktop's own sidebar as before. The connection placeholder and the pairing page have tidier spacing, and the pairing code box no longer runs past its card.
