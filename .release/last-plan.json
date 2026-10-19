@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
-  "createdAt": "2026-10-19T02:28:20.093Z",
+  "sourceSha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
+  "createdAt": "2026-10-19T02:46:59.746Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.43.1",
-      "baselineRef": "v1.43.1",
-      "reserved": "1.43.1",
-      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
+      "published": "1.43.2",
+      "baselineRef": "v1.43.2",
+      "reserved": "1.43.2",
+      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.43.2",
+      "version": "1.43.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.43.2",
+      "tag": "v1.43.3",
       "notes": [
         {
-          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
-          "subject": "fix(assistant): lay out setup description rows without overlap",
-          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
+          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
+          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
+          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.31.1",
-      "baselineRef": "desktop-v0.31.1",
-      "reserved": "0.31.1",
-      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
+      "published": "0.31.2",
+      "baselineRef": "desktop-v0.31.2",
+      "reserved": "0.31.2",
+      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.31.2",
+      "version": "0.31.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.31.2",
+      "tag": "desktop-v0.31.3",
       "notes": [
         {
-          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
-          "subject": "fix(assistant): lay out setup description rows without overlap",
-          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
+          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
+          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
+          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.3.1",
-      "baselineRef": "assistant-v0.3.1",
-      "reserved": "0.3.1",
-      "commits": ["ee8ba062163fa706c875804c9fe295b3e84347a3"],
+      "published": "0.3.2",
+      "baselineRef": "assistant-v0.3.2",
+      "reserved": "0.3.2",
+      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.3.2",
+      "tag": "assistant-v0.3.3",
       "notes": [
         {
-          "sha": "ee8ba062163fa706c875804c9fe295b3e84347a3",
-          "subject": "fix(assistant): lay out setup description rows without overlap",
-          "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
+          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
+          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
+          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
           "breaking": false
         }
       ]
@@ -143,6 +143,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ff39e8d22393c5b357698ca3669ce1e1890f097f": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.43.3
+
+- The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.
+
 ## 1.43.2
 
 - Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.
