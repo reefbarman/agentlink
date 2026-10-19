@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.41.0
+
 - `/fork` copies the current chat into a new tab, so you can use the same context for something else while the original stays untouched. The fork keeps the transcript, mode, model and loaded skills, but starts with default approval settings, no checkpoints and no handoff lineage. It works in VS Code chat and browser workspace tabs.
 
 ## 1.40.0
