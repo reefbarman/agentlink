@@ -3561,25 +3561,116 @@ html.quick-ask-document body {
   position: sticky;
   bottom: -24px;
   z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   margin: 0;
-  padding: 14px 0;
+  padding: 14px 0 0;
   border-top: 1px solid var(--ag-border);
   background: var(--ag-panel);
+}
+
+/* Inside a card, match the card so the sticky bar is not a darker band. */
+.browser-shell.browser-shell-desktop
+  .assistant-settings-section
+  .assistant-settings-actions {
+  background: var(--ag-bg);
+}
+
+/* Footers nested inside a step (key form, model choice) are inline rows. */
+.browser-shell.browser-shell-desktop
+  .assistant-setup-alternative
+  .assistant-settings-actions {
+  position: static;
+  padding: 0;
+  border-top: 0;
+  background: none;
+}
+
+.browser-shell.browser-shell-desktop
+  footer.assistant-settings-actions
+  > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid var(--ag-border-2, var(--ag-border));
+  border-radius: 9px;
+  background: #ffffff08;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    filter 120ms ease;
+}
+
+.browser-shell.browser-shell-desktop
+  footer.assistant-settings-actions
+  > button:not(.primary):hover:not(:disabled) {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop
+  footer.assistant-settings-actions
+  > button.primary {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop
+  footer.assistant-settings-actions
+  > button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.browser-shell.browser-shell-desktop
+  footer.assistant-settings-actions
+  > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .browser-shell.browser-shell-desktop .assistant-setup-steps {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 0 0 14px;
+  gap: 6px;
+  margin: 0 0 16px;
   padding: 0;
   list-style: none;
   font-size: 12px;
 }
 
+.browser-shell.browser-shell-desktop .assistant-setup-steps .link-button {
+  padding: 4px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 999px;
+  color: var(--ag-muted);
+  text-decoration: none;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-setup-steps
+  .link-button:hover:not(:disabled) {
+  border-color: var(--ag-accent-a35);
+  color: var(--ag-text);
+}
+
 .browser-shell.browser-shell-desktop .assistant-setup-steps li.current button {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
   color: var(--ag-accent-text);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .browser-shell.browser-shell-desktop .assistant-setup-instructions {
@@ -3589,15 +3680,15 @@ html.quick-ask-document body {
   padding-left: 20px;
 }
 
-.browser-shell.browser-shell-desktop .assistant-setup-instructions textarea {
-  width: 100%;
-  font-family: var(--ag-mono, monospace);
+.browser-shell.browser-shell-desktop .assistant-setup-instructions label {
+  display: grid;
+  gap: 6px;
 }
 
 .browser-shell.browser-shell-desktop .assistant-setup-alternative {
   display: grid;
-  gap: 10px;
-  padding-top: 12px;
+  gap: 12px;
+  padding-top: 16px;
   border-top: 1px solid var(--ag-border);
 }
 
@@ -3606,15 +3697,45 @@ html.quick-ask-document body {
   font-size: 13px;
 }
 
-.browser-shell.browser-shell-desktop .assistant-setup-alternative label {
-  display: grid;
-  gap: 4px;
+.browser-shell.browser-shell-desktop .assistant-setup-alternative p {
+  margin: 0;
 }
 
-.browser-shell.browser-shell-desktop .assistant-setup-alternative input,
-.browser-shell.browser-shell-desktop .assistant-setup-alternative select {
+.browser-shell.browser-shell-desktop .assistant-setup-alternative label {
+  display: grid;
+  gap: 6px;
+  color: var(--ag-muted);
+  font-size: 12px;
+}
+
+/* Fields outside an .assistant-project-form get the same look as form fields. */
+.browser-shell.browser-shell-desktop
+  :is(.assistant-setup-alternative, .assistant-setup-instructions)
+  :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 9px;
+  background: var(--ag-bg);
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-setup-instructions textarea {
+  resize: vertical;
+  font-family: var(--ag-mono, ui-monospace, monospace);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-setup-alternative
+  .assistant-panel-empty {
+  align-items: flex-start;
+  padding: 0;
+  font-size: 12px;
+  text-align: left;
 }
 
 .browser-shell.browser-shell-desktop .assistant-panel-notice {
