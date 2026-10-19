@@ -3557,6 +3557,52 @@ html.quick-ask-document body {
   color: var(--ag-muted);
 }
 
+/* A short label beside a longer description (setup steps, optional features). */
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  > .assistant-settings-row {
+  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr);
+  align-items: start;
+  padding: 12px 0;
+  line-height: 1.5;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  > .assistant-settings-row:last-child {
+  border-bottom: 0;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  > .assistant-settings-row
+  > span {
+  min-width: 0;
+  color: var(--ag-muted);
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-settings-described-list
+  > .assistant-settings-row
+  code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .browser-shell.browser-shell-desktop
+    .assistant-settings-described-list
+    > .assistant-settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}
+
 .browser-shell.browser-shell-desktop .assistant-settings-actions {
   position: sticky;
   bottom: -24px;

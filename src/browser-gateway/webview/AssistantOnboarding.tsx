@@ -99,7 +99,7 @@ export function OptionalFeatures({
         it somewhere other than <code>~/agentlink-assistant</code>). Running
         work is paused and backed up first, and a failed change is undone.
       </p>
-      <ul class="assistant-settings-list">
+      <ul class="assistant-settings-list assistant-settings-described-list">
         {FEATURES.map((feature) => {
           const state = features[feature.id];
           return (
@@ -342,7 +342,7 @@ export function SetupPanel({
             None of these are needed to chat. Connect them now or later from the
             toolbar.
           </p>
-          <ul class="assistant-settings-list">
+          <ul class="assistant-settings-list assistant-settings-described-list">
             <li class="assistant-settings-row">
               <strong>GitHub</strong>
               <span>
@@ -981,7 +981,7 @@ function SummaryStep({
   return (
     <section class="assistant-settings-section" aria-label="Check">
       <h3>{setupStatusLabel(state.status)}</h3>
-      <ul class="assistant-settings-list">
+      <ul class="assistant-settings-list assistant-settings-described-list">
         <li class="assistant-settings-row">
           <strong>Models</strong>
           <span>
