@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
-  "createdAt": "2026-10-19T04:06:49.883Z",
+  "sourceSha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+  "createdAt": "2026-10-19T04:21:47.353Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.44.0",
-      "baselineRef": "v1.44.0",
-      "reserved": "1.44.0",
-      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
+      "published": "1.44.1",
+      "baselineRef": "v1.44.1",
+      "reserved": "1.44.1",
+      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.44.1",
+      "version": "1.44.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.1",
+      "tag": "v1.44.2",
       "notes": [
         {
-          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
-          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
-          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
+          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
+          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.32.0",
-      "baselineRef": "desktop-v0.32.0",
-      "reserved": "0.32.0",
-      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
+      "published": "0.32.1",
+      "baselineRef": "desktop-v0.32.1",
+      "reserved": "0.32.1",
+      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.32.1",
+      "version": "0.32.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.1",
+      "tag": "desktop-v0.32.2",
       "notes": [
         {
-          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
-          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
-          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
+          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
+          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
           "breaking": false
         }
       ]
@@ -61,46 +61,70 @@
       "published": "0.24.0",
       "baselineRef": "cli-v0.24.0",
       "reserved": "0.24.0",
-      "commits": [],
+      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.24.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.24.1",
+      "notes": [
+        {
+          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
+          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.15.0",
       "baselineRef": "sdk-v0.15.0",
       "reserved": "0.15.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.4.0",
-      "baselineRef": "assistant-v0.4.0",
-      "reserved": "0.4.0",
-      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
+      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.4.1",
+      "version": "0.15.1",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.4.1",
+      "tag": "sdk-v0.15.1",
       "notes": [
         {
-          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
-          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
-          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
+          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
+          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.4.1",
+      "baselineRef": "assistant-v0.4.1",
+      "reserved": "0.4.1",
+      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.4.2",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.4.2",
+      "notes": [
+        {
+          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
+          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
+          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
           "breaking": false
         }
       ]
@@ -167,6 +191,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

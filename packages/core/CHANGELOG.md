@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.15.1 — 2026-10-19
+
+- MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.
+
 ## 0.15.0 — 2026-10-18
 
 - Workspace-host gains an optional prompt identity and a pluggable command execution backend, and the OpenAI-compatible provider now forwards the Meridian session-affinity option it previously dropped.

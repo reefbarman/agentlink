@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.44.2
+
 - An MCP server whose tool list fails right after connecting (for example a 401 from `tools/list`) no longer shows as connected with zero tools. It now goes through the usual sign-in and retry handling, and if that fails it shows as an error with the reason, which `find_mcp_tools` reports. Servers that don't support tools at all still connect normally.
 
 ## 1.44.1
