@@ -1,0 +1,68 @@
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 64,71-84
+  s_ea5fd6c1ec194f::t_87863c038954ec 85
+apps/desktop/src/assistantPreload.test.ts
+  h_e08a86bb3a33a2 1-69
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 27,153-159,223-224,252,260,268,381
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 55,63,2191-2235,8658-8664,8706-8708,8786,8788-8792,8794,8796-8805,8811-8812,9322,9331-9335,9338-9341,9365
+  s_ea5fd6c1ec194f::t_0361b1621bf80b 8665,8705,8709,8793,8795,8806-8810,8813,9330,9336-9337
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 876-885,888,892-898,900,904-914,917-920,924-928,930,934-1026
+  s_ea5fd6c1ec194f::t_ecd9d6848cd16c 915-916,1027-1028
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 414-415
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 27,4651-4789
+apps/desktop/src/DesktopAssistantView.ts
+  h_e08a86bb3a33a2 10,37-50,53-60,75-79,86,105,111-127,161-163,183,230-276,279-284,360,372,404-412
+  s_ea5fd6c1ec194f::t_f00246c6668146 277-278
+apps/desktop/src/DesktopAssistantView.test.ts
+  h_e08a86bb3a33a2 43-44,60,79,96-97,278-360
+  s_ea5fd6c1ec194f::t_8df98db5eaade5 94-95,361-362
+src/browser-gateway/webview/DesktopRemotePane.tsx
+  h_e08a86bb3a33a2 14-15,17-20
+  s_ea5fd6c1ec194f::t_f768121b67f772 13,16
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 61,68,135-158,164-182
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 28-33,36-52,87-91,133
+  s_ea5fd6c1ec194f::t_a21302e0168254 34-35,92
+apps/desktop/esbuild.mjs
+  h_e08a86bb3a33a2 52-60
+  s_ea5fd6c1ec194f::t_ae4d6151a89bf4 51
+src/browser-gateway/browserGatewayPages.ts
+  h_e08a86bb3a33a2 173,188-189,204-205,214,216,220,243
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 65
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/accessPages.ts
+  h_e08a86bb3a33a2 130
+apps/desktop/src/assistantPreload.ts
+  h_e08a86bb3a33a2 1-38
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c29a228a6fb04607e4e05a73f91445eb224b2a58",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ea5fd6c1ec194f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df5c5870-4c75-446b-9737-d32611da2a80",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
