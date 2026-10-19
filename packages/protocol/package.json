@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/protocol",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "private": true,
   "description": "Browser-safe AgentLink session and control protocol contracts",
   "license": "MIT",

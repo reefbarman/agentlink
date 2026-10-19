@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.44.3
+
 - MCP servers whose tool definitions use `true` or `false` as a property schema (valid JSON Schema, and common from Go servers) now load their tools. Previously the MCP SDK rejected the whole tool list, so the server showed zero tools, or kept reconnecting with an "Invalid input" error. Tools that still can't be read are skipped one at a time and logged. If a server's tool list can't be read at all, automatic retries now pause instead of looping.
 
 ## 1.44.2

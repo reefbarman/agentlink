@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.15.2 — 2026-10-19
+
+- MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.
+
 ## 0.15.1 — 2026-10-19
 
 - MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.

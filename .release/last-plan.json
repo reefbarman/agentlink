@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-  "createdAt": "2026-10-19T04:21:47.353Z",
+  "sourceSha": "2a2d433a73682c2c64c1b446c4d79a08c9cbaeea",
+  "createdAt": "2026-10-19T04:36:15.706Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,195 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.44.1",
-      "baselineRef": "v1.44.1",
-      "reserved": "1.44.1",
-      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "published": "1.44.2",
+      "baselineRef": "v1.44.2",
+      "reserved": "1.44.2",
+      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.44.2",
+      "version": "1.44.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.2",
+      "tag": "v1.44.3",
       "notes": [
         {
-          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
-          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
+          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
+          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.32.1",
-      "baselineRef": "desktop-v0.32.1",
-      "reserved": "0.32.1",
-      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "published": "0.32.2",
+      "baselineRef": "desktop-v0.32.2",
+      "reserved": "0.32.2",
+      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.32.2",
+      "version": "0.32.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.2",
+      "tag": "desktop-v0.32.3",
       "notes": [
         {
-          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
-          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
+          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
+          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.24.0",
-      "baselineRef": "cli-v0.24.0",
-      "reserved": "0.24.0",
-      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "published": "0.24.1",
+      "baselineRef": "cli-v0.24.1",
+      "reserved": "0.24.1",
+      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.24.1",
+      "version": "0.24.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.24.1",
+      "tag": "cli-v0.24.2",
       "notes": [
         {
-          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
-          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
+          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
+          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.15.0",
-      "baselineRef": "sdk-v0.15.0",
-      "reserved": "0.15.0",
-      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "published": "0.15.1",
+      "baselineRef": "sdk-v0.15.1",
+      "reserved": "0.15.1",
+      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.15.1",
+      "version": "0.15.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.15.1",
+      "tag": "sdk-v0.15.2",
       "notes": [
         {
-          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
-          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
+          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
+          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.4.1",
-      "baselineRef": "assistant-v0.4.1",
-      "reserved": "0.4.1",
-      "commits": ["0e06891b2fb57a02c1bbbf0a0bb959cc2271636a"],
+      "published": "0.4.2",
+      "baselineRef": "assistant-v0.4.2",
+      "reserved": "0.4.2",
+      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.4.2",
+      "tag": "assistant-v0.4.3",
       "notes": [
         {
-          "sha": "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a",
-          "subject": "fix(mcp): fail the connection when the initial tools/list fails",
-          "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
+          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
+          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "afc6dd932fef8e0c714ad47ef855545324685eb1": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a /fork slash command that copies an idle chat's transcript, mode, model and skills into a new independent tab, in VS Code chat and the browser workspace via a new /api/tabs/fork route.PR-free of approvals and checkpoints.</parameter>",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "974a85c526a5bbcf09537e2ae2c35c4443d82aca": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "You can now run /fork on a chat that is still running; the fork snapshots it as if stopped at that moment, marks unfinished tools and pending questions as interrupted, skips queued messages, and /fork from the slash menu now runs immediately.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c29a228a6fb04607e4e05a73f91445eb224b2a58": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The Desktop Assistant view now draws inside the desktop's own sidebar and title bar (violet theme, shared sidebar width, title-bar reload button) instead of showing a second title bar and sidebar, with a fallback for sign-in and older servers; pairing page spacing is also tidied.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c90adcdca4821021cf438e636e37c26022fa5824": {
+    "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Improves styling of the assistant setup wizard in the desktop browser UI, with polished step buttons, footers, and form fields that match the card appearance.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ee8ba062163fa706c875804c9fe295b3e84347a3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes overlapping text in the assistant setup and optional feature description rows by giving labels and descriptions a proper two-column layout that stacks on narrow screens.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ff39e8d22393c5b357698ca3669ce1e1890f097f": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c622440d171e44453bb41cefa896f6848b884c4c": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "0e06891b2fb57a02c1bbbf0a0bb959cc2271636a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "MCP connections now fail with an error when the initial tools/list request fails (e.g. a 401 after handshake) instead of reporting connected with an empty tool catalog.",
+      "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
