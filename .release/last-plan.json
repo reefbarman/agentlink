@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
-  "createdAt": "2026-10-19T02:46:59.746Z",
+  "sourceSha": "c622440d171e44453bb41cefa896f6848b884c4c",
+  "createdAt": "2026-10-19T03:08:34.807Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.43.2",
-      "baselineRef": "v1.43.2",
-      "reserved": "1.43.2",
-      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
+      "published": "1.43.3",
+      "baselineRef": "v1.43.3",
+      "reserved": "1.43.3",
+      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.43.3",
-      "effectiveBump": "patch",
+      "version": "1.44.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.43.3",
+      "tag": "v1.44.0",
       "notes": [
         {
-          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
-          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
-          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
+          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
+          "subject": "feat(agent): edit an earlier message in a fork",
+          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.31.2",
-      "baselineRef": "desktop-v0.31.2",
-      "reserved": "0.31.2",
-      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
+      "published": "0.31.3",
+      "baselineRef": "desktop-v0.31.3",
+      "reserved": "0.31.3",
+      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.31.3",
-      "effectiveBump": "patch",
+      "version": "0.32.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.31.3",
+      "tag": "desktop-v0.32.0",
       "notes": [
         {
-          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
-          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
-          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
+          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
+          "subject": "feat(agent): edit an earlier message in a fork",
+          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.3.2",
-      "baselineRef": "assistant-v0.3.2",
-      "reserved": "0.3.2",
-      "commits": ["ff39e8d22393c5b357698ca3669ce1e1890f097f"],
+      "published": "0.3.3",
+      "baselineRef": "assistant-v0.3.3",
+      "reserved": "0.3.3",
+      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.3.3",
-      "effectiveBump": "patch",
+      "version": "0.4.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.3.3",
+      "tag": "assistant-v0.4.0",
       "notes": [
         {
-          "sha": "ff39e8d22393c5b357698ca3669ce1e1890f097f",
-          "subject": "fix(assistant): space the backup checkbox and tidy the finish hint",
-          "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
+          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
+          "subject": "feat(agent): edit an earlier message in a fork",
+          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
           "breaking": false
         }
       ]
@@ -151,6 +151,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "The assistant onboarding screen now spaces the backup password confirmation checkbox properly and shows the finish-setup hint as muted text above the Finish button instead of below it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c622440d171e44453bb41cefa896f6848b884c4c": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
