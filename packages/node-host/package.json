@@ -37,7 +37,7 @@
     "@types/ws": "8.18.2",
     "@agentlink/core": "0.15.2",
     "@agentlink/protocol": "0.15.2",
-    "@napi-rs/keyring": "2.1.0",
+    "@napi-rs/keyring": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
     "https-proxy-agent": "9.1.0",
     "parse5": "^8.0.1",
