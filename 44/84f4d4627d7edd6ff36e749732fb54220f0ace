@@ -1,0 +1,27 @@
+src/agent/condensePreparation.test.ts
+  h_e08a86bb3a33a2 298-315
+src/agent/condensePreparation.ts
+  h_e08a86bb3a33a2 242-246,254-259,263-265
+  s_f3ff8eabffc5c3::t_c3e6de5cabbec9 262,266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4484f4d4627d7edd6ff36e749732fb54220f0ace",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f3ff8eabffc5c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d79fb39c-cc34-4dee-8cff-03ea3b0ad60b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
