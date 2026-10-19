@@ -2313,6 +2313,16 @@ body.chat-activity-shelf-resizing * {
   padding: 0;
 }
 
+/* Prose fences (prompts, notes) wrap instead of scrolling sideways in the
+   narrow sidebar; real code keeps its lines. Copy uses the original text. */
+.markdown-body pre code.language-text,
+.markdown-body pre code.language-plaintext,
+.markdown-body pre code.language-txt,
+.markdown-body pre code.language-markdown,
+.markdown-body pre code.language-md {
+  white-space: pre-wrap;
+}
+
 .markdown-body .copyable-code-block {
   position: relative;
   min-width: 0;

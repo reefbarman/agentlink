@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prose in `text`, `plaintext`, `txt`, `markdown` or `md` code blocks now wraps in VS Code chat. Previously each paragraph stayed on one line and was cut off by the sidebar, so a prompt or note was hard to read without scrolling sideways. Other code blocks still keep their original lines, and the copy button still copies the original text.
+
 ## 1.44.4
 
 - Updating a skill while the agent is using it (for example with a `git pull` that changes its `SKILL.md`) no longer stops the turn with a "skill changed or was disabled" error. The agent keeps following the version it loaded, including any `allowed-tools` limits, and the updated version applies from your next message. Loading the skill again partway through the turn can't loosen those limits.
