@@ -7,6 +7,7 @@ import {
   type Session,
 } from "electron";
 import type {
+  DesktopAssistantChrome,
   DesktopAssistantState,
   DesktopRemoteLayout,
 } from "../../../src/shared/desktopBridge.js";
@@ -33,11 +34,30 @@ function isCertificateError(code: number): boolean {
   return code <= -200 && code > -300;
 }
 
+export function isDesktopAssistantChrome(
+  value: unknown,
+): value is DesktopAssistantChrome {
+  if (!value || typeof value !== "object") return false;
+  const chrome = value as DesktopAssistantChrome;
+  return (
+    typeof chrome.sidebarOpen === "boolean" &&
+    (chrome.sidebarWidth === undefined ||
+      (typeof chrome.sidebarWidth === "number" &&
+        Number.isFinite(chrome.sidebarWidth) &&
+        chrome.sidebarWidth > 0))
+  );
+}
+
 /**
  * The desktop's Assistant tab: the AgentLink Assistant's own web app in a
- * sandboxed view with no preload, no permissions, and navigation locked to
- * the Assistant's origin. It is a separate page, not a frame inside the
- * shell, so the Assistant keeps its anti-framing and same-site protections.
+ * sandboxed view with no permissions and navigation locked to the
+ * Assistant's origin. It is a separate page, not a frame inside the shell,
+ * so the Assistant keeps its anti-framing and same-site protections.
+ *
+ * Its only preload is the embed bridge: the page may draw the desktop's
+ * sidebar (following the shell's open state and width) and ask for another
+ * view. Once it says it does, the shell hands it the sidebar's space so the
+ * Assistant reads as part of the app rather than a window inside it.
  */
 export class DesktopAssistantView {
   private readonly view: WebContentsView;
@@ -52,12 +72,18 @@ export class DesktopAssistantView {
   private loading = false;
   private certificateRejected = false;
   private disposed = false;
+  /** The page draws the desktop chrome (it called the bridge's `ready`). */
+  private embedded = false;
+  /** Whether the current document has said so; reset per navigation. */
+  private readyThisLoad = false;
+  private chrome: DesktopAssistantChrome = { sidebarOpen: true };
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly shellOrigin: string,
     private config: DesktopAssistantConfig,
     private readonly now: () => number = Date.now,
+    preload?: string,
   ) {
     this.assistantSession = session.fromPartition(ASSISTANT_PARTITION);
     // Notifications and every other permission stay off for now.
@@ -76,11 +102,29 @@ export class DesktopAssistantView {
         nodeIntegration: false,
         webviewTag: false,
         navigateOnDragDrop: false,
+        ...(preload ? { preload } : {}),
       },
     });
     this.view.setVisible(false);
     window.contentView.addChildView(this.view);
     const contents = this.view.webContents;
+    contents.on(
+      "did-start-navigation",
+      (
+        _event: unknown,
+        _url: string,
+        isInPlace: boolean,
+        isMainFrame: boolean,
+      ) => {
+        if (isMainFrame && !isInPlace) this.readyThisLoad = false;
+      },
+    );
+    // A page that loaded without the bridge (sign-in, an older Assistant)
+    // gets the shell's sidebar back. Checked after load, not at navigation
+    // start, so reloads of the app itself do not flash the shell sidebar.
+    contents.on("did-finish-load", () => {
+      if (!this.readyThisLoad) this.setEmbedded(false);
+    });
     contents.setWindowOpenHandler(({ url }) => {
       if (this.isAssistantUrl(url)) void contents.loadURL(url);
       else this.openExternal(url);
@@ -114,6 +158,9 @@ export class DesktopAssistantView {
     );
     ipcMain.on("agentlink:remote:layout", this.onLayout);
     ipcMain.on("agentlink:assistant:retry", this.onRetry);
+    ipcMain.on("agentlink:assistant:chrome", this.onChrome);
+    ipcMain.on("agentlink:assistant-embed:ready", this.onEmbedReady);
+    ipcMain.on("agentlink:assistant-embed:show-view", this.onShowView);
     window.on("resize", this.onResize);
     window.on("closed", this.dispose);
     window.webContents.on("zoom-changed", this.onResize);
@@ -133,6 +180,7 @@ export class DesktopAssistantView {
     // Connections verified under the old trust must not be reused.
     void this.assistantSession.closeAllConnections().catch(() => undefined);
     this.loaded = false;
+    this.embedded = false;
     this.error = undefined;
     this.setStatus("idle");
     if (this.layout.mode === "assistant") void this.load();
@@ -177,6 +225,61 @@ export class DesktopAssistantView {
 
   private openExternal(url: string): void {
     openExternalLink(url, [this.shellOrigin, this.config.origin]);
+  }
+
+  /** A message from the Assistant page itself, not a frame or other page. */
+  private isAssistantSender(event: IpcMainEvent): boolean {
+    const contents = this.view.webContents;
+    try {
+      return (
+        !this.disposed &&
+        event.sender === contents &&
+        event.senderFrame === contents.mainFrame &&
+        this.isAssistantUrl(event.senderFrame.url)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private readonly onEmbedReady = (event: IpcMainEvent): void => {
+    if (!this.isAssistantSender(event)) return;
+    this.readyThisLoad = true;
+    this.sendChrome();
+    this.setEmbedded(true);
+  };
+
+  private readonly onShowView = (event: IpcMainEvent, mode: unknown): void => {
+    if (!this.isAssistantSender(event) || this.window.isDestroyed()) return;
+    if (mode !== "ask" && mode !== "vscode") return;
+    this.window.webContents.send("agentlink:assistant:show-view", mode);
+  };
+
+  private readonly onChrome = (event: IpcMainEvent, value: unknown): void => {
+    if (
+      !isTrustedDesktopSender(event, this.window, this.shellOrigin) ||
+      !isDesktopAssistantChrome(value)
+    )
+      return;
+    this.chrome = {
+      sidebarOpen: value.sidebarOpen,
+      ...(value.sidebarWidth !== undefined
+        ? { sidebarWidth: value.sidebarWidth }
+        : {}),
+    };
+    this.sendChrome();
+  };
+
+  private sendChrome(): void {
+    const contents = this.view.webContents;
+    if (this.disposed || contents.isDestroyed()) return;
+    contents.send("agentlink:assistant-embed:chrome", this.chrome);
+  }
+
+  private setEmbedded(embedded: boolean): void {
+    if (this.embedded === embedded) return;
+    this.embedded = embedded;
+    this.publish();
   }
 
   private readonly onLayout = (event: IpcMainEvent, value: unknown): void => {
@@ -254,6 +357,7 @@ export class DesktopAssistantView {
   private loadFailed(error: NonNullable<DesktopAssistantState["error"]>): void {
     if (this.disposed) return;
     this.loaded = false;
+    this.embedded = false;
     this.error = error;
     this.setStatus("unavailable");
   }
@@ -265,6 +369,7 @@ export class DesktopAssistantView {
       origin: this.config.origin,
       pinned: this.config.ca !== undefined,
       ...(this.error ? { error: this.error } : {}),
+      ...(this.embedded ? { embedded: true } : {}),
     };
     this.window.webContents.send("agentlink:assistant:state", state);
   }
@@ -296,6 +401,15 @@ export class DesktopAssistantView {
     this.disposed = true;
     ipcMain.removeListener("agentlink:remote:layout", this.onLayout);
     ipcMain.removeListener("agentlink:assistant:retry", this.onRetry);
+    ipcMain.removeListener("agentlink:assistant:chrome", this.onChrome);
+    ipcMain.removeListener(
+      "agentlink:assistant-embed:ready",
+      this.onEmbedReady,
+    );
+    ipcMain.removeListener(
+      "agentlink:assistant-embed:show-view",
+      this.onShowView,
+    );
     this.window.removeListener("resize", this.onResize);
     this.window.removeListener("closed", this.dispose);
     this.assistantSession.setCertificateVerifyProc(null);

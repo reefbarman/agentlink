@@ -10,18 +10,18 @@ import { useEffect, useRef, useState } from "preact/hooks";
  * over. It reports its bounds and shows a placeholder while the view is not
  * ready.
  */
-export function DesktopRemotePane({ mode }: { mode: DesktopMode }) {
+export function DesktopRemotePane({
+  mode,
+  assistant,
+}: {
+  mode: DesktopMode;
+  /** The embedded Assistant's state, owned by the app (one subscription). */
+  assistant: DesktopAssistantState | null;
+}) {
   const element = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<DesktopRemoteState>({ status: "idle" });
-  const [assistant, setAssistant] = useState<DesktopAssistantState | null>(
-    null,
-  );
 
   useEffect(() => window.agentlinkDesktopShell?.onRemoteState(setState), []);
-  useEffect(
-    () => window.agentlinkDesktopShell?.onAssistantState?.(setAssistant),
-    [],
-  );
   useEffect(() => {
     const bridge = window.agentlinkDesktopShell;
     const pane = element.current;

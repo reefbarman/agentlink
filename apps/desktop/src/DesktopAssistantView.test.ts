@@ -40,6 +40,8 @@ vi.mock("electron", async () => {
         close: vi.fn(),
         isDestroyed: () => false,
         setWindowOpenHandler: vi.fn(),
+        send: vi.fn(),
+        mainFrame: { url: "" },
       });
       setVisible = vi.fn();
       setBounds = vi.fn();
@@ -55,6 +57,7 @@ const CA = { pem: "ca", fingerprint256: "AA:BB" };
 
 function fixture(
   config: { origin: string; ca?: typeof CA } = { origin: ORIGIN },
+  preload?: string,
 ) {
   const contents = Object.assign(new EventEmitter(), {
     mainFrame: { url: "http://127.0.0.1:47138/?surface=desktop" },
@@ -73,6 +76,7 @@ function fixture(
     "http://127.0.0.1:47138",
     config,
     () => 1_000,
+    preload,
   );
   const sender = { sender: contents, senderFrame: contents.mainFrame };
   const layout = (mode: "ask" | "vscode" | "assistant") =>
@@ -87,7 +91,10 @@ function fixture(
     proc({ hostname, certificate: { data: "leaf" } }, callback);
     return callback.mock.calls[0][0] as number;
   };
-  const lastState = () => contents.send.mock.calls.at(-1)?.[1];
+  const lastState = () =>
+    contents.send.mock.calls
+      .filter(([channel]) => channel === "agentlink:assistant:state")
+      .at(-1)?.[1];
   return {
     window,
     contents,
@@ -266,6 +273,91 @@ describe("desktop Assistant view", () => {
     await flush();
     expect(f.view.webContents.loadURL).not.toHaveBeenCalled();
     f.assistant.dispose();
+  });
+
+  it("hands the sidebar to an Assistant page that draws it, and relays its view requests", async () => {
+    const f = fixture({ origin: ORIGIN }, "/app/assistant-preload.cjs");
+    expect(f.view.options.webPreferences).toMatchObject({
+      preload: "/app/assistant-preload.cjs",
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    });
+    f.layout("assistant");
+    await flush();
+    electron.ipc.emit("agentlink:assistant:chrome", f.sender, {
+      sidebarOpen: false,
+      sidebarWidth: 300,
+    });
+    const page = f.view.webContents;
+    page.mainFrame.url = `${ORIGIN}/`;
+    const pageSender = { sender: page, senderFrame: page.mainFrame };
+
+    // Only the Assistant's own main frame can claim the sidebar.
+    electron.ipc.emit("agentlink:assistant-embed:ready", f.sender);
+    electron.ipc.emit("agentlink:assistant-embed:ready", {
+      sender: page,
+      senderFrame: { url: `${ORIGIN}/` },
+    });
+    expect(f.lastState()).not.toHaveProperty("embedded");
+
+    electron.ipc.emit("agentlink:assistant-embed:ready", pageSender);
+    expect(f.lastState()).toEqual({
+      status: "ready",
+      origin: ORIGIN,
+      pinned: false,
+      embedded: true,
+    });
+    expect(page.send).toHaveBeenLastCalledWith(
+      "agentlink:assistant-embed:chrome",
+      { sidebarOpen: false, sidebarWidth: 300 },
+    );
+    const sent = page.send.mock.calls.length;
+    electron.ipc.emit("agentlink:assistant:chrome", f.sender, {
+      sidebarOpen: true,
+      sidebarWidth: "wide",
+    });
+    electron.ipc.emit("agentlink:assistant:chrome", pageSender, {
+      sidebarOpen: true,
+    });
+    expect(page.send).toHaveBeenCalledTimes(sent);
+    electron.ipc.emit("agentlink:assistant:chrome", f.sender, {
+      sidebarOpen: true,
+    });
+    expect(page.send).toHaveBeenLastCalledWith(
+      "agentlink:assistant-embed:chrome",
+      { sidebarOpen: true },
+    );
+
+    electron.ipc.emit("agentlink:assistant-embed:show-view", pageSender, "ask");
+    electron.ipc.emit(
+      "agentlink:assistant-embed:show-view",
+      pageSender,
+      "settings",
+    );
+    electron.ipc.emit(
+      "agentlink:assistant-embed:show-view",
+      f.sender,
+      "vscode",
+    );
+    const views = f.contents.send.mock.calls.filter(
+      ([channel]) => channel === "agentlink:assistant:show-view",
+    );
+    expect(views).toEqual([["agentlink:assistant:show-view", "ask"]]);
+
+    // A reload that keeps the bridge stays embedded; a page without it
+    // (sign-in, an older Assistant) gives the sidebar back.
+    page.emit("did-start-navigation", {}, `${ORIGIN}/`, false, true);
+    electron.ipc.emit("agentlink:assistant-embed:ready", pageSender);
+    page.emit("did-finish-load");
+    expect(f.lastState()).toMatchObject({ embedded: true });
+    page.emit("did-start-navigation", {}, `${ORIGIN}/pair`, false, true);
+    page.emit("did-finish-load");
+    expect(f.lastState()).not.toHaveProperty("embedded");
+    f.assistant.dispose();
+    expect(electron.ipc.listenerCount("agentlink:assistant-embed:ready")).toBe(
+      0,
+    );
   });
 
   it("reloads with fresh connections when Settings change the address or CA", async () => {

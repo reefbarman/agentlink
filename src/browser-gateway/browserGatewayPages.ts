@@ -170,6 +170,7 @@ export function renderBrowserGatewayPairingHtml(options: {
       --accent-hover: ${cssValueEscape(brand.accentHover)};
       --accent-ring: ${cssValueEscape(brand.accentRing)};
     }
+    *, *::before, *::after { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: #1e1e1e;
@@ -184,8 +185,8 @@ export function renderBrowserGatewayPairingHtml(options: {
     .pair-card {
       background: #252526;
       border: 1px solid #3c3c3c;
-      border-radius: 12px;
-      padding: 32px 28px;
+      border-radius: 14px;
+      padding: 32px 32px 28px;
       max-width: 420px;
       width: 100%;
       box-shadow: 0 12px 32px rgba(0,0,0,0.35);
@@ -200,8 +201,8 @@ export function renderBrowserGatewayPairingHtml(options: {
       margin-bottom: 18px;
     }
     .pair-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-    h1 { margin: 0 0 6px; font-size: 20px; }
-    p { margin: 8px 0 16px; line-height: 1.5; font-size: 14px; color: #bbb; }
+    h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+    p { margin: 0 0 20px; line-height: 1.55; font-size: 14px; color: #bbb; }
     .pair-error {
       background: rgba(244, 71, 71, 0.12);
       border: 1px solid rgba(244, 71, 71, 0.4);
@@ -210,12 +211,13 @@ export function renderBrowserGatewayPairingHtml(options: {
       border-radius: 8px;
       font-size: 13px;
     }
-    form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+    form { display: flex; flex-direction: column; gap: 12px; margin: 0; }
     input[name="code"] {
+      width: 100%;
       font-size: 32px;
       letter-spacing: 8px;
       text-align: center;
-      padding: 14px;
+      padding: 14px 14px 14px 22px;
       border-radius: 10px;
       border: 1px solid #3c3c3c;
       background: #1e1e1e;
@@ -238,7 +240,7 @@ export function renderBrowserGatewayPairingHtml(options: {
       cursor: pointer;
     }
     button:hover { background: var(--accent-hover); }
-    .pair-footnote { margin-top: 12px; font-size: 12px; color: #888; }
+    .pair-footnote { margin-top: 16px; font-size: 12px; line-height: 1.5; color: #888; }
   </style>
 </head>
 <body>

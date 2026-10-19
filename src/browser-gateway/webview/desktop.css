@@ -873,30 +873,157 @@
 }
 
 .browser-shell.browser-shell-desktop .desktop-remote-placeholder {
-  max-width: 440px;
-  padding: 32px;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: min(440px, calc(100% - 48px));
+  padding: 32px 28px 28px;
+  border: 1px solid var(--ag-border);
+  border-radius: 16px;
+  background: var(--ag-panel);
+  box-shadow: 0 16px 40px #00000040;
   color: var(--ag-muted);
   text-align: center;
-  line-height: 1.6;
+  line-height: 1.55;
 }
 
 .browser-shell.browser-shell-desktop .desktop-remote-placeholder > .codicon {
-  font-size: 36px;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 4px;
+  border-radius: 14px;
+  background: var(--ag-accent-a15);
   color: var(--ag-accent);
+  font-size: 26px;
 }
 
 .browser-shell.browser-shell-desktop .desktop-remote-placeholder h2 {
-  font-size: 20px;
-  color: var(--ag-text);
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ag-title);
+}
+
+.browser-shell.browser-shell-desktop .desktop-remote-placeholder p {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-remote-placeholder
+  .desktop-remote-actions {
+  margin-top: 12px;
 }
 
 .browser-shell.browser-shell-desktop .desktop-remote-placeholder button {
-  padding: 9px 16px;
-  border: 1px solid var(--ag-accent-a30);
-  border-radius: 10px;
-  background: var(--ag-accent-a18);
+  min-height: 34px;
+  padding: 7px 16px;
+  border: 1px solid var(--ag-border-2);
+  border-radius: 9px;
+  background: #ffffff08;
   color: var(--ag-text);
+  font-size: 13px;
   cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-remote-placeholder
+  button:first-child {
+  border-color: transparent;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop
+  .desktop-remote-placeholder
+  button:first-child:hover {
+  background: var(--ag-accent-hover);
+  color: var(--ag-accent-ink);
+}
+
+/*
+ * Shell beside the embedded Assistant: once the Assistant's page draws the
+ * sidebar itself, its native view spans the whole layout under the title
+ * bar, so there is one sidebar and one header.
+ */
+.browser-shell.browser-shell-desktop.desktop-assistant-embedded
+  .browser-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.browser-shell.browser-shell-desktop.desktop-assistant-embedded
+  .desktop-remote-pane {
+  grid-column: 1;
+}
+
+/*
+ * Inside the desktop's Assistant view: the shell owns the title bar (and
+ * window dragging), so the page drops its own header and keeps just its
+ * chat actions, floating at the top right.
+ */
+.browser-shell.browser-shell-desktop.desktop-embedded {
+  position: relative;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded .browser-header {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 30;
+  flex: none;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded
+  .browser-header
+  > :not(.desktop-header-actions) {
+  display: none;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded
+  .browser-header
+  .desktop-header-actions {
+  padding: 3px;
+  border: 1px solid var(--ag-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ag-panel-2) 90%, transparent);
+  box-shadow: 0 6px 18px #00000033;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded
+  .browser-header
+  .desktop-more-trigger {
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded
+  .browser-header
+  .icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+
+.browser-shell.browser-shell-desktop.desktop-embedded
+  .browser-header
+  .session-restore-status {
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .desktop-workspace-empty {

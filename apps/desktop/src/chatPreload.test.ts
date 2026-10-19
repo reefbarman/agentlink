@@ -58,12 +58,14 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "onReleaseInstallState",
     "onReleaseUpdateState",
     "onRemoteState",
+    "onViewRequest",
     "openMcpConfig",
     "openMcpManager",
     "openSettings",
     "restartForReleaseUpdate",
     "retryAssistant",
     "retryRemote",
+    "setAssistantChrome",
     "setMcpOperation",
     "setRemoteLayout",
     "submitQuickAsk",
@@ -130,11 +132,54 @@ it("exposes only the shell bridge and strips Electron events from state callback
     origin: "https://agentlink-assistant.local:8443",
     pinned: true,
   });
+  assistantHandler(
+    {},
+    { status: "ready", origin: "https://a.local", pinned: false, embedded: 1 },
+  );
+  assistantHandler(
+    {},
+    {
+      status: "ready",
+      origin: "https://a.local",
+      pinned: false,
+      embedded: true,
+    },
+  );
+  expect(assistantListener).toHaveBeenNthCalledWith(2, {
+    status: "ready",
+    origin: "https://a.local",
+    pinned: false,
+  });
+  expect(assistantListener).toHaveBeenLastCalledWith({
+    status: "ready",
+    origin: "https://a.local",
+    pinned: false,
+    embedded: true,
+  });
   stopAssistant();
   expect(electron.removeListener).toHaveBeenCalledWith(
     "agentlink:assistant:state",
     assistantHandler,
   );
+
+  bridge.setAssistantChrome!({
+    sidebarOpen: true,
+    sidebarWidth: 280,
+    extra: "dropped",
+  } as never);
+  expect(electron.send).toHaveBeenLastCalledWith("agentlink:assistant:chrome", {
+    sidebarOpen: true,
+    sidebarWidth: 280,
+  });
+  const viewListener = vi.fn();
+  bridge.onViewRequest!(viewListener);
+  const viewHandler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:assistant:show-view",
+  )?.[1];
+  viewHandler({}, "vscode");
+  viewHandler({}, "assistant");
+  viewHandler({}, { mode: "ask" });
+  expect(viewListener).toHaveBeenCalledExactlyOnceWith("vscode");
 });
 
 it("routes native release-update controls through the narrow IPC bridge", async () => {

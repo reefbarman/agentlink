@@ -49,6 +49,16 @@ await Promise.all([
     external: ["electron"],
   }),
   esbuild.build({
+    entryPoints: [path.join(root, "src/assistantPreload.ts")],
+    outfile: path.join(outdir, "assistant-preload.cjs"),
+    bundle: true,
+    format: "cjs",
+    platform: "node",
+    target: "node22",
+    sourcemap: true,
+    external: ["electron"],
+  }),
+  esbuild.build({
     entryPoints: [path.join(root, "src/setup.ts")],
     outfile: path.join(outdir, "setup.js"),
     bundle: true,

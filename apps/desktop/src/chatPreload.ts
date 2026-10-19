@@ -61,11 +61,27 @@ if (process.isMainFrame) {
           ...(state.error === "certificate" || state.error === "load"
             ? { error: state.error }
             : {}),
+          ...(state.embedded === true ? { embedded: true } : {}),
         });
       };
       ipcRenderer.on("agentlink:assistant:state", handler);
       return () =>
         ipcRenderer.removeListener("agentlink:assistant:state", handler);
+    },
+    setAssistantChrome: (chrome) =>
+      ipcRenderer.send("agentlink:assistant:chrome", {
+        sidebarOpen: chrome.sidebarOpen === true,
+        ...(typeof chrome.sidebarWidth === "number"
+          ? { sidebarWidth: chrome.sidebarWidth }
+          : {}),
+      }),
+    onViewRequest: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, mode: unknown) => {
+        if (mode === "ask" || mode === "vscode") listener(mode);
+      };
+      ipcRenderer.on("agentlink:assistant:show-view", handler);
+      return () =>
+        ipcRenderer.removeListener("agentlink:assistant:show-view", handler);
     },
     openSettings: () => ipcRenderer.send("agentlink:open-settings"),
     submitQuickAsk: (submission) =>

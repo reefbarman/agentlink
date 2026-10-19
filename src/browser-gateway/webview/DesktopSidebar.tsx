@@ -24,7 +24,7 @@ export function clampSidebarWidth(width: number, viewport: number): number {
   return Math.round(Math.max(MIN_SIDEBAR_WIDTH, Math.min(width, roomy)));
 }
 
-function storedSidebarWidth(): number | undefined {
+export function storedSidebarWidth(): number | undefined {
   try {
     const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return Number.isFinite(value) && value > 0 ? value : undefined;
@@ -150,6 +150,13 @@ interface DesktopSidebarProps {
   onManage: () => void;
   mode?: DesktopMode;
   onModeChange?: (mode: DesktopMode) => void;
+  /**
+   * The view the navigation marks as current, when it differs from the
+   * content shown (the embedded Assistant shows chats under "Assistant").
+   */
+  activeView?: DesktopMode;
+  /** Offer the drag handle; off when another surface owns the width. */
+  resizable?: boolean;
   /** Shown above the chats, for example a product's project switcher. */
   header?: ComponentChildren;
   /** Offer the Assistant as a view (the desktop's embedded Assistant tab). */
@@ -213,6 +220,8 @@ export function DesktopSidebar({
   onManage,
   mode = "ask",
   onModeChange,
+  activeView = mode,
+  resizable = true,
   header,
   assistantMode = false,
   assistantLink,
@@ -240,7 +249,7 @@ export function DesktopSidebar({
         <nav class="desktop-mode-navigation" aria-label="Desktop views">
           <button
             type="button"
-            aria-current={mode === "ask" ? "page" : undefined}
+            aria-current={activeView === "ask" ? "page" : undefined}
             onClick={() => onModeChange("ask")}
           >
             <i class="codicon codicon-comment-discussion" aria-hidden="true" />{" "}
@@ -248,7 +257,7 @@ export function DesktopSidebar({
           </button>
           <button
             type="button"
-            aria-current={mode === "vscode" ? "page" : undefined}
+            aria-current={activeView === "vscode" ? "page" : undefined}
             onClick={() => onModeChange("vscode")}
           >
             <i class="codicon codicon-vscode" aria-hidden="true" /> VS Code
@@ -256,7 +265,7 @@ export function DesktopSidebar({
           {assistantMode && (
             <button
               type="button"
-              aria-current={mode === "assistant" ? "page" : undefined}
+              aria-current={activeView === "assistant" ? "page" : undefined}
               onClick={() => onModeChange("assistant")}
             >
               <i class="codicon codicon-sparkle" aria-hidden="true" /> Assistant
@@ -369,7 +378,7 @@ export function DesktopSidebar({
           the Assistant's server.
         </p>
       )}
-      <SidebarResizeHandle />
+      {resizable && <SidebarResizeHandle />}
     </aside>
   );
 }

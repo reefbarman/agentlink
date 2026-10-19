@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
 import type {
+  DesktopAssistantChrome,
   DesktopAssistantState,
   DesktopQuickAskSubmission,
 } from "../../shared/desktopBridge";
@@ -4644,6 +4645,145 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       cleanup();
       delete window.agentlinkDesktopShell;
       globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("hands the sidebar to an embedded Assistant that draws it and turns the shell violet", async () => {
+    const setAssistantChrome = vi.fn();
+    let publish: (state: DesktopAssistantState) => void = () => {};
+    let requestView: (mode: "ask" | "vscode") => void = () => {};
+    window.agentlinkDesktopShell = {
+      askAgentOwnerId: "agentlink-desktop",
+      onAskAgentOwnerIdChanged: () => () => {},
+      setRemoteLayout: vi.fn(),
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+      retryAssistant: vi.fn(),
+      setAssistantChrome,
+      onViewRequest: (listener) => {
+        requestView = listener;
+        return () => {};
+      },
+      onAssistantState: (listener) => {
+        publish = listener;
+        return () => {};
+      },
+    };
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver;
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      const shell = document.querySelector(".browser-shell") as HTMLElement;
+      const composer = document.querySelector(".browser-main") as HTMLElement;
+      expect(shell.classList.contains("assistant-product")).toBe(false);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Assistant", exact: true }),
+      );
+      expect(shell.classList.contains("assistant-product")).toBe(true);
+      expect(document.querySelector(".browser-title")?.textContent).toBe(
+        "AgentLink Assistant",
+      );
+      expect(setAssistantChrome).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sidebarOpen: true }),
+      );
+
+      // A page that does not draw the sidebar (sign-in, an older
+      // Assistant) keeps the shell's own sidebar beside it.
+      const origin = "https://agentlink-assistant.local:8443";
+      await act(async () =>
+        publish({ status: "ready", origin, pinned: false }),
+      );
+      expect(document.querySelector(".desktop-sidebar")).not.toBeNull();
+      await act(async () =>
+        publish({ status: "ready", origin, pinned: false, embedded: true }),
+      );
+      expect(document.querySelector(".desktop-sidebar")).toBeNull();
+      expect(shell.classList.contains("desktop-assistant-embedded")).toBe(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
+      expect(setAssistantChrome).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sidebarOpen: false }),
+      );
+      await act(async () => requestView("ask"));
+      expect(composer.style.display).not.toBe("none");
+      expect(shell.classList.contains("assistant-product")).toBe(false);
+      expect(shell.classList.contains("desktop-assistant-embedded")).toBe(
+        false,
+      );
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopShell;
+      globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("draws the desktop's sidebar and view navigation inside the desktop's Assistant view", async () => {
+    let applyChrome: (chrome: DesktopAssistantChrome) => void = () => {};
+    const ready = vi.fn();
+    const showView = vi.fn();
+    window.agentlinkDesktopEmbed = {
+      ready,
+      showView,
+      onChrome: (listener) => {
+        applyChrome = listener;
+        return () => {};
+      },
+    };
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+          product: "assistant",
+        }),
+      );
+      await screen.findByRole("heading", { name: "What should we work on?" });
+      expect(ready).toHaveBeenCalledOnce();
+      const shell = document.querySelector(".browser-shell") as HTMLElement;
+      expect(shell.classList.contains("desktop-embedded")).toBe(true);
+      const assistantView = screen.getByRole("button", {
+        name: "Assistant",
+        exact: true,
+      });
+      expect(assistantView.getAttribute("aria-current")).toBe("page");
+      expect(screen.getByRole("button", { name: "New chat" })).toBeTruthy();
+      expect(
+        document.querySelector(".desktop-sidebar-resize-handle"),
+      ).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "VS Code", exact: true }),
+      );
+      expect(showView).toHaveBeenCalledExactlyOnceWith("vscode");
+      fireEvent.click(assistantView);
+      expect(showView).toHaveBeenCalledOnce();
+
+      await act(async () =>
+        applyChrome({ sidebarOpen: true, sidebarWidth: 312 }),
+      );
+      expect(shell.style.getPropertyValue("--desktop-sidebar-user-width")).toBe(
+        "312px",
+      );
+      await act(async () => applyChrome({ sidebarOpen: false }));
+      expect(document.querySelector(".desktop-sidebar")).toBeNull();
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopEmbed;
     }
   });
 

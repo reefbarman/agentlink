@@ -52,7 +52,7 @@ import {
   MIN_APPROVAL_PANEL_HEIGHT,
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
-import { DesktopSidebar } from "./DesktopSidebar";
+import { DesktopSidebar, storedSidebarWidth } from "./DesktopSidebar";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { AssistantHub } from "./AssistantJobs";
 import { ChatTaskStrip, type ChatTaskCard } from "./AssistantTasks";
@@ -60,6 +60,7 @@ import { RememberedStrip, type RememberedCard } from "./AssistantMemory";
 import { DesktopRemotePane } from "./DesktopRemotePane";
 import { AssistantLauncher } from "./AssistantLauncher";
 import type {
+  DesktopAssistantState,
   DesktopMode,
   DesktopQuickAskSubmission,
   DesktopMcpManagerOpenRequest,
@@ -2187,6 +2188,51 @@ export function BrowserGatewayApp({
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 960,
   );
+  // Desktop shell: once the embedded Assistant draws the desktop's sidebar
+  // itself, it takes the sidebar's space and the shell turns violet, so the
+  // Assistant reads as part of the app rather than a window inside it.
+  const [desktopAssistant, setDesktopAssistant] =
+    useState<DesktopAssistantState | null>(null);
+  useEffect(() => {
+    if (!desktopAssistantAvailable) return;
+    return window.agentlinkDesktopShell?.onAssistantState?.(
+      setDesktopAssistant,
+    );
+  }, [desktopAssistantAvailable]);
+  useEffect(() => {
+    if (!desktopAssistantAvailable) return;
+    return window.agentlinkDesktopShell?.onViewRequest?.(setDesktopMode);
+  }, [desktopAssistantAvailable]);
+  const desktopAssistantSelected =
+    desktopAssistantAvailable && desktopMode === "assistant";
+  const assistantDrawsSidebar =
+    desktopAssistantSelected &&
+    desktopAssistant?.status === "ready" &&
+    desktopAssistant.embedded === true;
+  useEffect(() => {
+    if (!desktopAssistantAvailable) return;
+    const sidebarWidth = storedSidebarWidth();
+    window.agentlinkDesktopShell?.setAssistantChrome?.({
+      sidebarOpen: desktopSidebarOpen,
+      ...(sidebarWidth !== undefined ? { sidebarWidth } : {}),
+    });
+  }, [desktopAssistantAvailable, desktopMode, desktopSidebarOpen]);
+  // Inside the desktop's Assistant view: draw the desktop's sidebar (with
+  // its view navigation) and follow the shell's open state and width.
+  const desktopEmbed =
+    product === "assistant" && askAgentOnly
+      ? window.agentlinkDesktopEmbed
+      : undefined;
+  const [embedSidebarWidth, setEmbedSidebarWidth] = useState<number>();
+  useEffect(() => {
+    if (!desktopEmbed) return;
+    const stop = desktopEmbed.onChrome((chrome) => {
+      setDesktopSidebarOpen(chrome.sidebarOpen);
+      setEmbedSidebarWidth(chrome.sidebarWidth);
+    });
+    desktopEmbed.ready();
+    return stop;
+  }, [desktopEmbed]);
   const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
     null,
   );
@@ -8609,7 +8655,14 @@ export function BrowserGatewayApp({
 
   return (
     <div
-      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" ? " assistant-product" : ""}`}
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}`}
+      style={
+        desktopEmbed && embedSidebarWidth !== undefined
+          ? ({
+              "--desktop-sidebar-user-width": `${embedSidebarWidth}px`,
+            } as unknown as CSSProperties)
+          : undefined
+      }
     >
       {viewedFile && (
         <BrowserFileViewer
@@ -8649,7 +8702,11 @@ export function BrowserGatewayApp({
               <span class="consumer-brand-mark" aria-hidden="true" />
             )}
             <span>
-              {isAskAgentSelected ? productCopy.name : "AgentLink Remote"}
+              {isAskAgentSelected
+                ? desktopAssistantSelected
+                  ? PRODUCT_COPY.assistant.name
+                  : productCopy.name
+                : "AgentLink Remote"}
             </span>
             {isAskAgentSelected && !consumerShell && (
               <span class="consumer-brand-mode">Ask</span>
@@ -8726,24 +8783,34 @@ export function BrowserGatewayApp({
               />
             </div>
           )}
-          {desktopRemoteSelected && (
+          {desktopRemoteSelected && browserShell && (
             <div class="desktop-header-actions">
-              <span>
-                {desktopMode === "assistant" ? "Assistant" : "VS Code"}
-              </span>
-              {!browserShell && (
-                <button
-                  class="desktop-more-trigger"
-                  type="button"
-                  onClick={() =>
-                    desktopMode === "assistant"
-                      ? window.agentlinkDesktopShell?.retryAssistant?.()
-                      : window.agentlinkDesktopShell?.retryRemote()
-                  }
-                >
-                  Reconnect
-                </button>
-              )}
+              <span>VS Code</span>
+            </div>
+          )}
+          {desktopRemoteSelected && !browserShell && (
+            <div class="desktop-header-actions">
+              <button
+                class="icon-button"
+                type="button"
+                title={
+                  desktopMode === "assistant"
+                    ? "Reload Assistant"
+                    : "Reconnect to VS Code"
+                }
+                aria-label={
+                  desktopMode === "assistant"
+                    ? "Reload Assistant"
+                    : "Reconnect to VS Code"
+                }
+                onClick={() =>
+                  desktopMode === "assistant"
+                    ? window.agentlinkDesktopShell?.retryAssistant?.()
+                    : window.agentlinkDesktopShell?.retryRemote()
+                }
+              >
+                <i class="codicon codicon-refresh" aria-hidden="true" />
+              </button>
             </div>
           )}
           {consumerShell && !desktopRemoteSelected && (
@@ -9252,7 +9319,7 @@ export function BrowserGatewayApp({
           </>
         )}
 
-        {consumerShell && desktopSidebarOpen && (
+        {consumerShell && desktopSidebarOpen && !assistantDrawsSidebar && (
           <DesktopSidebar
             sessions={sessionHistory}
             currentSessionId={foreground?.sessionId ?? null}
@@ -9260,8 +9327,18 @@ export function BrowserGatewayApp({
             onNew={handleNewSession}
             onManage={handleShowHistory}
             mode={desktopMode}
-            onModeChange={desktopModesAvailable ? selectSurfaceMode : undefined}
-            assistantMode={desktopAssistantAvailable}
+            onModeChange={
+              desktopEmbed
+                ? (mode) => {
+                    if (mode !== "assistant") desktopEmbed.showView(mode);
+                  }
+                : desktopModesAvailable
+                  ? selectSurfaceMode
+                  : undefined
+            }
+            activeView={desktopEmbed ? "assistant" : desktopMode}
+            resizable={!desktopEmbed}
+            assistantMode={desktopAssistantAvailable || Boolean(desktopEmbed)}
             assistantLink={
               browserShell && product !== "assistant" ? (
                 <AssistantLauncher />
@@ -9285,7 +9362,7 @@ export function BrowserGatewayApp({
           />
         )}
         {desktopModesAvailable && !browserShell && (
-          <DesktopRemotePane mode={desktopMode} />
+          <DesktopRemotePane mode={desktopMode} assistant={desktopAssistant} />
         )}
         {browserShell && browserWorkspaceMounted && (
           <iframe

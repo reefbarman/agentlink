@@ -25,6 +25,31 @@ export interface DesktopAssistantState {
   pinned: boolean;
   /** Why the last load failed: an untrusted certificate, or anything else. */
   error?: "certificate" | "load";
+  /**
+   * True once the loaded Assistant page draws the desktop's sidebar itself
+   * (it supports the embed bridge). Until then, and for pages such as
+   * sign-in, the shell keeps its own sidebar beside the Assistant.
+   */
+  embedded?: boolean;
+}
+
+/** Shell layout the embedded Assistant mirrors so the two read as one app. */
+export interface DesktopAssistantChrome {
+  sidebarOpen: boolean;
+  /** The user's dragged sidebar width, when they chose one. */
+  sidebarWidth?: number;
+}
+
+/**
+ * The only API the embedded Assistant page receives. It can ask the desktop
+ * to show another view and follow the shell's sidebar; nothing else.
+ */
+export interface DesktopEmbedBridge {
+  /** The page draws the desktop chrome (sidebar and view navigation). */
+  ready(): void;
+  /** Switch the desktop to another view. */
+  showView(mode: Exclude<DesktopMode, "assistant">): void;
+  onChrome(listener: (chrome: DesktopAssistantChrome) => void): () => void;
 }
 
 export interface DesktopQuickAskMedia {
@@ -58,6 +83,12 @@ export interface DesktopBridge {
   retryAssistant?(): void;
   onAssistantState?(
     listener: (state: DesktopAssistantState) => void,
+  ): () => void;
+  /** Mirror the shell's sidebar into the embedded Assistant. */
+  setAssistantChrome?(chrome: DesktopAssistantChrome): void;
+  /** The embedded Assistant asked to show another view. */
+  onViewRequest?(
+    listener: (mode: Exclude<DesktopMode, "assistant">) => void,
   ): () => void;
   /** Opens the desktop Settings window (shortcut, login item, accounts). */
   openSettings?(): void;
@@ -99,5 +130,6 @@ export interface DesktopBridge {
 declare global {
   interface Window {
     agentlinkDesktopShell?: DesktopBridge;
+    agentlinkDesktopEmbed?: DesktopEmbedBridge;
   }
 }

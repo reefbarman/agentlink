@@ -127,6 +127,7 @@ function page(title: string, body: string): string {
   <title>${htmlEscape(title)} · ${ASSISTANT_BRAND.name}</title>
   <style>
     :root { color-scheme: dark; --accent: ${ASSISTANT_BRAND.accent}; }
+    *, *::before, *::after { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: #1e1e1e; color: #d4d4d4; margin: 0; min-height: 100vh;
