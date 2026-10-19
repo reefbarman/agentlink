@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.44.1
+
 - Jev no longer treats ordinary command text as a possible secret. Timestamped file names such as `migrations/20250101120000_add-user-index.sql` and image digests such as `@sha256:…` were redacted, and any command containing your home folder counted as altered because the path is shown as `~`. Either made the review ineligible. In recent Jev traffic, 21 of the 22 commands Jev saw as altered were one of these; the remaining one was over the size limit. Random-looking tokens, keys and passwords are still redacted.
 - Long instructions you type now reach Jev in full. Your latest instruction was cut off at 1,200 characters and earlier ones at 2,000, so a long request or a pasted spec made every later review in that session ineligible. Jev now gets the full text of your latest instruction (up to 8,000 characters) and earlier instructions up to 20,000 characters. The main Guardian's evidence is unchanged. In recent traffic this accounted for all 15 reviews that were missing one piece of your input.
 

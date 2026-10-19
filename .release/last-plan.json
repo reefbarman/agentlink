@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c622440d171e44453bb41cefa896f6848b884c4c",
-  "createdAt": "2026-10-19T03:08:34.807Z",
+  "sourceSha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
+  "createdAt": "2026-10-19T04:06:49.883Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.43.3",
-      "baselineRef": "v1.43.3",
-      "reserved": "1.43.3",
-      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
+      "published": "1.44.0",
+      "baselineRef": "v1.44.0",
+      "reserved": "1.44.0",
+      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.44.0",
-      "effectiveBump": "minor",
+      "version": "1.44.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.0",
+      "tag": "v1.44.1",
       "notes": [
         {
-          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
-          "subject": "feat(agent): edit an earlier message in a fork",
-          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
+          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
+          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
+          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.31.3",
-      "baselineRef": "desktop-v0.31.3",
-      "reserved": "0.31.3",
-      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
+      "published": "0.32.0",
+      "baselineRef": "desktop-v0.32.0",
+      "reserved": "0.32.0",
+      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.32.0",
-      "effectiveBump": "minor",
+      "version": "0.32.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.0",
+      "tag": "desktop-v0.32.1",
       "notes": [
         {
-          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
-          "subject": "feat(agent): edit an earlier message in a fork",
-          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
+          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
+          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
+          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.3.3",
-      "baselineRef": "assistant-v0.3.3",
-      "reserved": "0.3.3",
-      "commits": ["c622440d171e44453bb41cefa896f6848b884c4c"],
+      "published": "0.4.0",
+      "baselineRef": "assistant-v0.4.0",
+      "reserved": "0.4.0",
+      "commits": ["4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.4.0",
-      "effectiveBump": "minor",
+      "version": "0.4.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.4.0",
+      "tag": "assistant-v0.4.1",
       "notes": [
         {
-          "sha": "c622440d171e44453bb41cefa896f6848b884c4c",
-          "subject": "feat(agent): edit an earlier message in a fork",
-          "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
+          "sha": "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6",
+          "subject": "fix(guardian): stop false Jev redactions and keep long instructions intact",
+          "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
           "breaking": false
         }
       ]
@@ -159,6 +159,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Adds a pencil action on user messages that forks the chat just before that message and restores its text and attachments into the new tab's composer, in VS Code chat and browser workspace tabs, leaving the original chat and files untouched.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4dc03aae70fb9915afa8f1b2eb30eafd52c8c9d6": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes false redaction flags in the optional TypeSafe Jev shadow Guardian for timestamped file names, content digests and home paths, and passes long instructions (up to 8,000 or 20,000 chars) to Jev intact.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
