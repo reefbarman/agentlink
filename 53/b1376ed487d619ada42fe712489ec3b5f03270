@@ -1,0 +1,30 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 897
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 6372-6377,6402-6419
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 2460-2524
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 87
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53b1376ed487d619ada42fe712489ec3b5f03270",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
