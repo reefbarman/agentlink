@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   listTools: vi.fn(),
   listResources: vi.fn(),
   listPrompts: vi.fn(),
+  request: vi.fn(),
   callTool: vi.fn<(...args: unknown[]) => Promise<CallToolResult>>(
     async () => ({ content: [] }),
   ),
@@ -107,6 +108,9 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     }
     async callTool(...args: unknown[]): Promise<unknown> {
       return mocks.callTool(...args);
+    }
+    async request(...args: unknown[]): Promise<unknown> {
+      return mocks.request(...args);
     }
     setRequestHandler(): void {}
     setNotificationHandler(): void {}
@@ -1163,6 +1167,66 @@ describe("McpClientHub protocol correctness", () => {
         status: "error",
         error: expect.stringContaining("tools/list rejected"),
       });
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads tools/list leniently when one tool uses boolean property schemas", async () => {
+    const zodError = Object.assign(new Error("Invalid input"), {
+      name: "ZodError",
+      issues: [{ path: ["tools", 1, "outputSchema", "properties", "result"] }],
+    });
+    mocks.listTools.mockRejectedValue(zodError);
+    mocks.request.mockResolvedValue({
+      tools: [
+        tool("plain"),
+        {
+          name: "boolean-output",
+          inputSchema: { type: "object", properties: { any: true } },
+          outputSchema: {
+            type: "object",
+            properties: { preview: true, result: false },
+          },
+        },
+        { description: "missing name" },
+      ],
+    });
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+
+    expect(mocks.request).toHaveBeenCalledWith(
+      { method: "tools/list", params: undefined },
+      expect.anything(),
+    );
+    expect(hub.getServerInfos()[0]?.status).toBe("connected");
+    expect(hub.getToolNames()).toEqual([
+      "fixture__plain",
+      "fixture__boolean-output",
+    ]);
+    await hub.disconnectAll();
+  });
+
+  it("pauses retries when a tools/list response cannot be read at all", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      mocks.listTools.mockRejectedValue(
+        Object.assign(new Error("Invalid input"), {
+          name: "ZodError",
+          issues: [],
+        }),
+      );
+      mocks.request.mockResolvedValue({ tools: "not-a-list" });
+      await hub.connect([config]);
+
+      expect(hub.getServerInfos()[0]).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Automatic retries are paused"),
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
     } finally {
       await hub.disconnectAll();
       vi.useRealTimers();

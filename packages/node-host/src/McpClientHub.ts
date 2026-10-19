@@ -3,6 +3,8 @@ import {
   ElicitRequestSchema,
   ErrorCode,
   McpError,
+  ResultSchema,
+  ToolSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type {
   CallToolResult,
@@ -590,6 +592,104 @@ function isHttpNotFound(error: unknown): boolean {
   );
 }
 
+/** The SDK rejects responses that fail its Zod result schema with a ZodError. */
+function isSchemaValidationError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; issues?: unknown };
+  return candidate.name === "ZodError" || Array.isArray(candidate.issues);
+}
+
+/**
+ * JSON Schema 2020-12 allows boolean subschemas (`true` accepts anything,
+ * `false` accepts nothing), but the SDK requires object property schemas.
+ */
+function normalizeBooleanPropertySchemas(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema))
+    return schema;
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties)
+  )
+    return schema;
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (typeof value === "boolean") {
+      normalized[key] = value ? {} : { not: {} };
+      changed = true;
+    } else normalized[key] = value;
+  }
+  return changed ? { ...record, properties: normalized } : schema;
+}
+
+/**
+ * Parse a raw tools/list page tool by tool, so one non-standard definition
+ * cannot hide the server's whole catalog.
+ */
+function parseLenientToolsPage(raw: Record<string, unknown>):
+  | {
+      items: Tool[];
+      nextCursor?: string;
+      repaired: string[];
+      dropped: string[];
+    }
+  | undefined {
+  if (!Array.isArray(raw.tools)) return undefined;
+  const items: Tool[] = [];
+  const repaired: string[] = [];
+  const dropped: string[] = [];
+  for (const candidate of raw.tools as unknown[]) {
+    const direct = ToolSchema.safeParse(candidate);
+    if (direct.success) {
+      items.push(direct.data);
+      continue;
+    }
+    const record =
+      candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        ? (candidate as Record<string, unknown>)
+        : undefined;
+    const name =
+      typeof record?.name === "string"
+        ? record.name.slice(0, 120)
+        : "<unnamed>";
+    if (!record) {
+      dropped.push(name);
+      continue;
+    }
+    const normalized: Record<string, unknown> = {
+      ...record,
+      inputSchema: normalizeBooleanPropertySchemas(record.inputSchema),
+    };
+    if (record.outputSchema !== undefined) {
+      normalized.outputSchema = normalizeBooleanPropertySchemas(
+        record.outputSchema,
+      );
+    }
+    const repairedTool = ToolSchema.safeParse(normalized);
+    if (repairedTool.success) {
+      items.push(repairedTool.data);
+      repaired.push(name);
+      continue;
+    }
+    // Output schemas only drive optional result validation; keep the tool.
+    delete normalized.outputSchema;
+    const withoutOutput = ToolSchema.safeParse(normalized);
+    if (withoutOutput.success) {
+      items.push(withoutOutput.data);
+      repaired.push(name);
+    } else dropped.push(name);
+  }
+  return {
+    items,
+    nextCursor: typeof raw.nextCursor === "string" ? raw.nextCursor : undefined,
+    repaired,
+    dropped,
+  };
+}
+
 /** A 404 is a session expiry only when the request carried a session ID. */
 function isExpiredStreamableHttpSession(
   error: unknown,
@@ -999,10 +1099,33 @@ export class McpClientHub {
         entry,
         kind,
         async (cursor) => {
-          const result = await entry.client.listTools(
-            cursor ? { cursor } : undefined,
-          );
-          return { items: result.tools, nextCursor: result.nextCursor };
+          const params = cursor ? { cursor } : undefined;
+          try {
+            const result = await entry.client.listTools(params);
+            return { items: result.tools, nextCursor: result.nextCursor };
+          } catch (error) {
+            // The SDK rejects the whole page when one tool uses a valid JSON
+            // Schema form it does not model (for example `true` as a property
+            // schema). Re-read the page leniently and repair or skip per tool.
+            if (!isSchemaValidationError(error)) throw error;
+            const raw = await entry.client.request(
+              { method: "tools/list", params },
+              ResultSchema,
+            );
+            const page = parseLenientToolsPage(raw);
+            if (!page) throw error;
+            if (page.repaired.length > 0) {
+              this.log(
+                `[mcp:${entry.name}] normalized non-standard tool schemas: ${page.repaired.join(", ")}`,
+              );
+            }
+            if (page.dropped.length > 0) {
+              this.log(
+                `[mcp:${entry.name}] skipped tools with invalid definitions: ${page.dropped.join(", ")}`,
+              );
+            }
+            return { items: page.items, nextCursor: page.nextCursor };
+          }
         },
       );
       const outputValidators = new Map<string, McpOutputValidator>();
@@ -1842,6 +1965,13 @@ export class McpClientHub {
         this.authFailureCounts.delete(cfg.name);
         entry.status = "error";
         const startupDiagnostic = processDiagnostic(errMsg);
+        // A response the SDK cannot parse fails identically on every retry.
+        if (isSchemaValidationError(err)) {
+          entry.error = `'${cfg.name}' returned a response AgentLink could not read: ${startupDiagnostic}\nAutomatic retries are paused because the same response would fail again. Reconnect after the server is updated.`;
+          this.log(`[mcp:${cfg.name}] ${entry.error}`);
+          this.onStatusChange?.(this.getServerInfos());
+          return;
+        }
         if (isMcpRemoteConfig(cfg) && !options.retryAfterConnected) {
           entry.error = `MCP proxy '${cfg.name}' failed to start: ${startupDiagnostic}\nAutomatic startup retries are paused to avoid repeated interactive authentication. Check the process diagnostic and server configuration before another manual reconnect. Reauthenticate only if the diagnostic indicates an authentication failure.`;
           this.log(`[mcp:${cfg.name}] ${entry.error}`);
