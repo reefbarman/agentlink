@@ -1,0 +1,34 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 6
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 2316-2325
+resources/builtin-skills/documentation/references/package-contract.md
+  s_4249e3cad88387::t_355baf208a8317 12
+resources/builtin-skills/documentation/references/release-notes.md
+  s_4249e3cad88387::t_6b7d5567cc9e59 6
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe9eb46908f824e3f3a53dbd0f64158376b8db3b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_4249e3cad88387": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5b1807d-72f5-4674-a0dd-296d597142df",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
