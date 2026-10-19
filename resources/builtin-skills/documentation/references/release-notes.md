@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/fork` now works while a chat is still running. The original keeps going, and the fork is the chat as if it had been stopped at that moment: streamed text and finished tool results are kept, and tools still running are marked as interrupted. Picking `/fork` from the command menu now runs it straight away.
+
 ## 1.41.0
 
 - `/fork` copies the current chat into a new tab, so you can use the same context for something else while the original stays untouched. The fork keeps the transcript, mode, model and loaded skills, but starts with default approval settings, no checkpoints and no handoff lineage. It works in VS Code chat and browser workspace tabs.

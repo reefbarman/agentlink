@@ -894,6 +894,7 @@ export function InputArea({
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
     "new",
+    "fork",
     "condense",
     "context-doctor",
     "workspace",

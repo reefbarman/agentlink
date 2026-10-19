@@ -6369,9 +6369,12 @@ export class AgentSessionManager {
   }
 
   /**
-   * Copy an idle chat session's transcript and settings into a new,
-   * independent session that is not made the foreground session. The fork
-   * starts without run state, checkpoints, handoff lineage, fleet metadata,
+   * Copy a chat session's transcript and settings into a new, independent
+   * session that is not made the foreground session. A running source is
+   * left running: the fork is a snapshot of it as if it had been stopped at
+   * this moment, with streamed text and in-flight tool calls materialized the
+   * same way interrupted-run recovery does. The fork starts without run
+   * state, queued messages, checkpoints, handoff lineage, fleet metadata,
    * approval authority or the human decision record, so nothing that resumes
    * or authorizes work travels with the copied history.
    */
@@ -6389,19 +6392,6 @@ export class AgentSessionManager {
         message: "Only an open chat session can be forked.",
       };
     }
-    if (
-      source.status !== "idle" ||
-      source.runState ||
-      source.hasPendingInterjections ||
-      source.hasQueuedUiMessages
-    ) {
-      return {
-        ok: false,
-        code: "session_busy",
-        message:
-          "Wait for the current session activity to finish before forking.",
-      };
-    }
     if (!this.persistence) {
       return {
         ok: false,
@@ -6409,25 +6399,27 @@ export class AgentSessionManager {
         message: "Forking requires session history storage.",
       };
     }
-    if (!(await this.saveSessionNow(source.id))) {
-      return {
-        ok: false,
-        code: "source_persist_failed",
-        message: "The session could not be saved before forking.",
-      };
-    }
-    const sourceRead = await this.persistence.readSession(source.id);
-    if (!sourceRead.ok) {
-      return {
-        ok: false,
-        code: "source_unavailable",
-        message: "The session could not be read from session history.",
-      };
-    }
+
+    // Snapshot the live session synchronously so the transcript and run
+    // progress describe the same instant, even while the source keeps running.
+    const record = structuredClone(this.buildPersistedSessionRecord(source));
+    const runState = record.metadata.runState;
+    const stoppedRunState: PersistedSessionRunState | undefined =
+      runState?.phase === "awaiting_question" && runState.pendingToolTurn
+        ? {
+            phase: "running",
+            startedAt: runState.startedAt,
+            pendingToolTurn: runState.pendingToolTurn,
+          }
+        : runState;
+    record.messages = recoverInterruptedRunMessages(
+      record.messages,
+      stoppedRunState,
+    ).messages;
+    record.summary.messageCount = record.messages.length;
 
     const forkId = randomId();
     const now = Date.now();
-    const record = structuredClone(sourceRead.value);
     const {
       runState: _runState,
       fleet: _fleet,

@@ -2436,13 +2436,6 @@ describe("AgentSessionManager host injection", () => {
       source.addUserMessage("Investigate the parser");
       source.lineage = { schemaVersion: 1, suggestion: { acceptedAt: 1 } };
 
-      (source as { status: string }).status = "streaming";
-      await expect(manager.forkSession(source.id)).resolves.toMatchObject({
-        ok: false,
-        code: "session_busy",
-      });
-      (source as { status: string }).status = "idle";
-
       const result = await manager.forkSession(source.id);
 
       if (!result.ok) throw new Error(result.message);
@@ -2464,6 +2457,71 @@ describe("AgentSessionManager host injection", () => {
       expect(disk.value.metadata.checkpointState?.checkpoints ?? []).toEqual(
         [],
       );
+
+      // A running source forks as if stopped at this point, and keeps running.
+      const pendingAssistant = {
+        role: "assistant" as const,
+        content: [
+          { type: "text" as const, text: "Checking two files" },
+          {
+            type: "tool_use" as const,
+            id: "tool-done",
+            name: "read_file",
+            input: { path: "a.ts" },
+          },
+          {
+            type: "tool_use" as const,
+            id: "tool-running",
+            name: "read_file",
+            input: { path: "b.ts" },
+          },
+        ],
+      };
+      source.status = "streaming";
+      source.runState = {
+        phase: "running",
+        startedAt: 1,
+        pendingToolTurn: {
+          schemaVersion: 1,
+          assistantMessage: pendingAssistant,
+          toolResults: [
+            { type: "tool_result", tool_use_id: "tool-done", content: "A" },
+          ],
+        },
+      };
+      const runningSourceMessages = source.getAllMessages().length;
+
+      const running = await manager.forkSession(source.id);
+
+      if (!running.ok) throw new Error(running.message);
+      const runningFork = running.session;
+      const forkMessages = runningFork.getAllMessages();
+      expect(forkMessages).toHaveLength(runningSourceMessages + 2);
+      expect(forkMessages.at(-2)).toEqual(pendingAssistant);
+      expect(forkMessages.at(-1)).toMatchObject({
+        role: "user",
+        content: [
+          { tool_use_id: "tool-done", content: "A" },
+          { tool_use_id: "tool-running", is_error: true },
+        ],
+      });
+      expect(runningFork.runState).toBeUndefined();
+      expect(runningFork.status).toBe("idle");
+      expect(source.status).toBe("streaming");
+      expect(source.runState?.phase).toBe("running");
+      expect(source.getAllMessages()).toHaveLength(runningSourceMessages);
+
+      source.runState = {
+        phase: "running",
+        startedAt: 1,
+        partialAssistantText: "Half a thou",
+      };
+      const streamed = await manager.forkSession(source.id);
+      if (!streamed.ok) throw new Error(streamed.message);
+      expect(streamed.session.getAllMessages().at(-1)).toEqual({
+        role: "assistant",
+        content: [{ type: "text", text: "Half a thou" }],
+      });
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
