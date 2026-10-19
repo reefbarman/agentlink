@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2a2d433a73682c2c64c1b446c4d79a08c9cbaeea",
-  "createdAt": "2026-10-19T04:36:15.706Z",
+  "sourceSha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
+  "createdAt": "2026-10-19T05:06:39.124Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,95 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.44.2",
-      "baselineRef": "v1.44.2",
-      "reserved": "1.44.2",
-      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
+      "published": "1.44.3",
+      "baselineRef": "v1.44.3",
+      "reserved": "1.44.3",
+      "commits": ["f9fcb0053b83eace0d01fa8ad4438704497c2710"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.44.3",
+      "version": "1.44.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.44.3",
+      "tag": "v1.44.4",
       "notes": [
         {
-          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
-          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
-          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
+          "sha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
+          "subject": "fix(skills): keep going when an active skill changes mid-turn",
+          "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.32.2",
-      "baselineRef": "desktop-v0.32.2",
-      "reserved": "0.32.2",
-      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
+      "published": "0.32.3",
+      "baselineRef": "desktop-v0.32.3",
+      "reserved": "0.32.3",
+      "commits": ["f9fcb0053b83eace0d01fa8ad4438704497c2710"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.32.3",
+      "version": "0.32.4",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.32.3",
+      "tag": "desktop-v0.32.4",
       "notes": [
         {
-          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
-          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
-          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
+          "sha": "f9fcb0053b83eace0d01fa8ad4438704497c2710",
+          "subject": "fix(skills): keep going when an active skill changes mid-turn",
+          "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.24.1",
-      "baselineRef": "cli-v0.24.1",
-      "reserved": "0.24.1",
-      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
+      "published": "0.24.2",
+      "baselineRef": "cli-v0.24.2",
+      "reserved": "0.24.2",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.24.2",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.24.2",
-      "notes": [
-        {
-          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
-          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
-          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.15.1",
-      "baselineRef": "sdk-v0.15.1",
-      "reserved": "0.15.1",
-      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
+      "published": "0.15.2",
+      "baselineRef": "sdk-v0.15.2",
+      "reserved": "0.15.2",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.15.2",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.15.2",
-      "notes": [
-        {
-          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
-          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
-          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.4.2",
-      "baselineRef": "assistant-v0.4.2",
-      "reserved": "0.4.2",
-      "commits": ["2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29"],
+      "published": "0.4.3",
+      "baselineRef": "assistant-v0.4.3",
+      "reserved": "0.4.3",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.4.3",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.4.3",
-      "notes": [
-        {
-          "sha": "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29",
-          "subject": "fix(mcp): read tool lists with boolean property schemas and stop retry loops",
-          "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "2b3e7831f16b7c7bc04f6981e4be1de9a42e7b29": {
+    "f9fcb0053b83eace0d01fa8ad4438704497c2710": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "MCP servers whose tool lists use boolean property schemas now load, with non-standard tools repaired or skipped individually, and unreadable responses no longer trigger endless automatic retries.",
+      "summary": "Refreshing the skill catalogue (e.g. a git pull editing SKILL.md) no longer stops a turn mid-way; the session keeps enforcing the activation-time skill snapshot, and only restored sessions whose skill policy can't be verified still stop.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

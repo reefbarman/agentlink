@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.44.4
+
 - Updating a skill while the agent is using it (for example with a `git pull` that changes its `SKILL.md`) no longer stops the turn with a "skill changed or was disabled" error. The agent keeps following the version it loaded, including any `allowed-tools` limits, and the updated version applies from your next message. Loading the skill again partway through the turn can't loosen those limits.
 
 ## 1.44.3
