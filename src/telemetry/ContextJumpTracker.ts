@@ -1,4 +1,8 @@
-import type { ContextUsageRecord } from "./ContextUsageTelemetry.js";
+import type {
+  CondenseTiming,
+  ContextUsageRecord,
+} from "./ContextUsageTelemetry.js";
+
 import type { ToolResultContextAttribution } from "@agentlink/protocol/context-diagnostics";
 
 /**
@@ -58,6 +62,14 @@ export interface ContextJumpCondenseInfo {
   durationMs?: number;
   composeFoldedReadCount?: number;
   composeFoldedContextTokens?: number;
+  timing?: CondenseTiming;
+}
+
+export interface ContextJumpCondenseFailureInfo {
+  model: string;
+  timing: CondenseTiming;
+  errorCode?: string;
+  retryable?: boolean;
 }
 
 interface SessionContextState {
@@ -145,9 +157,25 @@ export class ContextJumpTracker {
       durationMs: info.durationMs,
       composeFoldedReadCount: info.composeFoldedReadCount,
       composeFoldedContextTokens: info.composeFoldedContextTokens,
+      ...info.timing,
     });
     state.pendingCondenseEstimateTokens = info.newInputTokens;
     state.lastInputTokens = info.newInputTokens;
+  }
+
+  /** A failed condense leaves context accounting untouched; record timing only. */
+  onCondenseFailed(
+    sessionId: string,
+    info: ContextJumpCondenseFailureInfo,
+  ): void {
+    this.emit({
+      kind: "condense_failed",
+      sessionId,
+      model: info.model,
+      ...(info.errorCode ? { errorCode: info.errorCode } : {}),
+      ...(info.retryable !== undefined ? { retryable: info.retryable } : {}),
+      ...info.timing,
+    });
   }
 
   onApiRequest(sessionId: string, info: ContextJumpApiRequestInfo): void {

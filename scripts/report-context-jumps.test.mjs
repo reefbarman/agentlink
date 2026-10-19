@@ -199,6 +199,7 @@ test("summarizes dedicated request attribution without double-counting jump deta
   assert.deepEqual(summary.totals, {
     events: 15,
     condenses: 1,
+    condenseFailures: 0,
     postCondenseFirstRequests: 10,
     contextJumps: 2,
     requestContextAttributions: 2,
@@ -343,4 +344,59 @@ test("filters context telemetry by date/version and keeps --json boolean", () =>
   assert.equal(parseArgs(["--json", "--version", "2.0.0"]).json, true);
   assert.equal(parseArgs(["-h"]).help, true);
   assert.throws(() => parseArgs(["--json", "output.json"]));
+});
+
+test("summarizes condense timing by trigger and isolates foreground turn blocking", () => {
+  const timed = (overrides) => ({
+    kind: "condense",
+    sessionId: "s",
+    model: "m",
+    prevInputTokens: 100,
+    newInputTokens: 10,
+    reclaimedTokens: 90,
+    isAutomatic: true,
+    background: false,
+    trigger: "threshold",
+    providerQueueMs: 100,
+    summarizeMs: 1_000,
+    ...overrides,
+  });
+  const summary = summarize(
+    [
+      timed({ totalMs: 2_000 }),
+      timed({ totalMs: 6_000 }),
+      timed({ totalMs: 9_000, trigger: "context_too_long" }),
+      timed({ totalMs: 30_000, background: true }),
+      timed({ totalMs: 4_000, isAutomatic: false, trigger: "manual" }),
+      { ...timed({ totalMs: 1_500 }), kind: "condense_failed" },
+      // Legacy rows: host-observed durationMs, 0 means the start was missed.
+      { kind: "condense", sessionId: "s", model: "m", durationMs: 5_000 },
+      { kind: "condense", sessionId: "s", model: "m", durationMs: 0 },
+    ],
+    5,
+  );
+
+  assert.equal(summary.totals.condenses, 7);
+  assert.equal(summary.totals.condenseFailures, 1);
+  const timing = summary.condenseTiming;
+  assert.deepEqual(timing.foregroundAutoTurnBlocking.threshold, {
+    samples: 3,
+    p50: 2_000,
+    p90: 6_000,
+    max: 6_000,
+    total: 9_500,
+  });
+  assert.equal(timing.foregroundAutoTurnBlocking.all.samples, 4);
+  assert.equal(timing.foregroundAutoTurnBlocking.all.max, 9_000);
+
+  const byGroup = Object.fromEntries(timing.groups.map((g) => [g.group, g]));
+  assert.equal(byGroup["auto foreground threshold"].count, 3);
+  assert.equal(byGroup["auto foreground threshold"].failed, 1);
+  assert.equal(byGroup["auto background threshold"].totalMs.max, 30_000);
+  assert.equal(byGroup["manual foreground manual"].count, 1);
+  const legacy = byGroup["legacy (no trigger recorded)"];
+  assert.equal(legacy.count, 2);
+  assert.equal(legacy.totalMs.samples, 1);
+  assert.equal(legacy.totalMs.p50, 5_000);
+  assert.equal(legacy.summarizeMs.samples, 0);
 });

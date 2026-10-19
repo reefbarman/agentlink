@@ -8609,6 +8609,7 @@ describe("AgentEngine", () => {
           {
             signal: new AbortController().signal,
             onProviderAdmissionPhase: (phase) => phases.push(phase),
+            trigger: "threshold",
           },
         ),
       );
@@ -8617,9 +8618,24 @@ describe("AgentEngine", () => {
       });
       expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
 
+      await new Promise((resolve) => setTimeout(resolve, 25));
       blocker.release();
-      await condense;
+      const events = await condense;
       expect(phases).toEqual(["queued_for_provider", "running"]);
+      const timing = events.find(
+        (event): event is Extract<AgentEvent, { type: "condense" }> =>
+          event.type === "condense",
+      )?.timing;
+      expect(timing).toMatchObject({
+        trigger: "threshold",
+        isAutomatic: true,
+        background: false,
+      });
+      expect(timing?.providerQueueMs).toBeGreaterThanOrEqual(20);
+      expect(timing?.summarizeMs).toBeGreaterThanOrEqual(0);
+      expect(timing?.totalMs).toBeGreaterThanOrEqual(
+        (timing?.providerQueueMs ?? 0) + (timing?.summarizeMs ?? 0),
+      );
       expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
 
       const nextPermit = await registry.requestScheduler.acquire(
@@ -8657,6 +8673,14 @@ describe("AgentEngine", () => {
           retryable: true,
           code: "oauth_usage_limit_exhausted",
           actions: { signInAnotherAccount: true },
+          timing: expect.objectContaining({
+            trigger: "automatic",
+            isAutomatic: true,
+            background: false,
+            totalMs: expect.any(Number),
+            providerQueueMs: expect.any(Number),
+            summarizeMs: expect.any(Number),
+          }),
         }),
       );
     });

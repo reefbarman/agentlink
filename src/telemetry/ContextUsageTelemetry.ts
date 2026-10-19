@@ -23,6 +23,38 @@ export interface ComposeRequestContextMetrics {
   inlineDefinitionTokens: number;
 }
 
+/**
+ * Why a condense ran. Threshold condenses are the ones a background precompute
+ * could hide; the other automatic triggers are recovery paths (a request would
+ * overflow, the provider rejected it as too long, or responses kept coming
+ * back empty). "automatic" covers callers that did not name a trigger.
+ */
+export type CondenseTrigger =
+  | "manual"
+  | "threshold"
+  | "context_too_long"
+  | "empty_response"
+  | "interjection_overflow"
+  | "automatic";
+
+/** Wall-clock timing measured inside the engine's condense operation. */
+export interface CondenseTiming {
+  trigger: CondenseTrigger;
+  isAutomatic: boolean;
+  /** Background agent session (nobody waits on the turn interactively). */
+  background: boolean;
+  /**
+   * Total time from entering condense to its outcome, including hooks,
+   * provider admission, summarization, and post-condense projection. For a
+   * foreground automatic condense this is how long the user's turn was blocked.
+   */
+  totalMs: number;
+  /** Time spent waiting for a provider request slot. */
+  providerQueueMs: number;
+  /** Time spent in the summarization request(s), including shrink retries. */
+  summarizeMs: number;
+}
+
 export type ContextUsageRecord =
   | {
       /** Privacy-safe composition attribution emitted for every provider request. */
@@ -43,7 +75,7 @@ export type ContextUsageRecord =
       contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
       compose?: ComposeRequestContextMetrics;
     }
-  | {
+  | ({
       /** A condense completed: usage dropped from prev to the post-condense estimate. */
       kind: "condense";
       sessionId: string;
@@ -51,10 +83,19 @@ export type ContextUsageRecord =
       prevInputTokens: number;
       newInputTokens: number;
       reclaimedTokens: number;
+      /** Host-observed condense_start → condense duration (legacy field). */
       durationMs?: number;
       composeFoldedReadCount?: number;
       composeFoldedContextTokens?: number;
-    }
+    } & Partial<CondenseTiming>)
+  | ({
+      /** A condense attempt ended with an error result; the turn still waited. */
+      kind: "condense_failed";
+      sessionId: string;
+      model: string;
+      errorCode?: string;
+      retryable?: boolean;
+    } & CondenseTiming)
   | {
       /**
        * First API response after a condense. `estimateGapTokens` is how far the

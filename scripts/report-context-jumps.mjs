@@ -304,8 +304,94 @@ export function finalizeComposeContextAggregate(aggregate) {
   };
 }
 
+function condenseTimingGroup(event) {
+  if (typeof event.trigger !== "string") return "legacy (no trigger recorded)";
+  const automatic = event.isAutomatic === true ? "auto" : "manual";
+  const surface = event.background === true ? "background" : "foreground";
+  return `${automatic} ${surface} ${event.trigger}`;
+}
+
+function finiteMs(value) {
+  return Number.isFinite(value) && value >= 0 ? Number(value) : undefined;
+}
+
+function distribution(values) {
+  const sorted = values
+    .filter((value) => value !== undefined)
+    .sort((a, b) => a - b);
+  return {
+    samples: sorted.length,
+    p50: percentile(sorted, 50),
+    p90: percentile(sorted, 90),
+    max: sorted.at(-1),
+    total: sorted.reduce((sum, value) => sum + value, 0),
+  };
+}
+
+/**
+ * Condense wall-clock timing. Engine-measured `totalMs` is preferred; legacy
+ * rows fall back to the host-observed `durationMs`. A foreground automatic
+ * condense blocks the user's turn for its whole duration, so that slice is the
+ * baseline a background precompute would need to beat.
+ */
+export function summarizeCondenseTiming(condenses, failures) {
+  const groups = new Map();
+  const add = (event, failed) => {
+    const key = condenseTimingGroup(event);
+    const group = groups.get(key) ?? {
+      group: key,
+      count: 0,
+      failed: 0,
+      totalMs: [],
+      providerQueueMs: [],
+      summarizeMs: [],
+    };
+    group.count += 1;
+    if (failed) group.failed += 1;
+    // Legacy hosts wrote durationMs=0 when they missed condense_start.
+    group.totalMs.push(
+      finiteMs(event.totalMs) ??
+        (event.durationMs > 0 ? finiteMs(event.durationMs) : undefined),
+    );
+    group.providerQueueMs.push(finiteMs(event.providerQueueMs));
+    group.summarizeMs.push(finiteMs(event.summarizeMs));
+    groups.set(key, group);
+  };
+  for (const event of condenses) add(event, false);
+  for (const event of failures) add(event, true);
+
+  const turnBlocking = [...condenses, ...failures].filter(
+    (event) =>
+      typeof event.trigger === "string" &&
+      event.isAutomatic === true &&
+      event.background !== true,
+  );
+  const thresholdBlocking = turnBlocking.filter(
+    (event) => event.trigger === "threshold",
+  );
+  return {
+    groups: [...groups.values()]
+      .map((group) => ({
+        group: group.group,
+        count: group.count,
+        failed: group.failed,
+        totalMs: distribution(group.totalMs),
+        providerQueueMs: distribution(group.providerQueueMs),
+        summarizeMs: distribution(group.summarizeMs),
+      }))
+      .sort((a, b) => b.count - a.count || a.group.localeCompare(b.group)),
+    foregroundAutoTurnBlocking: {
+      all: distribution(turnBlocking.map((event) => finiteMs(event.totalMs))),
+      threshold: distribution(
+        thresholdBlocking.map((event) => finiteMs(event.totalMs)),
+      ),
+    },
+  };
+}
+
 export function summarize(events, top) {
   const jumps = events.filter((e) => e.kind === "context_jump");
+  const condenseFailures = events.filter((e) => e.kind === "condense_failed");
   const postCondense = events.filter(
     (e) => e.kind === "post_condense_first_request",
   );
@@ -406,6 +492,7 @@ export function summarize(events, top) {
     totals: {
       events: events.length,
       condenses: condenses.length,
+      condenseFailures: condenseFailures.length,
       postCondenseFirstRequests: postCondense.length,
       contextJumps: jumps.length,
       requestContextAttributions: requestAttributions.length,
@@ -440,6 +527,7 @@ export function summarize(events, top) {
           right.agentProviderAttempts - left.agentProviderAttempts ||
           left.cohort.localeCompare(right.cohort),
       ),
+    condenseTiming: summarizeCondenseTiming(condenses, condenseFailures),
     postCondenseEstimateGapTokens: {
       p50: percentile(gaps, 50),
       p90: percentile(gaps, 90),
@@ -460,11 +548,46 @@ export function summarize(events, top) {
 const percent = (value) =>
   value === undefined ? "N/A" : `${(value * 100).toFixed(1)}%`;
 
+const seconds = (ms) =>
+  typeof ms === "number" && Number.isFinite(ms)
+    ? `${(ms / 1000).toFixed(1)}s`
+    : "-";
+
+function printCondenseTiming(timing) {
+  console.log(
+    "\nCondense timing (wall clock; legacy rows use host-observed duration):",
+  );
+  if (timing.groups.length === 0) {
+    console.log("  (no condenses)");
+    return;
+  }
+  const blocking = timing.foregroundAutoTurnBlocking;
+  const line = (label, d) =>
+    console.log(
+      `  ${label.padEnd(30)} n=${fmt(d.samples).padStart(6)} p50=${seconds(d.p50).padStart(7)} ` +
+        `p90=${seconds(d.p90).padStart(7)} max=${seconds(d.max).padStart(7)} total=${seconds(d.total)}`,
+    );
+  line("turn blocked (fg auto, all)", blocking.all);
+  line("turn blocked (fg threshold)", blocking.threshold);
+  console.log("");
+  for (const group of timing.groups) {
+    const d = group.totalMs;
+    console.log(
+      `  ${group.group.padEnd(44)} n=${fmt(group.count).padStart(6)} failed=${fmt(group.failed).padStart(4)} ` +
+        `p50=${seconds(d.p50).padStart(7)} p90=${seconds(d.p90).padStart(7)} max=${seconds(d.max).padStart(7)}` +
+        (group.summarizeMs.samples > 0
+          ? `  summarize-p50=${seconds(group.summarizeMs.p50)} queue-p90=${seconds(group.providerQueueMs.p90)}`
+          : ""),
+    );
+  }
+}
+
 function printReport(summary, top) {
   const { totals, postCondenseEstimateGapTokens: gap } = summary;
   console.log("Context usage telemetry");
   console.log(
     `  events=${fmt(totals.events)} condenses=${fmt(totals.condenses)} ` +
+      `condense-failures=${fmt(totals.condenseFailures)} ` +
       `post-condense-first-requests=${fmt(totals.postCondenseFirstRequests)} ` +
       `jumps=${fmt(totals.contextJumps)} ` +
       `request-attributions=${fmt(totals.requestContextAttributions)}`,
@@ -552,6 +675,8 @@ function printReport(summary, top) {
         `floor-p50=${fmt(cohort.estimatedStaticFloor.p50)} floor-share-of-allocated-input=${percent(cohort.estimatedStaticFloor.weightedShare)}`,
     );
   }
+
+  printCondenseTiming(summary.condenseTiming);
 
   console.log("\nPost-condense estimate gap (actual - estimate, tokens):");
   console.log(`  p50=${fmt(gap.p50)} p90=${fmt(gap.p90)} max=${fmt(gap.max)}`);

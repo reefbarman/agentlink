@@ -18,6 +18,7 @@ import type {
 } from "@agentlink/protocol/tool-result";
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
+import type { CondenseTiming } from "../telemetry/ContextUsageTelemetry.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
@@ -194,6 +195,8 @@ export type AgentEvent =
       metadata?: CondenseMetadata;
       composeFoldedReadCount?: number;
       composeFoldedContextTokens?: number;
+      /** Engine-measured timing and trigger for condense telemetry. */
+      timing?: CondenseTiming;
     }
   | {
       type: "condense_error";
@@ -201,6 +204,7 @@ export type AgentEvent =
       retryable?: boolean;
       code?: string;
       actions?: AgentErrorActions;
+      timing?: CondenseTiming;
     }
   | {
       type: "api_request_start";

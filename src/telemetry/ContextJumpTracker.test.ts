@@ -204,6 +204,48 @@ describe("ContextJumpTracker", () => {
     expect(records).toEqual([]);
   });
 
+  it("records condense timing on success and failure without touching accounting on failure", () => {
+    const { tracker, records } = createTracker();
+    const timing = {
+      trigger: "threshold" as const,
+      isAutomatic: true,
+      background: false,
+      totalMs: 4_200,
+      providerQueueMs: 150,
+      summarizeMs: 3_900,
+    };
+    tracker.onApiRequest("s1", { model: "m", inputTokens: 180_000 });
+    tracker.onCondenseFailed("s1", {
+      model: "m",
+      timing,
+      errorCode: "rate_limited",
+      retryable: true,
+    });
+    tracker.onCondense("s1", {
+      model: "m",
+      prevInputTokens: 180_000,
+      newInputTokens: 12_000,
+      durationMs: 4_100,
+      timing,
+    });
+
+    expect(records).toEqual([
+      {
+        kind: "condense_failed",
+        sessionId: "s1",
+        model: "m",
+        errorCode: "rate_limited",
+        retryable: true,
+        ...timing,
+      },
+      expect.objectContaining({
+        kind: "condense",
+        durationMs: 4_100,
+        ...timing,
+      }),
+    ]);
+  });
+
   it("emits condense and post_condense_first_request with the estimate gap", () => {
     const { tracker, records } = createTracker();
     tracker.onApiRequest("s1", {

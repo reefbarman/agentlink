@@ -78,6 +78,10 @@ import {
   type McpApprovalPromotionMeta,
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
+import type {
+  CondenseTiming,
+  CondenseTrigger,
+} from "../telemetry/ContextUsageTelemetry.js";
 import type { PostCondenseProjection } from "@agentlink/protocol/context-diagnostics";
 import {
   TODO_TOOL_NAME,
@@ -1579,6 +1583,7 @@ export class AgentEngine {
               automaticMemoryContext: opts?.automaticMemoryContext,
               hookRuntime: opts?.hookRuntime,
               hookTurnId: opts?.hookTurnId,
+              trigger: "threshold",
             },
           );
           if (condensed) retainedToolResults.clear();
@@ -1802,6 +1807,7 @@ export class AgentEngine {
                   automaticMemoryContext: opts?.automaticMemoryContext,
                   hookRuntime: opts?.hookRuntime,
                   hookTurnId: opts?.hookTurnId,
+                  trigger: "context_too_long",
                 },
               );
               if (signal.aborted) break;
@@ -2341,6 +2347,7 @@ export class AgentEngine {
                   automaticMemoryContext: opts?.automaticMemoryContext,
                   hookRuntime: opts?.hookRuntime,
                   hookTurnId: opts?.hookTurnId,
+                  trigger: "context_too_long",
                 },
               );
               if (signal.aborted) break;
@@ -2866,6 +2873,7 @@ export class AgentEngine {
                 automaticMemoryContext: opts?.automaticMemoryContext,
                 hookRuntime: opts?.hookRuntime,
                 hookTurnId: opts?.hookTurnId,
+                trigger: "empty_response",
               },
             );
             if (signal.aborted) break;
@@ -3561,6 +3569,7 @@ export class AgentEngine {
               automaticMemoryContext: opts?.automaticMemoryContext,
               hookRuntime: opts?.hookRuntime,
               hookTurnId: opts?.hookTurnId,
+              trigger: "threshold",
             },
           );
           if (condensed) retainedToolResults.clear();
@@ -3766,7 +3775,14 @@ export class AgentEngine {
         .overflowTokens > 0 &&
       session.autoCondense
     ) {
-      yield* this.condenseSession(session, true);
+      yield* this.condenseSession(
+        session,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        { trigger: "interjection_overflow" },
+      );
       if (signal.aborted) return "none";
     }
     if (
@@ -4257,9 +4273,20 @@ export class AgentEngine {
       tools?: ToolDefinition[];
       hookRuntime?: import("../core/hooks/HookRuntime.js").HookRuntime;
       hookTurnId?: string;
+      trigger?: CondenseTrigger;
     },
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
+    let providerQueueMs = 0;
+    let summarizeMs = 0;
+    const buildTiming = (): CondenseTiming => ({
+      trigger: opts?.trigger ?? (isAutomatic ? "automatic" : "manual"),
+      isAutomatic,
+      background: opts?.isBackground ?? session.background,
+      totalMs: Date.now() - condenseStartedAt,
+      providerQueueMs,
+      summarizeMs,
+    });
     const hookRuntime = opts?.hookRuntime;
     const hookTurnId = opts?.hookTurnId ?? "";
     if (hookRuntime) {
@@ -4284,6 +4311,7 @@ export class AgentEngine {
     const resolvedProvider =
       provider ?? this.registry.resolveProvider(activeModel);
 
+    const providerQueueStartedAt = Date.now();
     const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
       resolvedProvider.id,
       opts?.isBackground ? "background" : "interactive",
@@ -4299,6 +4327,7 @@ export class AgentEngine {
       );
     }
     const permit = await permitPromise;
+    providerQueueMs = Date.now() - providerQueueStartedAt;
     if (!opts?.isBackground) {
       opts?.onProviderAdmissionPhase?.("running");
     }
@@ -4310,6 +4339,7 @@ export class AgentEngine {
     let result: Awaited<ReturnType<typeof summarizeConversation>> | undefined;
     let summarizeError: unknown;
     let summarizeThrew = false;
+    const summarizeStartedAt = Date.now();
     try {
       result = await summarizeConversation(
         {
@@ -4374,6 +4404,7 @@ export class AgentEngine {
       summarizeThrew = true;
       summarizeError = error;
     } finally {
+      summarizeMs = Date.now() - summarizeStartedAt;
       permit.release();
     }
 
@@ -4388,6 +4419,7 @@ export class AgentEngine {
         retryable: result.errorRetryable,
         code: result.errorCode,
         actions: result.errorActions,
+        timing: buildTiming(),
       };
       return false;
     }
@@ -4472,6 +4504,7 @@ export class AgentEngine {
       durationMs: condenseDurationMs,
       composeFoldedReadCount: result.composeFoldedReadCount ?? 0,
       composeFoldedContextTokens: result.composeFoldedContextTokens ?? 0,
+      timing: buildTiming(),
     };
     return true;
   }

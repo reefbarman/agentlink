@@ -11661,6 +11661,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               durationMs: condenseDurationMs,
               composeFoldedReadCount: event.composeFoldedReadCount,
               composeFoldedContextTokens: event.composeFoldedContextTokens,
+              timing: event.timing,
             });
           }
           // The context bar's budget snapshot (usedInputTokens) is pushed on
@@ -11740,6 +11741,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           code: event.code,
           actions: event.actions,
         });
+        if (event.timing) {
+          const failedSession = this.sessionManager?.getSession(sessionId);
+          if (failedSession) {
+            this.contextJumpTracker?.onCondenseFailed(sessionId, {
+              model: failedSession.model,
+              timing: event.timing,
+              errorCode: event.code,
+              retryable: event.retryable,
+            });
+          }
+        }
         break;
 
       case "explicit_skill_activation":
