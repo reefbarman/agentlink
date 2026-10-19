@@ -1,0 +1,16 @@
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 3560-3605
+src/browser-gateway/webview/AssistantOnboarding.tsx
+  h_e08a86bb3a33a2 102,345,984
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb8226fe1da3acda93d01dc783828f51fd962d33",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
