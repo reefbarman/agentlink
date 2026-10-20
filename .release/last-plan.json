@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "7437dbccd251696fa4e0184b099a3c795880dc60",
-  "createdAt": "2026-10-20T01:01:00.124Z",
+  "sourceSha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
+  "createdAt": "2026-10-20T05:18:54.286Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.47.0",
-      "baselineRef": "v1.47.0",
-      "reserved": "1.47.0",
-      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
+      "published": "1.47.1",
+      "baselineRef": "v1.47.1",
+      "reserved": "1.47.1",
+      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.47.1",
-      "effectiveBump": "patch",
+      "version": "1.48.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.47.1",
+      "tag": "v1.48.0",
       "notes": [
         {
-          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
-          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
-          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
+          "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
+          "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
+          "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.35.0",
-      "baselineRef": "desktop-v0.35.0",
-      "reserved": "0.35.0",
-      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
+      "published": "0.35.1",
+      "baselineRef": "desktop-v0.35.1",
+      "reserved": "0.35.1",
+      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.35.1",
-      "effectiveBump": "patch",
+      "version": "0.36.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.35.1",
+      "tag": "desktop-v0.36.0",
       "notes": [
         {
-          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
-          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
-          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
+          "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
+          "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
+          "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
           "breaking": false
         }
       ]
@@ -82,25 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.6.0",
-      "baselineRef": "assistant-v0.6.0",
-      "reserved": "0.6.0",
-      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
+      "published": "0.6.1",
+      "baselineRef": "assistant-v0.6.1",
+      "reserved": "0.6.1",
+      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.6.1",
-      "effectiveBump": "patch",
+      "version": "0.7.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.6.1",
+      "tag": "assistant-v0.7.0",
       "notes": [
         {
-          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
-          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
-          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
+          "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
+          "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
+          "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
           "breaking": false
         }
       ]
@@ -111,6 +111,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

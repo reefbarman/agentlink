@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.48.0
+
 - AgentLink Desktop releases are now signed with an Apple Development certificate (Team ID `J2896P4NN3`), so updating no longer resets macOS permissions such as Local Network and Keychain access. Unsigned releases looked like a new app to macOS each time, which could silently stop the Assistant view reaching an Assistant on your home network until you turned Local Network access off and on again. The in-app updater now accepts a release signed by that Team ID after a strict signature check, and still refuses any other signature. Releases are still not notarised. Earlier unsigned previews refuse signed updates, so install the first signed release manually from the DMG or `install.sh`.
 - Desktop now explains why it needs Local Network access when macOS asks.
 
