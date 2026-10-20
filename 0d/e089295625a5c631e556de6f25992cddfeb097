@@ -1,0 +1,40 @@
+apps/desktop/src/DesktopAssistantView.test.ts
+  h_e08a86bb3a33a2 178-232
+  s_87f3d219e4f7a9::t_7ac89035738018 233-234
+src/browser-gateway/webview/AssistantNotifications.tsx
+  h_e08a86bb3a33a2 52-53,133-135,415-417
+apps/desktop/src/DesktopAssistantView.ts
+  h_e08a86bb3a33a2 95-96,98-105,109-115,285-299
+  s_aa0c19b8e8dd4c::t_f91771d2097095 106-108,300-301
+src/browser-gateway/webview/AssistantNotifications.test.tsx
+  h_e08a86bb3a33a2 254-268
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0de089295625a5c631e556de6f25992cddfeb097",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_87f3d219e4f7a9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46f2f99d-56bb-4156-a9cd-52ddd37dc289",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_aa0c19b8e8dd4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f0222ef1-37bb-4245-b848-0f8ce19e28db",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
