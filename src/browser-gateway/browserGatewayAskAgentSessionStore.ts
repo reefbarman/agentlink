@@ -31,6 +31,7 @@ import type {
   ChatModelInfo as WebviewModelInfo,
 } from "@agentlink/protocol/chat-catalog";
 
+import { ASK_AGENT_QUEUE_INTERJECT_CAPABILITY } from "./askAgentCapabilities.js";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
@@ -163,6 +164,11 @@ export interface BrowserGatewayAskAgentQueuedMessage {
   documents?: BrowserGatewayAskAgentMediaItem[];
   instanceId?: string;
   source: "browser";
+  /**
+   * The running turn takes this message in at its next break instead of
+   * waiting for the turn to end, like VS Code's "Interject at next break".
+   */
+  interjectionReady?: boolean;
 }
 
 export interface BrowserGatewayAskAgentSnapshot {
@@ -208,6 +214,8 @@ export interface BrowserGatewayAskAgentSnapshot {
       lastCacheReadTokens: 0;
       estimatedTotalUsed: 0;
       messageQueue: BrowserGatewayAskAgentQueuedMessage[];
+      /** The running turn can take queued messages in at its next break. */
+      queueInterjectionAvailable?: true;
       questionRequest: QuestionRequest | null;
       detectedQuestion: null;
       todos: TodoItem[];
@@ -868,6 +876,57 @@ export class BrowserGatewayAskAgentSessionStore {
     if (!message) return false;
     message.text = trimmed;
     return true;
+  }
+
+  /** Mark (or unmark) a queued message to be taken into the running turn. */
+  setQueuedMessageInterjectionReady(
+    messageId: string,
+    ready: boolean,
+  ): boolean {
+    const message = this.getActiveSession().queuedMessages?.find(
+      (queued) => queued.id === messageId,
+    );
+    if (!message) return false;
+    if (ready) message.interjectionReady = true;
+    else delete message.interjectionReady;
+    return true;
+  }
+
+  /**
+   * Remove and return the active chat's queued messages marked to interject,
+   * oldest first. Messages that are not marked keep waiting for the turn end.
+   */
+  takeReadyInterjections(): BrowserGatewayAskAgentQueuedMessage[] {
+    const session = this.getActiveSession();
+    const queue = session.queuedMessages;
+    if (!queue?.some((message) => message.interjectionReady)) return [];
+    const ready = queue.filter((message) => message.interjectionReady);
+    session.queuedMessages = queue.filter(
+      (message) => !message.interjectionReady,
+    );
+    return ready;
+  }
+
+  /**
+   * Show a queued message the running turn took in as a user message in the
+   * active chat, keeping its id, and return its model form for the turn.
+   */
+  admitQueuedMessage(
+    queued: BrowserGatewayAskAgentQueuedMessage,
+    now: number,
+  ): CoreModelMessage[] {
+    const media = {
+      images: queued.images ?? [],
+      documents: queued.documents ?? [],
+    };
+    const message = this.appendUserMessage({
+      id: queued.id,
+      text: queued.text,
+      now,
+      displayMedia: askAgentMediaToDisplayMedia(media),
+      media,
+    });
+    return surfaceMessagesToCoreModelMessages([message]);
   }
 
   /** Move a queued message to the front so it is the next one drained. */
@@ -1592,6 +1651,14 @@ export class BrowserGatewayAskAgentSessionStore {
                 displayMedia: askAgentMediaToDisplayMedia(message),
               }),
             ),
+            ...(this.options.additionalCapabilities?.some(
+              (capability) =>
+                capability.capabilityId ===
+                  ASK_AGENT_QUEUE_INTERJECT_CAPABILITY &&
+                capability.state === "enabled",
+            )
+              ? { queueInterjectionAvailable: true as const }
+              : {}),
             questionRequest: this.questionRequest,
             detectedQuestion: null,
             todos: this.todos,

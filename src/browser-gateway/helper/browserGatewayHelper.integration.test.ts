@@ -5376,6 +5376,380 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
   });
 
+  it("takes an interjecting queued message into the running turn at its next break", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let releaseFirstCall!: () => void;
+    const firstCallReleased = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    const secondCallMessages: string[] = [];
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      calls += 1;
+      if (calls === 1) {
+        resolveStarted();
+        await firstCallReleased;
+        return {
+          text: "Looking into it.",
+          toolCalls: [
+            {
+              id: "call_todos",
+              name: "todo_write",
+              input: {
+                todos: [
+                  {
+                    id: "look",
+                    content: "Look into it",
+                    activeForm: "Looking into it",
+                    status: "in_progress",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      secondCallMessages.push(
+        getLatestStringUserMessage(params.iterationMessages),
+      );
+      return { text: "Checked the facts too.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const firstSend = post("/api/ask-agent/send", { text: "Research this" });
+    await started;
+    const queued = await post("/api/ask-agent/send", {
+      id: "steer-1",
+      text: "Check the facts as well",
+    });
+    const queuedBody = (await queued.json()) as {
+      queued?: boolean;
+      interjected?: boolean;
+      snapshot: {
+        session: {
+          foreground: {
+            queueInterjectionAvailable?: boolean;
+            messageQueue: Array<{ id: string; interjectionReady?: boolean }>;
+          };
+        };
+      };
+    };
+    expect(queuedBody).toMatchObject({ queued: true });
+    expect(queuedBody.interjected).toBeUndefined();
+    expect(
+      queuedBody.snapshot.session.foreground.queueInterjectionAvailable,
+    ).toBe(true);
+    const interject = await post("/api/ask-agent/queue", {
+      action: "interject",
+      id: "steer-1",
+    });
+    const interjectBody = (await interject.json()) as typeof queuedBody;
+    expect(interjectBody.snapshot.session.foreground.messageQueue).toEqual([
+      expect.objectContaining({ id: "steer-1", interjectionReady: true }),
+    ]);
+
+    releaseFirstCall();
+    const firstResponse = await firstSend;
+    const body = (await firstResponse.json()) as {
+      snapshot: {
+        session: {
+          foreground: {
+            streaming: boolean;
+            messageQueue: unknown[];
+            projectedMessages: Array<{
+              id: string;
+              role: string;
+              content: string;
+              blocks: Array<{ type: string; name?: string }>;
+            }>;
+          };
+        };
+      };
+    };
+    const foreground = body.snapshot.session.foreground;
+    // One turn: the second model call answered the interjection.
+    expect(calls).toBe(2);
+    expect(secondCallMessages).toEqual(["Check the facts as well"]);
+    expect(foreground.streaming).toBe(false);
+    expect(foreground.messageQueue).toEqual([]);
+    expect(
+      foreground.projectedMessages.map((message) => [
+        message.role,
+        message.content,
+      ]),
+    ).toEqual([
+      ["user", "Research this"],
+      ["assistant", "Looking into it."],
+      ["user", "Check the facts as well"],
+      ["assistant", "Checked the facts too."],
+    ]);
+    // The message kept its queue id, and the tool call stayed with the reply
+    // segment that made it.
+    expect(foreground.projectedMessages[2]?.id).toBe("steer-1");
+    expect(foreground.projectedMessages[1]?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "tool_call", name: "todo_write" }),
+      ]),
+    );
+    // Not sent a second time as its own turn once the turn ended.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(2);
+  });
+
+  it("replays every segment of a turn split by interjections in order", async () => {
+    const gates = [0, 1].map(() => {
+      let release!: () => void;
+      let reached!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reachedPromise = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      return { release, released, reached, reachedPromise };
+    });
+    const todoCall = (id: string) => ({
+      id,
+      name: "todo_write",
+      input: {
+        todos: [
+          {
+            id: "look",
+            content: "Look into it",
+            activeForm: "Looking into it",
+            status: "in_progress",
+          },
+        ],
+      },
+    });
+    let nextTurnMessages: readonly CoreModelMessage[] = [];
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      calls += 1;
+      if (calls === 1 || calls === 2) {
+        const gate = gates[calls - 1]!;
+        gate.reached();
+        await gate.released;
+        // Non-streaming replies: text arrives only in the result.
+        return calls === 1
+          ? { text: "Starting.", toolCalls: [todoCall("call_1")] }
+          : { text: "Answer one.", toolCalls: [todoCall("call_2")] };
+      }
+      if (calls === 3) return { text: "Answer two.", toolCalls: [] };
+      nextTurnMessages = params.iterationMessages ?? [];
+      return { text: "Next answer.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const firstSend = post("/api/ask-agent/send", { text: "Research this" });
+    await gates[0]!.reachedPromise;
+    const first = await post("/api/ask-agent/send", {
+      id: "steer-1",
+      text: "First steer",
+      interject: true,
+    });
+    await expect(first.json()).resolves.toMatchObject({
+      queued: true,
+      interjected: true,
+    });
+    gates[0]!.release();
+    await gates[1]!.reachedPromise;
+    const second = await post("/api/ask-agent/send", {
+      id: "steer-2",
+      text: "Second steer",
+      interject: true,
+    });
+    await expect(second.json()).resolves.toMatchObject({ interjected: true });
+    gates[1]!.release();
+    const firstResponse = await firstSend;
+    const body = (await firstResponse.json()) as {
+      snapshot: {
+        session: {
+          foreground: {
+            projectedMessages: Array<{ role: string; content: string }>;
+          };
+        };
+      };
+    };
+    expect(
+      body.snapshot.session.foreground.projectedMessages.map((message) => [
+        message.role,
+        message.content,
+      ]),
+    ).toEqual([
+      ["user", "Research this"],
+      ["assistant", "Starting."],
+      ["user", "First steer"],
+      ["assistant", "Answer one."],
+      ["user", "Second steer"],
+      ["assistant", "Answer two."],
+    ]);
+
+    const next = await post("/api/ask-agent/send", { text: "Next" });
+    expect(next.ok).toBe(true);
+    const describe = (message: CoreModelMessage): string => {
+      if (typeof message.content === "string") {
+        return `${message.role}:${message.content}`;
+      }
+      return `${message.role}:${message.content
+        .map((block) =>
+          block.type === "text"
+            ? block.text
+            : block.type === "tool_use"
+              ? `tool_use(${block.id})`
+              : block.type === "tool_result"
+                ? `tool_result(${block.tool_use_id})`
+                : block.type,
+        )
+        .join("|")}`;
+    };
+    expect(
+      nextTurnMessages
+        .filter(
+          (message) =>
+            !(
+              message.role === "user" &&
+              typeof message.content !== "string" &&
+              message.content.some(
+                (block) =>
+                  block.type === "text" &&
+                  block.text.includes("<agentlink-memory"),
+              )
+            ),
+        )
+        .map(describe),
+    ).toEqual([
+      "user:Research this",
+      "assistant:Starting.|tool_use(call_1)",
+      "user:tool_result(call_1)",
+      "user:First steer",
+      "assistant:Answer one.|tool_use(call_2)",
+      "user:tool_result(call_2)",
+      "user:Second steer",
+      "assistant:Answer two.",
+      "user:Next",
+    ]);
+  });
+
+  it("keeps a queued message waiting for the turn end unless it interjects", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let releaseFirstCall!: () => void;
+    const firstCallReleased = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      calls += 1;
+      if (calls === 1) {
+        resolveStarted();
+        await firstCallReleased;
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "call_todos",
+              name: "todo_write",
+              input: {
+                todos: [
+                  {
+                    id: "look",
+                    content: "Look into it",
+                    activeForm: "Looking into it",
+                    status: "in_progress",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (calls === 2) return { text: "Researched.", toolCalls: [] };
+      return {
+        text: `Reply to ${getLatestStringUserMessage(params.iterationMessages)}`,
+        toolCalls: [],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify(body),
+      });
+
+    const firstSend = post("/api/ask-agent/send", { text: "Research this" });
+    await started;
+    const queued = await post("/api/ask-agent/send", {
+      id: "later-1",
+      text: "After that",
+    });
+    await expect(queued.json()).resolves.toMatchObject({ queued: true });
+    releaseFirstCall();
+    await firstSend;
+
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      const body = (await session.json()) as {
+        snapshot: {
+          session: {
+            foreground: {
+              streaming: boolean;
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      expect(body.snapshot.session.foreground.streaming).toBe(false);
+      expect(
+        body.snapshot.session.foreground.projectedMessages.map((message) => [
+          message.role,
+          message.content,
+        ]),
+      ).toEqual([
+        ["user", "Research this"],
+        ["assistant", "Researched."],
+        ["user", "After that"],
+        ["assistant", "Reply to After that"],
+      ]);
+    });
+  });
+
   it("awaits an in-flight cancellation publication before helper shutdown", async () => {
     let resolveStarted!: () => void;
     const started = new Promise<void>((resolve) => {

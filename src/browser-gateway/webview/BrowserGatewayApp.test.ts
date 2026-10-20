@@ -3411,6 +3411,150 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await waitFor(() => expect(screen.queryByText("Queued (1)")).toBeNull());
   });
 
+  it("interjects helper-owned Ask Agent queued messages and keeps them through stale updates", async () => {
+    const askSnapshot = createAskAgentSessionResponse().snapshot;
+    askSnapshot.session.foreground.status = "streaming";
+    askSnapshot.session.foreground.streaming = true;
+    (
+      askSnapshot.session.foreground as { queueInterjectionAvailable?: boolean }
+    ).queueInterjectionAvailable = true;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const queueRequests: Array<Record<string, unknown>> = [];
+    let queuedId = "";
+    const queuedSnapshot = (interjectionReady: boolean) => {
+      const next = structuredClone(askSnapshot);
+      next.session.foreground.messageQueue = [
+        {
+          id: queuedId,
+          text: "Ship it",
+          source: "browser",
+          ...(interjectionReady ? { interjectionReady: true } : {}),
+        },
+      ];
+      return next;
+    };
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input).split("?")[0];
+        if (url === "/api/instances") {
+          return jsonResponse({ currentInstanceId: "", instances: [] });
+        }
+        if (url === "/api/ask-agent/session") {
+          return jsonResponse(createAskAgentSessionResponse(askSnapshot));
+        }
+        if (url === "/api/ask-agent/send") {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            id?: string;
+          };
+          queuedId = request.id ?? "";
+          return jsonResponse({
+            ok: true,
+            queued: true,
+            snapshot: queuedSnapshot(false),
+          });
+        }
+        if (url === "/api/ask-agent/queue") {
+          const request = JSON.parse(String(init?.body ?? "{}")) as Record<
+            string,
+            unknown
+          >;
+          queueRequests.push(request);
+          return jsonResponse({
+            ok: true,
+            snapshot: queuedSnapshot(request.action === "interject"),
+          });
+        }
+        if (url === "/api/ask-agent/sessions")
+          return jsonResponse({ sessions: [] });
+        if (url === "/api/ask-agent/models")
+          return jsonResponse({ models: [] });
+        if (url === "/api/ask-agent/slash-commands") {
+          return jsonResponse({ commands: [] });
+        }
+        if (url === "/api/ask-agent/log") return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    expect(await screen.findByText("Queued.")).toBeTruthy();
+    expect(screen.getByText("Queued (1)")).toBeTruthy();
+
+    // A live update built before the message was queued lands afterwards:
+    // the confirmed message must stay in the queue while the turn runs.
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", askSnapshot);
+    });
+    expect(screen.getByText("Queued (1)")).toBeTruthy();
+    expect(screen.getByText("Ship it")).toBeTruthy();
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTitle("Interject at next break") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTitle("Interject at next break"));
+    await waitFor(() =>
+      expect(queueRequests).toEqual([
+        expect.objectContaining({ action: "interject", id: queuedId }),
+      ]),
+    );
+    expect(
+      await screen.findByTitle("Ready to interject at next break"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Ready to interject at next break"));
+    await waitFor(() =>
+      expect(queueRequests.at(-1)).toEqual(
+        expect.objectContaining({ action: "pause-interjection", id: queuedId }),
+      ),
+    );
+    expect(await screen.findByTitle("Interject at next break")).toBeTruthy();
+
+    // Once the grace period has passed, the owner's queue is authoritative
+    // again: removed elsewhere means gone here too.
+    const realNow = Date.now;
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => realNow() + 10_000);
+    try {
+      await act(async () => {
+        MockEventSource.instances.at(-1)?.emit("snapshot", askSnapshot);
+      });
+      await waitFor(() => expect(screen.queryByText("Queued (1)")).toBeNull());
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // Taken into the turn: shown once, in the transcript, not in the queue.
+    const admitted = structuredClone(askSnapshot);
+    admitted.session.foreground.projectedMessages = [
+      {
+        id: queuedId,
+        role: "user",
+        content: "Ship it",
+        timestamp: Date.now(),
+        blocks: [{ type: "text", text: "Ship it" }],
+      },
+    ];
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", admitted);
+    });
+    await waitFor(() => expect(screen.queryByText("Queued (1)")).toBeNull());
+  });
+
   it("reconciles a queued send when its transcript turn skips the queue snapshot", async () => {
     let queuedMessageId = "";
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;

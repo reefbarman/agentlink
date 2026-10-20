@@ -136,9 +136,12 @@ export interface AgentToolLoopHandlers<
    * User messages to admit now (queued input that steers the turn), oldest
    * first. Called once every result of an assistant turn is in, and before
    * the turn would end; returning any keeps the turn going so the model
-   * answers them. Each is fed as its own user message.
+   * answers them. Each is fed as its own user message. `iterationMessages`
+   * is the exact private sequence so far, before the admitted messages.
    */
-  takeInterjections?(): readonly CoreModelMessage[];
+  takeInterjections?(context: {
+    iterationMessages: readonly CoreModelMessage[];
+  }): readonly CoreModelMessage[];
   /** Finalize a turn that produced assistant text. */
   finishSuccess(text: string, outcome?: TOutcome): TResult;
   /** Finalize a turn where the model finished without any text. */
@@ -162,7 +165,10 @@ export async function runAgentToolLoop<
     handlers.initialToolCalls;
   const admitInterjections = (): boolean => {
     if (handlers.execution?.signal?.aborted) return false;
-    const admitted = handlers.takeInterjections?.() ?? [];
+    const admitted =
+      handlers.takeInterjections?.({
+        iterationMessages: [...iterationMessages],
+      }) ?? [];
     for (const message of admitted) iterationMessages.push(message);
     return admitted.length > 0;
   };

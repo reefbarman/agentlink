@@ -61,6 +61,7 @@ import {
   askAgentOwnerGenerationId,
   type AskAgentOwnerResolvedDetail,
 } from "./AskAgentOwnerAdapter.js";
+import { ASK_AGENT_QUEUE_INTERJECT_CAPABILITY } from "../askAgentCapabilities.js";
 import {
   BROWSER_GATEWAY_DATA_PLANE_FEATURES,
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
@@ -1385,7 +1386,15 @@ export class BrowserGatewayHelper {
     this.askAgentController = new AskAgentController({
       ownerRegistry: this.coreOwnerRegistry,
       ownerGenerationId: askAgentOwnerGenerationId(this.helperGenerationId),
-      additionalOwnerCapabilities: askAgentOwnerCommandCapabilities(),
+      additionalOwnerCapabilities: [
+        ...askAgentOwnerCommandCapabilities(),
+        // Queued messages can be taken into the running turn at its next
+        // break; the browser offers "Interject at next break" only then.
+        {
+          capabilityId: ASK_AGENT_QUEUE_INTERJECT_CAPABILITY,
+          state: "enabled",
+        },
+      ],
       coalesceMs: 20,
       byteLength: utf8ByteLength,
       publish: async (publication) => {
@@ -2724,6 +2733,7 @@ export class BrowserGatewayHelper {
           initialToolMessages: [answerToolMessage],
           theme,
           signal: activeTurn.signal,
+          turn: activeTurn,
         });
         sendOutcome = turnResult.outcome;
       } catch (err) {
@@ -2756,7 +2766,10 @@ export class BrowserGatewayHelper {
         });
         if (!alreadyStopped) {
           this.askAgentController.finishAssistantError({
-            messageId: answerResult.messageId,
+            // An interjection may have moved the reply into a newer message.
+            messageId:
+              this.askAgentController.getActiveTurnMessageId() ??
+              answerResult.messageId,
             text: errorPresentation.message,
             code: errorPresentation.code ?? sendOutcome,
             retryable: errorPresentation.retryable,
@@ -2792,7 +2805,11 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
+      if (activeTurn) {
+        this.askAgentController.completeTurn(activeTurn);
+        // Messages queued while the continued turn ran are sent next.
+        void this.drainAskAgentMessageQueue();
+      }
     }
   }
 
@@ -6063,6 +6080,8 @@ export class BrowserGatewayHelper {
     initialToolMessages?: readonly CoreModelMessage[];
     theme: BrowserGatewayThemeSnapshot;
     signal: AbortSignal;
+    /** The controller turn, retargeted when a queued message interjects. */
+    turn: AskAgentControllerTurn;
   }): Promise<AskAgentToolLoopResult> {
     const profileSnapshot = this.getModelCatalogSnapshot(
       params.modelContext.modelOwnerId,
@@ -6194,6 +6213,88 @@ export class BrowserGatewayHelper {
       // set_task_status completion guard) can tell whether the user has been
       // shown any response this turn.
       let turnVisibleAssistantText = "";
+      // A queued message marked to interject is taken in at the next break,
+      // like VS Code: it appears in the chat and the rest of the reply streams
+      // into a new assistant message below it. Each reply segment keeps its
+      // own exact private model history so later turns replay it in order.
+      let currentAssistantMessageId = params.assistantMessageId;
+      let segmented = false;
+      let segmentStartIndex = 0;
+      let previousSegmentsText = "";
+      // A stopping tool's text (set_task_status's summary) for the reply in
+      // progress, used when no assistant text streamed into it.
+      let segmentStopContent = "";
+      const segmentVisibleText = () =>
+        turnVisibleAssistantText.startsWith(previousSegmentsText)
+          ? turnVisibleAssistantText.slice(previousSegmentsText.length)
+          : turnVisibleAssistantText;
+      const segmentParams = () => ({
+        assistantMessageId: currentAssistantMessageId,
+        // Memory context belongs to the reply that first used it.
+        memoryDisclosure:
+          currentAssistantMessageId === params.assistantMessageId
+            ? params.memoryDisclosure
+            : undefined,
+      });
+      const persistSegmentPrivateTurn = (
+        messageId: string,
+        messages: readonly CoreModelMessage[],
+      ) => {
+        if (
+          // A split turn's surface messages cannot rebuild its tool
+          // exchanges, so every segment keeps its exact history.
+          (segmented && messages.length > 0) ||
+          messages.some(
+            (message) => message.role === "assistant" && message.providerReplay,
+          )
+        ) {
+          this.askAgentSessionStore.appendPrivateModelTurn(messageId, messages);
+        }
+      };
+      const takeInterjections = ({
+        iterationMessages,
+      }: {
+        iterationMessages: readonly CoreModelMessage[];
+      }): CoreModelMessage[] => {
+        if (params.signal.aborted) return [];
+        // Only the chat this turn runs in can steer it.
+        if (this.askAgentSessionStore.getActiveSessionId() !== conversationId) {
+          return [];
+        }
+        const ready = this.askAgentSessionStore.takeReadyInterjections();
+        if (ready.length === 0) return [];
+        segmented = true;
+        persistSegmentPrivateTurn(
+          currentAssistantMessageId,
+          iterationMessages.slice(segmentStartIndex),
+        );
+        // Fills the reply only when no text streamed into it, like the
+        // turn's own finish.
+        this.askAgentController.finishAssistantSuccess({
+          messageId: currentAssistantMessageId,
+          text: segmentVisibleText(),
+          memoryDisclosure: segmentParams().memoryDisclosure,
+        });
+        const now = Date.now();
+        const admitted = ready.flatMap((queued) =>
+          this.askAgentSessionStore.admitQueuedMessage(queued, now),
+        );
+        const reply = this.askAgentSessionStore.startAssistantMessage({ now });
+        this.askAgentController.retargetTurn(params.turn, reply.id);
+        currentAssistantMessageId = reply.id;
+        segmentStartIndex = iterationMessages.length + admitted.length;
+        previousSegmentsText = turnVisibleAssistantText;
+        segmentStopContent = "";
+        for (const queued of ready) {
+          this.logAskAgentEvent("ask-agent.queue.interjected", {
+            queueId: queued.id,
+            ok: true,
+          });
+        }
+        void this.persistAskAgentHistory().catch(() => undefined);
+        scheduleTurnSnapshot();
+        return admitted;
+      };
       return await runAgentToolLoop<
         AskAgentToolLoopResult,
         AskAgentToolLoopOutcome
@@ -6239,7 +6340,7 @@ export class BrowserGatewayHelper {
               onTextReset();
               turnVisibleAssistantText = textBeforeModelCall;
               this.askAgentController.appendAssistantDelta(
-                params.assistantMessageId,
+                currentAssistantMessageId,
                 "\n\n[Response interrupted. Retrying.]\n\n",
               );
               scheduleTurnSnapshot();
@@ -6256,16 +6357,17 @@ export class BrowserGatewayHelper {
                 });
               }
               this.askAgentController.appendAssistantDelta(
-                params.assistantMessageId,
+                currentAssistantMessageId,
                 delta,
               );
               scheduleTurnSnapshot();
             },
           });
           // Mirror the loop's fallback: a client that returns text without
-          // streaming deltas still counts as having produced a visible response.
-          if (!turnVisibleAssistantText && result.text) {
-            turnVisibleAssistantText = result.text;
+          // streaming deltas still counts as having produced a visible
+          // response. After an interjection this applies per reply.
+          if (!segmentVisibleText() && result.text) {
+            turnVisibleAssistantText += result.text;
           }
           return {
             text: result.text,
@@ -6275,18 +6377,12 @@ export class BrowserGatewayHelper {
           };
         },
         onIterationMessagesComplete: (messages) => {
-          if (
-            messages.some(
-              (message) =>
-                message.role === "assistant" && message.providerReplay,
-            )
-          ) {
-            this.askAgentSessionStore.appendPrivateModelTurn(
-              params.assistantMessageId,
-              messages,
-            );
-          }
+          persistSegmentPrivateTurn(
+            currentAssistantMessageId,
+            messages.slice(segmentStartIndex),
+          );
         },
+        takeInterjections,
         isParallelSafe: (providerCall) => {
           const { canonicalCall, resolutionError } =
             this.resolveAskAgentToolCall(providerCall, nativeToolDisclosure);
@@ -6319,7 +6415,7 @@ export class BrowserGatewayHelper {
           const { canonicalCall } = resolved;
           this.recordAskAgentSemanticDelta();
           this.askAgentController.startAssistantToolCall({
-            messageId: params.assistantMessageId,
+            messageId: currentAssistantMessageId,
             toolCallId: canonicalCall.id,
             toolName: canonicalCall.name,
             input: canonicalCall.input,
@@ -6342,7 +6438,7 @@ export class BrowserGatewayHelper {
                   params.modelContext.model,
                   params.modelContext.ownerId,
                   params.signal,
-                  { getVisibleAssistantText: () => turnVisibleAssistantText },
+                  { getVisibleAssistantText: segmentVisibleText },
                   {
                     sessionId: this.askAgentSessionStore.getActiveSessionId(),
                     turnId: params.assistantMessageId,
@@ -6350,7 +6446,7 @@ export class BrowserGatewayHelper {
                 );
           this.recordAskAgentSemanticDelta();
           this.askAgentController.completeAssistantToolCall({
-            messageId: params.assistantMessageId,
+            messageId: currentAssistantMessageId,
             toolCallId: canonicalCall.id,
             toolName: canonicalCall.name,
             input: canonicalCall.input,
@@ -6359,6 +6455,7 @@ export class BrowserGatewayHelper {
             durationMs: Date.now() - toolStartedAt,
           });
           await publishTurnSnapshot();
+          if (executed.stop) segmentStopContent = executed.content;
           return {
             toolMessage: this.rebindAskAgentToolResultMessage(
               executed.toolMessage,
@@ -6369,10 +6466,30 @@ export class BrowserGatewayHelper {
             outcome: executed.outcome,
           };
         },
-        finishSuccess: (text, outcome) =>
-          this.finishAskAgentSuccess(params, text, outcome),
+        finishSuccess: (text, outcome) => {
+          if (!segmented) {
+            return this.finishAskAgentSuccess(segmentParams(), text, outcome);
+          }
+          // The loop's text spans the whole turn; after an interjection only
+          // this reply's own text (or its stop summary) may fill it.
+          const replyText = segmentVisibleText() || segmentStopContent;
+          if (
+            !replyText &&
+            !this.askAgentSessionStore
+              .getAssistantMessageText(currentAssistantMessageId)
+              .trim()
+          ) {
+            this.finishAskAgentEmptyResponse(currentAssistantMessageId);
+            return { outcome: "model_empty", assistantText: "" };
+          }
+          return this.finishAskAgentSuccess(
+            segmentParams(),
+            replyText,
+            outcome,
+          );
+        },
         finishEmpty: () => {
-          this.finishAskAgentEmptyResponse(params.assistantMessageId);
+          this.finishAskAgentEmptyResponse(currentAssistantMessageId);
           return { outcome: "model_empty", assistantText: "" };
         },
       });
@@ -9116,6 +9233,7 @@ export class BrowserGatewayHelper {
           initialToolMessages: retryToolResults,
           theme,
           signal: activeTurn.signal,
+          turn: activeTurn,
         });
         sendOutcome = turnResult.outcome;
       } catch (err) {
@@ -9148,7 +9266,9 @@ export class BrowserGatewayHelper {
         });
         if (!alreadyStopped) {
           this.askAgentController.finishAssistantError({
-            messageId: assistantMessage.id,
+            messageId:
+              this.askAgentController.getActiveTurnMessageId() ??
+              assistantMessage.id,
             text: errorPresentation.message,
             code: errorPresentation.code ?? sendOutcome,
             retryable: errorPresentation.retryable,
@@ -9183,7 +9303,11 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
+      if (activeTurn) {
+        this.askAgentController.completeTurn(activeTurn);
+        // Messages queued while the retried turn ran are sent next.
+        void this.drainAskAgentMessageQueue();
+      }
     }
   }
 
@@ -9206,6 +9330,7 @@ export class BrowserGatewayHelper {
         documents?: unknown;
         instanceId?: unknown;
         queueDrainToken?: unknown;
+        interject?: unknown;
       } | null;
       const images = parseAskAgentMediaItems(body?.images);
       const documents = parseAskAgentMediaItems(body?.documents);
@@ -9322,6 +9447,7 @@ export class BrowserGatewayHelper {
         phase: "received",
       });
       const queueDrain = body.queueDrainToken === this.askAgentQueueDrainToken;
+      const interject = body.interject === true;
       const duplicateCommittedMessage =
         typeof body.id === "string" &&
         this.askAgentSessionStore.hasActiveUserMessageId(body.id);
@@ -9352,6 +9478,9 @@ export class BrowserGatewayHelper {
           ...(documents.length > 0 ? { documents } : {}),
           ...(requestedOwnerId ? { instanceId: requestedOwnerId } : {}),
           source: "browser",
+          // Taken into the running turn at its next break (VS Code's
+          // "Interject at next break") instead of waiting for it to end.
+          ...(interject ? { interjectionReady: true } : {}),
         };
         if (!this.askAgentSessionStore.enqueueMessage(queuedMessage)) {
           writeJson(res, 409, { error: "queue_full" });
@@ -9371,10 +9500,12 @@ export class BrowserGatewayHelper {
           ok: true,
           outcome: "queued",
           queueId: id,
+          interject,
         });
         writeJson(res, 200, {
           ok: true,
           queued: true,
+          ...(interject ? { interjected: true } : {}),
           snapshot: response.snapshot,
         });
         return;
@@ -9423,6 +9554,7 @@ export class BrowserGatewayHelper {
             memoryDisclosure: memoryContextResult?.disclosure,
             theme,
             signal: activeTurn.signal,
+            turn: activeTurn,
           });
           sendOutcome = turnResult.outcome;
         } catch (err) {
@@ -9455,7 +9587,9 @@ export class BrowserGatewayHelper {
           });
           if (!alreadyStopped) {
             this.askAgentController.finishAssistantError({
-              messageId: assistantMessage.id,
+              messageId:
+                this.askAgentController.getActiveTurnMessageId() ??
+                assistantMessage.id,
               text: errorPresentation.message,
               code: errorPresentation.code ?? sendOutcome,
               retryable: errorPresentation.retryable,
@@ -9597,8 +9731,9 @@ export class BrowserGatewayHelper {
   }
 
   /**
-   * Queue controls matching the VS Code chat queue: remove, edit, or steer
-   * (stop the running turn and send this message next).
+   * Queue controls matching the VS Code chat queue: remove, edit, steer
+   * (stop the running turn and send this message next), or interject (the
+   * running turn takes it in at its next break) and pause that again.
    */
   private async handleAskAgentQueueRequest(
     req: http.IncomingMessage,
@@ -9617,7 +9752,11 @@ export class BrowserGatewayHelper {
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
       if (
         !id ||
-        (action !== "remove" && action !== "update" && action !== "steer")
+        (action !== "remove" &&
+          action !== "update" &&
+          action !== "steer" &&
+          action !== "interject" &&
+          action !== "pause-interjection")
       ) {
         writeJson(res, 400, { error: "invalid_request" });
         return;
@@ -9639,6 +9778,11 @@ export class BrowserGatewayHelper {
           return;
         }
         applied = this.askAgentSessionStore.updateQueuedMessageText(id, text);
+      } else if (action === "interject" || action === "pause-interjection") {
+        applied = this.askAgentSessionStore.setQueuedMessageInterjectionReady(
+          id,
+          action === "interject",
+        );
       } else {
         applied = this.askAgentSessionStore.promoteQueuedMessage(id);
       }
@@ -9657,6 +9801,10 @@ export class BrowserGatewayHelper {
         // Stopping the running turn lets its completion drain the promoted
         // message next. With no running turn, drain immediately.
         if (this.hasAskAgentWork()) await this.cancelActiveTurn();
+        void this.drainAskAgentMessageQueue();
+      } else if (action === "interject" && !this.hasAskAgentWork()) {
+        // Nothing running to take it in: send it now instead.
+        this.askAgentSessionStore.promoteQueuedMessage(id);
         void this.drainAskAgentMessageQueue();
       }
       const response = this.buildAskAgentSnapshotResponse(

@@ -179,6 +179,7 @@ import {
   BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
 } from "../askAgentTabs";
 import { BROWSER_GATEWAY_ASK_AGENT_SESSION_ID_PREFIX } from "../browserGatewayAskAgentIdentity";
+import { ASK_AGENT_QUEUE_INTERJECT_CAPABILITY } from "../askAgentCapabilities";
 import {
   RELAY_SHADOW_OVERRIDE_STORAGE_KEY,
   resolveRelayClientEnabled,
@@ -593,6 +594,8 @@ export type GatewaySnapshot = {
       lastCacheReadTokens: number;
       estimatedTotalUsed: number;
       messageQueue: AppState["messageQueue"];
+      /** Ask Agent: queued messages can interject the running turn. */
+      queueInterjectionAvailable?: boolean;
       questionRequest: {
         id: string;
         context: string;
@@ -1145,6 +1148,23 @@ function UrlElicitationPanel({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * How long a queued Ask Agent message the owner has confirmed stays shown
+ * through updates that lack it. Covers a live update built before the
+ * message was queued but applied after the queued response.
+ */
+const ASK_AGENT_STALE_QUEUE_GRACE_MS = 2_000;
+
+function isWithinStaleQueueGrace(
+  confirmedAt: number,
+  streaming: boolean | undefined,
+): boolean {
+  return (
+    Boolean(streaming) &&
+    Date.now() - confirmedAt < ASK_AGENT_STALE_QUEUE_GRACE_MS
   );
 }
 
@@ -2127,6 +2147,13 @@ export function BrowserGatewayApp({
       sessionId: string;
       message: AppState["messageQueue"][number];
       baselineUserMessageIds: ReadonlySet<string>;
+      /**
+       * When the owner's queue first listed this message. Ask Agent keeps it
+       * shown briefly after that: a live update built before it was queued
+       * can land after the queued response and must not make it vanish.
+       * Later owner updates are authoritative again.
+       */
+      confirmedAt?: number;
     }>
   >([]);
   const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
@@ -2166,6 +2193,7 @@ export function BrowserGatewayApp({
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
+
   const [askAgentModelCatalog, setAskAgentModelCatalog] =
     useState<AskAgentModelCatalogStatus | null>(null);
   const [mobileLayout, setMobileLayout] = useState(
@@ -3010,6 +3038,15 @@ export function BrowserGatewayApp({
   }, [selectedInstanceId, selectedProjectId]);
 
   const foreground = snapshot?.session.foreground ?? null;
+  // Ask Agent hosts whose turns can take queued messages in at the next
+  // break, like VS Code's "Interject at next break".
+  const askAgentInterjectionAvailable =
+    foreground?.queueInterjectionAvailable === true ||
+    askAgentCapabilities.some(
+      (capability) =>
+        capability.capabilityId === ASK_AGENT_QUEUE_INTERJECT_CAPABILITY &&
+        capability.state === "enabled",
+    );
   const foregroundProjectedMessages = foreground?.projectedMessages;
   const foregroundMessageQueue = foreground?.messageQueue;
   const messageQueue = useMemo<AppState["messageQueue"]>(() => {
@@ -3022,10 +3059,12 @@ export function BrowserGatewayApp({
     );
     const matchedCommittedIds = new Set<string>();
     const optimisticMessages = optimisticQueuedMessages.filter(
-      ({ sessionId, message, baselineUserMessageIds }) => {
+      ({ sessionId, message, baselineUserMessageIds, confirmedAt }) => {
         if (
           sessionId !== foreground?.sessionId ||
-          confirmedIds.has(message.id)
+          confirmedIds.has(message.id) ||
+          (confirmedAt !== undefined &&
+            !isWithinStaleQueueGrace(confirmedAt, foreground?.streaming))
         ) {
           return false;
         }
@@ -3046,6 +3085,7 @@ export function BrowserGatewayApp({
     ];
   }, [
     foreground?.sessionId,
+    foreground?.streaming,
     foregroundMessageQueue,
     foregroundProjectedMessages,
     optimisticQueuedMessages,
@@ -3057,8 +3097,9 @@ export function BrowserGatewayApp({
     return new Set(
       optimisticQueuedMessages
         .filter(
-          ({ sessionId, message }) =>
+          ({ sessionId, message, confirmedAt }) =>
             sessionId === foreground?.sessionId &&
+            confirmedAt === undefined &&
             !confirmedIds.has(message.id) &&
             messageQueue.some((queued) => queued.id === message.id),
         )
@@ -3159,30 +3200,58 @@ export function BrowserGatewayApp({
     const committedUserMessages = foregroundProjectedMessages.filter(
       (message) => message.role === "user",
     );
+    const streaming = Boolean(foreground?.streaming);
     setOptimisticQueuedMessages((current) => {
       const matchedCommittedIds = new Set<string>();
-      const next = current.filter(
-        ({ sessionId, message, baselineUserMessageIds }) => {
-          if (sessionId !== foreground?.sessionId) return false;
-          if (confirmedIds.has(message.id)) return false;
-          const committed = committedUserMessages.find(
-            (candidate) =>
-              !matchedCommittedIds.has(candidate.id) &&
-              !baselineUserMessageIds.has(candidate.id) &&
-              (candidate.id === message.id ||
-                candidate.content === message.text),
-          );
-          if (!committed) return true;
+      let changed = false;
+      const next: typeof current = [];
+      for (const entry of current) {
+        const { sessionId, message, baselineUserMessageIds } = entry;
+        if (sessionId !== foreground?.sessionId) {
+          changed = true;
+          continue;
+        }
+        const committed = committedUserMessages.find(
+          (candidate) =>
+            !matchedCommittedIds.has(candidate.id) &&
+            !baselineUserMessageIds.has(candidate.id) &&
+            (candidate.id === message.id || candidate.content === message.text),
+        );
+        if (committed) {
           matchedCommittedIds.add(committed.id);
-          return false;
-        },
-      );
-      return next.length === current.length ? current : next;
+          changed = true;
+          continue;
+        }
+        if (confirmedIds.has(message.id)) {
+          // Ask Agent keeps the confirmed copy for a short grace period;
+          // elsewhere the owner's queue rules straight away.
+          if (!isAskAgentSelected) {
+            changed = true;
+            continue;
+          }
+          if (entry.confirmedAt === undefined) {
+            next.push({ ...entry, confirmedAt: Date.now() });
+            changed = true;
+            continue;
+          }
+        } else if (
+          entry.confirmedAt !== undefined &&
+          !isWithinStaleQueueGrace(entry.confirmedAt, streaming)
+        ) {
+          // Gone from a current owner queue: sent or removed.
+          changed = true;
+          continue;
+        }
+        next.push(entry);
+      }
+      return changed ? next : current;
     });
   }, [
     foreground?.sessionId,
+    foreground?.streaming,
     foregroundMessageQueue,
     foregroundProjectedMessages,
+    isAskAgentSelected,
     optimisticQueuedMessages,
   ]);
 
@@ -5528,7 +5597,7 @@ export function BrowserGatewayApp({
   };
 
   const runAskAgentQueueAction = (
-    action: "steer" | "update" | "remove",
+    action: "steer" | "update" | "remove" | "interject" | "pause-interjection",
     queueId: string,
     text?: string,
   ): void => {
@@ -5536,7 +5605,28 @@ export function BrowserGatewayApp({
     const sessionId = foreground.sessionId;
     const actionOrigin = { ...snapshotOriginRef.current };
     const label =
-      action === "steer" ? "Steer" : action === "update" ? "Edit" : "Remove";
+      action === "steer"
+        ? "Steer"
+        : action === "update"
+          ? "Edit"
+          : action === "remove"
+            ? "Remove"
+            : "Interject";
+    const interjectionKey = `${sessionId}:${queueId}`;
+    const togglesInterjection =
+      action === "interject" || action === "pause-interjection";
+    const clearInterjectionOverride = () =>
+      setQueueInterjectionOverrides((previous) => {
+        if (!previous.has(interjectionKey)) return previous;
+        const next = new Map(previous);
+        next.delete(interjectionKey);
+        return next;
+      });
+    if (togglesInterjection) {
+      setQueueInterjectionOverrides((previous) =>
+        new Map(previous).set(interjectionKey, action === "interject"),
+      );
+    }
     void (async () => {
       try {
         const response = await fetch("/api/ask-agent/queue", {
@@ -5565,18 +5655,41 @@ export function BrowserGatewayApp({
             actionOrigin.generation,
           );
         }
+        if (body.ok || body.error === "queue_item_not_found") {
+          // The kept copy of a confirmed message must follow the owner's
+          // queue: gone when removed or sent, edited text when updated.
+          setOptimisticQueuedMessages((current) =>
+            action === "update" && text !== undefined
+              ? current.map((entry) =>
+                  entry.message.id === queueId
+                    ? { ...entry, message: { ...entry.message, text } }
+                    : entry,
+                )
+              : action === "remove" ||
+                  action === "steer" ||
+                  body.error === "queue_item_not_found"
+                ? current.filter((entry) => entry.message.id !== queueId)
+                : current,
+          );
+        }
+        if (togglesInterjection) clearInterjectionOverride();
         setSendStatus(
           body.ok
             ? action === "steer"
               ? "Steering…"
               : action === "update"
                 ? "Queued message updated."
-                : "Queued message removed."
+                : action === "remove"
+                  ? "Queued message removed."
+                  : action === "interject"
+                    ? "Ready to interject at the next break."
+                    : "Interjection paused. It will send when the turn ends."
             : body.error === "queue_item_not_found"
               ? "That message has already been sent."
               : `${label} failed: ${body.error ?? response.status}`,
         );
       } catch (err) {
+        if (togglesInterjection) clearInterjectionOverride();
         setSendStatus(`${label} error: ${String(err)}`);
       }
     })();
@@ -10344,7 +10457,9 @@ export function BrowserGatewayApp({
                         : [],
                     )}
                     <MessageQueuePanel
-                      allowInterjection={!isAskAgentSelected}
+                      allowInterjection={
+                        !isAskAgentSelected || askAgentInterjectionAvailable
+                      }
                       pendingIds={pendingMessageQueueIds}
                       onEdit={
                         isAskAgentSelected
@@ -10385,7 +10500,15 @@ export function BrowserGatewayApp({
                         });
                       }}
                       onInterject={(item) => {
-                        if (isAskAgentSelected) return;
+                        if (isAskAgentSelected) {
+                          runAskAgentQueueAction(
+                            item.interjectionReady
+                              ? "pause-interjection"
+                              : "interject",
+                            item.id,
+                          );
+                          return;
+                        }
                         if (item.interjectionReady) {
                           browserVscodeApi.postMessage({
                             command: "agentPauseQueuedMessageInterjection",
@@ -11010,7 +11133,9 @@ export function BrowserGatewayApp({
                         : null
                     }
                     onInterject={
-                      isAskAgentSelected ? undefined : handleInterject
+                      !isAskAgentSelected || askAgentInterjectionAvailable
+                        ? handleInterject
+                        : undefined
                     }
                     onPolishPrompt={
                       isAskAgentSelected ? undefined : handlePolishPrompt
