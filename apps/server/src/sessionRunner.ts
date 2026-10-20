@@ -10,6 +10,10 @@ import {
   type WorkspaceHost,
 } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+
+import { StandaloneStructuralIndex } from "../../../src/indexer/standalone/StandaloneStructuralIndex.js";
+import { createStructuralIndexTools } from "../../../src/indexer/standalone/structuralIndexTools.js";
 
 import { HttpError } from "./httpJson.js";
 import { remoteApprovalHostTools, remoteHostTools } from "./remoteHostTools.js";
@@ -397,6 +401,15 @@ export async function startSessionRunner(options: {
       hasSessionGrant: (_proposal, request) => state.autonomous(request),
     },
     hostTools: remoteHostTools(control),
+    // The task's own index under its data root: tasks never share one.
+    structuralIndex: ({ projectRoot, resolveScopes }) =>
+      createStructuralIndexTools({
+        index: new StandaloneStructuralIndex({
+          projectRoot,
+          indexRoot: path.join(options.dataRoot, "code-index"),
+        }),
+        resolveScopes: async (request) => await resolveScopes(request),
+      }),
     ...(approvalHostTools ? { approvalHostTools } : {}),
     onTurnError: ({ sessionId, error }) => state.onTurnError(sessionId, error),
     files: {

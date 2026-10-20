@@ -201,6 +201,19 @@ export interface CreateWorkspaceHostOptions {
   readonly languageIntelligence?: {
     readonly enabled: true;
   };
+  /**
+   * Read-only structural code index tools (`get_repo_map`,
+   * `get_module_neighbors`) built by the host. The factory receives the
+   * canonical project root and the session's file-scope resolver (a
+   * background child's narrower scopes included), so the tools only show
+   * files the session may read. Not offered with an `executionBackend`:
+   * the index reads this machine's files, never a substitute for the
+   * backend's.
+   */
+  readonly structuralIndex?: (context: {
+    readonly projectRoot: string;
+    readonly resolveScopes: ResolveWorkspaceFileScopes;
+  }) => HostToolResolver;
   readonly background?: {
     readonly enabled: true;
     readonly maxActiveChildren?: number;
@@ -747,6 +760,13 @@ export async function createWorkspaceHost(
         canReadPath: canReadLanguagePath,
       })
     : undefined;
+  const structuralIndexTools =
+    options.structuralIndex && !options.executionBackend
+      ? options.structuralIndex({
+          projectRoot: project.root,
+          resolveScopes: resolveHostFileScopes,
+        })
+      : undefined;
   const fileTools = options.files
     ? createWorkspaceFileTools({
         projectRoot: project.root,
@@ -890,6 +910,7 @@ export async function createWorkspaceHost(
     sharedMcpTools ||
     backgroundTools ||
     languageTools ||
+    structuralIndexTools ||
     sessionInteractionTools ||
     options.hostTools ||
     approvalHostTools
@@ -916,6 +937,11 @@ export async function createWorkspaceHost(
                     : []),
                   ...(languageTools
                     ? await languageTools.resolveTools(request)
+                    : []),
+                  ...(structuralIndexTools
+                    ? requireUnauthorizedTools(
+                        await structuralIndexTools(request),
+                      )
                     : []),
                   ...(sessionInteractionTools
                     ? await sessionInteractionTools.resolveTools(request)

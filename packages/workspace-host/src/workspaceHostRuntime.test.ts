@@ -825,6 +825,89 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("gives structural index tools the project root and the session's scopes", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const seen: { root?: string; scopes?: unknown; sessionId?: string } = {};
+    const structuralIndex = vi.fn(
+      (
+        context: Parameters<
+          NonNullable<
+            Parameters<typeof createWorkspaceHost>[0]["structuralIndex"]
+          >
+        >[0],
+      ) => {
+        seen.root = context.projectRoot;
+        return () => [
+          defineTool({
+            name: "get_repo_map",
+            description: "Map",
+            inputSchema: { type: "object", properties: {} },
+            effect: "read",
+            handler: async (_input, toolContext) => {
+              seen.sessionId = toolContext.sessionId;
+              seen.scopes = await context.resolveScopes({
+                principal: toolContext.principal,
+                sessionId: toolContext.sessionId,
+                turnId: toolContext.turnId,
+              });
+              return { modelContent: "mapped" };
+            },
+          }),
+        ];
+      },
+    );
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: Array<{ role?: string }>;
+        };
+        return body.messages?.some((message) => message.role === "tool")
+          ? completion("done")
+          : toolCall("get_repo_map", {});
+      });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "structural-index",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      structuralIndex,
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      await expect(host.runTurn(sessionId, "map it")).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(seen.root).toBe(await fs.realpath(projectRoot));
+      expect(seen.sessionId).toBe(sessionId);
+      expect(seen.scopes).toEqual([
+        { path: ".", kind: "directory", access: "read_write" },
+      ]);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("applies the host's turn limits to every turn", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

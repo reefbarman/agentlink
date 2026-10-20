@@ -195,6 +195,15 @@ Set the SearXNG server in `~/.agentlink/cli/config.json`:
 
 `searxngUrl` must be an http(s) URL without credentials, a query or a fragment, and its SearXNG must allow the `json` format (`search.formats` in `settings.yml`). A private address is fine here: it is your search service, not a site the model can fetch. `agentlink status` shows the current web settings. MCP web tools are unaffected.
 
+## Code map
+
+Coding chats and background children get `get_repo_map` (a budgeted skeleton of the project: directories, files, imports, exports, top-level symbols and external dependencies) and `get_module_neighbors` (one file's imports, exports, symbols and the files that import it). They are read-only and need no setup or language server.
+
+- The index is built on first use and refreshed on every call: files git lists (tracked plus untracked, not ignored), or a bounded walk outside git, are compared by size and modification time, and only changed files are re-read. Importers of added or removed files are re-resolved, and tsconfig path aliases are re-applied each time. Symlinks, binary files and files over 1 MB are skipped, and at most 20,000 files are indexed (results then say `partial`).
+- It lives under `~/.agentlink/code-index`, one store per checkout, shared by every CLI and Desktop process on that folder. One process rebuilds at a time (a fenced writer lease); the others wait briefly, then use the last published map marked `stale`. Each result reports the index `state` and `generation`.
+- Results only include files the session may read: a background child limited to some folders sees only those files, and links into hidden files lose their resolved path.
+- Import resolution is strongest for JavaScript and TypeScript; other languages contribute files and symbols. This is a structural map, not a language server. VS Code's own `get_repo_map` still uses its code index for now.
+
 ## TypeScript and JavaScript intelligence
 
 TypeScript/JavaScript language intelligence is optional and is never installed or enabled implicitly. Inspect the global installation and current project's enablement, install or refresh the managed recipe, explicitly enable or disable one canonical project, or remove the installation with:

@@ -112,6 +112,8 @@ import {
 import type { StandaloneSessionSummary } from "./sessionProjection.js";
 import type { CliConfig } from "./types.js";
 import { createCliWebTools } from "./webTools.js";
+import { StandaloneStructuralIndex } from "../../../src/indexer/standalone/StandaloneStructuralIndex.js";
+import { createStructuralIndexTools } from "../../../src/indexer/standalone/structuralIndexTools.js";
 import { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import type { ReleaseUpdateServiceOptions } from "../../../src/updates/ReleaseUpdateService.js";
@@ -780,6 +782,16 @@ async function createHost(options: {
     ...(options.enableLanguageIntelligence
       ? { languageIntelligence: { enabled: true as const } }
       : {}),
+    // One store per checkout under ~/.agentlink, shared by every CLI and
+    // Desktop process on the same folder.
+    structuralIndex: ({ projectRoot, resolveScopes }) =>
+      createStructuralIndexTools({
+        index: new StandaloneStructuralIndex({
+          projectRoot,
+          indexRoot: path.join(options.dataRoot, "code-index"),
+        }),
+        resolveScopes: async (request) => await resolveScopes(request),
+      }),
     hostTools: createCliWebTools({
       web: cliWebConfig(options.config),
       codexProviderIds: new Set(

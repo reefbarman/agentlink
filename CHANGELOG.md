@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The standalone CLI and Assistant task runners now have `get_repo_map` and `get_module_neighbors`, with the same output as in VS Code. They use a new lightweight structural index (no embeddings or native database) that is built on first use and refreshed from changed files on every call. In the CLI it is stored under `~/.agentlink/code-index` and shared by every process working on the same checkout, with one writer at a time; each Assistant task keeps its own. Results only include files the session may read.
+
 ## 1.51.0
 
 - The standalone CLI now has `web_fetch` and `web_search`. Pages are read directly from your machine (public sites only; private, local and IP-address hosts are refused, and fetching refuses to run around a configured proxy). Search uses Codex hosted search for Codex models and, for other models, a SearXNG server set in `web.searxngUrl` in `~/.agentlink/cli/config.json`. The Assistant now uses the same tool implementation, with its project network presets unchanged.
