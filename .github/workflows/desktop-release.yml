@@ -48,7 +48,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -87,7 +87,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -170,7 +170,7 @@ jobs:
             security delete-keychain "$AGENTLINK_SIGNING_KEYCHAIN" || true
           fi
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: agentlink-desktop-${{ matrix.target }}
           path: |
@@ -196,7 +196,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: agentlink-desktop-*
           path: dist

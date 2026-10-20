@@ -46,7 +46,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -91,7 +91,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -159,7 +159,7 @@ jobs:
             | node scripts/verify-retrieval-package.mjs \
                 --target "$AGENTLINK_VSCE_TARGET"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: agentlink-${{ matrix.target }}
           path: agentlink-*-${{ matrix.target }}.vsix
@@ -184,7 +184,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: agentlink-*
           path: dist
