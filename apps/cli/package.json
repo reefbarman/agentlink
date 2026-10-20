@@ -27,7 +27,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@napi-rs/keyring": "2.1.0"
+    "@napi-rs/keyring": "2.1.1"
   },
   "devDependencies": {
     "@agentlink/core": "0.17.1",
@@ -39,7 +39,7 @@
     "ink": "8.0.0",
     "ink-picture": "2.1.0",
     "ink-testing-library": "4.0.0",
-    "marked": "18.1.0",
+    "marked": "18.1.1",
     "react": "19.3.0",
     "undici": "^8.7.0"
   },
