@@ -2253,11 +2253,13 @@ export function BrowserGatewayApp({
       ? window.agentlinkDesktopEmbed
       : undefined;
   const [embedSidebarWidth, setEmbedSidebarWidth] = useState<number>();
+  const [embedOffsetTop, setEmbedOffsetTop] = useState<number>();
   useEffect(() => {
     if (!desktopEmbed) return;
     const stop = desktopEmbed.onChrome((chrome) => {
       setDesktopSidebarOpen(chrome.sidebarOpen);
       setEmbedSidebarWidth(chrome.sidebarWidth);
+      setEmbedOffsetTop(chrome.offsetTop);
     });
     desktopEmbed.ready();
     return stop;
@@ -8799,9 +8801,15 @@ export function BrowserGatewayApp({
     <div
       class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}`}
       style={
-        desktopEmbed && embedSidebarWidth !== undefined
+        desktopEmbed &&
+        (embedSidebarWidth !== undefined || embedOffsetTop !== undefined)
           ? ({
-              "--desktop-sidebar-user-width": `${embedSidebarWidth}px`,
+              ...(embedSidebarWidth !== undefined
+                ? { "--desktop-sidebar-user-width": `${embedSidebarWidth}px` }
+                : {}),
+              ...(embedOffsetTop !== undefined
+                ? { "--desktop-embed-offset-top": `${embedOffsetTop}px` }
+                : {}),
             } as unknown as CSSProperties)
           : undefined
       }
@@ -9485,6 +9493,9 @@ export function BrowserGatewayApp({
               // Inside the Assistant, its own inbox; in the desktop shell,
               // the count the hidden Assistant page reported.
               desktopEmbed ? assistantInboxUnread : desktopAssistant?.unread
+            }
+            assistantLoading={
+              !desktopEmbed && desktopAssistant?.status === "connecting"
             }
             assistantLink={
               browserShell && product !== "assistant" ? (

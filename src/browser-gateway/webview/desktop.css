@@ -770,6 +770,13 @@
   line-height: 16px;
 }
 
+/* Holds the Assistant's loading spinner where its badge would be. */
+.browser-shell.browser-shell-desktop .desktop-mode-loading {
+  display: flex;
+  margin-left: auto;
+  padding-right: 4px;
+}
+
 .browser-shell.browser-shell-desktop .assistant-launcher-row {
   display: flex;
   align-items: center;
@@ -982,6 +989,8 @@
  */
 .browser-shell.browser-shell-desktop.desktop-embedded {
   position: relative;
+  /* The sub-pixel gap to the shell's title bar when zoomed (see the desktop). */
+  padding-top: var(--desktop-embed-offset-top, 0px);
 }
 
 .browser-shell.browser-shell-desktop.desktop-embedded .browser-header {

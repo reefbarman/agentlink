@@ -27,6 +27,12 @@ if (process.isMainFrame) {
           Number.isFinite(chrome.sidebarWidth)
             ? { sidebarWidth: chrome.sidebarWidth }
             : {}),
+          ...(typeof chrome?.offsetTop === "number" &&
+          Number.isFinite(chrome.offsetTop) &&
+          chrome.offsetTop > 0 &&
+          chrome.offsetTop < 4
+            ? { offsetTop: chrome.offsetTop }
+            : {}),
         });
       };
       ipcRenderer.on("agentlink:assistant-embed:chrome", handler);

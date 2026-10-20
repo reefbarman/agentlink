@@ -44,6 +44,30 @@ describe("DesktopSidebar", () => {
     );
     expect(screen.getByRole("button", { name: "Assistant" })).toBeTruthy();
     expect(container.querySelector(".desktop-mode-badge")).toBeNull();
+
+    // Loading in the background: a spinner where the badge would be.
+    rerender(
+      <DesktopSidebar
+        sessions={[]}
+        currentSessionId={null}
+        onSelect={() => undefined}
+        onNew={() => undefined}
+        onManage={() => undefined}
+        onModeChange={() => undefined}
+        assistantMode
+        assistantUnread={3}
+        assistantLoading
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Assistant (loading)" }),
+    ).toBeTruthy();
+    expect(
+      container.querySelector(
+        ".desktop-mode-loading .desktop-chat-activity-running",
+      ),
+    ).not.toBeNull();
+    expect(container.querySelector(".desktop-mode-badge")).toBeNull();
   });
 
   it("marks chats a scheduled job started", () => {

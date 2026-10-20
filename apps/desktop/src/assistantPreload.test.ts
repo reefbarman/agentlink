@@ -64,9 +64,13 @@ it("gives the Assistant page only view navigation and the shell's sidebar", asyn
   )?.[1];
   handler({ sender: "privileged" }, { sidebarOpen: true, sidebarWidth: 300 });
   handler({}, { sidebarOpen: "yes", sidebarWidth: Number.NaN, extra: 1 });
+  handler({}, { sidebarOpen: true, offsetTop: 0.364 });
+  handler({}, { sidebarOpen: true, offsetTop: 40 });
   expect(listener.mock.calls).toEqual([
     [{ sidebarOpen: true, sidebarWidth: 300 }],
     [{ sidebarOpen: false }],
+    [{ sidebarOpen: true, offsetTop: 0.364 }],
+    [{ sidebarOpen: true }],
   ]);
   stop();
   expect(electron.removeListener).toHaveBeenCalledWith(

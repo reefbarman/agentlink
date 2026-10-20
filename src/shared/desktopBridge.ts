@@ -43,6 +43,11 @@ export interface DesktopAssistantChrome {
   sidebarOpen: boolean;
   /** The user's dragged sidebar width, when they chose one. */
   sidebarWidth?: number;
+  /**
+   * CSS pixels the page pads above its layout, set by the desktop (not the
+   * shell) so the page's sidebar lines up with the shell's when zoomed.
+   */
+  offsetTop?: number;
 }
 
 /**

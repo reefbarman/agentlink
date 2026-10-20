@@ -43,6 +43,13 @@ vi.mock("electron", async () => {
         setWindowOpenHandler: vi.fn(),
         send: vi.fn(),
         mainFrame: { url: "" },
+        zoom: 1,
+        getZoomFactor(): number {
+          return this.zoom;
+        },
+        setZoomFactor: vi.fn(function (this: { zoom: number }, zoom: number) {
+          this.zoom = zoom;
+        }),
       });
       setVisible = vi.fn();
       setBounds = vi.fn();
@@ -64,7 +71,10 @@ function fixture(
     mainFrame: { url: "http://127.0.0.1:47138/?surface=desktop" },
     send: vi.fn(),
     isDestroyed: () => false,
-    getZoomFactor: () => 1,
+    zoom: 1,
+    getZoomFactor(): number {
+      return this.zoom;
+    },
   });
   const window = Object.assign(new EventEmitter(), {
     webContents: contents,
@@ -402,6 +412,54 @@ describe("desktop Assistant view", () => {
     await flush();
     expect(f.view.webContents.loadURL).toHaveBeenCalledOnce();
     expect(f.view.setVisible).toHaveBeenLastCalledWith(true);
+    f.assistant.dispose();
+  });
+
+  it("draws the Assistant at the shell's zoom so the sidebars match", async () => {
+    const f = fixture();
+    f.layout("assistant");
+    await flush();
+    expect(f.view.webContents.setZoomFactor).not.toHaveBeenCalled();
+    // Zooming the shell resizes its page, which reports a new layout.
+    f.contents.zoom = 1.25;
+    f.layout("assistant");
+    expect(f.view.webContents.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    // A new page in the view keeps the shell's zoom.
+    f.view.webContents.zoom = 1;
+    f.view.webContents.emit("did-finish-load");
+    expect(f.view.webContents.getZoomFactor()).toBe(1.25);
+    f.assistant.dispose();
+  });
+
+  it("lines the page up with the shell's title bar at fractional zoom", async () => {
+    const f = fixture();
+    f.contents.zoom = 1.1;
+    const page = f.view.webContents;
+    page.mainFrame.url = `${ORIGIN}/`;
+    electron.ipc.emit("agentlink:remote:layout", f.sender, {
+      mode: "assistant",
+      bounds: { x: 0, y: 64, width: 900, height: 700 },
+    });
+    await flush();
+    // 64px at 110% is 70.4: the view starts on 70, the page pads the rest.
+    expect(f.view.setBounds).toHaveBeenLastCalledWith(
+      expect.objectContaining({ y: 70, height: 730 }),
+    );
+    const chrome = page.send.mock.calls
+      .filter(
+        ([channel]: unknown[]) =>
+          channel === "agentlink:assistant-embed:chrome",
+      )
+      .at(-1)?.[1];
+    expect(chrome).toEqual({ sidebarOpen: true, offsetTop: 0.364 });
+
+    // A whole-pixel edge needs no padding.
+    f.contents.zoom = 1;
+    f.layout("assistant");
+    expect(page.send).toHaveBeenLastCalledWith(
+      "agentlink:assistant-embed:chrome",
+      { sidebarOpen: true },
+    );
     f.assistant.dispose();
   });
 

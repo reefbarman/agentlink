@@ -79,6 +79,8 @@ export class DesktopAssistantView {
   private chrome: DesktopAssistantChrome = { sidebarOpen: true };
   /** The page's last reported unread inbox count, for the tab badge. */
   private unread = 0;
+  /** Sub-pixel padding the page adds so its sidebar meets the title bar. */
+  private offsetTop = 0;
   /** The last failure happened while another view showed; opening retries. */
   private failedInBackground = false;
 
@@ -127,6 +129,7 @@ export class DesktopAssistantView {
     // gets the shell's sidebar back. Checked after load, not at navigation
     // start, so reloads of the app itself do not flash the shell sidebar.
     contents.on("did-finish-load", () => {
+      this.matchShellZoom();
       if (!this.readyThisLoad) {
         this.unread = 0;
         this.setEmbedded(false);
@@ -321,7 +324,10 @@ export class DesktopAssistantView {
   private sendChrome(): void {
     const contents = this.view.webContents;
     if (this.disposed || contents.isDestroyed()) return;
-    contents.send("agentlink:assistant-embed:chrome", this.chrome);
+    contents.send("agentlink:assistant-embed:chrome", {
+      ...this.chrome,
+      ...(this.offsetTop > 0 ? { offsetTop: this.offsetTop } : {}),
+    });
   }
 
   private setEmbedded(embedded: boolean): void {
@@ -432,14 +438,47 @@ export class DesktopAssistantView {
     this.publish();
   }
 
+  /**
+   * Draw the Assistant at the shell's zoom, so the sidebar it draws matches
+   * the shell's own (same font and button sizes, same sidebar width) when
+   * switching views. Zooming the shell resizes its page, which reports a new
+   * layout and lands here through `updateBounds`.
+   */
+  private matchShellZoom(): void {
+    const contents = this.view.webContents;
+    if (this.disposed || this.window.isDestroyed() || contents.isDestroyed())
+      return;
+    const zoom = this.window.webContents.getZoomFactor();
+    if (contents.getZoomFactor() !== zoom) contents.setZoomFactor(zoom);
+  }
+
   private updateBounds(): void {
     if (this.disposed || this.window.isDestroyed()) return;
+    const zoom = this.window.webContents.getZoomFactor();
     const bounds = clampDesktopRemoteBounds(
       this.layout.bounds,
       this.window.getContentSize(),
-      this.window.webContents.getZoomFactor(),
+      zoom,
     );
+    // Zoomed, the shell's title bar can end part-way through a pixel (64px
+    // at 110% is 70.4), but a view sits on whole pixels. Start the view on
+    // the pixel above and have the page pad the rest, so its sidebar lines
+    // up exactly with the shell's instead of shifting on every switch.
+    let offsetTop = 0;
+    const exactTop = this.layout.bounds.y * (zoom > 0 ? zoom : 1);
+    if (bounds.height > 0 && Number.isFinite(exactTop) && exactTop > 0) {
+      const top = Math.min(bounds.y, Math.floor(exactTop));
+      bounds.height += bounds.y - top;
+      bounds.y = top;
+      offsetTop =
+        Math.round(((exactTop - top) / (zoom > 0 ? zoom : 1)) * 1000) / 1000;
+    }
+    this.matchShellZoom();
     this.view.setBounds(bounds);
+    if (offsetTop !== this.offsetTop) {
+      this.offsetTop = offsetTop;
+      this.sendChrome();
+    }
     this.view.setVisible(
       this.layout.mode === "assistant" &&
         this.status === "ready" &&
