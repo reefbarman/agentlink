@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.17.0 — 2026-10-20
+
+- Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.
+
 ## 0.16.0 — 2026-10-19
 
 - Auto-condense now prepares the conversation summary in the background shortly before the threshold, so condensing no longer pauses the turn; it can be disabled with the new agentlink.backgroundCondense setting.

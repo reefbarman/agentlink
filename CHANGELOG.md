@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.47.0
+
 - Ask Agent in AgentLink Desktop and the browser now supports **Interject at next break** for queued messages, as in VS Code. The running turn takes the message in at its next tool break, shows it in the chat and continues its reply below it. Click again to let the message wait for the turn to end instead.
 - A message queued while Ask Agent is working no longer vanishes from the queue. A live update built just before it was queued could arrive after the "Queued" response and briefly hide it, sometimes for a minute or more during long tool calls.
 - Messages queued while Ask Agent retried a turn, or continued after you answered a question, are now sent when that turn ends. Previously they waited until you sent another message.
