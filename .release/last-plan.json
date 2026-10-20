@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a84eb9e5b65364a4c3fdf25751446637b41a9a8f",
-  "createdAt": "2026-10-20T00:40:08.836Z",
+  "sourceSha": "7437dbccd251696fa4e0184b099a3c795880dc60",
+  "createdAt": "2026-10-20T01:01:00.124Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,181 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.46.0",
-      "baselineRef": "v1.46.0",
-      "reserved": "1.46.1",
-      "commits": [
-        "3d0d397cc9f0e615194b27dc68a8e195eafe6646",
-        "879f626cba5f20441c3d7d28261049c0b16594a7",
-        "a84eb9e5b65364a4c3fdf25751446637b41a9a8f"
-      ],
+      "published": "1.47.0",
+      "baselineRef": "v1.47.0",
+      "reserved": "1.47.0",
+      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.47.0",
-      "effectiveBump": "minor",
+      "version": "1.47.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.47.0",
+      "tag": "v1.47.1",
       "notes": [
         {
-          "sha": "3d0d397cc9f0e615194b27dc68a8e195eafe6646",
-          "subject": "fix(condense): keep in-place message updates when installing a prepared summary",
-          "summary": "Fixes background conversation summarization so that later in-place message updates, such as final-status markers and runtime error details, are no longer lost from the stored transcript.",
-          "breaking": false
-        },
-        {
-          "sha": "879f626cba5f20441c3d7d28261049c0b16594a7",
-          "subject": "feat(ask-agent): interject queued messages at the next break",
-          "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-          "breaking": false
-        },
-        {
-          "sha": "a84eb9e5b65364a4c3fdf25751446637b41a9a8f",
-          "subject": "feat(desktop): badge the Assistant tab with its unread inbox count",
-          "summary": "The Desktop app preloads the Assistant once signed in and badges the Assistant tab with its unread inbox count, retrying a failed background load when the tab is opened.",
+          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
+          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
+          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.34.1",
-      "baselineRef": "desktop-v0.34.1",
-      "reserved": "0.34.1",
-      "commits": [
-        "879f626cba5f20441c3d7d28261049c0b16594a7",
-        "a84eb9e5b65364a4c3fdf25751446637b41a9a8f"
-      ],
+      "published": "0.35.0",
+      "baselineRef": "desktop-v0.35.0",
+      "reserved": "0.35.0",
+      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.35.0",
-      "effectiveBump": "minor",
+      "version": "0.35.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.35.0",
+      "tag": "desktop-v0.35.1",
       "notes": [
         {
-          "sha": "879f626cba5f20441c3d7d28261049c0b16594a7",
-          "subject": "feat(ask-agent): interject queued messages at the next break",
-          "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-          "breaking": false
-        },
-        {
-          "sha": "a84eb9e5b65364a4c3fdf25751446637b41a9a8f",
-          "subject": "feat(desktop): badge the Assistant tab with its unread inbox count",
-          "summary": "The Desktop app preloads the Assistant once signed in and badges the Assistant tab with its unread inbox count, retrying a failed background load when the tab is opened.",
+          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
+          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
+          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.25.0",
-      "baselineRef": "cli-v0.25.0",
-      "reserved": "0.25.0",
-      "commits": ["879f626cba5f20441c3d7d28261049c0b16594a7"],
+      "published": "0.26.0",
+      "baselineRef": "cli-v0.26.0",
+      "reserved": "0.26.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.26.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.26.0",
-      "notes": [
-        {
-          "sha": "879f626cba5f20441c3d7d28261049c0b16594a7",
-          "subject": "feat(ask-agent): interject queued messages at the next break",
-          "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.16.0",
-      "baselineRef": "sdk-v0.16.0",
-      "reserved": "0.16.0",
-      "commits": ["879f626cba5f20441c3d7d28261049c0b16594a7"],
+      "published": "0.17.0",
+      "baselineRef": "sdk-v0.17.0",
+      "reserved": "0.17.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.17.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.17.0",
-      "notes": [
-        {
-          "sha": "879f626cba5f20441c3d7d28261049c0b16594a7",
-          "subject": "feat(ask-agent): interject queued messages at the next break",
-          "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.5.0",
-      "baselineRef": "assistant-v0.5.0",
-      "reserved": "0.5.0",
-      "commits": [
-        "879f626cba5f20441c3d7d28261049c0b16594a7",
-        "a84eb9e5b65364a4c3fdf25751446637b41a9a8f"
-      ],
+      "published": "0.6.0",
+      "baselineRef": "assistant-v0.6.0",
+      "reserved": "0.6.0",
+      "commits": ["7437dbccd251696fa4e0184b099a3c795880dc60"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.6.0",
-      "effectiveBump": "minor",
+      "version": "0.6.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.6.0",
+      "tag": "assistant-v0.6.1",
       "notes": [
         {
-          "sha": "879f626cba5f20441c3d7d28261049c0b16594a7",
-          "subject": "feat(ask-agent): interject queued messages at the next break",
-          "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-          "breaking": false
-        },
-        {
-          "sha": "a84eb9e5b65364a4c3fdf25751446637b41a9a8f",
-          "subject": "feat(desktop): badge the Assistant tab with its unread inbox count",
-          "summary": "The Desktop app preloads the Assistant once signed in and badges the Assistant tab with its unread inbox count, retrying a failed background load when the tab is opened.",
+          "sha": "7437dbccd251696fa4e0184b099a3c795880dc60",
+          "subject": "fix(guardian): keep answers to long agent questions in Jev's extended window",
+          "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "3d0d397cc9f0e615194b27dc68a8e195eafe6646": {
+    "7437dbccd251696fa4e0184b099a3c795880dc60": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Fixes background conversation summarization so that later in-place message updates, such as final-status markers and runtime error details, are no longer lost from the stored transcript.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "879f626cba5f20441c3d7d28261049c0b16594a7": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a84eb9e5b65364a4c3fdf25751446637b41a9a8f": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The Desktop app preloads the Assistant once signed in and badges the Assistant tab with its unread inbox count, retrying a failed background load when the tab is opened.",
+      "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
