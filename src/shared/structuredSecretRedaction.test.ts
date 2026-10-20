@@ -187,6 +187,54 @@ describe("structured secret redaction", () => {
     );
   });
 
+  it("redacts env-style *_KEY names and known provider key values", () => {
+    const openRouter = `sk-or-v1-${"a1".repeat(32)}`;
+    const input = [
+      "[env]",
+      `OPENROUTER_DEV_KEY = "${openRouter}"`,
+      'GRAM_ENCRYPTION_KEY = "c2VjcmV0LWVuY3J5cHRpb24ta2V5LTMyLWJ5dGVzIQ=="',
+      'TUNNEL_LOCAL_KEY = "tunnel-secret"',
+      'DB_PASSWORD = "db-secret"',
+      'SSH_PUBLIC_KEY = "ssh-ed25519 visible"',
+      'SORT_ORDER = "visible-order"',
+      `UNRELATED = "${openRouter}"`,
+      "",
+      "[tools]",
+      'node = "22"',
+    ].join("\n");
+
+    const result = redactStructuredSecrets("/workspace/mise.local.toml", input);
+
+    expect(result.status).toBeUndefined();
+    expect(result.redactedKeys).toEqual([
+      "DB_PASSWORD",
+      "GRAM_ENCRYPTION_KEY",
+      "OPENROUTER_DEV_KEY",
+      "TUNNEL_LOCAL_KEY",
+      "UNRELATED",
+    ]);
+    expect(result.content).not.toContain(openRouter);
+    expect(result.content).not.toContain("c2VjcmV0");
+    expect(result.content).not.toContain("tunnel-secret");
+    expect(result.content).toContain('SSH_PUBLIC_KEY = "ssh-ed25519 visible"');
+    expect(result.content).toContain('SORT_ORDER = "visible-order"');
+    expect(result.content).toContain('node = "22"');
+
+    const jsonc = JSON.stringify({
+      mcpServers: {
+        demo: {
+          env: { OPENROUTER_DEV_KEY: "dev-secret", LOG_LEVEL: "debug" },
+          note: `ghp_${"x".repeat(36)}`,
+        },
+      },
+    });
+    const jsonResult = redactStructuredSecrets("/workspace/.mcp.json", jsonc);
+    expect(jsonResult.redactedKeys).toEqual(["OPENROUTER_DEV_KEY", "note"]);
+    expect(jsonResult.content).not.toContain("dev-secret");
+    expect(jsonResult.content).not.toContain("ghp_");
+    expect(jsonResult.content).toContain('"LOG_LEVEL":"debug"');
+  });
+
   it("redacts eligible mise TOML secrets while preserving valid TOML and line count", () => {
     const input = [
       "# Local development credentials",

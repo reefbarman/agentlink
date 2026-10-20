@@ -143,6 +143,33 @@ export function isHighConfidenceSecretKey(key: string): boolean {
 }
 
 /**
+ * Environment-variable style names (`OPENROUTER_DEV_KEY`, `GRAM_ENCRYPTION_KEY`,
+ * `DB_PASSWORD`) appear in mise `[env]` tables and MCP `env` maps. In that
+ * SCREAMING_SNAKE convention a `_KEY`/`_SECRET`/`_PASSWORD` suffix almost
+ * always names a credential, so match the suffix rather than a fixed prefix
+ * list. Public keys stay readable.
+ */
+function isEnvStyleSecretName(key: string): boolean {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) return false;
+  if (/(?:^|_)PUBLIC_KEYS?$/.test(key)) return false;
+  if (/^(?:MAX|NUM)_TOKENS?$/.test(key)) return false;
+  return /_(?:KEYS?|TOKENS?|SECRETS?|PASSWORDS?|PASSWD|PASS|PAT|CREDENTIALS?)$/.test(
+    key,
+  );
+}
+
+/**
+ * Well-known provider credential prefixes. A value with one of these shapes is
+ * redacted regardless of the key that holds it.
+ */
+const KNOWN_SECRET_VALUE =
+  /^(?:"""|'''|"|')?(?:sk-(?:or-v1-|ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})/;
+
+function isKnownSecretValueLiteral(rawLiteral: string): boolean {
+  return KNOWN_SECRET_VALUE.test(rawLiteral);
+}
+
+/**
  * HTTP header maps use arbitrary header names, so a credential such as
  * `Gram-Key` misses the generic key rules. Inside a header container, redact
  * only credential-like header names; ordinary headers stay readable. Maps of
@@ -282,11 +309,19 @@ class JsoncSecretScanner {
       this.index += 1;
       this.skipTrivia();
       const valueStart = this.index;
-      const sensitive =
+      const sensitiveKey =
         collectSecrets &&
         (isHighConfidenceSecretKey(key.value) ||
+          isEnvStyleSecretName(key.value) ||
           isSecretHeaderEntry(parentKey, key.value));
-      const valueEnd = this.parseValue(collectSecrets && !sensitive, key.value);
+      const valueEnd = this.parseValue(
+        collectSecrets && !sensitiveKey,
+        key.value,
+      );
+      const sensitive =
+        sensitiveKey ||
+        (collectSecrets &&
+          isKnownSecretValueLiteral(this.text.slice(valueStart, valueEnd)));
       if (sensitive) {
         this.spans.push({ start: valueStart, end: valueEnd, key: key.value });
       }
@@ -356,10 +391,7 @@ function isTomlSecretPath(fullPath: readonly string[]): boolean {
 }
 
 function isTomlSecretKey(key: string): boolean {
-  if (isHighConfidenceSecretKey(key)) return true;
-  return (
-    /^[A-Z][A-Z0-9_]*_TOKENS?$/.test(key) && !/^(?:MAX|NUM)_TOKENS?$/.test(key)
-  );
+  return isHighConfidenceSecretKey(key) || isEnvStyleSecretName(key);
 }
 
 class TomlSecretScanner {
@@ -457,7 +489,12 @@ class TomlSecretScanner {
     const start = this.index;
     this.parseValue(fullPath, collectSecrets && !sensitive);
     const end = this.index;
-    if (sensitive) this.spans.push({ start, end, key });
+    if (
+      sensitive ||
+      (collectSecrets && isKnownSecretValueLiteral(this.text.slice(start, end)))
+    ) {
+      this.spans.push({ start, end, key });
+    }
     this.skipInlineTrivia();
     if (this.text[this.index] === "#") this.skipComment();
     if (
@@ -577,7 +614,13 @@ class TomlSecretScanner {
       const start = this.index;
       this.parseValue(fullPath, collectSecrets && !sensitive);
       const end = this.index;
-      if (sensitive) this.spans.push({ start, end, key });
+      if (
+        sensitive ||
+        (collectSecrets &&
+          isKnownSecretValueLiteral(this.text.slice(start, end)))
+      ) {
+        this.spans.push({ start, end, key });
+      }
       this.skipInlineTrivia();
       if (this.text[this.index] === ",") this.index += 1;
       else if (this.text[this.index] === "}") {
