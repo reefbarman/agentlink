@@ -70,6 +70,9 @@ jobs:
 
   package:
     needs: verify
+    # Holds the Apple Development certificate. Its deployment policy limits
+    # the signing secrets to main and desktop-v* tags.
+    environment: desktop-signing
     strategy:
       fail-fast: false
       matrix:
@@ -115,13 +118,57 @@ jobs:
           extract_package "${LANCEDB_PACKAGE}@${LANCEDB_VERSION}"
           extract_package "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
 
+      - name: Import desktop signing certificate
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_DEV_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_DEV_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12_BASE64" ] || [ -z "$MACOS_CERT_PASSWORD" ]; then
+            echo "::error::MACOS_DEV_CERT_P12_BASE64 and MACOS_DEV_CERT_PASSWORD must be set in the desktop-signing environment."
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/agentlink-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          CERT="$RUNNER_TEMP/agentlink-signing.p12"
+          WWDR="$RUNNER_TEMP/AppleWWDRCAG3.cer"
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT"
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$WWDR"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$WWDR" -k "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$CERT"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          echo "AGENTLINK_SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Package standalone desktop app
         env:
-          AGENTLINK_MAC_SIGNING: unsigned
+          AGENTLINK_MAC_SIGNING: development
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: |
           npm run build
           npm run package --workspace @agentlink/desktop -- --target "$AGENTLINK_VSCE_TARGET"
+
+      - name: Verify release signature
+        # Must match DESKTOP_RELEASE_TEAM_ID in apps/desktop/src/desktopReleaseInstall.ts,
+        # which the in-app updater checks.
+        run: |
+          for APP in desktop-releases/mac*/AgentLink.app; do
+            codesign --verify --deep --strict \
+              '-R=anchor apple generic and identifier "com.agentlink.desktop" and certificate leaf[subject.OU] = "J2896P4NN3"' \
+              "$APP"
+            codesign -dv "$APP" 2>&1 | grep -E '^(Identifier|TeamIdentifier)='
+          done
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          if [ -n "${AGENTLINK_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$AGENTLINK_SIGNING_KEYCHAIN" || true
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
@@ -180,7 +227,7 @@ jobs:
           {
             node scripts/release-coordinator.mjs notes --unit desktop --version "$VERSION" && printf '\n' || true
             printf '%s\n\n' 'Standalone AgentLink Desktop preview for macOS Apple Silicon. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop`, or download the `arm64` DMG. Intel Macs are no longer supported.'
-            printf '%s\n' "This preview is unsigned and not notarized. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with \`xattr -dr com.apple.quarantine AgentLink.app\` after extraction."
+            printf '%s\n' "This preview is signed with an Apple Development certificate (Team ID J2896P4NN3) but not notarised, so macOS still asks you to confirm the first launch. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with \`xattr -dr com.apple.quarantine AgentLink.app\` after extraction."
           } > notes.md
           node scripts/release-publish.mjs \
             --tag "desktop-v${VERSION}" --target "$TARGET" \

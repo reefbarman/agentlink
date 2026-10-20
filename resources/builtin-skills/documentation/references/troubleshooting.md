@@ -13,7 +13,11 @@ See [installation](getting-started.md#install) for commands and [platform notes]
 
 ## Desktop or CLI preview will not open on macOS
 
-Desktop and CLI GitHub releases are unsigned and not notarised. Download the build for your Mac (Desktop and CLI: Apple Silicon only; Intel Macs are no longer supported). For Desktop, open the DMG, drag the app to Applications, then right-click **AgentLink** and choose **Open** if macOS warns about the first launch. For CLI, verify the archive against its release `.sha256` file before extracting, keep the extracted directory intact, and run its `bin/agentlink` launcher. See [Desktop setup](getting-started.md#standalone-desktop-preview) and [CLI installation](standalone-cli.md#github-release-preview). The local development-signed CLI installer deliberately rejects the unsigned public preview archive.
+Desktop GitHub releases are signed with an Apple Development certificate but not notarised; CLI releases are unsigned and not notarised. Download the build for your Mac (Desktop and CLI: Apple Silicon only; Intel Macs are no longer supported). For Desktop, open the DMG, drag the app to Applications, then right-click **AgentLink** and choose **Open** if macOS warns about the first launch. For CLI, verify the archive against its release `.sha256` file before extracting, keep the extracted directory intact, and run its `bin/agentlink` launcher. See [Desktop setup](getting-started.md#standalone-desktop-preview) and [CLI installation](standalone-cli.md#github-release-preview). The local development-signed CLI installer deliberately rejects the unsigned public preview archive.
+
+## Desktop's Assistant view cannot connect
+
+If **Could not reach the Assistant** appears while a browser on the same Mac opens the Assistant address fine, macOS is probably blocking Desktop's **Local Network** access. Open **System Settings → Privacy & Security → Local Network**, turn **AgentLink** off and on, then quit Desktop with **⌘Q** and reopen it. A generic icon next to that entry means it belongs to a differently signed copy of the app, which happens after replacing an unsigned build. If AgentLink is missing from the list, reopen Desktop and choose **Allow** when macOS asks. Signed releases keep this permission across updates. For certificate errors instead, see the Assistant view section in [Desktop setup](getting-started.md#standalone-desktop-preview).
 
 ## The chat says a model needs setup
 

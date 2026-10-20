@@ -244,7 +244,7 @@ case "$SURFACE" in
     open "$DOWNLOADS/$FILENAME"
     echo ""
     echo "Opened $DOWNLOADS/$FILENAME. Drag AgentLink to Applications."
-    echo "This preview is unsigned and not notarised. On first launch, right-click AgentLink, choose Open, and confirm."
+    echo "This preview is development-signed but not notarised. On first launch, right-click AgentLink, choose Open, and confirm."
     ;;
 
   cli)

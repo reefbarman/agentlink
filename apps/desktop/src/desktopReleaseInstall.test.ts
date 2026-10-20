@@ -16,6 +16,7 @@ import type { DesktopBridge } from "../../../src/shared/desktopBridge.js";
 import type { ReleaseUpdateCandidate } from "../../../src/updates/releaseUpdateTypes.js";
 import {
   checkDesktopUpdatePreconditions,
+  DESKTOP_RELEASE_TEAM_ID,
   DesktopReleaseInstaller,
   drainDesktopUpdateHelper,
   verifyDesktopUpdateBundle,
@@ -417,6 +418,53 @@ describe.skipIf(process.platform !== "darwin")("Desktop release host", () => {
       expect(f.options.quit).not.toHaveBeenCalled();
     },
   );
+
+  it("accepts a staged update signed by the release Team ID after strict verification", async () => {
+    const f = await fixture();
+    const original = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) =>
+      file.endsWith("codesign") &&
+      args[0] === "-dv" &&
+      args[1].includes(".agentlink-update-")
+        ? `TeamIdentifier=${DESKTOP_RELEASE_TEAM_ID}`
+        : original(file, args),
+    );
+    expect((await f.installer.install()).phase).toBe("ready_to_restart");
+    expect(f.run).toHaveBeenCalledWith("/usr/bin/codesign", [
+      "--verify",
+      "--deep",
+      "--strict",
+      expect.stringContaining(
+        `certificate leaf[subject.OU] = "${DESKTOP_RELEASE_TEAM_ID}"`,
+      ),
+      expect.stringContaining(".agentlink-update-"),
+    ]);
+  });
+
+  it("rejects a release Team ID update whose seal fails verification", async () => {
+    const f = await fixture();
+    const original = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) => {
+      if (
+        file.endsWith("codesign") &&
+        args.at(-1)!.includes(".agentlink-update-")
+      ) {
+        if (args[0] === "-dv") {
+          throw Object.assign(new Error("seal"), {
+            stderr: `invalid signature\nTeamIdentifier=${DESKTOP_RELEASE_TEAM_ID}`,
+          });
+        }
+        throw new Error("a sealed resource is missing or invalid");
+      }
+      return original(file, args);
+    });
+    expect(await f.installer.install()).toMatchObject({
+      phase: "failed",
+    });
+    await expect(readFile(f.pendingPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it("updates a locally signed build to the unsigned release after warning", async () => {
     const f = await fixture();

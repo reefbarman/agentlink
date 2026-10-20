@@ -24,6 +24,9 @@ mac:
   # A hardened runtime would also need the com.apple.security.device.audio-input entitlement.
   extendInfo:
     NSMicrophoneUsageDescription: AgentLink uses the microphone when you dictate a message with the composer mic button.
+    # Shown when macOS asks for Local Network access, needed to reach a
+    # self-hosted Assistant on the LAN (for example https://agentlink-assistant.local:8443).
+    NSLocalNetworkUsageDescription: AgentLink connects to your self-hosted AgentLink Assistant and other AgentLink services on your local network.
   target:
     - dmg
     - zip

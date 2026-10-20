@@ -57,6 +57,7 @@ import type { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateSer
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import { createDesktopReleaseUpdateService } from "./desktopReleaseUpdates.js";
 import {
+  DESKTOP_RELEASE_TEAM_ID,
   DesktopReleaseInstaller,
   drainDesktopUpdateHelper,
 } from "./desktopReleaseInstall.js";
@@ -583,9 +584,12 @@ async function prepareReleaseUpdateService(): Promise<void> {
           type: "warning",
           title: "Install Desktop update",
           message: `Download and prepare AgentLink Desktop ${version}?`,
-          detail: localTeamId
-            ? `This replaces your locally signed build (Team ID ${localTeamId}) with the unsigned release preview. macOS will ask for Keychain access again (choose Always Allow), and permissions granted to the local build may need to be granted again. Run npm run desktop:install to switch back to a local build. The download checksum verifies integrity, not publisher authenticity. Restart is a separate confirmation.`
-            : "This installs an unsigned preview. The download checksum verifies integrity, not publisher authenticity. Keychain access may be requested again. Restart is a separate confirmation.",
+          detail:
+            localTeamId === DESKTOP_RELEASE_TEAM_ID
+              ? `This installs the release preview, signed with the same Apple Development certificate (Team ID ${localTeamId}) as this app, so Keychain and Local Network permissions carry over. The preview is not notarised. Restart is a separate confirmation.`
+              : localTeamId
+                ? `This replaces your locally signed build (Team ID ${localTeamId}) with the release preview, which is signed by Team ID ${DESKTOP_RELEASE_TEAM_ID} (or unsigned for older releases) and not notarised. macOS will ask for Keychain access again (choose Always Allow), and permissions granted to the local build, such as Local Network access, may need to be granted again. Run npm run desktop:install to switch back to a local build. Restart is a separate confirmation.`
+                : `This installs a release preview signed with an Apple Development certificate (Team ID ${DESKTOP_RELEASE_TEAM_ID}) and not notarised. Because this copy is unsigned, macOS may ask for Keychain access again and permissions such as Local Network access may need to be granted once more. Later updates keep them. Restart is a separate confirmation.`,
           buttons: ["Install update", "Cancel"],
           defaultId: 0,
           cancelId: 1,

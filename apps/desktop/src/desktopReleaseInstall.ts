@@ -64,11 +64,23 @@ export function desktopBundlePath(executable: string): string {
   return executable.slice(0, -suffix.length);
 }
 
+/**
+ * Team ID of the Apple Development certificate that signs published Desktop
+ * previews (and the maintainer's local builds). Signing keeps macOS
+ * permissions such as Local Network and Keychain access across updates. The
+ * previews are not notarised. Older previews were unsigned and stay
+ * installable.
+ */
+export const DESKTOP_RELEASE_TEAM_ID = "J2896P4NN3";
+
+/** Code requirement a signed staged update must satisfy. */
+const DESKTOP_RELEASE_REQUIREMENT = `=anchor apple generic and identifier "com.agentlink.desktop" and certificate leaf[subject.OU] = "${DESKTOP_RELEASE_TEAM_ID}"`;
+
 async function readTeamIdentifier(
   bundle: string,
   run: DesktopUpdateCommand,
 ): Promise<string | undefined> {
-  // codesign exits unsuccessfully for the intentionally unsigned CI previews.
+  // codesign exits unsuccessfully for unsigned previews.
   let signature: string;
   try {
     signature = await run("/usr/bin/codesign", ["-dv", bundle]);
@@ -87,23 +99,41 @@ async function readTeamIdentifier(
   return team && team !== "not set" ? team : undefined;
 }
 
-async function requireUnsigned(
+/**
+ * A staged update is either an unsigned preview or carries a valid signature
+ * from the release Team ID. Any other signature, or a broken seal, is refused.
+ */
+async function requireReleaseSignature(
   bundle: string,
   run: DesktopUpdateCommand,
 ): Promise<void> {
-  if (await readTeamIdentifier(bundle, run)) {
+  const team = await readTeamIdentifier(bundle, run);
+  if (!team) return;
+  if (team !== DESKTOP_RELEASE_TEAM_ID) {
     throw new Error(
-      "The downloaded app has an unexpected Team ID signature. Release previews are unsigned.",
+      `The downloaded app is signed by an unexpected Team ID (${team}).`,
     );
+  }
+  try {
+    await run("/usr/bin/codesign", [
+      "--verify",
+      "--deep",
+      "--strict",
+      `-R${DESKTOP_RELEASE_REQUIREMENT}`,
+      bundle,
+    ]);
+  } catch {
+    throw new Error("The downloaded app's signature is not valid.");
   }
 }
 
 export interface DesktopUpdateTarget {
   bundle: string;
   /**
-   * Team ID of a locally signed build (npm run desktop:install). Updating
-   * replaces it with the unsigned release, so Keychain trust and other
-   * signature-bound grants must be re-approved.
+   * Team ID of a signed installed build. When it differs from the release
+   * Team ID, updating replaces it with a differently signed (or unsigned)
+   * release, so Keychain trust and other signature-bound grants must be
+   * re-approved.
    */
   localTeamId?: string;
 }
@@ -181,7 +211,7 @@ export async function verifyDesktopUpdateBundle(
   const architectures = await run("/usr/bin/lipo", ["-archs", executable]);
   if (!architectures.split(/\s+/).includes(arch === "x64" ? "x86_64" : arch))
     throw new Error("The staged app does not support this Mac's architecture.");
-  await requireUnsigned(bundle, run);
+  await requireReleaseSignature(bundle, run);
 }
 
 export async function drainDesktopUpdateHelper(options: {

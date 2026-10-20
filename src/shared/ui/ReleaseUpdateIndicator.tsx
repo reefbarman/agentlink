@@ -175,7 +175,11 @@ export function ReleaseUpdateIndicator({
           {state.identity.product !== "vscode" && (
             <p class="release-update-note">
               <i class="codicon codicon-shield" aria-hidden="true" />
-              <span>This preview is unsigned and not notarised.</span>
+              <span>
+                {state.identity.product === "desktop"
+                  ? "This preview is development-signed but not notarised."
+                  : "This preview is unsigned and not notarised."}
+              </span>
             </p>
           )}
           {installState && installState.phase !== "idle" && (

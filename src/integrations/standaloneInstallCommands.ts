@@ -37,7 +37,10 @@ export function registerStandaloneInstallCommands(): vscode.Disposable[] {
         {
           modal: true,
           detail:
-            "Published previews are unsigned and not notarised. Only proceed if you trust this release. " +
+            (product === "desktop"
+              ? "Published Desktop previews are signed with an Apple Development certificate but not notarised. "
+              : "Published CLI previews are unsigned and not notarised. ") +
+            "Only proceed if you trust this release. " +
             (product === "desktop"
               ? "Your browser will download the DMG for this Mac. Open it and drag AgentLink to Applications. Quit an existing Desktop app before replacing it. macOS may require right-click > Open on first launch."
               : "A visible terminal will download and checksum-verify the bundle, install under ~/.local/lib/agentlink, and link ~/.local/bin/agentlink. An existing launcher will not be replaced. Your shell profile, sessions, and credentials are not changed. macOS may block this unsigned preview."),

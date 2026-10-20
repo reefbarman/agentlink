@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/i
 
 You can also download the DMG from the [Desktop releases](https://github.com/reefbarman/agentlink/releases?q=desktop-v&expanded=true). Desktop binaries are not included in the VSIX.
 
-This preview is unsigned and not notarised. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm its first launch. See [Desktop setup and limitations](resources/builtin-skills/documentation/references/getting-started.md#standalone-desktop-preview).
+This preview is development-signed but not notarised. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm its first launch. See [Desktop setup and limitations](resources/builtin-skills/documentation/references/getting-started.md#standalone-desktop-preview).
 
 ### Try the standalone CLI preview
 
