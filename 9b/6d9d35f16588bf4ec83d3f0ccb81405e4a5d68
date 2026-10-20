@@ -1,0 +1,47 @@
+src/indexer/standalone/standaloneBoundary.test.ts
+  h_e08a86bb3a33a2 1-41
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 828-910
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 13-16,404-412
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 13
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 115-116,785-794
+src/indexer/standalone/StandaloneStructuralIndex.test.ts
+  h_e08a86bb3a33a2 1-301
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 198-206
+src/indexer/standalone/StandaloneStructuralIndex.ts
+  h_e08a86bb3a33a2 1-554
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 204-216,763-769,913,941-944
+  s_f538dbcd86d0a2::t_8582c960a427d8 945
+src/indexer/standalone/structuralIndexTools.ts
+  h_e08a86bb3a33a2 1-346
+resources/builtin-skills/documentation/references/release-notes.md
+  s_f538dbcd86d0a2::t_0fbf00aee4472a 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9b6d9d35f16588bf4ec83d3f0ccb81405e4a5d68",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f538dbcd86d0a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "629bcf05-ea01-4966-a06b-704a2e13b950",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
