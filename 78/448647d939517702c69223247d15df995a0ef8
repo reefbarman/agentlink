@@ -1,0 +1,52 @@
+apps/desktop/src/assistantPreload.ts
+  h_e08a86bb3a33a2 30-35
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 46-50
+apps/desktop/src/assistantPreload.test.ts
+  h_e08a86bb3a33a2 67-68,72-73
+apps/desktop/src/DesktopAssistantView.test.ts
+  h_e08a86bb3a33a2 46-52,74-77,418-430,434-462
+  s_06077ddec1c8da::t_dcf89c68c8b5aa 431-433,463-465
+src/browser-gateway/webview/DesktopSidebar.test.tsx
+  h_e08a86bb3a33a2 47-70
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 166-167,232,279-281,288-290,292-297
+  s_06077ddec1c8da::t_d104ab089e0baf 282-283
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 2256,2262,8805,8807-8812,9497-9498
+  s_40418b44f751f6::t_f0c5b31fc05b56 8804,9499
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 773-779,992-993
+apps/desktop/src/DesktopAssistantView.ts
+  h_e08a86bb3a33a2 82-83,132,327-330,441-452,457,461,463-476,478-481
+  s_06077ddec1c8da::t_d1956ce513b078 453-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78448647d939517702c69223247d15df995a0ef8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_06077ddec1c8da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f116b597-eccb-4cc0-8ccc-d1e6a5d94691",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_40418b44f751f6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c8bde9ab-6df6-483e-af06-4cc16257af2e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
