@@ -1,0 +1,53 @@
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 73-75,121-146,149,155-171,230
+  s_02b63981a0ceee::t_f4ffd1edff557f 172
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 16-20
+apps/desktop/src/desktopReleaseInstall.ts
+  h_e08a86bb3a33a2 67-78,83,102-106,110-112,114,117-126,133-136,214
+  s_02b63981a0ceee::t_b326267ec85ee6 127
+apps/desktop/src/desktopReleaseInstall.test.ts
+  h_e08a86bb3a33a2 19,422-467
+  s_02b63981a0ceee::t_9ca23bb4e7b838 468
+README.md
+  h_e08a86bb3a33a2 99
+CHANGELOG.md
+  h_e08a86bb3a33a2 8-9
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 60,588-592
+  s_02b63981a0ceee::t_387aa657421d47 587
+apps/desktop/electron-builder.yml
+  h_e08a86bb3a33a2 27-29
+src/integrations/standaloneInstallCommands.ts
+  h_e08a86bb3a33a2 40-43
+src/shared/ui/ReleaseUpdateIndicator.tsx
+  h_e08a86bb3a33a2 179-181
+  s_02b63981a0ceee::t_bb99a73637728e 178,182
+scripts/install.sh
+  h_e08a86bb3a33a2 247
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 44,53,65,75,83,92
+resources/builtin-skills/documentation/references/release-notes.md
+  s_02b63981a0ceee::t_a0d71eef2194e0 8-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa01aa1ff20ebbaeb9982dd40c38a2af6351ad0c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02b63981a0ceee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a2e50dc5-c004-402e-877f-3054fdfb5c98",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
