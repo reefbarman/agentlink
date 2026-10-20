@@ -1,4 +1,8 @@
 import {
+  EXPECTED_KEYRING_VERSION,
+  verifyCliBundle,
+} from "./verify-cli-bundle.mjs";
+import {
   chmod,
   mkdir,
   mkdtemp,
@@ -14,7 +18,6 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { verifyCliBundle } from "./verify-cli-bundle.mjs";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const launcher =
@@ -32,7 +35,7 @@ async function fixture(root) {
       platform: "darwin-arm64",
       bundle: "agentlink.js",
       assets: { ripgrep: { path: "rg", sha256: digest("ripgrep") } },
-      runtimeDependencies: { "@napi-rs/keyring": "2.1.0" },
+      runtimeDependencies: { "@napi-rs/keyring": EXPECTED_KEYRING_VERSION },
       externalImports: ["@napi-rs/keyring"],
     }),
     LICENSE: "agentlink license",
@@ -45,12 +48,12 @@ async function fixture(root) {
     }),
     "dist/node_modules/@napi-rs/keyring/package.json": JSON.stringify({
       name: "@napi-rs/keyring",
-      version: "2.1.0",
+      version: EXPECTED_KEYRING_VERSION,
     }),
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json":
       JSON.stringify({
         name: "@napi-rs/keyring-darwin-arm64",
-        version: "2.1.0",
+        version: EXPECTED_KEYRING_VERSION,
       }),
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node":
       "addon",

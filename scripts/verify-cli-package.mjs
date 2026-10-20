@@ -1,6 +1,7 @@
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 const EXPECTED_FILES = [
   "package/LICENSE",
@@ -11,7 +12,14 @@ const EXPECTED_FILES = [
   "package/dist/runtime-manifest.json",
   "package/package.json",
 ];
-const EXPECTED_RUNTIME_DEPENDENCIES = { "@napi-rs/keyring": "2.1.0" };
+// The CLI manifest pins the Keychain runtime exactly; derive the expected
+// version from it so dependency bumps do not need matching verifier edits.
+const EXPECTED_KEYRING_VERSION = JSON.parse(
+  readFileSync(new URL("../apps/cli/package.json", import.meta.url), "utf8"),
+).dependencies["@napi-rs/keyring"];
+const EXPECTED_RUNTIME_DEPENDENCIES = {
+  "@napi-rs/keyring": EXPECTED_KEYRING_VERSION,
+};
 const EXPECTED_EXTERNAL_IMPORTS = ["@napi-rs/keyring"];
 export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "@alcalzone/ansi-tokenize": "0.3.0",
@@ -189,7 +197,9 @@ export function verifyCliPackage(manifest, files, runtimeManifest) {
     JSON.stringify(dependencies) !==
     JSON.stringify(EXPECTED_RUNTIME_DEPENDENCIES)
   ) {
-    errors.push("runtime dependencies must be exactly @napi-rs/keyring@2.1.0");
+    errors.push(
+      `runtime dependencies must be exactly @napi-rs/keyring@${EXPECTED_KEYRING_VERSION}`,
+    );
   }
 
   const sortedFiles = [...files].sort();

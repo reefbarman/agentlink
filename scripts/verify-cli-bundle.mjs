@@ -34,6 +34,12 @@ const required = [
 ];
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+// The CLI manifest pins the Keychain runtime exactly; derive the expected
+// version from it so dependency bumps do not need matching verifier edits.
+export const EXPECTED_KEYRING_VERSION = JSON.parse(
+  await readFile(new URL("../apps/cli/package.json", import.meta.url), "utf8"),
+).dependencies["@napi-rs/keyring"];
+
 export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   const manifest = JSON.parse(
     await readFile(path.join(root, "bundle-manifest.json"), "utf8"),
@@ -115,7 +121,8 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
     runtime.bundle !== "agentlink.js" ||
     runtime.assets?.ripgrep?.path !== "rg" ||
     runtime.assets.ripgrep.sha256 !== manifest.upstreamSha256.ripgrep ||
-    runtime.runtimeDependencies?.["@napi-rs/keyring"] !== "2.1.0" ||
+    runtime.runtimeDependencies?.["@napi-rs/keyring"] !==
+      EXPECTED_KEYRING_VERSION ||
     runtime.externalImports
       ?.filter((name) => !name.startsWith("node:") && !importBuiltin(name))
       .join(",") !== "@napi-rs/keyring"
@@ -141,9 +148,9 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   );
   if (
     keyring.name !== "@napi-rs/keyring" ||
-    keyring.version !== "2.1.0" ||
+    keyring.version !== EXPECTED_KEYRING_VERSION ||
     addon.name !== "@napi-rs/keyring-darwin-arm64" ||
-    addon.version !== "2.1.0"
+    addon.version !== EXPECTED_KEYRING_VERSION
   ) {
     throw new Error("Unexpected Keychain runtime package versions.");
   }

@@ -1,4 +1,8 @@
 import {
+  EXPECTED_KEYRING_VERSION,
+  verifyCliBundle,
+} from "../../scripts/verify-cli-bundle.mjs";
+import {
   chmod,
   copyFile,
   mkdir,
@@ -19,7 +23,6 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { stageKeychainRuntime } from "../../scripts/package-keychain-runtime.mjs";
-import { verifyCliBundle } from "../../scripts/verify-cli-bundle.mjs";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -96,7 +99,8 @@ export async function bundleCli() {
     sourceManifest.platform !== "darwin-arm64" ||
     sourceManifest.bundle !== "agentlink.js" ||
     sourceManifest.assets?.ripgrep?.path !== "rg" ||
-    sourceManifest.runtimeDependencies?.["@napi-rs/keyring"] !== "2.1.0"
+    sourceManifest.runtimeDependencies?.["@napi-rs/keyring"] !==
+      EXPECTED_KEYRING_VERSION
   ) {
     throw new Error(
       "Run node apps/cli/esbuild.mjs --package before bundling the CLI.",
