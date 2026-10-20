@@ -33,6 +33,11 @@ if (process.isMainFrame) {
       return () =>
         ipcRenderer.removeListener("agentlink:assistant-embed:chrome", handler);
     },
+    setUnread: (count) => {
+      if (Number.isSafeInteger(count) && count >= 0) {
+        ipcRenderer.send("agentlink:assistant-embed:unread", count);
+      }
+    },
   };
   contextBridge.exposeInMainWorld("agentlinkDesktopEmbed", bridge);
 }

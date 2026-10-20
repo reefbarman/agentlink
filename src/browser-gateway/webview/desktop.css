@@ -737,6 +737,7 @@
 .browser-shell.browser-shell-desktop .desktop-mode-navigation button {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 40px;
   padding: 10px 12px;
@@ -755,6 +756,17 @@
 .browser-shell.browser-shell-desktop .desktop-mode-navigation button:hover {
   color: var(--ag-accent-text-strong);
   background: var(--ag-accent-a15);
+}
+
+.browser-shell.browser-shell-desktop .desktop-mode-badge {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ag-accent);
+  color: var(--ag-accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
 }
 
 .browser-shell.browser-shell-desktop .assistant-launcher-row {
@@ -1662,7 +1674,12 @@
   transition: box-shadow 180ms ease;
 }
 
+/* Solid border while focused so the gradient's violet end does not show as a
+   faint line inside the teal focus ring. */
 .browser-shell.browser-shell-desktop .input-area:focus-within {
+  background:
+    var(--ag-composer-bg) padding-box,
+    linear-gradient(var(--ag-accent), var(--ag-accent)) border-box;
   box-shadow:
     0 8px 32px #00000030,
     0 0 0 2px var(--ag-accent),

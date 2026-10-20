@@ -161,6 +161,8 @@ interface DesktopSidebarProps {
   header?: ComponentChildren;
   /** Offer the Assistant as a view (the desktop's embedded Assistant tab). */
   assistantMode?: boolean;
+  /** The Assistant's unread inbox count, badged on its view button. */
+  assistantUnread?: number;
   /** Or a link to it, shown with the views (the browser gateway). */
   assistantLink?: ComponentChildren;
 }
@@ -224,6 +226,7 @@ export function DesktopSidebar({
   resizable = true,
   header,
   assistantMode = false,
+  assistantUnread = 0,
   assistantLink,
 }: DesktopSidebarProps) {
   const [search, setSearch] = useState("");
@@ -266,9 +269,19 @@ export function DesktopSidebar({
             <button
               type="button"
               aria-current={activeView === "assistant" ? "page" : undefined}
+              aria-label={
+                assistantUnread > 0
+                  ? `Assistant (${assistantUnread} unread)`
+                  : undefined
+              }
               onClick={() => onModeChange("assistant")}
             >
               <i class="codicon codicon-sparkle" aria-hidden="true" /> Assistant
+              {assistantUnread > 0 && (
+                <span class="desktop-mode-badge" aria-hidden="true">
+                  {assistantUnread > 99 ? "99+" : assistantUnread}
+                </span>
+              )}
             </button>
           )}
           {assistantLink}

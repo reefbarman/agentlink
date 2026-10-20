@@ -12,6 +12,40 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 afterEach(cleanup);
 
 describe("DesktopSidebar", () => {
+  it("badges the Assistant view with its unread inbox count", () => {
+    const { container, rerender } = render(
+      <DesktopSidebar
+        sessions={[]}
+        currentSessionId={null}
+        onSelect={() => undefined}
+        onNew={() => undefined}
+        onManage={() => undefined}
+        onModeChange={() => undefined}
+        assistantMode
+        assistantUnread={120}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Assistant (120 unread)" }),
+    ).toBeTruthy();
+    expect(container.querySelector(".desktop-mode-badge")?.textContent).toBe(
+      "99+",
+    );
+    rerender(
+      <DesktopSidebar
+        sessions={[]}
+        currentSessionId={null}
+        onSelect={() => undefined}
+        onNew={() => undefined}
+        onManage={() => undefined}
+        onModeChange={() => undefined}
+        assistantMode
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Assistant" })).toBeTruthy();
+    expect(container.querySelector(".desktop-mode-badge")).toBeNull();
+  });
+
   it("marks chats a scheduled job started", () => {
     const { container } = render(
       <DesktopSidebar

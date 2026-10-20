@@ -62,6 +62,9 @@ if (process.isMainFrame) {
             ? { error: state.error }
             : {}),
           ...(state.embedded === true ? { embedded: true } : {}),
+          ...(Number.isSafeInteger(state.unread) && (state.unread ?? 0) > 0
+            ? { unread: state.unread }
+            : {}),
         });
       };
       ipcRenderer.on("agentlink:assistant:state", handler);

@@ -31,6 +31,11 @@ export interface DesktopAssistantState {
    * sign-in, the shell keeps its own sidebar beside the Assistant.
    */
   embedded?: boolean;
+  /**
+   * The loaded Assistant page's unread inbox count, as it last reported it.
+   * Absent when zero, or before the page has loaded and reported.
+   */
+  unread?: number;
 }
 
 /** Shell layout the embedded Assistant mirrors so the two read as one app. */
@@ -50,6 +55,11 @@ export interface DesktopEmbedBridge {
   /** Switch the desktop to another view. */
   showView(mode: Exclude<DesktopMode, "assistant">): void;
   onChrome(listener: (chrome: DesktopAssistantChrome) => void): () => void;
+  /**
+   * Report the Assistant's unread inbox count so the desktop can badge its
+   * Assistant tab. Optional: older desktop builds do not offer it.
+   */
+  setUnread?(count: number): void;
 }
 
 export interface DesktopQuickAskMedia {

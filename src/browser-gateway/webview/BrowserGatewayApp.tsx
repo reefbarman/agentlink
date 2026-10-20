@@ -2262,6 +2262,12 @@ export function BrowserGatewayApp({
     desktopEmbed.ready();
     return stop;
   }, [desktopEmbed]);
+  // Let the desktop badge its Assistant tab while another view is showing.
+  const assistantInboxUnread = snapshot?.assistant?.inboxUnread;
+  useEffect(() => {
+    if (!desktopEmbed || assistantInboxUnread === undefined) return;
+    desktopEmbed.setUnread?.(assistantInboxUnread);
+  }, [desktopEmbed, assistantInboxUnread]);
   const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
     null,
   );
@@ -9475,6 +9481,7 @@ export function BrowserGatewayApp({
             activeView={desktopEmbed ? "assistant" : desktopMode}
             resizable={!desktopEmbed}
             assistantMode={desktopAssistantAvailable || Boolean(desktopEmbed)}
+            assistantUnread={desktopAssistant?.unread}
             assistantLink={
               browserShell && product !== "assistant" ? (
                 <AssistantLauncher />

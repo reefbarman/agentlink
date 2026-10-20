@@ -27,6 +27,7 @@ vi.mock("electron", async () => {
     setDevicePermissionHandler: vi.fn(),
     setCertificateVerifyProc: vi.fn(),
     closeAllConnections: vi.fn(async () => undefined),
+    cookies: { get: vi.fn(async (): Promise<unknown[]> => []) },
   });
   electron.fromPartition = vi.fn(() => electron.assistantSession);
   return {
@@ -118,6 +119,7 @@ describe("desktop Assistant view", () => {
     electron.openExternal.mockClear();
     electron.assistantSession.setCertificateVerifyProc.mockClear();
     electron.assistantSession.closeAllConnections.mockClear();
+    electron.assistantSession.cookies.get.mockReset().mockResolvedValue([]);
   });
   afterEach(() => {
     electron.ipc.removeAllListeners();
@@ -345,19 +347,80 @@ describe("desktop Assistant view", () => {
     );
     expect(views).toEqual([["agentlink:assistant:show-view", "ask"]]);
 
+    // The page's unread inbox count badges the shell's Assistant tab.
+    electron.ipc.emit("agentlink:assistant-embed:unread", f.sender, 9);
+    electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, -1);
+    electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, "3");
+    expect(f.lastState()).not.toHaveProperty("unread");
+    electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, 3);
+    expect(f.lastState()).toMatchObject({ embedded: true, unread: 3 });
+    electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, 0);
+    expect(f.lastState()).not.toHaveProperty("unread");
+    electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, 2);
+
     // A reload that keeps the bridge stays embedded; a page without it
     // (sign-in, an older Assistant) gives the sidebar back.
     page.emit("did-start-navigation", {}, `${ORIGIN}/`, false, true);
     electron.ipc.emit("agentlink:assistant-embed:ready", pageSender);
     page.emit("did-finish-load");
     expect(f.lastState()).toMatchObject({ embedded: true });
+    expect(f.lastState()).toMatchObject({ unread: 2 });
     page.emit("did-start-navigation", {}, `${ORIGIN}/pair`, false, true);
     page.emit("did-finish-load");
     expect(f.lastState()).not.toHaveProperty("embedded");
+    expect(f.lastState()).not.toHaveProperty("unread");
     f.assistant.dispose();
     expect(electron.ipc.listenerCount("agentlink:assistant-embed:ready")).toBe(
       0,
     );
+    expect(electron.ipc.listenerCount("agentlink:assistant-embed:unread")).toBe(
+      0,
+    );
+  });
+
+  it("loads a paired Assistant hidden at launch so its tab can show unread", async () => {
+    const unpaired = fixture();
+    await flush();
+    expect(unpaired.view.webContents.loadURL).not.toHaveBeenCalled();
+    unpaired.assistant.dispose();
+
+    electron.assistantSession.cookies.get.mockResolvedValue([
+      { name: "session" },
+    ]);
+    const f = fixture();
+    await flush();
+    expect(electron.assistantSession.cookies.get).toHaveBeenLastCalledWith({
+      url: `${ORIGIN}/`,
+    });
+    expect(f.view.webContents.loadURL).toHaveBeenCalledExactlyOnceWith(
+      `${ORIGIN}/`,
+    );
+    expect(f.lastState()).toMatchObject({ status: "ready" });
+    // Hidden until the Assistant view is chosen.
+    expect(f.view.setVisible).toHaveBeenLastCalledWith(false);
+    f.layout("assistant");
+    await flush();
+    expect(f.view.webContents.loadURL).toHaveBeenCalledOnce();
+    expect(f.view.setVisible).toHaveBeenLastCalledWith(true);
+    f.assistant.dispose();
+  });
+
+  it("retries a background failure when the Assistant view opens", async () => {
+    electron.assistantSession.cookies.get.mockResolvedValue([
+      { name: "session" },
+    ]);
+    const f = fixture();
+    f.view.webContents.loadURL.mockRejectedValueOnce(new Error("offline"));
+    await flush();
+    expect(f.lastState()).toMatchObject({
+      status: "unavailable",
+      error: "load",
+    });
+    f.layout("assistant");
+    await flush();
+    expect(f.view.webContents.loadURL).toHaveBeenCalledTimes(2);
+    expect(f.lastState()).toMatchObject({ status: "ready" });
+    f.assistant.dispose();
   });
 
   it("reloads with fresh connections when Settings change the address or CA", async () => {

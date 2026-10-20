@@ -77,6 +77,10 @@ export class DesktopAssistantView {
   /** Whether the current document has said so; reset per navigation. */
   private readyThisLoad = false;
   private chrome: DesktopAssistantChrome = { sidebarOpen: true };
+  /** The page's last reported unread inbox count, for the tab badge. */
+  private unread = 0;
+  /** The last failure happened while another view showed; opening retries. */
+  private failedInBackground = false;
 
   constructor(
     private readonly window: BrowserWindow,
@@ -123,7 +127,10 @@ export class DesktopAssistantView {
     // gets the shell's sidebar back. Checked after load, not at navigation
     // start, so reloads of the app itself do not flash the shell sidebar.
     contents.on("did-finish-load", () => {
-      if (!this.readyThisLoad) this.setEmbedded(false);
+      if (!this.readyThisLoad) {
+        this.unread = 0;
+        this.setEmbedded(false);
+      }
     });
     contents.setWindowOpenHandler(({ url }) => {
       if (this.isAssistantUrl(url)) void contents.loadURL(url);
@@ -161,10 +168,40 @@ export class DesktopAssistantView {
     ipcMain.on("agentlink:assistant:chrome", this.onChrome);
     ipcMain.on("agentlink:assistant-embed:ready", this.onEmbedReady);
     ipcMain.on("agentlink:assistant-embed:show-view", this.onShowView);
+    ipcMain.on("agentlink:assistant-embed:unread", this.onUnread);
     window.on("resize", this.onResize);
     window.on("closed", this.dispose);
     window.webContents.on("zoom-changed", this.onResize);
     window.webContents.on("did-start-navigation", this.onShellNavigation);
+    void this.preloadIfPaired();
+  }
+
+  /**
+   * Load the Assistant hidden, so its tab can show the unread inbox badge
+   * and opens instantly. Only once this desktop has signed in to it before
+   * (its session holds cookies for the address): people who never use an
+   * Assistant make no connection at launch.
+   */
+  private async preloadIfPaired(): Promise<void> {
+    const origin = this.config.origin;
+    let paired = false;
+    try {
+      const cookies = await this.assistantSession.cookies.get({
+        url: `${origin}/`,
+      });
+      paired = cookies.length > 0;
+    } catch {
+      paired = false;
+    }
+    if (
+      !paired ||
+      this.disposed ||
+      this.loaded ||
+      this.loading ||
+      this.config.origin !== origin
+    )
+      return;
+    void this.load();
   }
 
   /** Apply new Settings: reload if the address or pinned CA changed. */
@@ -181,9 +218,11 @@ export class DesktopAssistantView {
     void this.assistantSession.closeAllConnections().catch(() => undefined);
     this.loaded = false;
     this.embedded = false;
+    this.unread = 0;
     this.error = undefined;
     this.setStatus("idle");
     if (this.layout.mode === "assistant") void this.load();
+    else void this.preloadIfPaired();
   }
 
   private readonly verifyCertificate = (
@@ -255,6 +294,15 @@ export class DesktopAssistantView {
     this.window.webContents.send("agentlink:assistant:show-view", mode);
   };
 
+  private readonly onUnread = (event: IpcMainEvent, count: unknown): void => {
+    if (!this.isAssistantSender(event)) return;
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+      return;
+    if (this.unread === count) return;
+    this.unread = count;
+    this.publish();
+  };
+
   private readonly onChrome = (event: IpcMainEvent, value: unknown): void => {
     if (
       !isTrustedDesktopSender(event, this.window, this.shellOrigin) ||
@@ -294,7 +342,7 @@ export class DesktopAssistantView {
     if (
       value.mode === "assistant" &&
       !this.loaded &&
-      this.error === undefined
+      (this.error === undefined || this.failedInBackground)
     ) {
       void this.load();
     }
@@ -328,6 +376,7 @@ export class DesktopAssistantView {
     if (this.disposed || this.loading) return;
     this.loading = true;
     this.certificateRejected = false;
+    this.failedInBackground = false;
     this.error = undefined;
     this.setStatus("connecting");
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -358,6 +407,8 @@ export class DesktopAssistantView {
     if (this.disposed) return;
     this.loaded = false;
     this.embedded = false;
+    this.unread = 0;
+    this.failedInBackground = this.layout.mode !== "assistant";
     this.error = error;
     this.setStatus("unavailable");
   }
@@ -370,6 +421,7 @@ export class DesktopAssistantView {
       pinned: this.config.ca !== undefined,
       ...(this.error ? { error: this.error } : {}),
       ...(this.embedded ? { embedded: true } : {}),
+      ...(this.unread > 0 ? { unread: this.unread } : {}),
     };
     this.window.webContents.send("agentlink:assistant:state", state);
   }
@@ -410,6 +462,7 @@ export class DesktopAssistantView {
       "agentlink:assistant-embed:show-view",
       this.onShowView,
     );
+    ipcMain.removeListener("agentlink:assistant-embed:unread", this.onUnread);
     this.window.removeListener("resize", this.onResize);
     this.window.removeListener("closed", this.dispose);
     this.assistantSession.setCertificateVerifyProc(null);
