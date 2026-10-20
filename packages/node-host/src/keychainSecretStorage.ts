@@ -53,6 +53,10 @@ export async function createKeychainSecretStorage(
   let cacheInitialized = false;
   let cachedValue: string | undefined;
   let cachedRevision: string | null = null;
+  // @napi-rs/keyring 2.1+ reports a missing entry as null; earlier versions
+  // used undefined. Normalize so callers only ever see undefined.
+  const readPassword = async (): Promise<string | undefined> =>
+    (await entry.getPassword()) ?? undefined;
 
   return {
     async get() {
@@ -66,7 +70,7 @@ export async function createKeychainSecretStorage(
           return cachedValue;
         }
 
-        const value = await entry.getPassword();
+        const value = await readPassword();
         const revisionAfter = await readRevision(revisionPath);
         if (revisionBefore !== revisionAfter) continue;
         if (!isPendingRevision(revisionAfter)) {
@@ -76,7 +80,7 @@ export async function createKeychainSecretStorage(
         }
         return value;
       }
-      return await entry.getPassword();
+      return await readPassword();
     },
     async store(value) {
       const revision = randomUUID();

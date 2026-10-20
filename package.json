@@ -1314,7 +1314,7 @@
     "zod-to-json-schema": "^3.25.2"
   },
   "overrides": {
-    "dompurify": "^3.4.11",
+    "dompurify": "$dompurify",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
