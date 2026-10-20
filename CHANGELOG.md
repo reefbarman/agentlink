@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.50.2
+
 - `find_and_replace` (and `rename_symbol`) no longer report success when the change never reached disk. When VS Code held the file under a differently cased path, for example on an SMB share mounted under `/Volumes`, the replacement stayed unsaved in the editor while the tool returned `applied`, and the next search then missed text that was still on disk. Saves now follow the documents the edit actually changed, and the tool reports a save failure unless the file on disk matches.
 - `apply_diff` and `write_file` now accept an editor whose path differs from the requested path only in letter case. Previously they refused with "Review editor does not match the target file" on case-insensitive volumes such as SMB shares.
 - Settings and `mise` config reads and searches now also redact environment-style names ending in `_KEY`, `_SECRET` or `_PASSWORD` (for example `OPENROUTER_DEV_KEY` or `GRAM_ENCRYPTION_KEY`), and any value with a well-known provider key prefix such as `sk-` or `ghp_`. Previously these were returned in full.

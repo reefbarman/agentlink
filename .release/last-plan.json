@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e0fc0dabeda3e5a26573103fb2d803f1496c838f",
-  "createdAt": "2026-10-20T08:00:38.632Z",
+  "sourceSha": "7ccf3197a6817536f4480f9796858a3796f3ddc0",
+  "createdAt": "2026-10-20T08:27:21.988Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,175 +10,133 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.50.0",
-      "baselineRef": "v1.50.0",
-      "reserved": "1.50.0",
+      "published": "1.50.1",
+      "baselineRef": "v1.50.1",
+      "reserved": "1.50.1",
       "commits": [
-        "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-        "58afdf99713a5a3eb90e76d6f2388dfa048b5750"
+        "dc929a9f979e84b5760e46a21e892141ee8f8122",
+        "7ccf3197a6817536f4480f9796858a3796f3ddc0"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.50.1",
+      "version": "1.50.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.50.1",
+      "tag": "v1.50.2",
       "notes": [
         {
-          "sha": "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 8 updates",
-          "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
+          "sha": "dc929a9f979e84b5760e46a21e892141ee8f8122",
+          "subject": "fix(redaction): redact env-style *_KEY names and known provider key values",
+          "summary": "Settings and mise config redaction now also hides environment-style names ending in _KEY, _TOKEN, _SECRET or _PASSWORD and values with well-known provider key prefixes, which were previously returned in full.",
           "breaking": false
         },
         {
-          "sha": "58afdf99713a5a3eb90e76d6f2388dfa048b5750",
-          "subject": "fix(cli): derive the Keychain runtime version from the CLI manifest",
-          "summary": "CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.",
+          "sha": "7ccf3197a6817536f4480f9796858a3796f3ddc0",
+          "subject": "fix(edit): save and match documents by file identity, not path string",
+          "summary": "Edits to files on case-insensitive volumes such as SMB shares now save correctly and are verified on disk, and apply_diff no longer refuses when the path casing differs from the open document.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.36.0",
-      "baselineRef": "desktop-v0.36.0",
-      "reserved": "0.36.0",
+      "published": "0.36.1",
+      "baselineRef": "desktop-v0.36.1",
+      "reserved": "0.36.1",
       "commits": [
-        "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-        "58afdf99713a5a3eb90e76d6f2388dfa048b5750"
+        "dc929a9f979e84b5760e46a21e892141ee8f8122",
+        "7ccf3197a6817536f4480f9796858a3796f3ddc0"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.36.1",
+      "version": "0.36.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.36.1",
+      "tag": "desktop-v0.36.2",
       "notes": [
         {
-          "sha": "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 8 updates",
-          "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
+          "sha": "dc929a9f979e84b5760e46a21e892141ee8f8122",
+          "subject": "fix(redaction): redact env-style *_KEY names and known provider key values",
+          "summary": "Settings and mise config redaction now also hides environment-style names ending in _KEY, _TOKEN, _SECRET or _PASSWORD and values with well-known provider key prefixes, which were previously returned in full.",
           "breaking": false
         },
         {
-          "sha": "58afdf99713a5a3eb90e76d6f2388dfa048b5750",
-          "subject": "fix(cli): derive the Keychain runtime version from the CLI manifest",
-          "summary": "CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.",
+          "sha": "7ccf3197a6817536f4480f9796858a3796f3ddc0",
+          "subject": "fix(edit): save and match documents by file identity, not path string",
+          "summary": "Edits to files on case-insensitive volumes such as SMB shares now save correctly and are verified on disk, and apply_diff no longer refuses when the path casing differs from the open document.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.26.1",
-      "baselineRef": "cli-v0.26.1",
-      "reserved": "0.26.1",
-      "commits": [
-        "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-        "58afdf99713a5a3eb90e76d6f2388dfa048b5750"
-      ],
+      "published": "0.26.2",
+      "baselineRef": "cli-v0.26.2",
+      "reserved": "0.26.2",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.26.2",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.26.2",
-      "notes": [
-        {
-          "sha": "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 8 updates",
-          "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
-          "breaking": false
-        },
-        {
-          "sha": "58afdf99713a5a3eb90e76d6f2388dfa048b5750",
-          "subject": "fix(cli): derive the Keychain runtime version from the CLI manifest",
-          "summary": "CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.17.1",
-      "baselineRef": "sdk-v0.17.1",
-      "reserved": "0.17.1",
-      "commits": ["a7281d90201c9bff48f4310a6938b56c0f1f471b"],
+      "published": "0.17.2",
+      "baselineRef": "sdk-v0.17.2",
+      "reserved": "0.17.2",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.17.2",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.17.2",
-      "notes": [
-        {
-          "sha": "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 8 updates",
-          "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.8.0",
-      "baselineRef": "assistant-v0.8.0",
-      "reserved": "0.8.0",
-      "commits": [
-        "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-        "58afdf99713a5a3eb90e76d6f2388dfa048b5750"
-      ],
+      "published": "0.8.1",
+      "baselineRef": "assistant-v0.8.1",
+      "reserved": "0.8.1",
+      "commits": ["dc929a9f979e84b5760e46a21e892141ee8f8122"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.8.1",
+      "tag": "assistant-v0.8.2",
       "notes": [
         {
-          "sha": "a7281d90201c9bff48f4310a6938b56c0f1f471b",
-          "subject": "chore(deps): bump the minor-and-patch group across 1 directory with 8 updates",
-          "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
-          "breaking": false
-        },
-        {
-          "sha": "58afdf99713a5a3eb90e76d6f2388dfa048b5750",
-          "subject": "fix(cli): derive the Keychain runtime version from the CLI manifest",
-          "summary": "CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.",
+          "sha": "dc929a9f979e84b5760e46a21e892141ee8f8122",
+          "subject": "fix(redaction): redact env-style *_KEY names and known provider key values",
+          "summary": "Settings and mise config redaction now also hides environment-style names ending in _KEY, _TOKEN, _SECRET or _PASSWORD and values with well-known provider key prefixes, which were previously returned in full.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "a7281d90201c9bff48f4310a6938b56c0f1f471b": {
+    "dc929a9f979e84b5760e46a21e892141ee8f8122": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.",
+      "summary": "Settings and mise config redaction now also hides environment-style names ending in _KEY, _TOKEN, _SECRET or _PASSWORD and values with well-known provider key prefixes, which were previously returned in full.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "58afdf99713a5a3eb90e76d6f2388dfa048b5750": {
+    "7ccf3197a6817536f4480f9796858a3796f3ddc0": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.",
+      "summary": "Edits to files on case-insensitive volumes such as SMB shares now save correctly and are verified on disk, and apply_diff no longer refuses when the path casing differs from the open document.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
