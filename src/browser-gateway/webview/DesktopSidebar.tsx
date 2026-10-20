@@ -251,6 +251,7 @@ export function DesktopSidebar({
       {onModeChange && (
         <nav class="desktop-mode-navigation" aria-label="Desktop views">
           <button
+            class="desktop-mode-button"
             type="button"
             aria-current={activeView === "ask" ? "page" : undefined}
             onClick={() => onModeChange("ask")}
@@ -259,6 +260,7 @@ export function DesktopSidebar({
             Ask AgentLink
           </button>
           <button
+            class="desktop-mode-button"
             type="button"
             aria-current={activeView === "vscode" ? "page" : undefined}
             onClick={() => onModeChange("vscode")}
@@ -267,6 +269,7 @@ export function DesktopSidebar({
           </button>
           {assistantMode && (
             <button
+              class="desktop-mode-button"
               type="button"
               aria-current={activeView === "assistant" ? "page" : undefined}
               aria-label={

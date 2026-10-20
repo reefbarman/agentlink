@@ -734,6 +734,7 @@
   border-bottom: 1px solid #ffffff0c;
 }
 
+/* Classed so the centring default for class-less buttons never applies. */
 .browser-shell.browser-shell-desktop .desktop-mode-navigation button {
   display: flex;
   align-items: center;

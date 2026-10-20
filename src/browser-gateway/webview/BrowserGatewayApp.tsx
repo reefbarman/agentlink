@@ -9481,7 +9481,11 @@ export function BrowserGatewayApp({
             activeView={desktopEmbed ? "assistant" : desktopMode}
             resizable={!desktopEmbed}
             assistantMode={desktopAssistantAvailable || Boolean(desktopEmbed)}
-            assistantUnread={desktopAssistant?.unread}
+            assistantUnread={
+              // Inside the Assistant, its own inbox; in the desktop shell,
+              // the count the hidden Assistant page reported.
+              desktopEmbed ? assistantInboxUnread : desktopAssistant?.unread
+            }
             assistantLink={
               browserShell && product !== "assistant" ? (
                 <AssistantLauncher />
