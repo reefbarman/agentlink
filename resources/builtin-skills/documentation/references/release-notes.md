@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.49.0
+
+- Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.
+- The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.
+- The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.
+
 ## 1.48.1
 
 - Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.

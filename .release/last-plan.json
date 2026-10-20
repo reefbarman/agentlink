@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
-  "createdAt": "2026-10-20T06:16:53.115Z",
+  "sourceSha": "0de089295625a5c631e556de6f25992cddfeb097",
+  "createdAt": "2026-10-20T06:58:38.804Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,25 +10,41 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.48.0",
-      "baselineRef": "v1.48.0",
-      "reserved": "1.48.0",
-      "commits": ["f7c54f042be046b63fcfff97f5e182cf95dd4b39"],
+      "published": "1.48.1",
+      "baselineRef": "v1.48.1",
+      "reserved": "1.48.1",
+      "commits": [
+        "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+        "78448647d939517702c69223247d15df995a0ef8",
+        "0de089295625a5c631e556de6f25992cddfeb097"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.48.1",
-      "effectiveBump": "patch",
+      "version": "1.49.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.48.1",
+      "tag": "v1.49.0",
       "notes": [
         {
-          "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
-          "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
-          "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
+          "sha": "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+          "subject": "fix(webview): flush buffered text before thinking blocks start",
+          "summary": "Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.",
+          "breaking": false
+        },
+        {
+          "sha": "78448647d939517702c69223247d15df995a0ef8",
+          "subject": "fix(desktop): match Assistant zoom to the shell and show a loading spinner on its tab",
+          "summary": "The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.",
+          "breaking": false
+        },
+        {
+          "sha": "0de089295625a5c631e556de6f25992cddfeb097",
+          "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
+          "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
           "breaking": false
         }
       ]
@@ -39,7 +55,10 @@
       "reserved": "0.36.0",
       "commits": [
         "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
-        "f7c54f042be046b63fcfff97f5e182cf95dd4b39"
+        "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
+        "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+        "78448647d939517702c69223247d15df995a0ef8",
+        "0de089295625a5c631e556de6f25992cddfeb097"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -62,6 +81,24 @@
           "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
           "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
           "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
+          "breaking": false
+        },
+        {
+          "sha": "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+          "subject": "fix(webview): flush buffered text before thinking blocks start",
+          "summary": "Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.",
+          "breaking": false
+        },
+        {
+          "sha": "78448647d939517702c69223247d15df995a0ef8",
+          "subject": "fix(desktop): match Assistant zoom to the shell and show a loading spinner on its tab",
+          "summary": "The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.",
+          "breaking": false
+        },
+        {
+          "sha": "0de089295625a5c631e556de6f25992cddfeb097",
+          "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
+          "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
           "breaking": false
         }
       ]
@@ -91,25 +128,41 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.7.0",
-      "baselineRef": "assistant-v0.7.0",
-      "reserved": "0.7.0",
-      "commits": ["f7c54f042be046b63fcfff97f5e182cf95dd4b39"],
+      "published": "0.7.1",
+      "baselineRef": "assistant-v0.7.1",
+      "reserved": "0.7.1",
+      "commits": [
+        "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+        "78448647d939517702c69223247d15df995a0ef8",
+        "0de089295625a5c631e556de6f25992cddfeb097"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.7.1",
-      "effectiveBump": "patch",
+      "version": "0.8.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.7.1",
+      "tag": "assistant-v0.8.0",
       "notes": [
         {
-          "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
-          "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
-          "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
+          "sha": "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
+          "subject": "fix(webview): flush buffered text before thinking blocks start",
+          "summary": "Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.",
+          "breaking": false
+        },
+        {
+          "sha": "78448647d939517702c69223247d15df995a0ef8",
+          "subject": "fix(desktop): match Assistant zoom to the shell and show a loading spinner on its tab",
+          "summary": "The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.",
+          "breaking": false
+        },
+        {
+          "sha": "0de089295625a5c631e556de6f25992cddfeb097",
+          "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
+          "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
           "breaking": false
         }
       ]
@@ -124,6 +177,14 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
+    "f7c54f042be046b63fcfff97f5e182cf95dd4b39": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "7437dbccd251696fa4e0184b099a3c795880dc60": {
       "bump": "patch",
       "breakingUnits": [],
@@ -132,10 +193,26 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "f7c54f042be046b63fcfff97f5e182cf95dd4b39": {
+    "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
+      "summary": "Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "78448647d939517702c69223247d15df995a0ef8": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0de089295625a5c631e556de6f25992cddfeb097": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
