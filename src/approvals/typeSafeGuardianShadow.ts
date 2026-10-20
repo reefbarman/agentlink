@@ -38,7 +38,7 @@ export const TYPESAFE_GUARDIAN_API_KEY_SECRET =
  * tied to one model version; aliases move without a code change.
  */
 export const DEFAULT_TYPESAFE_GUARDIAN_MODEL = "jev-1.14.0";
-const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v8";
+const TYPESAFE_GUARDIAN_ADAPTER_VERSION = "jev-shared-v9";
 // Subcommand codes where an omitted older human answer cannot plausibly carry
 // a restriction that matters: read-only work, local toolchain steps, and git's
 // own recoverable local operations (staging, committing, switching branches).

@@ -899,6 +899,33 @@ describe("command review context", () => {
     });
   });
 
+  it("keeps answers to long agent-written questions intact for the extended window", () => {
+    const messages = [
+      typed("pick the rollout plan", "input-1"),
+      ...decision("long", `Which plan? ${"option detail ".repeat(250)}`, true),
+      typed("go ahead", "input-2"),
+    ];
+    const built = buildCommandReviewContextWithMetadata(messages, "session");
+    const shared = built.context.filter((entry) => entry.humanDecisionEvidence);
+    // The main Guardian still gets an omission marker at the shared cap.
+    expect(
+      shared.some((entry) => JSON.parse(entry.content).evidenceOmitted),
+    ).toBe(true);
+    const extended = built.extendedHumanAuthority.context
+      .filter((entry) => entry.humanDecisionEvidence)
+      .map((entry) => JSON.parse(entry.content));
+    expect(extended.find((entry) => entry.toolCallId === "long")).toMatchObject(
+      { humanAnswer: true },
+    );
+    expect(extended.some((entry) => entry.evidenceOmitted !== undefined)).toBe(
+      false,
+    );
+    expect(built.extendedHumanAuthority.humanAuthority).toMatchObject({
+      state: "complete",
+      omittedCount: 0,
+    });
+  });
+
   it("keeps long instructions intact for the extended window", () => {
     const pasted = `implement this spec\n${"step detail. ".repeat(1_200)}`;
     const latest = `now ship it ${"carefully ".repeat(250)}`;

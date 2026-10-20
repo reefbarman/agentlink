@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Your answers to the agent's questions now reach Jev even when the question itself is long. When the agent wrote a question with long option descriptions (over 2,000 characters including your answer), the answer was replaced with an "exceeded the evidence budget" marker, which made every later review in that session ineligible. Jev now keeps these up to 20,000 characters; the main Guardian's evidence is unchanged. In one recent session this affected 136 of 167 reviews, and none are affected with the fix. In the 118-command replay, eligible Jev answers rose from 91 to 106 and first-pass approvals from 21 to 29, with no should-block command approved.
+
 ## 1.47.0
 
 - Ask Agent in AgentLink Desktop and the browser now supports **Interject at next break** for queued messages, as in VS Code. The running turn takes the message in at its next tool break, shows it in the chat and continues its reply below it. Click again to let the message wait for the turn to end instead.

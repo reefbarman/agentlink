@@ -118,7 +118,10 @@ interface HumanDecisionBudget {
    * reads only decisions plus the latest instruction sees all of them.
    */
   restoreAllInstructions?: boolean;
-  /** Largest restored instruction kept intact; longer ones become markers. */
+  /**
+   * Largest restored instruction or question answer kept intact; longer ones
+   * become omission markers.
+   */
   maxInstructionLength?: number;
 }
 
@@ -806,6 +809,8 @@ type IndexedContextEntry = CommandReviewContextEntry & {
   humanInputId?: string;
   /** Stable identity of one human decision across transcript and record. */
   decisionKey?: string;
+  /** Full decision text when `content` is an over-budget omission marker. */
+  unboundedContent?: string;
 };
 
 /**
@@ -1201,7 +1206,16 @@ function selectHumanDecisions(
     });
   }
 
-  const ordered = [...candidates.values()].sort((a, b) => b.index - a.index);
+  // A budget with a larger per-entry cap keeps intact answers that the
+  // shared cap replaced with an omission marker (long agent-written questions).
+  const ordered = [...candidates.values()]
+    .map((entry) =>
+      entry.unboundedContent !== undefined &&
+      entry.unboundedContent.length <= maxInstructionLength
+        ? { ...entry, content: entry.unboundedContent }
+        : entry,
+    )
+    .sort((a, b) => b.index - a.index);
   const totalLength = ordered.reduce(
     (total, entry) => total + entry.content.length,
     0,
@@ -1305,6 +1319,7 @@ function questionDecisionEntries(
     entries.push({
       role: "tool",
       content: boundedContent,
+      ...(boundedContent !== content ? { unboundedContent: content } : {}),
       humanDecisionEvidence: true,
       decisionKey: `question:${binding.questionRequestId}:${binding.toolCallId}:${question.id}`,
       index: index + (questionIndex + 1) / 1000,
