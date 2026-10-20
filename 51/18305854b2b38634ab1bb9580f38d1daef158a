@@ -1,0 +1,29 @@
+src/shared/structuredSecretRedaction.ts
+  h_e08a86bb3a33a2 146-171,312,315,318-324,394,493-495,497,618-621,623
+  s_b388ae48bc9161::t_2611392cc27330 145,317,492,496,617,622
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 29
+src/shared/structuredSecretRedaction.test.ts
+  h_e08a86bb3a33a2 190-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5118305854b2b38634ab1bb9580f38d1daef158a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_b388ae48bc9161": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9e595167-6c7d-4637-a844-f735502fb459",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
