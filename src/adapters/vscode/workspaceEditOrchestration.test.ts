@@ -129,6 +129,88 @@ describe("applyWorkspaceEditAndSave", () => {
     expect(buildSuccess).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ status: "accepted" });
   });
+
+  describe("with real files", () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-save-")),
+      );
+    });
+
+    afterEach(() => {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    function fileDocument(
+      fsPath: string,
+      text: string,
+      save: (doc: { text: string; isDirty: boolean }) => Promise<boolean>,
+    ) {
+      const document = {
+        uri: { scheme: "file", fsPath },
+        isDirty: true,
+        text,
+        getText() {
+          return this.text;
+        },
+        save: vi.fn(async () => save(document)),
+      };
+      return document;
+    }
+
+    it("saves the document the edit targeted even when its path casing differs", async () => {
+      const filePath = path.join(tempDir, "Config.yaml");
+      fs.writeFileSync(filePath, "old\n", "utf-8");
+      // Same file on a case-insensitive volume, held by VS Code in another case.
+      const documentPath = path.join(tempDir, "config.yaml");
+      const document = fileDocument(documentPath, "new\n", async (doc) => {
+        fs.writeFileSync(documentPath, doc.text, "utf-8");
+        doc.isDirty = false;
+        return true;
+      });
+      textDocuments.push(document as never);
+      applyEdit.mockResolvedValue(true);
+      openTextDocument.mockResolvedValue(document);
+      const edit = { entries: () => [[{ fsPath: documentPath }, []]] };
+
+      const result = await applyWorkspaceEditAndSave({
+        edit: edit as never,
+        affectedPaths: [filePath],
+        applyFailure: { error: "apply failed" },
+        saveFailure: { error: "save failed" },
+        buildSuccess: () => ({ status: "applied" }),
+      });
+
+      expect(document.save).toHaveBeenCalledOnce();
+      expect(result).toEqual({ status: "applied" });
+      expect(fs.readFileSync(documentPath, "utf-8")).toBe("new\n");
+    });
+
+    it("reports a save failure when save returns true but disk is unchanged", async () => {
+      const filePath = path.join(tempDir, "remote.yaml");
+      fs.writeFileSync(filePath, "old\n", "utf-8");
+      const document = fileDocument(filePath, "new\n", async (doc) => {
+        doc.isDirty = false;
+        return true;
+      });
+      applyEdit.mockResolvedValue(true);
+      openTextDocument.mockResolvedValue(document);
+      const buildSuccess = vi.fn(() => ({ status: "applied" }));
+
+      const result = await applyWorkspaceEditAndSave({
+        edit: { entries: () => [[{ fsPath: filePath }, []]] } as never,
+        affectedPaths: [filePath],
+        applyFailure: { error: "apply failed" },
+        saveFailure: { error: "save failed" },
+        buildSuccess,
+      });
+
+      expect(result).toEqual({ error: "save failed" });
+      expect(buildSuccess).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("applyWorkspaceEditAndSaveWithoutFormatting", () => {

@@ -24,6 +24,8 @@ const applyEdit = vi.hoisted(() => vi.fn(async () => true));
 const settleBaseline = vi.hoisted(() => vi.fn(async (_delay: number) => {}));
 const executeCommand = vi.hoisted(() => vi.fn());
 const stat = vi.hoisted(() => vi.fn());
+/** Disk content overrides for fake paths, consulted before the real fs. */
+const fakeDiskFiles = vi.hoisted(() => new Map<string, string>());
 const resolveAndValidatePath = vi.hoisted(() =>
   vi.fn((inputPath: string) => ({
     absolutePath: inputPath,
@@ -57,10 +59,20 @@ const workspaceEditInstances = vi.hoisted(
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
+  const readFile = (async (target: unknown, ...rest: unknown[]) => {
+    const fake =
+      typeof target === "string" ? fakeDiskFiles.get(target) : undefined;
+    if (fake !== undefined) return fake;
+    return (actual.readFile as (...args: unknown[]) => Promise<unknown>)(
+      target,
+      ...rest,
+    );
+  }) as typeof actual.readFile;
   return {
     ...actual,
-    default: { ...actual, stat },
+    default: { ...actual, stat, readFile },
     stat,
+    readFile,
   };
 });
 
@@ -927,6 +939,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     };
     textDocuments.push(doc);
     openTextDocument.mockResolvedValue(doc);
+    fakeDiskFiles.set(filePath, "xoldy");
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? true : fallback,
@@ -1716,8 +1729,10 @@ describe("createVscodeRenameSymbolProvider", () => {
       uri: { scheme: "file", fsPath: filePath },
       isDirty: true,
       save: vi.fn(async () => true),
+      getText: () => "const newName = 1;",
     };
     textDocuments.push(dirtyDoc);
+    fakeDiskFiles.set(filePath, "const newName = 1;");
     openTextDocument.mockResolvedValue(doc);
     const renameEdit = {
       entries: vi.fn(() => [[{ fsPath: filePath }, [{}, {}]]]),

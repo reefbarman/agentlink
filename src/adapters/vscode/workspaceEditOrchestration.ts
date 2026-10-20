@@ -5,6 +5,7 @@ import {
   commitAndVerifyEdit,
   type CommitAndVerifyEditResult,
 } from "../../integrations/editDurability.js";
+import { canonicalizePath } from "../../util/canonicalPath.js";
 
 export interface WorkspaceEditOrchestration<TFailure, TSuccess> {
   edit: vscode.WorkspaceEdit;
@@ -22,18 +23,70 @@ export async function applyWorkspaceEditAndSave<TFailure, TSuccess>(
     return params.applyFailure;
   }
 
-  const affectedPaths = new Set(params.affectedPaths);
-  for (const document of vscode.workspace.textDocuments) {
-    if (
-      affectedPaths.has(document.uri.fsPath) &&
-      document.isDirty &&
-      !(await document.save())
-    ) {
-      return params.saveFailure ?? params.applyFailure;
-    }
+  const saveFailure = params.saveFailure ?? params.applyFailure;
+  for (const document of await collectAffectedDocuments(params)) {
+    if (!document.isDirty) continue;
+    if (!(await document.save())) return saveFailure;
+    if (!(await diskMatchesDocument(document))) return saveFailure;
   }
 
   return params.buildSuccess();
+}
+
+/**
+ * Resolve the documents the edit changed. VS Code may hold a document whose
+ * URI differs from the requested path only in letter case or symlink form, so
+ * match by the edit's own URIs and by canonical path rather than raw string
+ * equality. A missed document would stay dirty in memory while the caller
+ * reported success.
+ */
+async function collectAffectedDocuments(params: {
+  edit: vscode.WorkspaceEdit;
+  affectedPaths: readonly string[];
+}): Promise<vscode.TextDocument[]> {
+  const documents = new Set<vscode.TextDocument>();
+  const editEntries =
+    typeof params.edit.entries === "function" ? params.edit.entries() : [];
+  for (const [uri] of editEntries) {
+    try {
+      documents.add(await vscode.workspace.openTextDocument(uri));
+    } catch {
+      // Not a text document; nothing to save.
+    }
+  }
+
+  const affected = new Set(params.affectedPaths);
+  const canonicalAffected = new Set(params.affectedPaths.map(canonicalizePath));
+  for (const document of vscode.workspace.textDocuments) {
+    const fsPath = document.uri.fsPath;
+    if (
+      affected.has(fsPath) ||
+      (document.uri.scheme === "file" &&
+        canonicalAffected.has(canonicalizePath(fsPath)))
+    ) {
+      documents.add(document);
+    }
+  }
+  return [...documents];
+}
+
+/**
+ * Confirm a saved file document reached disk. Non-file schemes and documents
+ * in a non-UTF-8 encoding cannot be compared byte-for-byte here and are
+ * trusted to VS Code's save result.
+ */
+async function diskMatchesDocument(
+  document: vscode.TextDocument,
+): Promise<boolean> {
+  if (document.uri.scheme !== "file") return true;
+  const encoding = (document as { encoding?: string }).encoding;
+  if (encoding && encoding !== "utf8" && encoding !== "utf8bom") return true;
+  try {
+    const disk = await fs.readFile(document.uri.fsPath, "utf-8");
+    return disk.replace(/^\uFEFF/, "") === document.getText();
+  } catch {
+    return false;
+  }
 }
 
 export interface ExactSaveTarget {

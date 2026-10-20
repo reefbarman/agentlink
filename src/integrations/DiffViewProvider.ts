@@ -341,9 +341,9 @@ export class DiffViewProvider {
       ? await fs.readFile(this.absolutePath, "utf-8")
       : "";
     if (fileExists) {
-      const existingDoc = vscode.workspace.textDocuments.find(
-        (doc) =>
-          doc.uri.scheme === "file" && doc.uri.fsPath === this.absolutePath,
+      const absolutePath = this.absolutePath;
+      const existingDoc = vscode.workspace.textDocuments.find((doc) =>
+        documentMatchesTarget(doc, absolutePath),
       );
       if (
         existingDoc?.isDirty &&
@@ -760,8 +760,9 @@ export class DiffViewProvider {
 
     // Revert the in-memory document to match disk state before closing,
     // so VS Code doesn't prompt "Do you want to save?"
-    const doc = vscode.workspace.textDocuments.find(
-      (d) => d.uri.scheme === "file" && d.uri.fsPath === this.absolutePath,
+    const absolutePath = this.absolutePath;
+    const doc = vscode.workspace.textDocuments.find((d) =>
+      documentMatchesTarget(d, absolutePath),
     );
     if (doc?.isDirty) {
       const diskContent =
