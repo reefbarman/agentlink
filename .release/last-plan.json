@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
-  "createdAt": "2026-10-20T05:18:54.286Z",
+  "sourceSha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
+  "createdAt": "2026-10-20T06:16:53.115Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,25 +10,25 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.47.1",
-      "baselineRef": "v1.47.1",
-      "reserved": "1.47.1",
-      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
+      "published": "1.48.0",
+      "baselineRef": "v1.48.0",
+      "reserved": "1.48.0",
+      "commits": ["f7c54f042be046b63fcfff97f5e182cf95dd4b39"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.48.0",
-      "effectiveBump": "minor",
+      "version": "1.48.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.48.0",
+      "tag": "v1.48.1",
       "notes": [
         {
-          "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
-          "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
-          "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
+          "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
+          "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
+          "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
           "breaking": false
         }
       ]
@@ -36,8 +36,11 @@
     "desktop": {
       "published": "0.35.1",
       "baselineRef": "desktop-v0.35.1",
-      "reserved": "0.35.1",
-      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
+      "reserved": "0.36.0",
+      "commits": [
+        "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
+        "f7c54f042be046b63fcfff97f5e182cf95dd4b39"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
@@ -45,7 +48,7 @@
       "version": "0.36.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "desktop-v0.36.0",
       "notes": [
@@ -53,6 +56,12 @@
           "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
           "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
           "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
+          "breaking": false
+        },
+        {
+          "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
+          "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
+          "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
           "breaking": false
         }
       ]
@@ -82,31 +91,39 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.6.1",
-      "baselineRef": "assistant-v0.6.1",
-      "reserved": "0.6.1",
-      "commits": ["a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d"],
+      "published": "0.7.0",
+      "baselineRef": "assistant-v0.7.0",
+      "reserved": "0.7.0",
+      "commits": ["f7c54f042be046b63fcfff97f5e182cf95dd4b39"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.7.0",
-      "effectiveBump": "minor",
+      "version": "0.7.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.7.0",
+      "tag": "assistant-v0.7.1",
       "notes": [
         {
-          "sha": "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d",
-          "subject": "feat(desktop): sign release builds so macOS permissions survive updates",
-          "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
+          "sha": "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
+          "subject": "fix(desktop): left-align view tabs and badge the Assistant tab inside the Assistant",
+          "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
+    "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
     "7437dbccd251696fa4e0184b099a3c795880dc60": {
       "bump": "patch",
       "breakingUnits": [],
@@ -115,10 +132,10 @@
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "a41ff845906fd3ca5559b19e7c8579dc3ebfbf1d": {
-      "bump": "minor",
+    "f7c54f042be046b63fcfff97f5e182cf95dd4b39": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "Desktop releases are now signed with an Apple Development certificate so macOS Local Network and Keychain permissions persist across updates, and the in-app updater accepts signed releases while still allowing unsigned ones.",
+      "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
