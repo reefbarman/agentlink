@@ -1,0 +1,41 @@
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 304-306,342-343,351-353,395-396,400-401
+  s_aeeb51858e4481::t_5e68b96e4525a8 307-341,345-350,354-394,397-399,402-412
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 619,629-635,718-724,728-732,734-744,748-751,758-761,768-771,775-776,779,783,787,790-792,794
+  s_38b171315905dc::t_0bf4084cb71c85 745-747,752-757,762-767,772-774,777-778,780-782,784-786,788-789
+src/browser-gateway/webview/AssistantJobs.test.tsx
+  h_e08a86bb3a33a2 590-612
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 869-873,875,879-891,1114-1115,1141,1143,2670,2672-2673,2682-2683,2685-2725
+  s_38b171315905dc::t_aab59a68ae58bd 2726-2727,2828,2834
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_38b171315905dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a463bf44-7ffd-4158-a9c9-59455fc9c4be",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_aeeb51858e4481": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99a96e10-1353-481f-aad5-b085fbea51ac",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
