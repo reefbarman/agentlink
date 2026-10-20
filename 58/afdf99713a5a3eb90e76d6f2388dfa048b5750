@@ -1,0 +1,41 @@
+scripts/verify-cli-bundle.mjs
+  h_e08a86bb3a33a2 37-42,125,151,153
+  s_ea203e97b7e050::t_8db79936b76236 124
+scripts/verify-cli-package.test.mjs
+  h_e08a86bb3a33a2 10-12,27,35
+apps/cli/bundle.mjs
+  h_e08a86bb3a33a2 2-4,103
+  s_ea203e97b7e050::t_99f8dbc086f170 1,102
+apps/cli/esbuild.mjs
+  h_e08a86bb3a33a2 225
+  s_ea203e97b7e050::t_199b900b3cb154 224,226
+scripts/verify-cli-package.mjs
+  h_e08a86bb3a33a2 4,15-21,201
+  s_ea203e97b7e050::t_e09074b4716acd 22,200,202
+scripts/verify-cli-bundle.test.mjs
+  h_e08a86bb3a33a2 2-4,38,51,56
+  s_ea203e97b7e050::t_c439c4fa49711b 1
+package-lock.json
+  s_ea203e97b7e050::t_0d1fcc1a580ff3 98,142,14502
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58afdf99713a5a3eb90e76d6f2388dfa048b5750",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ea203e97b7e050": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "61edbbbe-66bb-4b59-a98e-744059b6b9db",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
