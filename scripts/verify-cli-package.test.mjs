@@ -7,6 +7,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+const keyringVersion = JSON.parse(
+  readFileSync(new URL("../apps/cli/package.json", import.meta.url), "utf8"),
+).dependencies["@napi-rs/keyring"];
 const files = [
   "package/LICENSE",
   "package/README.md",
@@ -21,7 +24,7 @@ const manifest = {
   os: ["darwin"],
   cpu: ["arm64"],
   engines: { node: ">=22.19.0" },
-  dependencies: { "@napi-rs/keyring": "2.1.0" },
+  dependencies: { "@napi-rs/keyring": keyringVersion },
 };
 const runtimeManifest = {
   schemaVersion: 1,
@@ -29,7 +32,7 @@ const runtimeManifest = {
   bundle: "agentlink.js",
   externalImports: ["@napi-rs/keyring", "node:fs"],
   bundledDependencies: EXPECTED_BUNDLED_DEPENDENCIES,
-  runtimeDependencies: { "@napi-rs/keyring": "2.1.0" },
+  runtimeDependencies: { "@napi-rs/keyring": keyringVersion },
   assets: {
     ripgrep: {
       path: "rg",
