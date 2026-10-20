@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.51.0
+
 - The standalone CLI now has `web_fetch` and `web_search`. Pages are read directly from your machine (public sites only; private, local and IP-address hosts are refused, and fetching refuses to run around a configured proxy). Search uses Codex hosted search for Codex models and, for other models, a SearXNG server set in `web.searxngUrl` in `~/.agentlink/cli/config.json`. The Assistant now uses the same tool implementation, with its project network presets unchanged.
 
 ## 1.50.2

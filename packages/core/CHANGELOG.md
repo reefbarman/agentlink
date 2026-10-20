@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.18.0 — 2026-10-20
+
+- The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.
+
 ## 0.17.2 — 2026-10-20
 
 - Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.
