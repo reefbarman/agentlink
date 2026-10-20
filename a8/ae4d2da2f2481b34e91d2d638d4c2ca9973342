@@ -1,0 +1,22 @@
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 11333-11335
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 1240-1242
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8ae4d2da2f2481b34e91d2d638d4c2ca9973342",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
