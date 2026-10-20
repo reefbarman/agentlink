@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.46.1
+
+- Fixes background conversation summarization so that later in-place message updates, such as final-status markers and runtime error details, are no longer lost from the stored transcript.
+
 ## 1.46.0
 
 - Automatic condensing should usually no longer pause the turn. Shortly before the condense point, AgentLink now writes the summary in the background while the agent keeps working, then swaps it in when the point is reached, keeping everything added since then word for word. Until now every automatic condense blocked the turn while the summary was written: about 40 seconds typically and up to 3 minutes. If the conversation was rewound or edited, or the model changed, it condenses the old way. This is experimental and on by default; turn off `agentlink.backgroundCondense` to go back to foreground condensing.
