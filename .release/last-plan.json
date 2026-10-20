@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "0de089295625a5c631e556de6f25992cddfeb097",
-  "createdAt": "2026-10-20T06:58:38.804Z",
+  "sourceSha": "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b",
+  "createdAt": "2026-10-20T07:23:54.391Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,41 +10,34 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.48.1",
-      "baselineRef": "v1.48.1",
-      "reserved": "1.48.1",
+      "published": "1.49.0",
+      "baselineRef": "v1.49.0",
+      "reserved": "1.49.0",
       "commits": [
-        "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
-        "78448647d939517702c69223247d15df995a0ef8",
-        "0de089295625a5c631e556de6f25992cddfeb097"
+        "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+        "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.49.0",
+      "version": "1.50.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.49.0",
+      "tag": "v1.50.0",
       "notes": [
         {
-          "sha": "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
-          "subject": "fix(webview): flush buffered text before thinking blocks start",
-          "summary": "Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.",
+          "sha": "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+          "subject": "fix(deps): unblock the grouped Dependabot npm update",
+          "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
           "breaking": false
         },
         {
-          "sha": "78448647d939517702c69223247d15df995a0ef8",
-          "subject": "fix(desktop): match Assistant zoom to the shell and show a loading spinner on its tab",
-          "summary": "The Desktop Assistant view now matches the shell's zoom and sidebar alignment, and its sidebar tab shows a loading spinner while the Assistant connects.",
-          "breaking": false
-        },
-        {
-          "sha": "0de089295625a5c631e556de6f25992cddfeb097",
-          "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
-          "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
+          "sha": "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b",
+          "subject": "feat(assistant): scroll the whole sidebar and fold secondary panels under Settings",
+          "summary": "The Assistant sidebar now scrolls as one region and GitHub, MCP, Memory, Assistant settings and Setup move into an inline Settings expansion, leaving Jobs, Inbox, Tasks and Settings as a 2x2 hub.",
           "breaking": false
         }
       ]
@@ -58,7 +51,9 @@
         "f7c54f042be046b63fcfff97f5e182cf95dd4b39",
         "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
         "78448647d939517702c69223247d15df995a0ef8",
-        "0de089295625a5c631e556de6f25992cddfeb097"
+        "0de089295625a5c631e556de6f25992cddfeb097",
+        "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+        "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -100,6 +95,18 @@
           "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
           "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
           "breaking": false
+        },
+        {
+          "sha": "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+          "subject": "fix(deps): unblock the grouped Dependabot npm update",
+          "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
+          "breaking": false
+        },
+        {
+          "sha": "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b",
+          "subject": "feat(assistant): scroll the whole sidebar and fold secondary panels under Settings",
+          "summary": "The Assistant sidebar now scrolls as one region and GitHub, MCP, Memory, Assistant settings and Setup move into an inline Settings expansion, leaving Jobs, Inbox, Tasks and Settings as a 2x2 hub.",
+          "breaking": false
         }
       ]
     },
@@ -107,34 +114,60 @@
       "published": "0.26.0",
       "baselineRef": "cli-v0.26.0",
       "reserved": "0.26.0",
-      "commits": [],
+      "commits": ["8586326b088126e8e8efb9abdece9f9b420bd0e7"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.26.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.26.1",
+      "notes": [
+        {
+          "sha": "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+          "subject": "fix(deps): unblock the grouped Dependabot npm update",
+          "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.17.0",
       "baselineRef": "sdk-v0.17.0",
       "reserved": "0.17.0",
-      "commits": [],
+      "commits": ["8586326b088126e8e8efb9abdece9f9b420bd0e7"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.17.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.17.1",
+      "notes": [
+        {
+          "sha": "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+          "subject": "fix(deps): unblock the grouped Dependabot npm update",
+          "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.7.1",
       "baselineRef": "assistant-v0.7.1",
-      "reserved": "0.7.1",
+      "reserved": "0.8.0",
       "commits": [
         "16c4916d0dd8bbdcaa8f8e6d8d636c40f8225589",
         "78448647d939517702c69223247d15df995a0ef8",
-        "0de089295625a5c631e556de6f25992cddfeb097"
+        "0de089295625a5c631e556de6f25992cddfeb097",
+        "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+        "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -143,7 +176,7 @@
       "version": "0.8.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "assistant-v0.8.0",
       "notes": [
@@ -164,6 +197,18 @@
           "subject": "feat(desktop): allow Assistant notifications for the paired Assistant page",
           "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
           "breaking": false
+        },
+        {
+          "sha": "8586326b088126e8e8efb9abdece9f9b420bd0e7",
+          "subject": "fix(deps): unblock the grouped Dependabot npm update",
+          "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
+          "breaking": false
+        },
+        {
+          "sha": "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b",
+          "subject": "feat(assistant): scroll the whole sidebar and fold secondary panels under Settings",
+          "summary": "The Assistant sidebar now scrolls as one region and GitHub, MCP, Memory, Assistant settings and Setup move into an inline Settings expansion, leaving Jobs, Inbox, Tasks and Settings as a 2x2 hub.",
+          "breaking": false
         }
       ]
     }
@@ -181,14 +226,6 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Desktop view tabs are now left-aligned, and the Assistant tab shows its own unread badge when viewed inside the Assistant.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7437dbccd251696fa4e0184b099a3c795880dc60": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
@@ -213,6 +250,30 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The Desktop app now allows notifications for the paired Assistant page only, and the page explains a refusal in desktop terms instead of pointing to browser site settings.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7437dbccd251696fa4e0184b099a3c795880dc60": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes the experimental TypeSafe Guardian shadow review (Jev) so human answers to long agent-written questions are kept intact in its extended evidence window instead of being replaced by an omission marker.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8586326b088126e8e8efb9abdece9f9b420bd0e7": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c5da2cab0f976d78e7cfe59a5f2271e30d24cf6b": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Assistant sidebar now scrolls as one region and GitHub, MCP, Memory, Assistant settings and Setup move into an inline Settings expansion, leaving Jobs, Inbox, Tasks and Settings as a 2x2 hub.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

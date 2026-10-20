@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.17.1 — 2026-10-20
+
+- Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.
+
 ## 0.17.0 — 2026-10-20
 
 - Ask Agent in Desktop and the browser can now interject queued messages at the next tool break, and confirmed queued messages no longer vanish from the queue panel; retried and answered-question turns now send queued messages when they end.

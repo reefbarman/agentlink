@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.50.0
+
+- Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.
+- The Assistant sidebar now scrolls as one region and GitHub, MCP, Memory, Assistant settings and Setup move into an inline Settings expansion, leaving Jobs, Inbox, Tasks and Settings as a 2x2 hub.
+
 ## 1.49.0
 
 - Text streamed before a thinking block is now flushed first, so it no longer gets split around the thinking block in the chat view.
