@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.50.1
+
+- Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.
+- CLI packaging now reads the pinned Keychain runtime version from the CLI manifest instead of a hardcoded value, fixing bundle and package verification after the keyring update.
+
 ## 1.50.0
 
 - Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.

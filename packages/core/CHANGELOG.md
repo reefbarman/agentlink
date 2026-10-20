@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.17.2 — 2026-10-20
+
+- Updates runtime and dev dependencies (ACP SDK, dompurify, marked, openai, zod, keyring, vitest) to newer minor and patch versions.
+
 ## 0.17.1 — 2026-10-20
 
 - Fixes Dependabot override resolution for dompurify and normalizes a missing keychain entry (null from newer @napi-rs/keyring) to undefined so secret reads behave consistently.
