@@ -60,6 +60,7 @@ import {
   compatibleCredentialAccount,
   getApiKey,
   OPENAI_API_KEY_ACCOUNT,
+  cliWebConfig,
   parseCliConfig,
   publicConfig,
   readCliConfig,
@@ -110,6 +111,7 @@ import {
 } from "./sessionController.js";
 import type { StandaloneSessionSummary } from "./sessionProjection.js";
 import type { CliConfig } from "./types.js";
+import { createCliWebTools } from "./webTools.js";
 import { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
 import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 import type { ReleaseUpdateServiceOptions } from "../../../src/updates/ReleaseUpdateService.js";
@@ -778,6 +780,13 @@ async function createHost(options: {
     ...(options.enableLanguageIntelligence
       ? { languageIntelligence: { enabled: true as const } }
       : {}),
+    hostTools: createCliWebTools({
+      web: cliWebConfig(options.config),
+      codexProviderIds: new Set(
+        options.config.codexModels.length > 0 ? ["codex"] : [],
+      ),
+      codexCredentials: options.oauthProvider,
+    }),
     ...(options.enableCommands
       ? {
           background: {
@@ -2650,12 +2659,24 @@ async function printStatus(
         },
         sessions: sessions.length,
         languageIntelligence,
+        web: webStatus(config),
       },
       null,
       2,
     )}\n`,
   );
   return 0;
+}
+
+function webStatus(config: CliConfig): object {
+  const web = cliWebConfig(config);
+  return {
+    fetch: "public sites, direct from this machine",
+    search: [
+      ...(config.codexModels.length > 0 ? ["codex (ChatGPT sign-in)"] : []),
+      ...(web.searxngUrl ? [`searxng (${web.searxngUrl})`] : []),
+    ],
+  };
 }
 
 async function printSessions(

@@ -34,4 +34,6 @@ export type {
   PublicFetchResult,
   PublicWebFetcher,
 } from "./webImageTransport.js";
+export * from "./webPageFetcher.js";
+export * from "./webPageText.js";
 export * from "./writeTools.js";

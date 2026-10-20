@@ -20,6 +20,12 @@ export interface CliCompatibleProvider {
   readonly models: readonly CliCompatibleModel[];
 }
 
+/** Owner-controlled settings for the web tools (`web_fetch`, `web_search`). */
+export interface CliWebConfig {
+  /** SearXNG base URL for `web_search` on non-Codex models. */
+  readonly searxngUrl?: string;
+}
+
 export interface CliConfig {
   readonly schemaVersion: 1;
   readonly updateAutomaticChecks: boolean;
@@ -31,4 +37,6 @@ export interface CliConfig {
   readonly codexModels: readonly string[];
   readonly codexUseWebSocket?: boolean;
   readonly compatibleProviders: readonly CliCompatibleProvider[];
+  /** Absent in older configs; read with {@link cliWebConfig}. */
+  readonly web?: CliWebConfig;
 }

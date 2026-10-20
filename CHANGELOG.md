@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The standalone CLI now has `web_fetch` and `web_search`. Pages are read directly from your machine (public sites only; private, local and IP-address hosts are refused, and fetching refuses to run around a configured proxy). Search uses Codex hosted search for Codex models and, for other models, a SearXNG server set in `web.searxngUrl` in `~/.agentlink/cli/config.json`. The Assistant now uses the same tool implementation, with its project network presets unchanged.
+
 ## 1.50.2
 
 - `find_and_replace` (and `rename_symbol`) no longer report success when the change never reached disk. When VS Code held the file under a differently cased path, for example on an SMB share mounted under `/Volumes`, the replacement stayed unsaved in the editor while the tool returned `applied`, and the next search then missed text that was still on disk. Saves now follow the documents the edit actually changed, and the tool reports a save failure unless the file on disk matches.

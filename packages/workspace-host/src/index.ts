@@ -16,6 +16,7 @@ export * from "./projectIdentity.js";
 export * from "./promptProfile.js";
 export * from "./sessionInteractionTools.js";
 export * from "./sharedMcpTools.js";
+export * from "./webTools.js";
 export * from "./workspaceExecutionBackend.js";
 export * from "./workspaceHostRuntime.js";
 export * from "./workspaceOwnership.js";

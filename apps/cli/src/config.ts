@@ -6,7 +6,11 @@ import {
   AGENTLINK_SHARED_KEYCHAIN_SERVICE,
   createKeychainSecretStorage,
 } from "@agentlink/node-host";
-import type { CliCompatibleProvider, CliConfig } from "./types.js";
+import type {
+  CliCompatibleProvider,
+  CliConfig,
+  CliWebConfig,
+} from "./types.js";
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -30,6 +34,11 @@ const defaultConfig: CliConfig = {
   codexUseWebSocket: true,
   compatibleProviders: [],
 };
+
+/** Web settings; older configs have no `web` key. */
+export function cliWebConfig(config: CliConfig): CliWebConfig {
+  return config.web ?? {};
+}
 
 export async function readCliConfig(dataRoot: string): Promise<CliConfig> {
   const configPath = path.join(dataRoot, "cli", "config.json");
@@ -117,7 +126,38 @@ export function parseCliConfig(value: unknown): CliConfig {
     codexModels: stringArray(value.codexModels, "codexModels"),
     codexUseWebSocket: value.codexUseWebSocket ?? true,
     compatibleProviders: compatibleProviders(value.compatibleProviders),
+    ...(value.web === undefined ? {} : { web: webConfig(value.web) }),
   };
+}
+
+function webConfig(value: unknown): CliWebConfig {
+  if (!isRecord(value)) throw new Error("AgentLink CLI web must be an object");
+  return value.searxngUrl === undefined
+    ? {}
+    : { searxngUrl: searxngBaseUrl(value.searxngUrl, "web.searxngUrl") };
+}
+
+/**
+ * An owner-configured search service. Private and HTTP hosts are allowed
+ * (a self-hosted SearXNG is usually on the LAN); this never lets the model
+ * fetch private URLs.
+ */
+function searxngBaseUrl(value: unknown, label: string): string {
+  let url: URL;
+  try {
+    url = new URL(requiredText(value, label));
+  } catch {
+    throw new Error(`${label} must be an absolute http(s) URL`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(`${label} must be an absolute http(s) URL`);
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      `${label} cannot contain credentials, a query, or a fragment`,
+    );
+  }
+  return url.toString().replace(/\/+$/u, "");
 }
 
 function compatibleProviders(value: unknown): CliCompatibleProvider[] {

@@ -180,6 +180,21 @@ Every child write, command, MCP launch, MCP destination, OAuth browser handoff, 
 
 `/agents` lists child state. `/agent-steer CHILD_ID MESSAGE` queues guidance, `/agent-stop CHILD_ID` cancels one child, and `/new` or normal CLI exit cancels the foreground session's remaining children. Child engine sessions are hidden from the ordinary `/sessions` list. After restart, completed child results remain readable, while previously active children become interrupted with bounded partial output. Pending child approvals are abandoned, and no child, write, command, or MCP effect is replayed automatically.
 
+## Web tools
+
+Coding chats and background children always get `web_fetch` and `web_search`. They are read-only and run without approval.
+
+- `web_fetch` reads one page as text, directly from this machine. HTML becomes readable text with links kept as `text (url)`; long pages come back in parts (`start_index`, `max_length`). Only public hostnames on default ports are reachable: private, local and IP-address hosts, URLs with credentials, and redirects to any of these are refused, and every resolved address is checked when connecting. If `HTTPS_PROXY` or a similar proxy variable is set, fetching is refused rather than sent around the proxy. Pages are untrusted input.
+- `web_search` uses Codex's hosted search for Codex models (needs `agentlink auth codex`), and a SearXNG server you configure for every other model. Without one, search on a non-Codex model returns an error explaining what to set. Queries go to the chosen backend.
+
+Set the SearXNG server in `~/.agentlink/cli/config.json`:
+
+```json
+"web": { "searxngUrl": "http://192.168.1.10:8080" }
+```
+
+`searxngUrl` must be an http(s) URL without credentials, a query or a fragment, and its SearXNG must allow the `json` format (`search.formats` in `settings.yml`). A private address is fine here: it is your search service, not a site the model can fetch. `agentlink status` shows the current web settings. MCP web tools are unaffected.
+
 ## TypeScript and JavaScript intelligence
 
 TypeScript/JavaScript language intelligence is optional and is never installed or enabled implicitly. Inspect the global installation and current project's enablement, install or refresh the managed recipe, explicitly enable or disable one canonical project, or remove the installation with:

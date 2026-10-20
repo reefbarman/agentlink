@@ -222,11 +222,14 @@ export const agentLinkLongPollingFetch: typeof globalThis.fetch = async (
   // Undici's Response has a different constructor, so convert failures without
   // buffering the body. Successful MCP streams keep their original response.
   if (response.status >= 400 && !(response instanceof globalThis.Response)) {
-    return new Response(response.body as unknown as BodyInit | null, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries()),
-    });
+    return new Response(
+      response.body as unknown as ConstructorParameters<typeof Response>[0],
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+      },
+    );
   }
   return response as unknown as globalThis.Response;
 };
