@@ -25,7 +25,7 @@ apps/cli/src/webTools.ts
 resources/builtin-skills/documentation/references/standalone-cli.md
   h_e08a86bb3a33a2 183-197
 CHANGELOG.md
-  h_e08a86bb3a33a2 5
+  h_e08a86bb3a33a2 5-6
 packages/workspace-host/src/webTools.ts
   h_e08a86bb3a33a2 1-424
 apps/cli/src/cli.ts
