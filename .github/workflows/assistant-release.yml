@@ -47,7 +47,7 @@ jobs:
       - id: source
         name: Resolve exact source commit
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -72,7 +72,7 @@ jobs:
         env:
           AGENTLINK_BUILD_COMMIT: ${{ steps.source.outputs.commit }}
         run: node --input-type=module -e 'import { readFileSync } from "node:fs"; const bundle = readFileSync("apps/server/dist/agentlink-server.js", "utf8"); if (!bundle.includes(process.env.AGENTLINK_BUILD_COMMIT.slice(0, 12))) throw new Error("server bundle does not contain the exact source commit identity");'
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: assistant-server-bundle
           path: apps/server/dist/agentlink-server.js
@@ -95,7 +95,7 @@ jobs:
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
@@ -105,7 +105,7 @@ jobs:
           AGENTLINK_BUILD_COMMIT: ${{ needs.verify.outputs.commit }}
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: npm run package -- "apps/server/dist/agentlink-editor-${AGENTLINK_VSCE_TARGET}.vsix"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: assistant-editor-${{ matrix.target }}
           path: apps/server/dist/agentlink-editor-${{ matrix.target }}.vsix
@@ -197,11 +197,11 @@ jobs:
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: assistant-server-bundle
           path: apps/server/dist
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         if: matrix.target == 'editor'
         with:
           name: assistant-editor-linux-${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
@@ -211,17 +211,17 @@ jobs:
         env:
           EDITOR_TARGET: ${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
         run: mv "apps/server/dist/agentlink-editor-linux-${EDITOR_TARGET}.vsix" apps/server/dist/agentlink-editor.vsix
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build and optionally publish single-architecture image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/server
           file: apps/server/deploy/container/Dockerfile
@@ -232,7 +232,7 @@ jobs:
       - name: Save image digest before upload
         if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
         run: echo '${{ steps.build.outputs.digest }}' > "${{ runner.temp }}/digest.txt"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: inputs.publish && github.repository == 'reefbarman/agentlink' && github.ref == 'refs/heads/main'
         with:
           name: assistant-digest-${{ matrix.target }}-${{ matrix.arch }}
@@ -246,14 +246,14 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: assistant-digest-*
           path: digests
           merge-multiple: false
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -286,7 +286,7 @@ jobs:
             fi
             printf '%s' "$digest" > "manifest-digests/$target/digest.txt"
           done
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: assistant-manifest-digests
           path: manifest-digests/*/digest.txt
@@ -310,7 +310,7 @@ jobs:
         with:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: assistant-manifest-digests
           path: digests
