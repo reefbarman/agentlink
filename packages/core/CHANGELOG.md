@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.19.0 — 2026-10-20
+
+- The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.
+
 ## 0.18.0 — 2026-10-20
 
 - The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-  "createdAt": "2026-10-20T23:12:02.946Z",
+  "sourceSha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+  "createdAt": "2026-10-20T23:34:35.201Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,147 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.50.2",
-      "baselineRef": "v1.50.2",
-      "reserved": "1.50.2",
-      "commits": ["7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9"],
+      "published": "1.51.0",
+      "baselineRef": "v1.51.0",
+      "reserved": "1.51.0",
+      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.51.0",
+      "version": "1.52.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.51.0",
+      "tag": "v1.52.0",
       "notes": [
         {
-          "sha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-          "subject": "feat(cli): add web_fetch and web_search, shared with the Assistant",
-          "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
+          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.36.2",
-      "baselineRef": "desktop-v0.36.2",
-      "reserved": "0.36.2",
-      "commits": ["7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9"],
+      "published": "0.37.0",
+      "baselineRef": "desktop-v0.37.0",
+      "reserved": "0.37.0",
+      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.37.0",
+      "version": "0.38.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.37.0",
+      "tag": "desktop-v0.38.0",
       "notes": [
         {
-          "sha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-          "subject": "feat(cli): add web_fetch and web_search, shared with the Assistant",
-          "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
+          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.26.2",
-      "baselineRef": "cli-v0.26.2",
-      "reserved": "0.26.2",
-      "commits": ["7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9"],
+      "published": "0.27.0",
+      "baselineRef": "cli-v0.27.0",
+      "reserved": "0.27.0",
+      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.27.0",
+      "version": "0.28.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.27.0",
+      "tag": "cli-v0.28.0",
       "notes": [
         {
-          "sha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-          "subject": "feat(cli): add web_fetch and web_search, shared with the Assistant",
-          "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
+          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.17.2",
-      "baselineRef": "sdk-v0.17.2",
-      "reserved": "0.17.2",
-      "commits": ["7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9"],
+      "published": "0.18.0",
+      "baselineRef": "sdk-v0.18.0",
+      "reserved": "0.18.0",
+      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.18.0",
+      "version": "0.19.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.18.0",
+      "tag": "sdk-v0.19.0",
       "notes": [
         {
-          "sha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-          "subject": "feat(cli): add web_fetch and web_search, shared with the Assistant",
-          "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
+          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.8.2",
-      "baselineRef": "assistant-v0.8.2",
-      "reserved": "0.8.2",
-      "commits": ["7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9"],
+      "published": "0.9.0",
+      "baselineRef": "assistant-v0.9.0",
+      "reserved": "0.9.0",
+      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.9.0",
+      "tag": "assistant-v0.10.0",
       "notes": [
         {
-          "sha": "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9",
-          "subject": "feat(cli): add web_fetch and web_search, shared with the Assistant",
-          "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
+          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
+          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "dc929a9f979e84b5760e46a21e892141ee8f8122": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Settings and mise config redaction now also hides environment-style names ending in _KEY, _TOKEN, _SECRET or _PASSWORD and values with well-known provider key prefixes, which were previously returned in full.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7ccf3197a6817536f4480f9796858a3796f3ddc0": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Edits to files on case-insensitive volumes such as SMB shares now save correctly and are verified on disk, and apply_diff no longer refuses when the path casing differs from the open document.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "7e6cf4bda33e2816dc513a1e79ae3315c0ccf4f9": {
+    "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "The CLI gains web_fetch (public sites only) and web_search (Codex hosted search, or a SearXNG server set in web.searxngUrl). Shared web tools and readable-HTML helpers are now exported from the SDK packages, and the Assistant uses them with its network presets unchanged.",
+      "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

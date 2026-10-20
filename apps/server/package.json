@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/server",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Standalone AgentLink assistant server",
   "license": "MIT",
@@ -14,10 +14,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/core": "0.18.0",
-    "@agentlink/node-host": "0.18.0",
-    "@agentlink/protocol": "0.18.0",
-    "@agentlink/workspace-host": "0.18.0",
+    "@agentlink/core": "0.19.0",
+    "@agentlink/node-host": "0.19.0",
+    "@agentlink/protocol": "0.19.0",
+    "@agentlink/workspace-host": "0.19.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "node-forge": "^1.4.0",
     "uqr": "0.1.3"
