@@ -616,7 +616,7 @@ export function AssistantHub({
         .then(setSetup)
         .catch(() =>
           setSetupNotice(
-            "Could not record that setup was closed, so it may open again next time. Setup in the toolbar has it.",
+            "Could not record that setup was closed, so it may open again next time. Setup under Settings has it.",
           ),
         );
       return;
@@ -626,6 +626,13 @@ export function AssistantHub({
       .catch(() => undefined);
   };
   const [taskId, setTaskId] = useState<string | undefined>(undefined);
+  // Less frequent panels sit under Settings, keeping the sidebar short.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const openPanel = (panel: NonNullable<typeof view>) => {
+    setMoreOpen(false);
+    setView(panel);
+  };
+  const setupPending = setup !== null && setup.status !== "ready";
   const openChat = async (projectId: string, sessionId: string) => {
     await openAssistantChat({ projectId, sessionId, loadSession, reloadPage });
     setView(null);
@@ -708,60 +715,83 @@ export function AssistantHub({
         <button
           type="button"
           class="assistant-hub-button"
-          aria-haspopup="dialog"
-          title="GitHub connections"
-          onClick={() => setView("github")}
-        >
-          <i class="codicon codicon-github" aria-hidden="true" />
-          <span>GitHub</span>
-        </button>
-        <button
-          type="button"
-          class="assistant-hub-button"
-          aria-haspopup="dialog"
-          title="MCP servers (other services the assistant can use)"
-          onClick={() => setView("mcp")}
-        >
-          <i class="codicon codicon-plug" aria-hidden="true" />
-          <span>MCP</span>
-        </button>
-        <button
-          type="button"
-          class="assistant-hub-button"
-          aria-haspopup="dialog"
-          title="What the Assistant remembers about you"
-          onClick={() => setView("memory")}
-        >
-          <i class="codicon codicon-lightbulb" aria-hidden="true" />
-          <span>Memory</span>
-        </button>
-        <button
-          type="button"
-          class="assistant-hub-button"
-          aria-haspopup="dialog"
-          title="Settings (name, persona, time zone and quiet hours)"
-          onClick={() => setView("settings")}
+          aria-expanded={moreOpen}
+          aria-controls="assistant-hub-more"
+          aria-label={
+            setupPending ? "Settings (setup needs attention)" : undefined
+          }
+          title="Settings, GitHub, MCP, memory and setup"
+          onClick={() => setMoreOpen((open) => !open)}
         >
           <i class="codicon codicon-settings-gear" aria-hidden="true" />
           <span>Settings</span>
+          {setupPending && !moreOpen && (
+            <span class="assistant-hub-badge" aria-hidden="true">
+              !
+            </span>
+          )}
         </button>
-        {setup && (
-          <button
-            type="button"
-            class="assistant-hub-button"
-            aria-haspopup="dialog"
-            aria-label={`Setup: ${setupStatusLabel(setup.status)}`}
-            title={`Setup: ${setupStatusLabel(setup.status)}`}
-            onClick={() => setView("setup")}
-          >
-            <i class="codicon codicon-checklist" aria-hidden="true" />
-            <span>Setup</span>
-            {setup.status !== "ready" && (
-              <span class="assistant-hub-badge" aria-hidden="true">
-                !
-              </span>
+        {moreOpen && (
+          <div class="assistant-hub-more" id="assistant-hub-more">
+            <button
+              type="button"
+              class="assistant-hub-more-item"
+              aria-haspopup="dialog"
+              title="Name, persona, time zone and quiet hours"
+              onClick={() => openPanel("settings")}
+            >
+              <i class="codicon codicon-settings-gear" aria-hidden="true" />
+              <span>Assistant settings</span>
+            </button>
+            <button
+              type="button"
+              class="assistant-hub-more-item"
+              aria-haspopup="dialog"
+              title="GitHub connections"
+              onClick={() => openPanel("github")}
+            >
+              <i class="codicon codicon-github" aria-hidden="true" />
+              <span>GitHub</span>
+            </button>
+            <button
+              type="button"
+              class="assistant-hub-more-item"
+              aria-haspopup="dialog"
+              title="MCP servers (other services the assistant can use)"
+              onClick={() => openPanel("mcp")}
+            >
+              <i class="codicon codicon-plug" aria-hidden="true" />
+              <span>MCP</span>
+            </button>
+            <button
+              type="button"
+              class="assistant-hub-more-item"
+              aria-haspopup="dialog"
+              title="What the Assistant remembers about you"
+              onClick={() => openPanel("memory")}
+            >
+              <i class="codicon codicon-lightbulb" aria-hidden="true" />
+              <span>Memory</span>
+            </button>
+            {setup && (
+              <button
+                type="button"
+                class="assistant-hub-more-item"
+                aria-haspopup="dialog"
+                aria-label={`Setup: ${setupStatusLabel(setup.status)}`}
+                title={`Setup: ${setupStatusLabel(setup.status)}`}
+                onClick={() => openPanel("setup")}
+              >
+                <i class="codicon codicon-checklist" aria-hidden="true" />
+                <span>Setup</span>
+                {setupPending && (
+                  <span class="assistant-hub-badge" aria-hidden="true">
+                    !
+                  </span>
+                )}
+              </button>
             )}
-          </button>
+          </div>
         )}
       </nav>
       {notice && (

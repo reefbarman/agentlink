@@ -587,6 +587,29 @@ describe("AssistantHub", () => {
     expect(await screen.findByText(/No jobs yet/u)).toBeTruthy();
   });
 
+  it("keeps the less frequent panels under Settings", async () => {
+    stubFetch({
+      "GET /api/inbox": () => ({ entries: [], unread: 0 }),
+    });
+    render(
+      <AssistantHub
+        revision={1}
+        loadSession={() => undefined}
+        reloadPage={() => undefined}
+      />,
+    );
+    expect(screen.queryByText("GitHub")).toBeNull();
+    expect(screen.queryByText("Memory")).toBeNull();
+    const settings = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(settings);
+    expect(settings.getAttribute("aria-expanded")).toBe("true");
+    for (const name of ["Assistant settings", "GitHub", "MCP", "Memory"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    fireEvent.click(settings);
+    expect(screen.queryByText("GitHub")).toBeNull();
+  });
+
   it("says when an upgrade holds new work, and shows the version", async () => {
     stubFetch({
       "GET /api/inbox": () => ({ entries: [], unread: 0 }),

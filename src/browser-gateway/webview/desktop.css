@@ -866,12 +866,29 @@
   gap: 8px;
 }
 
-.browser-shell.browser-shell-desktop .desktop-sidebar-history {
+/*
+ * Everything under the view buttons scrolls as one, so a tall header (the
+ * Assistant's project switcher and hub) never squeezes the chat list.
+ */
+.browser-shell.browser-shell-desktop .desktop-sidebar-scroll {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
-  flex: 1;
+  /* Room for focus rings, which overflow clipping would cut off. */
+  margin: 0 -4px;
+  padding: 2px 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff20 transparent;
+}
+
+.browser-shell.browser-shell-desktop .desktop-sidebar-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 0 auto;
 }
 
 .browser-shell.browser-shell-desktop .desktop-sidebar-history[hidden],
@@ -1094,8 +1111,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 4px 2px 14px;
-  padding: 9px 10px;
+  margin: 2px 2px 8px;
+  padding: 8px 10px;
   border: 1px solid #ffffff12;
   border-radius: 10px;
   color: var(--ag-muted);
@@ -1121,13 +1138,10 @@
   font-weight: 500;
 }
 
+/* Grows with its chats: the sidebar's scroll area scrolls them. */
 .browser-shell.browser-shell-desktop .desktop-chat-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  flex: 1 0 auto;
   padding: 2px;
-  scrollbar-width: thin;
-  scrollbar-color: #ffffff20 transparent;
 }
 
 .browser-shell.browser-shell-desktop .desktop-chat-link {
@@ -2653,9 +2667,10 @@ html.quick-ask-document body {
 }
 
 /*
- * Assistant Jobs, Inbox, Tasks and GitHub: sidebar entries and their
+ * Assistant Jobs, Inbox, Tasks and Settings: sidebar entries and their
  * panels. The entries sit two by two in a normal sidebar, in one row when
- * it is dragged wide, and as icons only when it is narrow.
+ * it is dragged wide, and as icons only when it is narrow. Settings
+ * expands in place to the less frequent panels (GitHub, MCP, ...).
  */
 .browser-shell.browser-shell-desktop .assistant-hub {
   display: grid;
@@ -2664,11 +2679,52 @@ html.quick-ask-document body {
   gap: 6px;
 }
 
-/* Two by two, so an odd last entry takes the whole row. */
-.browser-shell.browser-shell-desktop
-  .assistant-hub
-  > .assistant-hub-button:last-child:nth-child(odd) {
+.browser-shell.browser-shell-desktop .assistant-hub-more {
+  display: grid;
   grid-column: 1 / -1;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-more-item:hover {
+  background: var(--ag-accent-a12);
+}
+
+.browser-shell.browser-shell-desktop .assistant-hub-more-item > .codicon {
+  color: var(--ag-accent-text);
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-hub-more-item
+  > span:not([class]) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-hub-button[aria-expanded="true"] {
+  border-color: var(--ag-accent-a35);
+  background: var(--ag-accent-a12);
 }
 
 /* An MCP server's tools, each with Ask, Run or Off. */
@@ -2769,25 +2825,13 @@ html.quick-ask-document body {
 
 @container desktop-sidebar (min-width: 400px) {
   .browser-shell.browser-shell-desktop .assistant-hub {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-
-  .browser-shell.browser-shell-desktop
-    .assistant-hub
-    > .assistant-hub-button:last-child:nth-child(odd) {
-    grid-column: auto;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
 @container desktop-sidebar (max-width: 219px) {
   .browser-shell.browser-shell-desktop .assistant-hub {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-
-  .browser-shell.browser-shell-desktop
-    .assistant-hub
-    > .assistant-hub-button:last-child:nth-child(odd) {
-    grid-column: auto;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .browser-shell.browser-shell-desktop .assistant-hub-button {

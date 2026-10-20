@@ -301,110 +301,116 @@ export function DesktopSidebar({
           {assistantLink}
         </nav>
       )}
-      {header}
-      <div class="desktop-sidebar-history" hidden={mode !== "ask"}>
-        <button class="desktop-new-chat" type="button" onClick={onNew}>
-          <i class="codicon codicon-new-file" aria-hidden="true" />
-          New chat
-        </button>
-        <label class="desktop-search">
-          <i class="codicon codicon-search" aria-hidden="true" />
-          <input
-            aria-label="Search chats"
-            placeholder="Search chats"
-            value={search}
-            onInput={(event) => setSearch(event.currentTarget.value)}
-            type="search"
-          />
-        </label>
-        <h2 class="desktop-sidebar-heading">Your chats</h2>
-        {filtering && (
-          <div
-            class="desktop-chat-filters"
-            role="group"
-            aria-label="Show chats"
-          >
-            {CHAT_FILTERS.filter(
-              (option) => option.id === "all" || kinds.has(option.id),
-            ).map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                class="desktop-chat-filter"
-                aria-pressed={activeFilter === option.id}
-                onClick={() => setFilter(option.id)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        )}
-        <nav class="desktop-chat-list" aria-label="Saved chats">
-          {visibleSessions.map((session) => {
-            const title = session.title || "Untitled chat";
-            const kind = kindOf(session);
-            const notes = [
-              KIND_NOTES[kind],
-              session.activity ? ACTIVITY_LABELS[session.activity] : undefined,
-            ].filter(Boolean);
-            const label = notes.length
-              ? `${title} (${notes.join(", ")})`
-              : undefined;
-            return (
-              <button
-                key={session.id}
-                class={`desktop-chat-link${session.id === currentSessionId ? " active" : ""}`}
-                type="button"
-                aria-current={
-                  session.id === currentSessionId ? "page" : undefined
-                }
-                title={label ?? title}
-                aria-label={label}
-                onClick={() => onSelect(session.id)}
-              >
-                {kind === "job_run" && (
-                  <i
-                    class="codicon codicon-history desktop-chat-scheduled"
-                    aria-hidden="true"
-                  />
-                )}
-                {kind === "task" && (
-                  <i
-                    class="codicon codicon-git-pull-request desktop-chat-task"
-                    aria-hidden="true"
-                  />
-                )}
-                <span class="desktop-chat-title">{title}</span>
-                {session.activity && (
-                  <ChatActivityIndicator activity={session.activity} />
-                )}
-              </button>
-            );
-          })}
-          {visibleSessions.length === 0 && (
-            <p class="desktop-sidebar-empty">
-              {query || activeFilter !== "all"
-                ? "No matching chats."
-                : "Your conversations will appear here."}
-            </p>
+      {/* Everything under the views scrolls together, so a tall header
+          (the Assistant's project and hub) never squeezes the chats. */}
+      <div class="desktop-sidebar-scroll">
+        {header}
+        <div class="desktop-sidebar-history" hidden={mode !== "ask"}>
+          <button class="desktop-new-chat" type="button" onClick={onNew}>
+            <i class="codicon codicon-new-file" aria-hidden="true" />
+            New chat
+          </button>
+          <label class="desktop-search">
+            <i class="codicon codicon-search" aria-hidden="true" />
+            <input
+              aria-label="Search chats"
+              placeholder="Search chats"
+              value={search}
+              onInput={(event) => setSearch(event.currentTarget.value)}
+              type="search"
+            />
+          </label>
+          <h2 class="desktop-sidebar-heading">Your chats</h2>
+          {filtering && (
+            <div
+              class="desktop-chat-filters"
+              role="group"
+              aria-label="Show chats"
+            >
+              {CHAT_FILTERS.filter(
+                (option) => option.id === "all" || kinds.has(option.id),
+              ).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  class="desktop-chat-filter"
+                  aria-pressed={activeFilter === option.id}
+                  onClick={() => setFilter(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           )}
-        </nav>
-        <button class="desktop-manage-chats" type="button" onClick={onManage}>
-          <i class="codicon codicon-history" aria-hidden="true" />
-          Manage chats
-        </button>
+          <nav class="desktop-chat-list" aria-label="Saved chats">
+            {visibleSessions.map((session) => {
+              const title = session.title || "Untitled chat";
+              const kind = kindOf(session);
+              const notes = [
+                KIND_NOTES[kind],
+                session.activity
+                  ? ACTIVITY_LABELS[session.activity]
+                  : undefined,
+              ].filter(Boolean);
+              const label = notes.length
+                ? `${title} (${notes.join(", ")})`
+                : undefined;
+              return (
+                <button
+                  key={session.id}
+                  class={`desktop-chat-link${session.id === currentSessionId ? " active" : ""}`}
+                  type="button"
+                  aria-current={
+                    session.id === currentSessionId ? "page" : undefined
+                  }
+                  title={label ?? title}
+                  aria-label={label}
+                  onClick={() => onSelect(session.id)}
+                >
+                  {kind === "job_run" && (
+                    <i
+                      class="codicon codicon-history desktop-chat-scheduled"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {kind === "task" && (
+                    <i
+                      class="codicon codicon-git-pull-request desktop-chat-task"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span class="desktop-chat-title">{title}</span>
+                  {session.activity && (
+                    <ChatActivityIndicator activity={session.activity} />
+                  )}
+                </button>
+              );
+            })}
+            {visibleSessions.length === 0 && (
+              <p class="desktop-sidebar-empty">
+                {query || activeFilter !== "all"
+                  ? "No matching chats."
+                  : "Your conversations will appear here."}
+              </p>
+            )}
+          </nav>
+          <button class="desktop-manage-chats" type="button" onClick={onManage}>
+            <i class="codicon codicon-history" aria-hidden="true" />
+            Manage chats
+          </button>
+        </div>
+        {mode === "vscode" && (
+          <p class="desktop-sidebar-empty">
+            Your open VS Code windows and chats, connected through AgentLink.
+          </p>
+        )}
+        {mode === "assistant" && (
+          <p class="desktop-sidebar-empty">
+            Your self-hosted AgentLink Assistant. Its chats and projects live on
+            the Assistant's server.
+          </p>
+        )}
       </div>
-      {mode === "vscode" && (
-        <p class="desktop-sidebar-empty">
-          Your open VS Code windows and chats, connected through AgentLink.
-        </p>
-      )}
-      {mode === "assistant" && (
-        <p class="desktop-sidebar-empty">
-          Your self-hosted AgentLink Assistant. Its chats and projects live on
-          the Assistant's server.
-        </p>
-      )}
       {resizable && <SidebarResizeHandle />}
     </aside>
   );
