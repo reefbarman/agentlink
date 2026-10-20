@@ -185,6 +185,10 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/desktop-release.yml
+    # The package job reads the Apple Development certificate from the
+    # desktop-signing environment. A called workflow only sees those
+    # environment secrets when the caller passes secrets through.
+    secrets: inherit
     with:
       ref: ${{ needs.prepare.outputs.sha }}
       version: ${{ needs.plan.outputs.desktop_version }}
