@@ -92,11 +92,28 @@ export class DesktopAssistantView {
     preload?: string,
   ) {
     this.assistantSession = session.fromPartition(ASSISTANT_PARTITION);
-    // Notifications and every other permission stay off for now.
+    // Only the paired Assistant page may show notifications (inbox alerts
+    // while the app is open). Every other permission and origin stays off.
     this.assistantSession.setPermissionRequestHandler(
-      (_contents, _permission, callback) => callback(false),
+      (contents, permission, callback, details) =>
+        callback(
+          this.allowsPermission(
+            contents,
+            permission,
+            details.requestingUrl,
+            details.isMainFrame,
+          ),
+        ),
     );
-    this.assistantSession.setPermissionCheckHandler(() => false);
+    this.assistantSession.setPermissionCheckHandler(
+      (contents, permission, requestingOrigin, details) =>
+        this.allowsPermission(
+          contents,
+          permission,
+          requestingOrigin,
+          details.isMainFrame,
+        ),
+    );
     this.assistantSession.setDevicePermissionHandler(() => false);
     this.assistantSession.setCertificateVerifyProc(this.verifyCertificate);
     this.view = new WebContentsView({
@@ -263,6 +280,23 @@ export class DesktopAssistantView {
     } catch {
       return false;
     }
+  }
+
+  private allowsPermission(
+    contents: Electron.WebContents | null,
+    permission: string,
+    url: string | undefined,
+    isMainFrame: boolean | undefined,
+  ): boolean {
+    return (
+      !this.disposed &&
+      permission === "notifications" &&
+      isMainFrame === true &&
+      contents !== null &&
+      contents === this.view.webContents &&
+      url !== undefined &&
+      this.isAssistantUrl(url)
+    );
   }
 
   private openExternal(url: string): void {

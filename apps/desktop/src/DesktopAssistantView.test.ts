@@ -146,13 +146,6 @@ describe("desktop Assistant view", () => {
       session: electron.assistantSession,
     });
     expect(f.view.options.webPreferences).not.toHaveProperty("preload");
-    const permission = vi.fn();
-    electron.assistantSession.setPermissionRequestHandler.mock.calls.at(-1)[0](
-      null,
-      "notifications",
-      permission,
-    );
-    expect(permission).toHaveBeenCalledWith(false);
 
     f.layout("vscode");
     await flush();
@@ -180,6 +173,63 @@ describe("desktop Assistant view", () => {
       electron.assistantSession.setCertificateVerifyProc,
     ).toHaveBeenLastCalledWith(null);
     expect(electron.ipc.listenerCount("agentlink:assistant:retry")).toBe(0);
+  });
+
+  it("allows notifications only for the paired Assistant page", () => {
+    const f = fixture();
+    const contents = f.view.webContents;
+    const request = (
+      webContents: unknown,
+      permission: string,
+      requestingUrl: string,
+      isMainFrame = true,
+    ) => {
+      const callback = vi.fn();
+      electron.assistantSession.setPermissionRequestHandler.mock.calls.at(
+        -1,
+      )[0](webContents, permission, callback, { requestingUrl, isMainFrame });
+      return callback.mock.calls[0][0] as boolean;
+    };
+    const check = (
+      webContents: unknown,
+      permission: string,
+      origin: string,
+      isMainFrame = true,
+    ) =>
+      electron.assistantSession.setPermissionCheckHandler.mock.calls.at(-1)[0](
+        webContents,
+        permission,
+        origin,
+        { requestingUrl: `${origin}/`, isMainFrame },
+      ) as boolean;
+
+    expect(request(contents, "notifications", `${ORIGIN}/inbox`)).toBe(true);
+    expect(check(contents, "notifications", ORIGIN)).toBe(true);
+    // Every other permission stays off, even for the Assistant.
+    for (const permission of ["media", "geolocation", "clipboard-read"]) {
+      expect(request(contents, permission, `${ORIGIN}/`)).toBe(false);
+      expect(check(contents, permission, ORIGIN)).toBe(false);
+    }
+    // Other origins, credentials, subframes and other pages are refused.
+    expect(request(contents, "notifications", "https://example.com/")).toBe(
+      false,
+    );
+    expect(check(contents, "notifications", "https://example.com")).toBe(false);
+    expect(
+      request(
+        contents,
+        "notifications",
+        "https://user:pw@agentlink-assistant.local:8443/",
+      ),
+    ).toBe(false);
+    expect(request(contents, "notifications", `${ORIGIN}/`, false)).toBe(false);
+    expect(check(contents, "notifications", ORIGIN, false)).toBe(false);
+    expect(request({}, "notifications", `${ORIGIN}/`)).toBe(false);
+    expect(check(null, "notifications", ORIGIN)).toBe(false);
+
+    f.assistant.dispose();
+    expect(request(contents, "notifications", `${ORIGIN}/`)).toBe(false);
+    expect(check(contents, "notifications", ORIGIN)).toBe(false);
   });
 
   it("pins the configured CA for the Assistant's host only", () => {

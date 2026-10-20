@@ -49,6 +49,8 @@ export interface BrowserSubscription {
 /** The browser APIs the settings use; replaced in tests. */
 export interface NotificationBrowser {
   readonly support: NotificationSupport;
+  /** Running inside the AgentLink desktop app rather than a browser. */
+  readonly desktopApp?: boolean;
   permission(): NotificationPermission | "unavailable";
   requestPermission(): Promise<NotificationPermission | "unavailable">;
   currentSubscription(): Promise<BrowserSubscription | null>;
@@ -128,6 +130,9 @@ export function createNotificationBrowser(): NotificationBrowser {
     typeof window === "undefined" ? "none" : detectNotificationSupport();
   return {
     support,
+    desktopApp:
+      typeof navigator !== "undefined" &&
+      /\bElectron\//u.test(navigator.userAgent),
     permission: () =>
       typeof Notification === "undefined"
         ? "unavailable"
@@ -407,7 +412,9 @@ export function NotificationSettings({
       const permission = await browser.requestPermission();
       if (permission !== "granted") {
         setNote(
-          "Notifications are blocked for this site. Allow them in the browser's site settings, then try again.",
+          browser.desktopApp
+            ? "The AgentLink desktop app didn't allow notifications. Update the app to the latest version, then try again."
+            : "Notifications are blocked for this site. Allow them in the browser's site settings, then try again.",
         );
         return;
       }

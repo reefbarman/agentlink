@@ -251,6 +251,21 @@ describe("NotificationSettings", () => {
     expect(browser.subscribe).not.toHaveBeenCalled();
   });
 
+  it("points the desktop app at an update instead of site settings", async () => {
+    const { browser } = fakeBrowser("local", { grant: "denied" });
+    render(
+      <NotificationSettings
+        browser={{ ...browser, desktopApp: true }}
+        storage={memoryStorage()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    await screen.findByText(
+      /AgentLink desktop app didn't allow notifications/u,
+    );
+    expect(screen.queryByText(/site settings/u)).toBeNull();
+  });
+
   it("falls back to notifying while open when the browser has no push service", async () => {
     const calls = stubFetch({
       "GET /api/push": () => ({ publicKey: "BPub", subscribed: false }),
