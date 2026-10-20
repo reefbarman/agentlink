@@ -11330,6 +11330,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     switch (event.type) {
       case "thinking_start":
         this.log(`[agent] thinking_start id=${event.thinkingId}`);
+        // Flush buffered text deltas first so text streamed before this
+        // thinking block is not split around it (same as tool_start).
+        this.deltaBufferFlusher.flushNow();
         this.postMessage({
           type: isBackground ? "agentBgThinkingStart" : "agentThinkingStart",
           sessionId,

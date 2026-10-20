@@ -1237,6 +1237,9 @@ export function App({
           break;
         case "agentThinkingStart":
           if (dropIfNotStreaming()) break;
+          // Flush buffered text deltas so pre-thinking text lands before the
+          // thinking block instead of being split around it.
+          flushDeltasNow();
           dispatch({ type: "THINKING_START", thinkingId: msg.thinkingId });
           break;
         case "agentThinkingDelta":
