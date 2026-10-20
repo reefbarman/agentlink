@@ -1,0 +1,29 @@
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 737
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 9485-9487
+  s_e8ef1b8aef1665::t_25679489187cdd 9484,9488
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 254,263,272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6565604f681c41ca7cb2b062c6485340b5e16697",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e8ef1b8aef1665": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4d5a29a0-4935-4616-abc7-2349b728503a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
