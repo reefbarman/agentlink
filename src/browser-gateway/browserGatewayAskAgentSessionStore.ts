@@ -1473,8 +1473,13 @@ export class BrowserGatewayAskAgentSessionStore {
       message.memoryDisclosure = memoryDisclosure;
     }
     if (message && !message.content.trim() && fallbackText) {
+      // Content keeps the reply in model history, memory, and copy.
       message.content = fallbackText;
-      this.setAssistantFallbackTextBlock(message, fallbackText);
+      // A summary-only reply already renders in its final-status card; a
+      // matching body block would show the same response twice.
+      if (message.finalMarker?.summary?.trim() !== fallbackText.trim()) {
+        this.setAssistantFallbackTextBlock(message, fallbackText);
+      }
     }
     this.stopStreamingFor(messageId);
   }

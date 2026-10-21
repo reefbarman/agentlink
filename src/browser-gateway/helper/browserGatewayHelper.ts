@@ -8936,7 +8936,7 @@ export class BrowserGatewayHelper {
         const content = JSON.stringify({
           error: "response_not_delivered",
           detail:
-            "You have not sent the user any response this turn. The user sees only your streamed message text plus this summary — never tool calls or their results. Write the complete answer (the actual content, not a description of it) as normal assistant text, then call set_task_status again; alternatively include the full deliverable in `summary`.",
+            "You have not sent the user any response this turn. The user sees only your streamed message text plus this summary, never tool calls or their results. Call set_task_status again with the complete answer (the actual content, not a description of it) in `summary`.",
         });
         this.logAskAgentEvent("ask-agent.tool.set_task_status", {
           ok: false,

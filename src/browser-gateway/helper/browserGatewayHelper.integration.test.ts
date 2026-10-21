@@ -6458,15 +6458,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
           ],
         };
       }
+      // Recovers by putting the whole response in the summary, as the
+      // final-status contract asks, with no text-first duplicate.
       return {
-        text: "Meeting guide: 1. Confirm stakeholder requirements. 2. Compare Azure API Management tiers. 3. Review OAIC privacy obligations.",
+        text: "",
         toolCalls: [
           {
             id: "call_final_real",
             name: "set_task_status",
             input: {
               status: "completed",
-              summary: "Meeting guide with agenda and architecture options.",
+              summary:
+                "Meeting guide: 1. Confirm stakeholder requirements. 2. Compare Azure API Management tiers. 3. Review OAIC privacy obligations.",
             },
           },
         ],
@@ -6499,7 +6502,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(assistant?.finalMarker).toMatchObject({
       status: "completed",
       source: "tool",
+      summary: expect.stringContaining("Meeting guide: 1."),
     });
+    // The summary renders in the final-status card only, not again as body text.
+    expect(
+      assistant?.blocks.some(
+        (block) =>
+          block.type === "text" && block.text.includes("Meeting guide"),
+      ),
+    ).toBe(false);
   });
 
   it("accepts a repeated contentless completion instead of looping forever", async () => {
