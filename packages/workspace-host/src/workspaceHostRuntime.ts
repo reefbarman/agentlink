@@ -17,6 +17,7 @@ import {
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
+  createNodeHostAgentInstructions,
   createFileNodeHostPersistence,
   createNodeHostAgent,
   createNodeHostLocalFileSystem,
@@ -164,6 +165,21 @@ export interface CreateWorkspaceHostOptions {
   readonly promptIdentity?: WorkspacePromptIdentity;
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
+  };
+  /**
+   * VS Code's instruction, rule and skill behaviour: `AGENTS.md` /
+   * `CLAUDE.md`, `AGENTS.local.md` and rules from the project (and from
+   * `~/.agents`, `~/.claude` and `~/.agentlink` unless `homeDir` is null),
+   * a budgeted skill catalog in the prompt, and the `load_skill`,
+   * `read_skill_resource` and `load_rule` tools. Reads this machine's
+   * files. Cannot be combined with `artifacts`.
+   */
+  readonly agentInstructions?: {
+    readonly enabled: true;
+    /** Home folder for global sources. Defaults to `os.homedir()`; `null` skips them. */
+    readonly homeDir?: string | null;
+    /** Built-in skill folders this host ships. Defaults to none. */
+    readonly builtinSkillDirs?: readonly string[];
   };
   /**
    * Where project file access, search, git status and `execute_command`
@@ -428,6 +444,9 @@ export async function createWorkspaceHost(
   if (options.promptIdentity) {
     validateWorkspacePromptIdentity(options.promptIdentity);
   }
+  if (options.artifacts && options.agentInstructions) {
+    throw new Error("agent_instructions_and_artifacts_are_exclusive");
+  }
   if (
     options.executionBackend &&
     options.commands &&
@@ -561,6 +580,13 @@ export async function createWorkspaceHost(
       : undefined;
   const artifactTools = options.artifacts
     ? createWorkspaceArtifactTools({ roots: options.artifacts.roots })
+    : undefined;
+  const agentInstructions = options.agentInstructions
+    ? createNodeHostAgentInstructions({
+        projectRoot: project.root,
+        homeDir: options.agentInstructions.homeDir,
+        builtinSkillDirs: options.agentInstructions.builtinSkillDirs,
+      })
     : undefined;
   let engine!: AgentEngine;
   backgroundSupervisor = options.background
@@ -906,6 +932,7 @@ export async function createWorkspaceHost(
     ...(fileTools ||
     commandTools ||
     artifactTools ||
+    agentInstructions ||
     mcpTools ||
     sharedMcpTools ||
     backgroundTools ||
@@ -926,6 +953,11 @@ export async function createWorkspaceHost(
                     : []),
                   ...(artifactTools
                     ? await artifactTools.resolveTools(request)
+                    : []),
+                  ...(agentInstructions
+                    ? requireUnauthorizedTools(
+                        await agentInstructions.resolveTools(request),
+                      )
                     : []),
                   ...(mcpTools
                     ? (await mcpTools.resolveTools(request)).map((tool) =>
@@ -1115,7 +1147,9 @@ export async function createWorkspaceHost(
           : "Command tools are not enabled.",
         options.artifacts
           ? "Host-approved instructions and rules are active. Use list_artifacts and load_artifact for exact advertised skills or prompt commands."
-          : "Instruction and skill artifacts are not enabled.",
+          : agentInstructions
+            ? undefined
+            : "Instruction and skill artifacts are not enabled.",
         options.mcp || options.sharedMcp
           ? "MCP servers are unsandboxed external capabilities. Discovery requires foreground launch or destination trust, and MCP tool calls follow host authorization and configured policy."
           : approvalToolNames.has("call_mcp_tool")
@@ -1134,6 +1168,9 @@ export async function createWorkspaceHost(
               }`
           : "Background writers are not enabled.",
         artifactInstructions,
+        agentInstructions
+          ? await agentInstructions.resolveInstructions(request)
+          : undefined,
         typeof options.instructions === "function"
           ? await options.instructions({
               sessionId: request.session.sessionId,

@@ -68,6 +68,8 @@ For an exact `SKILL.md` path excluded during the session's catalogue discovery, 
 
 Reading a resource never activates a skill, applies its tool restrictions, grants path trust, or counts as a loaded skill in the transcript. For compatibility, passing a built-in skill's reference path to `load_skill` still returns the file as `kind: "skill_resource"` with `activation: false` and a deprecation notice. This fallback is temporary; use `read_skill_resource` instead.
 
+The standalone CLI, Assistant and Ask Agent use the same three tools, with the same descriptions, inputs and results. Each offers them only when it advertised a skill or deferred rule that turn. Two differences apply. These surfaces do not enforce a skill's `allowed-tools`, so the prompt asks the model to keep to them itself. Their sources also follow each surface's role: the CLI reads global and project sources, Assistant chats and tasks read only the project's, and Ask Agent reads global sources plus the built-in skills.
+
 ## Reduce related read-only fan-out
 
 `compose` is a default-on foreground tool for known workflows with roughly four or more related reads. It runs a bounded JavaScript function body that calls authorized read-only tools, keeps child results out of provider history, and returns only the filtered, projected, joined, counted, or summarized JSON the model needs.

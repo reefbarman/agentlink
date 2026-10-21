@@ -323,6 +323,8 @@ async function makeAskAgentToolLoopTestHarness(params: {
     publication: AskAgentControllerPublication,
   ) => void | Promise<void>;
   standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
+  /** Defaults to null so tests never read the developer's home folder. */
+  askAgentInstructionsHomeDir?: string | null;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -372,6 +374,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       standaloneMcpRuntime: params.standaloneMcpRuntime,
       streamingMetrics: params.streamingMetrics,
       beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
+      askAgentInstructionsHomeDir: params.askAgentInstructionsHomeDir ?? null,
     },
   );
   helperServer.on("request", helper.handleRequest);
@@ -6200,6 +6203,76 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(
       streamingMetrics.summarize("ask-agent-helper").projectedMessages,
     ).toBeGreaterThan(0);
+  });
+
+  it("gives Ask Agent VS Code's global instructions and loads a skill", async () => {
+    const home = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-home-")),
+    );
+    const skillPath = path.join(
+      home,
+      ".agentlink",
+      "skills",
+      "ask-skill",
+      "SKILL.md",
+    );
+    await fs.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.writeFile(
+      path.join(home, ".agentlink", "CLAUDE.md"),
+      "ASK-OWNER-RULE-5",
+    );
+    await fs.writeFile(
+      skillPath,
+      "---\nname: ask-skill\ndescription: Distinctive Ask Agent skill\n---\nASK-SKILL-BODY-8",
+    );
+    const calls: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      calls.push(params);
+      if (calls.length === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "call_skill",
+              name: "load_skill",
+              input: { path: skillPath },
+            },
+          ],
+        };
+      }
+      return { text: "Skill used.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentInstructionsHomeDir: home,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    try {
+      const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ text: "Use my skill" }),
+      });
+      expect(send.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.additionalInstructions).toContain(
+        "# Instructions (~/.agentlink/CLAUDE.md):\nASK-OWNER-RULE-5",
+      );
+      expect(calls[0]?.additionalInstructions).toContain(`path="${skillPath}"`);
+      expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["load_skill", "read_skill_resource"]),
+      );
+      expect(JSON.stringify(calls[1]?.iterationMessages)).toContain(
+        "ASK-SKILL-BODY-8",
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 
   it("applies safe Ask Agent todo_write and set_task_status tool calls", async () => {

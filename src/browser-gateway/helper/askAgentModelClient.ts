@@ -107,10 +107,15 @@ Write the complete answer or deliverable as normal assistant message text before
 
 function buildAskAgentInstructions(
   promptProfile: PromptProfile = "compatibility",
+  additionalInstructions?: string,
 ): string {
-  return promptProfile === "reasoning"
-    ? ASK_AGENT_REASONING_SYSTEM_PROMPT
-    : ASK_AGENT_SYSTEM_PROMPT;
+  const base =
+    promptProfile === "reasoning"
+      ? ASK_AGENT_REASONING_SYSTEM_PROMPT
+      : ASK_AGENT_SYSTEM_PROMPT;
+  return additionalInstructions?.trim()
+    ? `${base}\n\n${additionalInstructions.trim()}`
+    : base;
 }
 
 export function findAskAgentMemoryAnchor(
@@ -210,6 +215,11 @@ export type BrowserGatewayAskAgentCompletionParams = {
   maxTokens?: number;
   /** Override the standard Ask Agent instructions for constrained delegated calls. */
   instructions?: string;
+  /**
+   * Appended to the standard Ask Agent instructions (ignored with
+   * `instructions`): the user's instructions, rule catalog and skills.
+   */
+  additionalInstructions?: string;
   /** Ordered assistant responses and user tool results for the active turn. */
   iterationMessages?: readonly CoreModelMessage[];
   /** @deprecated Compatibility input for older test clients. */
@@ -655,7 +665,10 @@ export class BrowserGatewayAskAgentModelClient {
           model,
           systemPrompt:
             params.instructions ??
-            buildAskAgentInstructions(params.promptProfile),
+            buildAskAgentInstructions(
+              params.promptProfile,
+              params.additionalInstructions,
+            ),
           messages: buildAskAgentMessages(params),
           maxTokens: params.maxTokens ?? 2048,
           reasoningEffort: params.reasoningEffort ?? "low",
@@ -809,7 +822,11 @@ export class BrowserGatewayAskAgentModelClient {
           : undefined,
         model: params.model,
         instructions:
-          params.instructions ?? buildAskAgentInstructions(promptProfile),
+          params.instructions ??
+          buildAskAgentInstructions(
+            promptProfile,
+            params.additionalInstructions,
+          ),
         input: translateCodexMessages(buildAskAgentMessages(params)),
         maxTokens: params.maxTokens ?? 2048,
         state: { store: false },

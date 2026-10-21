@@ -3,7 +3,14 @@ import {
   CodexTurnState,
   ResponsesConversationState,
 } from "@agentlink/core/codex";
-import { createResponsesWebSocketConnector } from "@agentlink/node-host";
+import {
+  createNodeHostAgentInstructions,
+  createResponsesWebSocketConnector,
+  isAgentInstructionToolName,
+  type AgentInstructionToolName,
+  type NodeHostAgentInstructions,
+  type NodeHostAgentInstructionsSnapshot,
+} from "@agentlink/node-host";
 import * as fs from "fs/promises";
 import * as http from "http";
 import * as https from "https";
@@ -257,6 +264,7 @@ import type {
   FinalMessageStatus,
 } from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
+import { getBundledSkillDirs } from "../../agent/skillLoader.js";
 import { presentImages } from "../../tools/presentImages.js";
 import { resolveMarkdownImage } from "../../tools/markdownImageResolver.js";
 import type { MarkdownImageResolution } from "../../shared/markdownImageSource.js";
@@ -1101,6 +1109,8 @@ export class BrowserGatewayHelper {
     string,
     ResponsesConversationState
   >();
+  /** VS Code's instructions, rules and skills, projectless (global and built-in). */
+  private readonly askAgentInstructions: NodeHostAgentInstructions;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
     "complete"
@@ -1214,6 +1224,8 @@ export class BrowserGatewayHelper {
         options: ConstructorParameters<typeof StandaloneMcpOAuthRuntime>[0],
       ) => StandaloneMcpOAuthRuntime;
       streamingMetrics?: StreamingBaselineMetrics;
+      /** Home folder for Ask Agent's global instructions and skills; null skips them. */
+      askAgentInstructionsHomeDir?: string | null;
       beforeAskAgentSnapshotPublish?: (
         publication: AskAgentControllerPublication,
       ) => void | Promise<void>;
@@ -1477,6 +1489,10 @@ export class BrowserGatewayHelper {
       process.platform === "darwin" && !injectables.askAgentModelClient
         ? createSharedCodexOAuthRuntime((message) => logHelper(message))
         : undefined;
+    this.askAgentInstructions = createNodeHostAgentInstructions({
+      homeDir: injectables.askAgentInstructionsHomeDir,
+      builtinSkillDirs: getBundledSkillDirs(),
+    });
     this.askAgentModelClient =
       injectables.askAgentModelClient ??
       new BrowserGatewayAskAgentModelClient({
@@ -6156,8 +6172,22 @@ export class BrowserGatewayHelper {
         params.assistantMessageId,
         params.signal,
       );
+      // One catalog for this turn's prompt and its skill/rule tools. Only the
+      // tool-calling path can use them.
+      const instructionSnapshot = completeWithToolCalls
+        ? await this.askAgentInstructions.snapshot().catch((error: unknown) => {
+            logHelper(`ask-agent instructions unavailable: ${String(error)}`);
+            return undefined;
+          })
+        : undefined;
+      const additionalInstructions = instructionSnapshot?.prompt || undefined;
       const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
         ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+        ...(instructionSnapshot
+          ? (this.askAgentInstructions.toolDefinitions(
+              instructionSnapshot,
+            ) as unknown as CoreModelToolDefinition[])
+          : []),
         ...preparedWebAccess.tools,
         ...ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
       ]);
@@ -6183,6 +6213,7 @@ export class BrowserGatewayHelper {
           messages: [],
           memoryContext: params.memoryContext,
           memoryContextBeforeIndex,
+          additionalInstructions,
           iterationMessages: modelTranscriptMessages,
           codexUseWebSocket: preparedWebAccess.codexUseWebSocket,
           signal: params.signal,
@@ -6324,6 +6355,7 @@ export class BrowserGatewayHelper {
             messages: [],
             memoryContext: params.memoryContext,
             memoryContextBeforeIndex,
+            additionalInstructions,
             iterationMessages: [
               ...modelTranscriptMessages,
               ...iterationMessages,
@@ -6431,19 +6463,26 @@ export class BrowserGatewayHelper {
                   canonicalCall,
                   nativeToolDisclosure,
                 )
-              : await this.executeAskAgentSafeProjectlessTool(
-                  canonicalCall,
-                  preparedWebAccess,
-                  params.modelContext.credential,
-                  params.modelContext.model,
-                  params.modelContext.ownerId,
-                  params.signal,
-                  { getVisibleAssistantText: segmentVisibleText },
-                  {
-                    sessionId: this.askAgentSessionStore.getActiveSessionId(),
-                    turnId: params.assistantMessageId,
-                  },
-                );
+              : instructionSnapshot &&
+                  isAgentInstructionToolName(canonicalCall.name)
+                ? await this.executeAskAgentInstructionTool(
+                    canonicalCall,
+                    canonicalCall.name,
+                    instructionSnapshot,
+                  )
+                : await this.executeAskAgentSafeProjectlessTool(
+                    canonicalCall,
+                    preparedWebAccess,
+                    params.modelContext.credential,
+                    params.modelContext.model,
+                    params.modelContext.ownerId,
+                    params.signal,
+                    { getVisibleAssistantText: segmentVisibleText },
+                    {
+                      sessionId: this.askAgentSessionStore.getActiveSessionId(),
+                      turnId: params.assistantMessageId,
+                    },
+                  );
           this.recordAskAgentSemanticDelta();
           this.askAgentController.completeAssistantToolCall({
             messageId: currentAssistantMessageId,
@@ -6650,6 +6689,34 @@ export class BrowserGatewayHelper {
       stop,
       ...(stop ? { outcome: "model_final" as const } : {}),
       toolMessage: this.buildAskAgentToolResultMessage(toolCall, content, true),
+    };
+  }
+
+  private async executeAskAgentInstructionTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    name: AgentInstructionToolName,
+    snapshot: NodeHostAgentInstructionsSnapshot,
+  ): Promise<AskAgentToolExecutionResult> {
+    const { result } = await this.askAgentInstructions.executeTool(
+      name,
+      toolCall.input,
+      snapshot,
+    );
+    const content = result.content
+      .flatMap((item) => (item.type === "text" ? [item.text] : []))
+      .join("\n");
+    this.logAskAgentEvent("ask-agent.tool.agent_instructions", {
+      toolName: name,
+      ok: !result.isError,
+    });
+    return {
+      content,
+      stop: false,
+      toolMessage: this.buildAskAgentToolResultMessage(
+        toolCall,
+        content,
+        Boolean(result.isError),
+      ),
     };
   }
 

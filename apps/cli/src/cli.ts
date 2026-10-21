@@ -810,25 +810,9 @@ async function createHost(options: {
           },
         }
       : {}),
-    artifacts: {
-      roots: [
-        {
-          id: "global",
-          scope: "global",
-          rootPath: path.join(options.dataRoot, "artifacts"),
-        },
-        {
-          id: "project",
-          scope: "project",
-          rootPath: options.projectRoot,
-        },
-        {
-          id: "project_agentlink",
-          scope: "project",
-          rootPath: path.join(options.projectRoot, ".agentlink"),
-        },
-      ],
-    },
+    // VS Code's instructions, rules and skills: ~/.agents, ~/.claude and
+    // ~/.agentlink, then the project, with load_skill and load_rule.
+    agentInstructions: { enabled: true },
     ...(options.enableCommands
       ? {
           commands: {

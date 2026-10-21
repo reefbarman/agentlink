@@ -235,9 +235,14 @@ The language server is an unsandboxed local process. Tool path checks constrain 
 
 ## Instructions and skills
 
-At each model turn, the CLI discovers instructions and rules from three explicit roots in increasing precedence: the CLI data root's `artifacts/` directory, the project root, and the project's `.agentlink` directory. Supported instruction files are `AGENTS.md`, `AGENT.md`, and `CLAUDE.md`; rule files live under `rules/`. The current contents are resolved again for every turn rather than being trusted from an old session snapshot.
+The CLI finds instructions, rules and skills the same way the VS Code agent does, using the same shared code. That includes your global `~/.agentlink/CLAUDE.md` and `~/.claude/CLAUDE.md`, the project root's `AGENTS.md`/`AGENT.md`/`CLAUDE.md` files, `AGENTS.local.md` overrides, `.agentlink/AGENTS.md`, and global and project `rules/`. Rules marked `alwaysApply: false` are listed in a rule catalog and loaded on demand with `load_rule`. Everything is discovered again at the start of each turn, so edits apply to the next turn.
 
-Skills under `skills/NAME/SKILL.md` and prompt commands under `commands/` are listed through `list_artifacts` and loaded through `load_artifact`. Loading requires the exact artifact ID, artifact revision, and catalog revision returned for the same turn. These tools cannot read an arbitrary path, and instruction or rule contents are activated directly rather than exposed as loadable artifacts.
+Skills are discovered from the same global and project skill folders as VS Code (`~/.agentlink/skills`, `~/.agents/skills`, `~/.claude/skills` and the project's equivalents). The model activates one with `load_skill` and its exact `SKILL.md` path. Both tools accept only skills and rules advertised in the current turn's catalog, not arbitrary paths, and are offered only when there is something to load. Limits compared with VS Code:
+
+- The CLI ships no built-in skills.
+- Instruction files in subfolders are not read. VS Code reads them only for the file open in the editor, and the CLI has no open file.
+- A skill's `allowed-tools` is not enforced. The prompt tells the model to keep to those tools itself.
+- Prompt files under `commands/` are not offered to the model or as slash commands. The old `<data root>/artifacts/` folder is no longer read.
 
 ## MCP
 

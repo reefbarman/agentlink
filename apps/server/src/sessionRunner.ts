@@ -392,6 +392,10 @@ export async function startSessionRunner(options: {
     },
     sessionInteractions: {},
     instructions: spec.instructions,
+    // The task repository's AGENTS.md, rules and skills, as VS Code reads
+    // them. Never the runner's home folder: the persona and memory stand in
+    // for the owner's global instructions.
+    agentInstructions: { enabled: true, homeDir: null },
     commands: {
       enabled: true,
       shellExecutable: spec.shell,

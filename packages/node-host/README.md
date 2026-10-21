@@ -58,6 +58,25 @@ Results are bounded: text files are capped at 1 MB, reads at 200 lines, listing 
 
 These tools do not create grants or an approval UI. The embedding host authenticates the principal, obtains/records user consent, and resolves grants per turn.
 
+## VS Code instructions, rules, and skills
+
+`createNodeHostAgentInstructions(...)` is the VS Code agent's own discovery, moved here so other agents get the same behaviour: `~/.agentlink/CLAUDE.md` and `~/.claude/CLAUDE.md`, the project root's `AGENTS.md` / `AGENT.md` / `CLAUDE.md` (VS Code also reads nested ones for the active editor file; this factory has no active file yet), `AGENTS.local.md`, `.agentlink/AGENTS.md`, global and project `rules/` (deferred rules go in a rule catalog), and the global, project and built-in skill folders. VS Code imports these modules directly, so the two cannot drift.
+
+```ts
+import { createNodeHostAgentInstructions } from "@agentlink/node-host";
+
+const agentInstructions = createNodeHostAgentInstructions({
+  projectRoot, // omit for a projectless agent
+  homeDir: null, // skip global sources; defaults to os.homedir()
+  builtinSkillDirs: [bundledSkillsDir],
+});
+// Per turn: prompt sections plus load_skill / read_skill_resource / load_rule.
+const instructions = agentInstructions.resolveInstructions;
+const tools = agentInstructions.resolveTools;
+```
+
+`snapshot(turn)` discovers once per session turn, so the prompt and the tools agree on one catalog. The cache is in memory: a turn resumed after a restart, or evicted after 16 newer turns, rediscovers from the same roots. The skill tools are offered only when a skill was advertised, and `load_rule` only when a rule was deferred. Both load only what that catalog advertised. A loaded skill's `allowed-tools` is not enforced by this package: unless the host passes `enforcesSkillToolRestrictions: true`, the prompt asks the model to keep to those tools itself. `@agentlink/workspace-host` composes this through its `agentInstructions` option, which cannot be combined with `artifacts`.
+
 ## C2 instruction, skill, and command artifacts
 
 `createNodeHostArtifactCatalog(...)` discovers conventional `AGENTS.md` / `AGENT.md` / `CLAUDE.md`, `rules/*.md`, `skills/<name>/SKILL.md`, and `commands/**/*.md` files **only** below the absolute roots the embedding host supplies. Roots are ordered low-to-high precedence: all instruction/rule blocks compose in order, while a later command with the same name replaces an earlier one. Skill names must match their directory and use lowercase hyphenated names.

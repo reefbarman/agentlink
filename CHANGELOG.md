@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The standalone CLI, Assistant and Ask Agent (Desktop and the browser gateway) now find instructions, rules and skills the same way the VS Code agent does, using VS Code's own code. The CLI now reads `~/.agentlink/CLAUDE.md`, `~/.claude/CLAUDE.md`, `AGENTS.local.md`, deferred rules, and the global and project skill folders, and uses `load_skill`, `read_skill_resource` and `load_rule` in place of `list_artifacts` and `load_artifact`. Assistant project chats and tasks read the project's instructions, rules and skills but not your global ones, so the Assistant's own persona and memory stay in charge. Ask Agent has no project, so it uses your global instructions and skills plus the built-in skills. Outside VS Code, a skill's `allowed-tools` is a prompt instruction, not an enforced restriction. VS Code behaviour is unchanged.
+
 ## 1.53.0
 
 - Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.

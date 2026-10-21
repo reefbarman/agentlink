@@ -1,11 +1,3 @@
-export function normalizeSkillToolNames(
-  tools: readonly string[] | undefined,
-): string[] | undefined {
-  return tools === undefined
-    ? undefined
-    : [
-        ...new Set(
-          tools.map((tool) => (tool === "Bash" ? "execute_command" : tool)),
-        ),
-      ];
-}
+// Shared with every agent surface; see `skillDiscovery.ts` in
+// `@agentlink/node-host`.
+export { normalizeSkillToolNames } from "@agentlink/node-host";

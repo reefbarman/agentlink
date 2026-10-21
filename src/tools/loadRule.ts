@@ -1,24 +1,16 @@
+import { loadRule, type AllowedRule } from "@agentlink/node-host";
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
-import { loadAdvertisedFile } from "./loadAdvertisedFile.js";
+import { createLegacyAdvertisedArtifactProvider } from "./loadAdvertisedFile.js";
 
-export interface AllowedRule {
-  source: string;
-  filePath: string;
-  summary?: string;
-}
+export type { AllowedRule } from "@agentlink/node-host";
 
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return content;
-
-  return content.slice(end + 4).trim();
-}
-
+/**
+ * VS Code's `load_rule`. The handler is shared with every agent surface
+ * (`skillTools.ts` in `@agentlink/node-host`).
+ */
 export async function handleLoadRule(
   params: {
     path: string;
@@ -29,17 +21,10 @@ export async function handleLoadRule(
   advertisedRules: AllowedRule[] = [],
   artifactProvider?: AdvertisedArtifactProvider,
 ): Promise<ToolResult> {
-  return loadAdvertisedFile({
-    path: params.path,
-    advertisedFiles: advertisedRules.map((rule) => ({
-      name: rule.summary ? `${rule.source} — ${rule.summary}` : rule.source,
-      filePath: rule.filePath,
-    })),
-    kind: "rule",
-    pathProperty: "rulePath",
-    nameProperty: "rule_name",
-    allowlistLabel: "rule",
-    contentTransform: stripFrontmatter,
+  return loadRule(
+    params,
+    advertisedRules,
     artifactProvider,
-  });
+    artifactProvider ? undefined : createLegacyAdvertisedArtifactProvider(),
+  );
 }

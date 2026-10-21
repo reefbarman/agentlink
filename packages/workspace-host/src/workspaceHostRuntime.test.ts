@@ -731,6 +731,120 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("composes VS Code instructions and skills, and loads a skill through the turn", async () => {
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-")),
+    );
+    const projectRoot = path.join(parent, "project");
+    const home = path.join(parent, "home");
+    const skillPath = path.join(
+      projectRoot,
+      ".agentlink",
+      "skills",
+      "turn-skill",
+      "SKILL.md",
+    );
+    await fs.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.mkdir(path.join(home, ".agentlink"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "AGENTS.md"), "PROJECT-RULE-7");
+    await fs.writeFile(
+      path.join(home, ".agentlink", "CLAUDE.md"),
+      "OWNER-RULE-9",
+    );
+    await fs.writeFile(
+      skillPath,
+      "---\nname: turn-skill\ndescription: Distinctive turn skill\n---\nSKILL-BODY-42",
+    );
+    const toolResults: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: Array<{ role?: string; content?: string }>;
+          tools?: Array<{ function?: { name?: string } }>;
+        };
+        const system = body.messages?.find(
+          (message) => message.role === "system",
+        )?.content;
+        expect(system).toContain("# Instructions (AGENTS.md):\nPROJECT-RULE-7");
+        expect(system).toContain(
+          "# Instructions (~/.agentlink/CLAUDE.md):\nOWNER-RULE-9",
+        );
+        expect(system).toContain(`path="${skillPath}"`);
+        expect(system).not.toContain("Instruction and skill artifacts");
+        const names = body.tools?.map((tool) => tool.function?.name);
+        expect(names).toEqual(
+          expect.arrayContaining(["load_skill", "read_skill_resource"]),
+        );
+        expect(names).not.toContain("list_artifacts");
+        const result = body.messages?.find(
+          (message) => message.role === "tool",
+        );
+        if (result) {
+          toolResults.push(String(result.content));
+          return completion("skill loaded");
+        }
+        return toolCall("load_skill", { path: skillPath });
+      });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "agent-instructions",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      agentInstructions: { enabled: true, homeDir: home },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      await expect(
+        host.runTurn(sessionId, "use the skill"),
+      ).resolves.toMatchObject({ status: "completed", text: "skill loaded" });
+      expect(toolResults.join("\n")).toContain("SKILL-BODY-42");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses agentInstructions combined with artifacts", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    try {
+      await expect(
+        createWorkspaceHost({
+          projectRoot,
+          dataRoot: path.join(parent, "data"),
+          ownerId: "exclusive",
+          providers: [],
+          defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+          artifacts: {
+            roots: [{ id: "project", scope: "project", rootPath: projectRoot }],
+          },
+          agentInstructions: { enabled: true, homeDir: null },
+        }),
+      ).rejects.toThrow("agent_instructions_and_artifacts_are_exclusive");
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("offers and runs host-supplied tools, refusing ones that need approval", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

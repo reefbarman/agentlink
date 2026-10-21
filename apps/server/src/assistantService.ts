@@ -1428,6 +1428,10 @@ export async function startAssistantService(
         // The todo list, for Auto Continue; no ask_user (approval cards and
         // messages are how a chat reaches the owner).
         sessionInteractions: {},
+        // The project's AGENTS.md, rules and skills, as VS Code reads them.
+        // Never the server's home folder: the persona and memory stand in
+        // for the owner's global instructions.
+        agentInstructions: { enabled: true, homeDir: null },
         // Read each turn, so a persona change applies without a restart.
         instructions: async (request) =>
           kind === "project"

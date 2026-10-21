@@ -1,15 +1,16 @@
-import { createHash } from "crypto";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 
-import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import {
-  errorResult,
-  jsonResult,
-  type ToolResult,
-} from "@agentlink/protocol/tool-result";
+  loadAdvertisedFile as loadSharedAdvertisedFile,
+  type AllowedAdvertisedFile,
+} from "@agentlink/node-host";
+import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { resolveAndValidatePath } from "../util/paths.js";
+
+export type { AllowedAdvertisedFile } from "@agentlink/node-host";
 
 function normalizeExistingPath(filePath: string): string {
   try {
@@ -19,15 +20,8 @@ function normalizeExistingPath(filePath: string): string {
   }
 }
 
-export interface AllowedAdvertisedFile {
-  name: string;
-  filePath: string;
-  resultFields?: Record<string, unknown>;
-  expectedRealPath?: string;
-  expectedSha256?: string;
-}
-
-function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
+/** VS Code's resolver for callers that pass no artifact provider. */
+export function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
   return {
     resolvePath(inputPath) {
       return resolveAndValidatePath(inputPath).absolutePath;
@@ -39,6 +33,10 @@ function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
   };
 }
 
+/**
+ * Shared with every agent surface (`skillTools.ts` in `@agentlink/node-host`);
+ * VS Code resolves workspace paths when no provider is passed.
+ */
 export async function loadAdvertisedFile(params: {
   path: string;
   advertisedFiles: AllowedAdvertisedFile[];
@@ -49,67 +47,8 @@ export async function loadAdvertisedFile(params: {
   contentTransform?: (raw: string) => string;
   artifactProvider?: AdvertisedArtifactProvider;
 }): Promise<ToolResult> {
-  try {
-    const artifactProvider =
-      params.artifactProvider ?? createLegacyAdvertisedArtifactProvider();
-    const absolutePath = artifactProvider.resolvePath(params.path);
-    const normalizedAbsolutePath =
-      artifactProvider.normalizeExistingPath(absolutePath);
-    const allowed = params.advertisedFiles.find((file) => {
-      try {
-        return (
-          artifactProvider.normalizeExistingPath(file.filePath) ===
-          normalizedAbsolutePath
-        );
-      } catch {
-        return false;
-      }
-    });
-
-    if (!allowed) {
-      return errorResult(
-        `${params.kind[0].toUpperCase()}${params.kind.slice(1)} path is not in the current session's advertised ${params.allowlistLabel} allowlist`,
-        params.path ? { path: params.path } : undefined,
-      );
-    }
-
-    if (
-      allowed.expectedRealPath &&
-      artifactProvider.normalizeExistingPath(allowed.expectedRealPath) !==
-        normalizedAbsolutePath
-    ) {
-      return errorResult(
-        `${params.kind[0].toUpperCase()}${params.kind.slice(1)} changed after it was advertised; refresh the catalog before loading it`,
-        { path: params.path, status: "stale_advertised_artifact" },
-      );
-    }
-
-    const raw = await artifactProvider.readTextFile(absolutePath);
-    if (
-      allowed.expectedSha256 &&
-      createHash("sha256").update(raw).digest("hex") !== allowed.expectedSha256
-    ) {
-      return errorResult(
-        `${params.kind[0].toUpperCase()}${params.kind.slice(1)} changed after it was advertised; refresh the catalog before loading it`,
-        { path: params.path, status: "stale_advertised_artifact" },
-      );
-    }
-    const content = params.contentTransform?.(raw) ?? raw;
-
-    return jsonResult(
-      {
-        [params.nameProperty]: allowed.name,
-        [params.pathProperty]: absolutePath,
-        ...allowed.resultFields,
-        content,
-      },
-      true,
-    );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return errorResult(
-      message,
-      params.path ? { path: params.path } : undefined,
-    );
-  }
+  return loadSharedAdvertisedFile({
+    ...params,
+    fallbackArtifactProvider: createLegacyAdvertisedArtifactProvider(),
+  });
 }
