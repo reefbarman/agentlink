@@ -1,0 +1,24 @@
+apps/cli/THIRD_PARTY_NOTICES.md
+  s_ca53b3c99e46df::t_93c5cc5cb46e04 2531,2753,4202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49923d0109b9fb892691b1cbbbe3c1714bbb78e8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ca53b3c99e46df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f0c237b-09da-4b3c-b381-f1d7d452f2eb",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
