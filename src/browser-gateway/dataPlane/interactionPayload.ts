@@ -14,7 +14,10 @@ import type {
   StructuredQuestionRequest as QuestionRequest,
   UserQuestion as Question,
 } from "@agentlink/protocol/structured-question";
-import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
+import type {
+  ManagedNetworkRequest,
+  TerminalExecutionSecuritySummary,
+} from "@agentlink/protocol/terminal-security";
 import type {
   McpElicitationField,
   McpElicitationOption,
@@ -129,6 +132,20 @@ function approvalRequest(value: unknown): ApprovalRequest {
     recoveryAttempt,
   );
   copyOptional(result, "security", source.security, terminalSecurity);
+  // Malformed network evidence degrades to the card's reject-only fallback
+  // rather than discarding the whole interaction.
+  copyOptionalValid(
+    result,
+    "managedNetwork",
+    source.managedNetwork,
+    managedNetworkRequest,
+  );
+  copyOptionalValid(
+    result,
+    "networkReview",
+    source.networkReview,
+    commandReview,
+  );
   copyOptional(result, "mcpDetail", source.mcpDetail, stringValue);
   copyOptional(result, "mcpServerName", source.mcpServerName, stringValue);
   copyOptional(result, "mcpToolName", source.mcpToolName, stringValue);
@@ -272,6 +289,42 @@ function commandReview(value: unknown): CommandReviewSummary {
     rationale: stringValue(source.rationale),
     model: stringValue(source.model),
   };
+}
+
+function managedNetworkRequest(value: unknown): ManagedNetworkRequest {
+  const source = recordValue(value);
+  const result: ManagedNetworkRequest = {
+    requestId: stringValue(source.requestId),
+    sessionId: stringValue(source.sessionId),
+    auditId: stringValue(source.auditId),
+    terminalId: stringValue(source.terminalId),
+    commandId: stringValue(source.commandId),
+    generation: finiteNumberValue(source.generation),
+    command: stringValue(source.command),
+    cwd: stringValue(source.cwd),
+    host: stringValue(source.host),
+    protocol: enumValue(source.protocol, ["http", "https", "tcp"] as const),
+    port: finiteNumberValue(source.port),
+    address: stringValue(source.address),
+    family: ipFamily(source.family),
+    dnsAnswers: arrayValue(source.dnsAnswers, (item) => {
+      const answer = recordValue(item);
+      return {
+        address: stringValue(answer.address),
+        family: ipFamily(answer.family),
+      };
+    }),
+    destinationClass: enumValue(source.destinationClass, ["public"] as const),
+  };
+  copyOptional(result, "reason", source.reason, stringValue);
+  return result;
+}
+
+function ipFamily(value: unknown): 4 | 6 {
+  if (value !== 4 && value !== 6) {
+    throw new Error("invalid_browser_gateway_interaction_payload");
+  }
+  return value;
 }
 
 function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {

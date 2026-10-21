@@ -777,6 +777,58 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     );
   });
 
+  it("forwards managed-network destination evidence and Guardian review", () => {
+    const managedNetwork = {
+      requestId: "network-1",
+      sessionId: "session-1",
+      auditId: "audit-network-1",
+      terminalId: "sandbox-1",
+      commandId: "command-1",
+      generation: 2,
+      command: "bash check.sh",
+      cwd: "/workspace",
+      reason: "Check site",
+      host: "www.example.com",
+      protocol: "tcp" as const,
+      port: 443,
+      address: "34.160.232.4",
+      family: 4 as const,
+      dnsAnswers: [{ address: "34.160.232.4", family: 4 as const }],
+      destinationClass: "public" as const,
+    };
+    const networkReview = {
+      status: "reviewed" as const,
+      outcome: "deny" as const,
+      risk: "medium" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Unfamiliar destination.",
+      model: "guardian",
+    };
+    const payload = (approval: Record<string, unknown>) => ({
+      approval: { id: "network-approval-1", kind: "network", ...approval },
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    });
+
+    const projected = projectBrowserGatewayOwnerInteractionPayload(
+      payload({ managedNetwork, networkReview }) as never,
+    );
+    expect(projected?.approval?.managedNetwork).toEqual(managedNetwork);
+    expect(projected?.approval?.networkReview).toEqual(networkReview);
+
+    const malformed = projectBrowserGatewayOwnerInteractionPayload(
+      payload({
+        managedNetwork: { ...managedNetwork, family: 5 },
+        networkReview: { ...networkReview, status: "future" },
+      }) as never,
+    );
+    expect(malformed?.approval?.id).toBe("network-approval-1");
+    expect(malformed?.approval).not.toHaveProperty("managedNetwork");
+    expect(malformed?.approval).not.toHaveProperty("networkReview");
+  });
+
   it("projects lifecycle hook approvals with their exact decisions", () => {
     const payload: BrowserGatewayOwnerInteractionPayload = {
       approval: {
