@@ -1,0 +1,16 @@
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 801-802,816-833,2345
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 2181-2223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4ea20b05216c7fc9fe36572ca3209509d869ef2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
