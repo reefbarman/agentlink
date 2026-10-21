@@ -341,6 +341,7 @@
   --ag-user-bubble: linear-gradient(125deg, #263735, #293237);
   --ag-composer-bg: linear-gradient(120deg, #222d2c, #252b31);
   --ag-new-chat-bg: linear-gradient(115deg, #24473d, #223a37);
+  --ag-shelf-bg: linear-gradient(180deg, #1c2628f2, #1a2225f2);
   --ag-accent-a09: rgb(var(--ag-accent-rgb) / 0.035);
   --ag-accent-a0c: rgb(var(--ag-accent-rgb) / 0.047);
   --ag-accent-a10: rgb(var(--ag-accent-rgb) / 0.063);
@@ -1534,7 +1535,7 @@
   border: 1px solid #ffffff12;
   border-bottom: 0;
   border-radius: 18px 18px 0 0;
-  background: linear-gradient(180deg, #1c2628f2, #1a2225f2);
+  background: var(--ag-shelf-bg);
   box-shadow: 0 -6px 24px #00000024;
   pointer-events: none;
 }
@@ -2205,6 +2206,7 @@ html.quick-ask-document body {
   --ag-user-bubble: linear-gradient(125deg, #2e2942, #2a2b3a);
   --ag-composer-bg: linear-gradient(120deg, #26233a, #25263a);
   --ag-new-chat-bg: linear-gradient(115deg, #3a2f63, #2d2848);
+  --ag-shelf-bg: linear-gradient(180deg, #1e1b29f2, #1b1925f2);
   --ag-glow-2: #71baff09;
   --ag-code-bg: #1b1925;
   --consumer-surface: #232030;
@@ -3371,6 +3373,61 @@ html.quick-ask-document body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* "Remembered" lines above the composer, each with Undo. */
+.browser-shell.browser-shell-desktop .assistant-remembered {
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border-color: var(--ag-accent-a20);
+  border-radius: 10px;
+  background: var(--ag-accent-a09);
+  color: var(--ag-text);
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered > .codicon {
+  flex: 0 0 auto;
+  color: var(--ag-accent-text);
+  font-size: 14px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered-text {
+  flex: 1 1 auto;
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered-label {
+  color: var(--ag-accent-text);
+  font-weight: 600;
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered-undo {
+  appearance: none;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ag-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-shell.browser-shell-desktop
+  .assistant-remembered-undo:hover:not(:disabled) {
+  background: var(--ag-accent-a1a);
+  color: var(--ag-accent-text-strong);
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered-undo:focus-visible {
+  outline: 2px solid var(--ag-accent);
+  outline-offset: 1px;
+}
+
+.browser-shell.browser-shell-desktop .assistant-remembered-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .browser-shell.browser-shell-desktop .assistant-task-summary > p {

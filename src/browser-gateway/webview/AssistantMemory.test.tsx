@@ -49,7 +49,9 @@ describe("RememberedStrip", () => {
         onUndo={onUndo}
       />,
     );
-    expect(screen.getByText("Remembered: Prefers short answers")).toBeTruthy();
+    expect(screen.getByTitle("Prefers short answers").textContent).toBe(
+      "Remembered: Prefers short answers",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(onUndo).toHaveBeenCalledWith("m1"));
   });

@@ -69,14 +69,18 @@ export function RememberedStrip({
   return (
     <ul class="assistant-chat-tasks" aria-label="Remembered in this chat">
       {memories.map((memory) => (
-        <li class="assistant-chat-task" key={memory.id}>
+        <li class="assistant-chat-task assistant-remembered" key={memory.id}>
           <i class="codicon codicon-lightbulb" aria-hidden="true" />
-          <span class="assistant-chat-task-name">
-            Remembered: {memory.statement}
+          <span
+            class="assistant-chat-task-name assistant-remembered-text"
+            title={memory.statement}
+          >
+            <span class="assistant-remembered-label">Remembered:</span>{" "}
+            {memory.statement}
           </span>
           <button
             type="button"
-            class="assistant-task-pr"
+            class="assistant-remembered-undo"
             disabled={busy === memory.id}
             onClick={() => undo(memory.id)}
           >
