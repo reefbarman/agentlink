@@ -1,0 +1,48 @@
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 2041-2053,2055
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 46
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1512
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 6715,6760,6848-6863
+packages/core/src/nativeWebTools.ts
+  h_e08a86bb3a33a2 19,21
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 241
+src/core/nativeWebTools.test.ts
+  h_e08a86bb3a33a2 26-33
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 129-131
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 145
+src/agent/unifiedContextBaselines.test.ts
+  h_e08a86bb3a33a2 796
+CHANGELOG.md
+  h_e08a86bb3a33a2 9-10
+resources/builtin-skills/documentation/references/release-notes.md
+  s_5de00323195f76::t_1f94137e06cd1b 9-10
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e03f7b7684a12d665771d4b0cf6b2818c9490a41",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_5de00323195f76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd26b443-63e4-49e5-9f11-96c5a97ce480",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
