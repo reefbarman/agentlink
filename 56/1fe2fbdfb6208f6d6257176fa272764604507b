@@ -1,0 +1,24 @@
+.github/workflows/marketplace-identity.yml
+  s_b99c1c54fb1b2f::t_7bce7f26285a47 32-33,36-40,43-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "561fe2fbdfb6208f6d6257176fa272764604507b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_b99c1c54fb1b2f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0f6b1bec-7724-49dc-9331-d6ffb511de0e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
