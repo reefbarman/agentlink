@@ -1673,11 +1673,14 @@ describe("AgentSessionManager host injection", () => {
   });
 
   it.each([
-    [true, "approve-for-me", "session"],
-    [false, "sensitive", "prompt"],
+    ["foreground", true, "approve-for-me", "session"],
+    ["foreground", false, "sensitive", "prompt"],
+    ["chat tab", true, "approve-for-me", "session"],
+    ["chat tab", false, "sensitive", "prompt"],
+    ["internal background", true, "sensitive", "prompt"],
   ] as const)(
-    "starts new foreground chats per approveForMeByDefault=%s",
-    async (enabled, expectedPolicy, expectedWrites) => {
+    "starts a new %s chat per approveForMeByDefault=%s",
+    async (kind, enabled, expectedPolicy, expectedWrites) => {
       let writeApproval: "prompt" | "session" = "prompt";
       const setAgentWriteApprovalSelection = vi.fn(
         (_sessionId: string, selection: "session") => {
@@ -1717,12 +1720,20 @@ describe("AgentSessionManager host injection", () => {
         extensionUri: {} as any,
       });
 
-      const session = await mgr.createForegroundSession("code");
+      const session =
+        kind === "foreground"
+          ? await mgr.createForegroundSession("code")
+          : await mgr.createSession("code", {
+              foreground: false,
+              ...(kind === "chat tab" ? { applyApprovalDefault: true } : {}),
+            });
 
       expect(mgr.getCommandApprovalPolicy(session.id, "sensitive")).toBe(
         expectedPolicy,
       );
-      expect(Boolean(session.approveForMe)).toBe(enabled);
+      expect(Boolean(session.approveForMe)).toBe(
+        expectedPolicy === "approve-for-me",
+      );
       expect(writeApproval).toBe(expectedWrites);
     },
   );

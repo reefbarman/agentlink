@@ -210,6 +210,7 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
       projectId: undefined,
       foreground: false,
+      applyApprovalDefault: true,
     });
     expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
@@ -244,6 +245,7 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.createSession).toHaveBeenCalledWith("ask", {
       projectId: "project-remote",
       foreground: false,
+      applyApprovalDefault: true,
     });
     expect(harness.manager.switchTo).not.toHaveBeenCalled();
     expect(harness.manager.stopSessionAndWait).not.toHaveBeenCalled();
@@ -318,6 +320,7 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
       projectId: undefined,
       foreground: false,
+      applyApprovalDefault: true,
     });
     expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
@@ -396,6 +399,7 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
       projectId: undefined,
       foreground: false,
+      applyApprovalDefault: true,
     });
     expect(harness.manager.switchTo).not.toHaveBeenCalled();
   });

@@ -5163,6 +5163,12 @@ export class AgentSessionManager {
       activeFilePath?: string;
       projectId?: string;
       foreground?: boolean;
+      /**
+       * Apply `agentlink.approveForMeByDefault` to this new user chat.
+       * Defaults to true for foreground sessions; chat tabs create their
+       * sessions in the background and opt in explicitly.
+       */
+      applyApprovalDefault?: boolean;
     },
   ): Promise<AgentSession> {
     const projectScope =
@@ -5217,17 +5223,18 @@ export class AgentSessionManager {
     if (!isProjectlessSessionScope(projectScope)) {
       this.getCheckpointManagerForSession(session);
     }
-    if (opts?.foreground !== false) {
-      const pendingApprovalMode = this.sessionApprovalModes.get("agent");
-      if (pendingApprovalMode) {
-        this.sessionApprovalModes.set(session.id, pendingApprovalMode);
-        this.sessionApprovalModes.delete("agent");
-        this.syncSessionApproveForMe(session);
-      } else {
-        this.applyDefaultApproveForMe(session);
-      }
-      this.foregroundId = session.id;
+    const foreground = opts?.foreground !== false;
+    const pendingApprovalMode = foreground
+      ? this.sessionApprovalModes.get("agent")
+      : undefined;
+    if (pendingApprovalMode) {
+      this.sessionApprovalModes.set(session.id, pendingApprovalMode);
+      this.sessionApprovalModes.delete("agent");
+      this.syncSessionApproveForMe(session);
+    } else if (opts?.applyApprovalDefault ?? foreground) {
+      this.applyDefaultApproveForMe(session);
     }
+    if (foreground) this.foregroundId = session.id;
     this.notifySessionsChanged();
     return session;
   }

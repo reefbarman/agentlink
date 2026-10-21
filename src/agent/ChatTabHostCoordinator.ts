@@ -41,6 +41,7 @@ interface ChatTabHostSessionManager {
       activeFilePath?: string;
       projectId?: string;
       foreground?: boolean;
+      applyApprovalDefault?: boolean;
     },
   ): Promise<AgentSession>;
   hydratePersistedSession(sessionId: string): Promise<AgentSession | null>;
@@ -87,6 +88,7 @@ export class ChatTabHostCoordinator {
     const session = await this.sessions.createSession(mode, {
       projectId,
       foreground: false,
+      applyApprovalDefault: true,
     });
     const bound = await this.ensureBinding(tab.id, null, session.id);
     if (!bound) return { ok: false, reason: "binding_conflict" };
@@ -162,6 +164,7 @@ export class ChatTabHostCoordinator {
     const session = await this.sessions.createSession(mode, {
       projectId: options.projectId,
       foreground: false,
+      applyApprovalDefault: true,
     });
     const bound = await this.ensureBinding(
       validated.tab.id,
