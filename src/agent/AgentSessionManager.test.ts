@@ -204,6 +204,21 @@ function addCurrentMutationMetadata(
   ];
 }
 
+/**
+ * Session checkpoints run git in the background, which can still be writing
+ * into `.agentlink/checkpoints/<id>/.git` when a test finishes. A single
+ * recursive delete then races it and fails with ENOTEMPTY, so let Node retry
+ * the transient ENOTEMPTY/EBUSY errors before giving up.
+ */
+function removeTempWorkspace(workspace: string): void {
+  fs.rmSync(workspace, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 50,
+  });
+}
+
 const makeConfig = (): AgentConfig => ({
   model: "claude-sonnet-4-6",
   maxTokens: 8192,
@@ -2495,7 +2510,7 @@ describe("AgentSessionManager host injection", () => {
         expect.anything(),
       );
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -2617,7 +2632,7 @@ describe("AgentSessionManager host injection", () => {
         content: [{ type: "text", text: "Half a thou" }],
       });
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -2675,7 +2690,7 @@ describe("AgentSessionManager host injection", () => {
         code: "fork_message_not_found",
       });
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -3558,7 +3573,7 @@ describe("AgentSessionManager host injection", () => {
       (mgr as any).releaseSessionToolContext(session.id, request);
       (mgr as any).releaseInteractiveEngine(session.id, interactive);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -5236,7 +5251,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       expect(second.messages).toHaveLength(3);
       expect(afterSecondReload.revision).toBe(beforeSecondReload.revision);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -6299,7 +6314,7 @@ describe("AgentSessionManager in-flight persistence", () => {
         { role: "user", content: "distinct checkpoint transcript" },
       ]);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 });
@@ -6412,7 +6427,7 @@ describe("AgentSessionManager activity tracing", () => {
         ),
       ).toHaveLength(1);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
@@ -6527,7 +6542,7 @@ describe("AgentSessionManager activity tracing", () => {
         totalCacheCreationTokens: 5,
       });
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 });
@@ -6933,7 +6948,7 @@ describe("AgentSessionManager checkpoints", () => {
       expect(managerA.revertToCheckpoint).toHaveBeenCalledTimes(1);
       expect(managerB.revertToCheckpoint).toHaveBeenCalledTimes(1);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      removeTempWorkspace(workspace);
     }
   });
 
