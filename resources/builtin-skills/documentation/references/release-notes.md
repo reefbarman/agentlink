@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `web_fetch` with Codex no longer stops partway through longer pages when you ask for a short preview. The provider ignores the requested continuation line and sizes each page by the requested output budget, which AgentLink took from `max_length`, so a 3,000-character preview fetched only about 16K characters and every continuation repeated that same page ("Provider pagination did not advance"). AgentLink now sizes the provider window from the retention budget and still trims the inline preview locally.
+- Sandboxed commands with network access on macOS can now reach the system certificate trust service, so `gh`, `gcloud`, `terraform`, `kubectl` and other Go CLIs verify TLS inside the sandbox instead of failing with `x509: OSStatus -26276` and needing a reviewed retry outside it. This matches Codex CLI's sandbox policy. Commands without network access keep the service blocked, and certificate verification is unchanged.
+
 ## 1.59.1
 
 - CLI and Assistant condensing now works with Codex models. The summariser asks for temperature 0, which VS Code's providers drop when a model does not support it but the SDK's Codex backend rejected, so `/condense` and automatic condensing failed with "Responses backend does not support temperature". The SDK condenser now leaves temperature out unless the model supports it. VS Code behaviour is unchanged.

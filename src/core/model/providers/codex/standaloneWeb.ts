@@ -313,6 +313,10 @@ export function prepareCodexStandaloneWebRequest(
         external_web_access: externalWebAccess(mode),
         ...(Object.keys(filters).length > 0 ? { filters } : {}),
       },
+      // The provider ignores `open.lineno` and always serves the page from L0,
+      // sized by max_output_tokens. Size fetch windows from the retention
+      // budget, not the inline preview length (which AgentLink truncates
+      // locally), or every continuation repeats the same short first page.
       max_output_tokens:
         request.operation === "search"
           ? 4_096
@@ -320,7 +324,7 @@ export function prepareCodexStandaloneWebRequest(
               MAX_STANDALONE_OUTPUT_TOKENS,
               Math.max(
                 4_096,
-                Math.ceil(maxContentCharacters / FETCH_CHARS_PER_TOKEN),
+                Math.ceil(maxRetainedCharacters / FETCH_CHARS_PER_TOKEN),
               ),
             ),
     },

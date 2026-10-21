@@ -120,6 +120,33 @@ describe("prepareCodexStandaloneWebRequest", () => {
       }),
     ).toThrow("blocked by web access policy");
   });
+
+  it("sizes the fetch window from the retention budget, not the inline preview", () => {
+    // Observed: the provider ignores open.lineno and serves from L0 sized by
+    // max_output_tokens, so a 3000-char preview requested only 4096 tokens and
+    // every continuation repeated the same page (L0-L321 of 390).
+    const settings = normalizeCoreWebAccessSettings({
+      maxFetchContentTokens: 12_000,
+    });
+    const prepared = prepareCodexStandaloneWebRequest({
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/long", max_length: 3000 },
+      settings,
+    });
+    expect(prepared.maxContentCharacters).toBe(3000);
+    expect(prepared.body.max_output_tokens).toBe(12_000);
+
+    const capped = prepareCodexStandaloneWebRequest({
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/long", max_length: 3000 },
+      settings: normalizeCoreWebAccessSettings(),
+    });
+    expect(capped.body.max_output_tokens).toBe(16_384);
+  });
 });
 
 describe("executeCodexStandaloneWeb", () => {

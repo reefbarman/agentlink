@@ -24,6 +24,7 @@ Options:
   --url <url>                   Open an exact URL (default: ${DEFAULT_URL})
   --query <query>               Run a search instead of opening a URL
   --find <pattern>              Find text in the URL supplied with --url
+  --lineno <line>               Open the URL from this provider line (continuation)
   --mode <cached|indexed|live>  External web access mode (default: cached)
   --model <model>               Model sent to the search endpoint (default: ${DEFAULT_MODEL})
   --response-length <length>    short, medium, or long (default: short)
@@ -45,6 +46,7 @@ function parseArgs(argv) {
     baseUrl: process.env.CODEX_SEARCH_PROBE_BASE_URL ?? DEFAULT_BASE_URL,
     find: undefined,
     help: false,
+    lineno: undefined,
     mode: "cached",
     model: process.env.CODEX_SEARCH_PROBE_MODEL ?? DEFAULT_MODEL,
     query: undefined,
@@ -64,6 +66,7 @@ function parseArgs(argv) {
       arg === "--url" ||
       arg === "--query" ||
       arg === "--find" ||
+      arg === "--lineno" ||
       arg === "--mode" ||
       arg === "--model" ||
       arg === "--response-length" ||
@@ -76,6 +79,7 @@ function parseArgs(argv) {
       if (arg === "--url") options.url = next;
       if (arg === "--query") options.query = next;
       if (arg === "--find") options.find = next;
+      if (arg === "--lineno") options.lineno = Number(next);
       if (arg === "--mode") options.mode = next;
       if (arg === "--model") options.model = next;
       if (arg === "--response-length") options.responseLength = next;
@@ -97,6 +101,12 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) {
     throw new Error(`Invalid --timeout-ms value: ${options.timeoutMs}`);
+  }
+  if (
+    options.lineno !== undefined &&
+    (!Number.isInteger(options.lineno) || options.lineno < 0)
+  ) {
+    throw new Error(`Invalid --lineno value: ${options.lineno}`);
   }
   if (options.query && options.find) {
     throw new Error("--query and --find cannot be used together");
@@ -160,8 +170,25 @@ function commands(options) {
     };
   }
   return {
-    open: [{ ref_id: options.url }],
+    open: [
+      {
+        ref_id: options.url,
+        ...(options.lineno !== undefined ? { lineno: options.lineno } : {}),
+      },
+    ],
     response_length: options.responseLength,
+  };
+}
+
+function summarizeLineMarkers(output) {
+  const lines = [...output.matchAll(/^L(\d+):/gm)].map((m) => Number(m[1]));
+  const total = output.match(/\bTotal lines:\s*(\d+)\b/i);
+  return {
+    totalLines: total ? Number(total[1]) : undefined,
+    markerCount: lines.length,
+    firstLine: lines[0],
+    lastLine: lines.at(-1),
+    highestLine: lines.length > 0 ? Math.max(...lines) : undefined,
   };
 }
 
@@ -284,6 +311,14 @@ async function probe(options) {
       outputPreview:
         typeof payload.output === "string"
           ? payload.output.slice(0, 500)
+          : undefined,
+      outputTail:
+        typeof payload.output === "string"
+          ? payload.output.slice(-300)
+          : undefined,
+      lineMarkers:
+        typeof payload.output === "string"
+          ? summarizeLineMarkers(payload.output)
           : undefined,
       resultCount: Array.isArray(payload.results)
         ? payload.results.length

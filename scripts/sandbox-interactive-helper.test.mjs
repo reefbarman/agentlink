@@ -558,6 +558,8 @@ test("launches loopback networking with a private environment and emits ready be
     CLAUDE_CODE_TMPDIR: "/private/tmp/agentlink-interactive/tmp",
   });
   assert.equal(harness.calls.initialize[0].allowPty, true);
+  // No network access, so Go's trustd certificate lookup stays blocked.
+  assert.equal(harness.calls.initialize[0].enableWeakerNetworkIsolation, false);
   assert.deepEqual(harness.calls.initialize[0].network, {
     allowedDomains: [],
     deniedDomains: [],
@@ -1424,6 +1426,8 @@ test("launches public-proxy with a host-owned wildcard and redacts credentials f
   await harness.waitFor(() => harness.frames()[0]?.type === "ready");
 
   assert.deepEqual(harness.calls.proxyAllowlist, [["*"]]);
+  // Networked commands may reach trustd so Go CLIs such as gh verify TLS.
+  assert.equal(harness.calls.initialize[0].enableWeakerNetworkIsolation, true);
   assert.deepEqual(harness.calls.initialize[0].network, {
     allowedDomains: ["*"],
     deniedDomains: [],

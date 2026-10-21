@@ -759,7 +759,10 @@ export function createSandboxInteractiveHelper(options = {}) {
         filesystem,
         allowPty: true,
         allowAppleEvents: false,
-        enableWeakerNetworkIsolation: false,
+        // Go TLS clients on macOS (gh, gcloud, terraform, kubectl) verify
+        // certificates through com.apple.trustd.agent. Allow that lookup only
+        // when the command has network access, matching Codex CLI's policy.
+        enableWeakerNetworkIsolation: request.network.allowedDomains.length > 0,
       });
       const descriptor = await runtime.wrapWithSandboxArgv(
         request.command,
