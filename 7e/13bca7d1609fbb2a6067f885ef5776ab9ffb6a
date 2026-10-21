@@ -1,0 +1,26 @@
+package.json
+  h_e08a86bb3a33a2 3
+resources/builtin-skills/documentation/references/package-contract.md
+  s_254b0bddbbaff3::t_e4ca630cd402e7 9-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_254b0bddbbaff3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7dac7ddd-23d1-4577-ab82-a66ad247a419",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
