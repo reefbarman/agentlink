@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "561fe2fbdfb6208f6d6257176fa272764604507b",
-  "createdAt": "2026-10-21T22:53:05.312Z",
+  "sourceSha": "0c006d416ac4b62d114bfac8372d70ac4f14a20f",
+  "createdAt": "2026-10-21T23:59:05.433Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,67 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.60.0",
-      "baselineRef": "v1.60.0",
-      "reserved": "1.60.0",
-      "commits": ["648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8"],
+      "published": "1.61.0",
+      "baselineRef": "v1.61.0",
+      "reserved": "1.61.0",
+      "commits": [
+        "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+        "d29fad305b68290f2c9a5cd0f6f5e798eae0d102"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.61.0",
+      "version": "1.62.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.61.0",
+      "tag": "v1.62.0",
       "notes": [
         {
-          "sha": "648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8",
-          "subject": "feat(webview): let question cards hand the composer back to chat input",
-          "summary": "The ask_user question composer gains a Chat input button that sets the question aside so slash commands like /mcp can run while it stays pending, with a Back to question button to restore it.",
+          "sha": "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+          "subject": "fix(desktop): bring the Assistant forward when its notification is clicked",
+          "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
+          "breaking": false
+        },
+        {
+          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+          "subject": "feat(agent): search and read earlier sessions in the same workspace",
+          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.46.0",
-      "baselineRef": "desktop-v0.46.0",
-      "reserved": "0.46.0",
-      "commits": ["648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8"],
+      "published": "0.47.0",
+      "baselineRef": "desktop-v0.47.0",
+      "reserved": "0.47.0",
+      "commits": [
+        "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+        "d29fad305b68290f2c9a5cd0f6f5e798eae0d102"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.47.0",
+      "version": "0.48.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.47.0",
+      "tag": "desktop-v0.48.0",
       "notes": [
         {
-          "sha": "648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8",
-          "subject": "feat(webview): let question cards hand the composer back to chat input",
-          "summary": "The ask_user question composer gains a Chat input button that sets the question aside so slash commands like /mcp can run while it stays pending, with a Back to question button to restore it.",
+          "sha": "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+          "subject": "fix(desktop): bring the Assistant forward when its notification is clicked",
+          "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
+          "breaking": false
+        },
+        {
+          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+          "subject": "feat(agent): search and read earlier sessions in the same workspace",
+          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
           "breaking": false
         }
       ]
@@ -61,46 +79,79 @@
       "published": "0.34.0",
       "baselineRef": "cli-v0.34.0",
       "reserved": "0.34.0",
-      "commits": [],
+      "commits": ["d29fad305b68290f2c9a5cd0f6f5e798eae0d102"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.35.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.35.0",
+      "notes": [
+        {
+          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+          "subject": "feat(agent): search and read earlier sessions in the same workspace",
+          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.25.0",
       "baselineRef": "sdk-v0.25.0",
       "reserved": "0.25.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.18.0",
-      "baselineRef": "assistant-v0.18.0",
-      "reserved": "0.18.0",
-      "commits": ["648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8"],
+      "commits": ["d29fad305b68290f2c9a5cd0f6f5e798eae0d102"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.19.0",
+      "version": "0.26.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.19.0",
+      "tag": "sdk-v0.26.0",
       "notes": [
         {
-          "sha": "648c7b660b8ad5529362c20fb6e3c0a2c6eab2d8",
-          "subject": "feat(webview): let question cards hand the composer back to chat input",
-          "summary": "The ask_user question composer gains a Chat input button that sets the question aside so slash commands like /mcp can run while it stays pending, with a Back to question button to restore it.",
+          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+          "subject": "feat(agent): search and read earlier sessions in the same workspace",
+          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.19.0",
+      "baselineRef": "assistant-v0.19.0",
+      "reserved": "0.19.0",
+      "commits": [
+        "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+        "d29fad305b68290f2c9a5cd0f6f5e798eae0d102"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.20.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.20.0",
+      "notes": [
+        {
+          "sha": "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+          "subject": "fix(desktop): bring the Assistant forward when its notification is clicked",
+          "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
+          "breaking": false
+        },
+        {
+          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+          "subject": "feat(agent): search and read earlier sessions in the same workspace",
+          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
           "breaking": false
         }
       ]
@@ -111,6 +162,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The ask_user question composer gains a Chat input button that sets the question aside so slash commands like /mcp can run while it stays pending, with a Back to question button to restore it.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d29fad305b68290f2c9a5cd0f6f5e798eae0d102": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

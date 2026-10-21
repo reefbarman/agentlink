@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.26.0 — 2026-10-21
+
+- The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.
+
 ## 0.25.0 — 2026-10-21
 
 - Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.

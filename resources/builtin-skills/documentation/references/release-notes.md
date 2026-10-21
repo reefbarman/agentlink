@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.62.0
+
 - The VS Code agent can now look up earlier sessions in the same project with `search_workspace_sessions` and `read_workspace_session_excerpt`, so it can check whether something was worked on before and read the original discussion. Search uses a local lexical index of saved history (no embeddings or external calls), re-reads each matching session before returning excerpts, and reports when indexing is incomplete. Background agents, bounded profiles, other projects and skills that don't name the tools don't get access, and current-session recall is unchanged. SDK: `@agentlink/core/workspace-session-history` provides the shared service and tool handlers for hosts that supply their own session source and index.
 
 ## 1.61.0
