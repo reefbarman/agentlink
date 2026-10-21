@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-  "createdAt": "2026-10-20T23:34:35.201Z",
+  "sourceSha": "7fe6644e527195e10817713ec4ce52343ba63edd",
+  "createdAt": "2026-10-21T00:43:56.391Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.51.0",
-      "baselineRef": "v1.51.0",
-      "reserved": "1.51.0",
-      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
+      "published": "1.52.0",
+      "baselineRef": "v1.52.0",
+      "reserved": "1.52.0",
+      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.52.0",
+      "version": "1.53.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.52.0",
+      "tag": "v1.53.0",
       "notes": [
         {
-          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
-          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
+          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
+          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
+          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.37.0",
-      "baselineRef": "desktop-v0.37.0",
-      "reserved": "0.37.0",
-      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
+      "published": "0.38.0",
+      "baselineRef": "desktop-v0.38.0",
+      "reserved": "0.38.0",
+      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.38.0",
+      "version": "0.39.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.38.0",
+      "tag": "desktop-v0.39.0",
       "notes": [
         {
-          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
-          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
+          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
+          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
+          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.27.0",
-      "baselineRef": "cli-v0.27.0",
-      "reserved": "0.27.0",
-      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
+      "published": "0.28.0",
+      "baselineRef": "cli-v0.28.0",
+      "reserved": "0.28.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.28.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.28.0",
-      "notes": [
-        {
-          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
-          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.18.0",
-      "baselineRef": "sdk-v0.18.0",
-      "reserved": "0.18.0",
-      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
+      "published": "0.19.0",
+      "baselineRef": "sdk-v0.19.0",
+      "reserved": "0.19.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.19.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.19.0",
-      "notes": [
-        {
-          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
-          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.9.0",
-      "baselineRef": "assistant-v0.9.0",
-      "reserved": "0.9.0",
-      "commits": ["75df8360ea5eb620f2be73ac2d0eb65bdf2aacae"],
+      "published": "0.10.0",
+      "baselineRef": "assistant-v0.10.0",
+      "reserved": "0.10.0",
+      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.10.0",
+      "tag": "assistant-v0.11.0",
       "notes": [
         {
-          "sha": "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae",
-          "subject": "feat(cli): add get_repo_map and get_module_neighbors from a shared structural index",
-          "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
+          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
+          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
+          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "75df8360ea5eb620f2be73ac2d0eb65bdf2aacae": {
+    "7fe6644e527195e10817713ec4ce52343ba63edd": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.",
+      "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

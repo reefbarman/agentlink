@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.53.0
+
+- Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.
+
 ## 1.52.0
 
 - The standalone CLI and Assistant task runners now have `get_repo_map` and `get_module_neighbors`, with the same output as in VS Code. They use a new lightweight structural index (no embeddings or native database) that is built on first use and refreshed from changed files on every call. In the CLI it is stored under `~/.agentlink/code-index` and shared by every process working on the same checkout, with one writer at a time; each Assistant task keeps its own. Results only include files the session may read.
