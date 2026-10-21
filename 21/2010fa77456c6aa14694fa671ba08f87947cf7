@@ -1,0 +1,31 @@
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 344,1538,2209,3378-3430
+  h_e08a86bb3a33a2 3431-3432
+src/browser-gateway/webview/AssistantMemory.test.tsx
+  h_e08a86bb3a33a2 52-53
+  s_d4f73b444fe8a0::t_01c976b92b41e6 54
+src/browser-gateway/webview/AssistantMemory.tsx
+  h_e08a86bb3a33a2 72,75-76,78,83
+  h_e08a86bb3a33a2 74,77,79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "212010fa77456c6aa14694fa671ba08f87947cf7",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d4f73b444fe8a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf100348-106c-4ca6-92cc-1600614b4c5a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
