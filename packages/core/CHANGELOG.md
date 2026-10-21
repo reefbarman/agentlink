@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.24.1 — 2026-10-21
+
+- Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.
+
 ## 0.24.0 — 2026-10-21
 
 - The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c4ea20b05216c7fc9fe36572ca3209509d869ef2",
-  "createdAt": "2026-10-21T05:15:10.731Z",
+  "sourceSha": "5efdee20194ca05c1de5558ddf8668c2d9b48acf",
+  "createdAt": "2026-10-21T06:02:20.706Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,196 +10,148 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.58.0",
-      "baselineRef": "v1.58.0",
-      "reserved": "1.58.0",
-      "commits": [
-        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-        "e9323ceadc4dcac37bbc744827e625fe90968949"
-      ],
+      "published": "1.59.0",
+      "baselineRef": "v1.59.0",
+      "reserved": "1.59.0",
+      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.59.0",
-      "effectiveBump": "minor",
+      "version": "1.59.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.59.0",
+      "tag": "v1.59.1",
       "notes": [
         {
-          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
-          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
-          "breaking": false
-        },
-        {
-          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
-          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
-          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
+          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.44.0",
-      "baselineRef": "desktop-v0.44.0",
-      "reserved": "0.44.0",
-      "commits": [
-        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-        "e9323ceadc4dcac37bbc744827e625fe90968949"
-      ],
+      "published": "0.45.0",
+      "baselineRef": "desktop-v0.45.0",
+      "reserved": "0.45.0",
+      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.45.0",
-      "effectiveBump": "minor",
+      "version": "0.45.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.45.0",
+      "tag": "desktop-v0.45.1",
       "notes": [
         {
-          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
-          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
-          "breaking": false
-        },
-        {
-          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
-          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
-          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
+          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.32.0",
-      "baselineRef": "cli-v0.32.0",
-      "reserved": "0.32.0",
-      "commits": ["e9323ceadc4dcac37bbc744827e625fe90968949"],
+      "published": "0.33.0",
+      "baselineRef": "cli-v0.33.0",
+      "reserved": "0.33.0",
+      "commits": [
+        "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+        "5efdee20194ca05c1de5558ddf8668c2d9b48acf"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.33.0",
-      "effectiveBump": "minor",
+      "version": "0.33.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.33.0",
+      "tag": "cli-v0.33.1",
       "notes": [
         {
-          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
-          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
-          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
+          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
+          "breaking": false
+        },
+        {
+          "sha": "5efdee20194ca05c1de5558ddf8668c2d9b48acf",
+          "subject": "chore(cli): refresh third-party notices for bumped dependencies",
+          "summary": "Refreshes the CLI third-party notices to match bumped dependency versions (marked, openai, zod).",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.23.0",
-      "baselineRef": "sdk-v0.23.0",
-      "reserved": "0.23.0",
-      "commits": ["e9323ceadc4dcac37bbc744827e625fe90968949"],
+      "published": "0.24.0",
+      "baselineRef": "sdk-v0.24.0",
+      "reserved": "0.24.0",
+      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.24.0",
-      "effectiveBump": "minor",
+      "version": "0.24.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.24.0",
+      "tag": "sdk-v0.24.1",
       "notes": [
         {
-          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
-          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
-          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
+          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.16.0",
-      "baselineRef": "assistant-v0.16.0",
-      "reserved": "0.16.0",
-      "commits": [
-        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-        "e792155be87155b50a525dd792c1977f8913a8ba",
-        "e9323ceadc4dcac37bbc744827e625fe90968949",
-        "c4ea20b05216c7fc9fe36572ca3209509d869ef2"
-      ],
+      "published": "0.17.0",
+      "baselineRef": "assistant-v0.17.0",
+      "reserved": "0.17.0",
+      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.17.0",
-      "effectiveBump": "minor",
+      "version": "0.17.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.17.0",
+      "tag": "assistant-v0.17.1",
       "notes": [
         {
-          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
-          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
-          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
-          "breaking": false
-        },
-        {
-          "sha": "e792155be87155b50a525dd792c1977f8913a8ba",
-          "subject": "fix(assistant): pass the note written on an approval card to the agent",
-          "summary": "A note or denial reason written on an Assistant approval card is now passed to the agent as a user message after the tool result, instead of being silently dropped.",
-          "breaking": false
-        },
-        {
-          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
-          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
-          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
-          "breaking": false
-        },
-        {
-          "sha": "c4ea20b05216c7fc9fe36572ca3209509d869ef2",
-          "subject": "fix(assistant): reopen chats on the model and thinking level they last used",
-          "summary": "Assistant chats now reopen on the model and thinking level they last used, keeping the current selection if the chat has not run or the model is no longer offered.",
+          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
+          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a": {
+    "50320c42a6353567dfea023d46904aaf0dd9bf4d": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
+      "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "e792155be87155b50a525dd792c1977f8913a8ba": {
+    "5efdee20194ca05c1de5558ddf8668c2d9b48acf": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "A note or denial reason written on an Assistant approval card is now passed to the agent as a user message after the tool result, instead of being silently dropped.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "e9323ceadc4dcac37bbc744827e625fe90968949": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c4ea20b05216c7fc9fe36572ca3209509d869ef2": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Assistant chats now reopen on the model and thinking level they last used, keeping the current selection if the chat has not run or the model is no longer offered.",
+      "summary": "Refreshes the CLI third-party notices to match bumped dependency versions (marked, openai, zod).",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

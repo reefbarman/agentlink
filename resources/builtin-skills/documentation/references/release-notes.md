@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.59.1
+
 - CLI and Assistant condensing now works with Codex models. The summariser asks for temperature 0, which VS Code's providers drop when a model does not support it but the SDK's Codex backend rejected, so `/condense` and automatic condensing failed with "Responses backend does not support temperature". The SDK condenser now leaves temperature out unless the model supports it. VS Code behaviour is unchanged.
 - When a CLI turn fails, the error now says why (for example the provider's message) instead of only "Turn execution failed". The cause is redacted the same way as the Assistant's job and Inbox failure details, which now share the code through workspace-host's `describeTurnFailure`.
 - The CLI's activity shelf no longer counts the Context row as live activity, so an idle session no longer shows "1 live", and a failed condense is cleared from the Context row when the next turn starts.
