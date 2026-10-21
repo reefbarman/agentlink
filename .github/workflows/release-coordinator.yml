@@ -173,6 +173,8 @@ jobs:
     if: contains(format(',{0},', needs.plan.outputs.units), ',vscode,')
     permissions:
       contents: write
+      # Marketplace publishing signs in to Microsoft Entra ID with GitHub OIDC.
+      id-token: write
     uses: ./.github/workflows/release.yml
     with:
       ref: ${{ needs.prepare.outputs.sha }}

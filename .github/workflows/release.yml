@@ -222,3 +222,52 @@ jobs:
             --tag "v${VERSION}" --target "$TARGET" \
             --title "AgentLink v${VERSION}" \
             --notes-file notes.md --dir dist --latest
+
+  # Publishes the same verified VSIX artifacts to the VS Code Marketplace after
+  # the GitHub release, so a Marketplace failure never affects GitHub assets.
+  # Auth: the `marketplace` environment's federated credential lets this job
+  # sign in as the agentlink-marketplace-publisher Entra app (no stored secret).
+  # Rerunning is safe: --skip-duplicate skips platforms already published.
+  marketplace:
+    name: Publish to VS Code Marketplace
+    needs: [release]
+    concurrency:
+      group: publish-marketplace
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: agentlink-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release asset set
+        run: |
+          VERSION=${RELEASE_VERSION#v}
+          ACTUAL_COUNT=$(find dist -maxdepth 1 -type f -name "agentlink-${VERSION}-*.vsix" | wc -l | tr -d ' ')
+          test "$ACTUAL_COUNT" -eq 7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish VSIX packages
+        run: |
+          VERSION=${RELEASE_VERSION#v}
+          npx --yes @vscode/vsce@3.9.2 publish \
+            --azure-credential \
+            --skip-duplicate \
+            --packagePath dist/agentlink-"${VERSION}"-*.vsix

@@ -1,0 +1,40 @@
+name: Marketplace Identity Check
+
+# Manual check of the Entra identity that release.yml uses to publish to the
+# VS Code Marketplace. It prints the identity's Marketplace user ID (needed
+# when adding it as a member of the agentlink publisher), then verifies
+# publish rights without publishing anything.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Show Marketplace user ID
+        run: |
+          az rest \
+            -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+            --query '{id: id, displayName: displayName}'
+
+      - name: Verify publish rights for agentlink
+        run: npx --yes @vscode/vsce@3.9.2 verify-pat agentlink --azure-credential
