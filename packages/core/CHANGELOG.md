@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.20.0 — 2026-10-21
+
+- The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.
+
 ## 0.19.0 — 2026-10-20
 
 - The standalone CLI and Assistant session runners now offer get_repo_map and get_module_neighbors from a shared lightweight structural index, and workspace-host gains an optional structuralIndex option.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "7fe6644e527195e10817713ec4ce52343ba63edd",
-  "createdAt": "2026-10-21T00:43:56.391Z",
+  "sourceSha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+  "createdAt": "2026-10-21T02:30:01.921Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,81 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.52.0",
-      "baselineRef": "v1.52.0",
-      "reserved": "1.52.0",
-      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
+      "published": "1.53.0",
+      "baselineRef": "v1.53.0",
+      "reserved": "1.53.0",
+      "commits": [
+        "86e044a37f05cfcd91fd2324c3eda6c7c619e39e",
+        "b4fbe00f762237abaab150a3320d33c59945fa0c",
+        "4e511b40e59eb87322881b616bdc64a31437dd66"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.53.0",
+      "version": "1.54.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.53.0",
+      "tag": "v1.54.0",
       "notes": [
         {
-          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
-          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
-          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
+          "sha": "86e044a37f05cfcd91fd2324c3eda6c7c619e39e",
+          "subject": "fix(chat): keep a starting turn marked as streaming during preparation",
+          "summary": "Fixes a brief flash of \"(No response)\" in chat: a turn that is still preparing (hooks, checkpoint, memory recall) is now shown as streaming until the spinner appears.",
+          "breaking": false
+        },
+        {
+          "sha": "b4fbe00f762237abaab150a3320d33c59945fa0c",
+          "subject": "feat(sdk): share VS Code's instructions, rules and skills with the CLI, Assistant and Ask Agent",
+          "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+          "breaking": false
+        },
+        {
+          "sha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+          "subject": "feat(approvals): start new project chats with Approve for Me on",
+          "summary": "Adds the agentlink.approveForMeByDefault setting (default on) so new project chats start with Approve for Me. Composer toolbar toggles keep a fixed width and no longer append \"On\".",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.38.0",
-      "baselineRef": "desktop-v0.38.0",
-      "reserved": "0.38.0",
-      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
+      "published": "0.39.0",
+      "baselineRef": "desktop-v0.39.0",
+      "reserved": "0.39.0",
+      "commits": [
+        "86e044a37f05cfcd91fd2324c3eda6c7c619e39e",
+        "b4fbe00f762237abaab150a3320d33c59945fa0c",
+        "4e511b40e59eb87322881b616bdc64a31437dd66"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.39.0",
+      "version": "0.40.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.39.0",
+      "tag": "desktop-v0.40.0",
       "notes": [
         {
-          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
-          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
-          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
+          "sha": "86e044a37f05cfcd91fd2324c3eda6c7c619e39e",
+          "subject": "fix(chat): keep a starting turn marked as streaming during preparation",
+          "summary": "Fixes a brief flash of \"(No response)\" in chat: a turn that is still preparing (hooks, checkpoint, memory recall) is now shown as streaming until the spinner appears.",
+          "breaking": false
+        },
+        {
+          "sha": "b4fbe00f762237abaab150a3320d33c59945fa0c",
+          "subject": "feat(sdk): share VS Code's instructions, rules and skills with the CLI, Assistant and Ask Agent",
+          "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+          "breaking": false
+        },
+        {
+          "sha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+          "subject": "feat(approvals): start new project chats with Approve for Me on",
+          "summary": "Adds the agentlink.approveForMeByDefault setting (default on) so new project chats start with Approve for Me. Composer toolbar toggles keep a fixed width and no longer append \"On\".",
           "breaking": false
         }
       ]
@@ -61,46 +93,95 @@
       "published": "0.28.0",
       "baselineRef": "cli-v0.28.0",
       "reserved": "0.28.0",
-      "commits": [],
+      "commits": [
+        "b4fbe00f762237abaab150a3320d33c59945fa0c",
+        "4e511b40e59eb87322881b616bdc64a31437dd66"
+      ],
       "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "breakingCommits": ["b4fbe00f762237abaab150a3320d33c59945fa0c"],
+      "bump": "breaking",
+      "status": "release",
+      "version": "0.29.0",
+      "effectiveBump": "minor",
+      "breaking": true,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.29.0",
+      "notes": [
+        {
+          "sha": "b4fbe00f762237abaab150a3320d33c59945fa0c",
+          "subject": "feat(sdk): share VS Code's instructions, rules and skills with the CLI, Assistant and Ask Agent",
+          "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+          "breaking": true
+        },
+        {
+          "sha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+          "subject": "feat(approvals): start new project chats with Approve for Me on",
+          "summary": "Adds the agentlink.approveForMeByDefault setting (default on) so new project chats start with Approve for Me. Composer toolbar toggles keep a fixed width and no longer append \"On\".",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.19.0",
       "baselineRef": "sdk-v0.19.0",
       "reserved": "0.19.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.10.0",
-      "baselineRef": "assistant-v0.10.0",
-      "reserved": "0.10.0",
-      "commits": ["7fe6644e527195e10817713ec4ce52343ba63edd"],
+      "commits": ["b4fbe00f762237abaab150a3320d33c59945fa0c"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.11.0",
+      "version": "0.20.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.11.0",
+      "tag": "sdk-v0.20.0",
       "notes": [
         {
-          "sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
-          "subject": "feat(approvals): judge only command segments not covered by an Allow rule",
-          "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
+          "sha": "b4fbe00f762237abaab150a3320d33c59945fa0c",
+          "subject": "feat(sdk): share VS Code's instructions, rules and skills with the CLI, Assistant and Ask Agent",
+          "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.11.0",
+      "baselineRef": "assistant-v0.11.0",
+      "reserved": "0.11.0",
+      "commits": [
+        "b4fbe00f762237abaab150a3320d33c59945fa0c",
+        "e327c66a19dedbc5ef7947f1664f8f2c0228fa68",
+        "4e511b40e59eb87322881b616bdc64a31437dd66"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.12.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.12.0",
+      "notes": [
+        {
+          "sha": "b4fbe00f762237abaab150a3320d33c59945fa0c",
+          "subject": "feat(sdk): share VS Code's instructions, rules and skills with the CLI, Assistant and Ask Agent",
+          "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+          "breaking": false
+        },
+        {
+          "sha": "e327c66a19dedbc5ef7947f1664f8f2c0228fa68",
+          "subject": "fix(assistant): clear a chat's Inbox entries when it is opened",
+          "summary": "Opening a chat in the Assistant now marks that chat's unread Inbox entries as read.",
+          "breaking": false
+        },
+        {
+          "sha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+          "subject": "feat(approvals): start new project chats with Approve for Me on",
+          "summary": "Adds the agentlink.approveForMeByDefault setting (default on) so new project chats start with Approve for Me. Composer toolbar toggles keep a fixed width and no longer append \"On\".",
           "breaking": false
         }
       ]
@@ -111,6 +192,38 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Automatic approval now judges only the parts of a compound command that no Allow rule covers, so rule-allowed risky segments no longer force Guardian review, and Guardian receives allowedByRule flags for the remaining parts.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "86e044a37f05cfcd91fd2324c3eda6c7c619e39e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes a brief flash of \"(No response)\" in chat: a turn that is still preparing (hooks, checkpoint, memory recall) is now shown as streaming until the spinner appears.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b4fbe00f762237abaab150a3320d33c59945fa0c": {
+      "bump": "minor",
+      "breakingUnits": ["cli"],
+      "summary": "The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.",
+      "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e327c66a19dedbc5ef7947f1664f8f2c0228fa68": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Opening a chat in the Assistant now marks that chat's unread Inbox entries as read.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4e511b40e59eb87322881b616bdc64a31437dd66": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds the agentlink.approveForMeByDefault setting (default on) so new project chats start with Approve for Me. Composer toolbar toggles keep a fixed width and no longer append \"On\".",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
