@@ -1,0 +1,46 @@
+apps/desktop/src/DesktopAssistantView.test.ts
+  h_e08a86bb3a33a2 70,92,115,413-423,453
+  s_2011c77fda45e8::t_d3bbce6e19854d 454-455
+apps/desktop/src/DesktopAssistantView.ts
+  h_e08a86bb3a33a2 93-94,194,337-349,555
+src/browser-gateway/webview/AssistantNotifications.test.tsx
+  h_e08a86bb3a33a2 16,33-64
+  s_2011c77fda45e8::t_d9c3781a1d4fbf 65-66
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 417
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 83,85
+  s_2011c77fda45e8::t_6a2166680878f7 84
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 181,183
+apps/desktop/src/assistantPreload.ts
+  h_e08a86bb3a33a2 8-11,49
+apps/desktop/src/assistantPreload.test.ts
+  h_e08a86bb3a33a2 34,60-63
+src/browser-gateway/webview/AssistantNotifications.tsx
+  h_e08a86bb3a33a2 173-175
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 68-72,110-111,113
+  s_2011c77fda45e8::t_7c87630feb4302 109,112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2011c77fda45e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f9e051cf-bbfe-4f2f-983e-640ebd20ad20",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
