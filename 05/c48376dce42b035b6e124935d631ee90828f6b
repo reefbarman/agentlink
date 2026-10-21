@@ -1,0 +1,22 @@
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 472-483
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 180,190,192,246,282
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1742,1747
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 556,567
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 11-13,28-30,45-47,62-64,79-81,90-92,101-103,112-114,123-125,140-142,157-159,174-176,191-193,202-204,213-215,224-226,235-237,252-254,269-271,286-288,303-305,314-316,325-327,336-338,347-349,364-366,381-383,398-400,415-417,426-428,437-439,448-450,459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,571-573,588-590,605-607,622-624,639-641,650-652,661-663,672-674,682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05c48376dce42b035b6e124935d631ee90828f6b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
