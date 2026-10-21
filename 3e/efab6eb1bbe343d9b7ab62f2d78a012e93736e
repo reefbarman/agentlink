@@ -1,0 +1,52 @@
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 907-909,911-912,915,958
+packages/core/src/contextCondenser.test.ts
+  h_e08a86bb3a33a2 6,23-28,39-40,74-75,110-129,142-144,160-162,166-167,177,287-300,302-514,537-546
+  s_b8e4003bd97946::t_59224e6a121741 38,41,73,76,141,145,164-165,168,301,515-517
+packages/workspace-host/src/modelRuntime.ts
+  h_e08a86bb3a33a2 7,91-94,102-105,108,110-112,310,349-350,365-382
+  s_12105a6a2109e5::t_a6e78d52b69b2b 90,354,361,364
+packages/workspace-host/src/modelRuntime.test.ts
+  h_e08a86bb3a33a2 40-41,49,54,60-102
+packages/core/src/contextCondenser.ts
+  h_e08a86bb3a33a2 61-64,172-173,180
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 726-743,765,775-780,788,800,826-834,913-943,962,1120,1154,1159,1179,1255-1256,1441,1500-1502
+packages/core/src/turnInteractions.ts
+  h_e08a86bb3a33a2 67-71
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 251,324
+CHANGELOG.md
+  h_e08a86bb3a33a2 6-7
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 6-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3eefab6eb1bbe343d9b7ab62f2d78a012e93736e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_12105a6a2109e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2e58668f-7b50-4ff2-a76a-b5c1f8c49104",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b8e4003bd97946": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c1b9ac0-c9b9-46ed-b8ec-38fb29088eb5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
