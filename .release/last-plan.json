@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5efdee20194ca05c1de5558ddf8668c2d9b48acf",
-  "createdAt": "2026-10-21T06:02:20.706Z",
+  "sourceSha": "ec93e4b3421475008824877eb24d9804fae52b59",
+  "createdAt": "2026-10-21T12:35:39.444Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,25 +10,55 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.59.0",
-      "baselineRef": "v1.59.0",
-      "reserved": "1.59.0",
-      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
+      "published": "1.59.1",
+      "baselineRef": "v1.59.1",
+      "reserved": "1.59.1",
+      "commits": [
+        "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+        "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+        "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+        "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+        "ec93e4b3421475008824877eb24d9804fae52b59"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.59.1",
-      "effectiveBump": "patch",
+      "version": "1.60.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.59.1",
+      "tag": "v1.60.0",
       "notes": [
         {
-          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
-          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
-          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
+          "sha": "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+          "subject": "fix(browser-gateway): forward managed-network evidence in owner interaction payloads",
+          "summary": "Browser gateway owner interaction payloads now forward managed-network approval evidence, and malformed evidence falls back to the reject-only card instead of dropping the interaction.",
+          "breaking": false
+        },
+        {
+          "sha": "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+          "subject": "fix(webview): keep transcript following latest after scroll clamping and viewport resize",
+          "summary": "The chat transcript keeps following the latest content after scroll clamping or viewport resizing, no longer mistaking browser-driven scrollTop reductions for a user scrolling up.",
+          "breaking": false
+        },
+        {
+          "sha": "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+          "subject": "feat(approvals): remember Guardian-approved sandbox sites per session",
+          "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
+          "breaking": false
+        },
+        {
+          "sha": "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+          "subject": "fix(marketplace): use unique display name for Marketplace listing",
+          "summary": "The VS Code extension's Marketplace display name changes to \"AgentLink: AI Coding Agent\" so it can be listed; the extension ID is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "ec93e4b3421475008824877eb24d9804fae52b59",
+          "subject": "fix: let sandboxed Go CLIs verify TLS and stop web_fetch repeating short pages",
+          "summary": "Sandboxed Go CLIs such as gh can now verify TLS on macOS when the command has network access, and Codex web_fetch no longer repeats the same short page on continuation.",
           "breaking": false
         }
       ]
@@ -36,23 +66,60 @@
     "desktop": {
       "published": "0.45.0",
       "baselineRef": "desktop-v0.45.0",
-      "reserved": "0.45.0",
-      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
+      "reserved": "0.45.1",
+      "commits": [
+        "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+        "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+        "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+        "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+        "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+        "ec93e4b3421475008824877eb24d9804fae52b59"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.45.1",
-      "effectiveBump": "patch",
+      "version": "0.46.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.45.1",
+      "tag": "desktop-v0.46.0",
       "notes": [
         {
           "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
           "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
           "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
+          "breaking": false
+        },
+        {
+          "sha": "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+          "subject": "fix(browser-gateway): forward managed-network evidence in owner interaction payloads",
+          "summary": "Browser gateway owner interaction payloads now forward managed-network approval evidence, and malformed evidence falls back to the reject-only card instead of dropping the interaction.",
+          "breaking": false
+        },
+        {
+          "sha": "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+          "subject": "fix(webview): keep transcript following latest after scroll clamping and viewport resize",
+          "summary": "The chat transcript keeps following the latest content after scroll clamping or viewport resizing, no longer mistaking browser-driven scrollTop reductions for a user scrolling up.",
+          "breaking": false
+        },
+        {
+          "sha": "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+          "subject": "feat(approvals): remember Guardian-approved sandbox sites per session",
+          "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
+          "breaking": false
+        },
+        {
+          "sha": "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+          "subject": "fix(marketplace): use unique display name for Marketplace listing",
+          "summary": "The VS Code extension's Marketplace display name changes to \"AgentLink: AI Coding Agent\" so it can be listed; the extension ID is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "ec93e4b3421475008824877eb24d9804fae52b59",
+          "subject": "fix: let sandboxed Go CLIs verify TLS and stop web_fetch repeating short pages",
+          "summary": "Sandboxed Go CLIs such as gh can now verify TLS on macOS when the command has network access, and Codex web_fetch no longer repeats the same short page on continuation.",
           "breaking": false
         }
       ]
@@ -60,21 +127,24 @@
     "cli": {
       "published": "0.33.0",
       "baselineRef": "cli-v0.33.0",
-      "reserved": "0.33.0",
+      "reserved": "0.33.1",
       "commits": [
         "50320c42a6353567dfea023d46904aaf0dd9bf4d",
-        "5efdee20194ca05c1de5558ddf8668c2d9b48acf"
+        "5efdee20194ca05c1de5558ddf8668c2d9b48acf",
+        "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+        "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+        "ec93e4b3421475008824877eb24d9804fae52b59"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.33.1",
-      "effectiveBump": "patch",
+      "version": "0.34.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.33.1",
+      "tag": "cli-v0.34.0",
       "notes": [
         {
           "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
@@ -87,53 +157,101 @@
           "subject": "chore(cli): refresh third-party notices for bumped dependencies",
           "summary": "Refreshes the CLI third-party notices to match bumped dependency versions (marked, openai, zod).",
           "breaking": false
+        },
+        {
+          "sha": "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+          "subject": "feat(approvals): remember Guardian-approved sandbox sites per session",
+          "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
+          "breaking": false
+        },
+        {
+          "sha": "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+          "subject": "fix(marketplace): use unique display name for Marketplace listing",
+          "summary": "The VS Code extension's Marketplace display name changes to \"AgentLink: AI Coding Agent\" so it can be listed; the extension ID is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "ec93e4b3421475008824877eb24d9804fae52b59",
+          "subject": "fix: let sandboxed Go CLIs verify TLS and stop web_fetch repeating short pages",
+          "summary": "Sandboxed Go CLIs such as gh can now verify TLS on macOS when the command has network access, and Codex web_fetch no longer repeats the same short page on continuation.",
+          "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.24.0",
-      "baselineRef": "sdk-v0.24.0",
-      "reserved": "0.24.0",
-      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
+      "published": "0.24.1",
+      "baselineRef": "sdk-v0.24.1",
+      "reserved": "0.24.1",
+      "commits": ["54aa00373424f9bb1b44b9c3fa287ed7cac1e326"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.24.1",
-      "effectiveBump": "patch",
+      "version": "0.25.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.24.1",
+      "tag": "sdk-v0.25.0",
       "notes": [
         {
-          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
-          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
-          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
+          "sha": "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+          "subject": "feat(approvals): remember Guardian-approved sandbox sites per session",
+          "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.17.0",
-      "baselineRef": "assistant-v0.17.0",
-      "reserved": "0.17.0",
-      "commits": ["50320c42a6353567dfea023d46904aaf0dd9bf4d"],
+      "published": "0.17.1",
+      "baselineRef": "assistant-v0.17.1",
+      "reserved": "0.17.1",
+      "commits": [
+        "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+        "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+        "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+        "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+        "ec93e4b3421475008824877eb24d9804fae52b59"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.17.1",
-      "effectiveBump": "patch",
+      "version": "0.18.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.17.1",
+      "tag": "assistant-v0.18.0",
       "notes": [
         {
-          "sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
-          "subject": "fix(cli): make condense work on Codex models and fix TUI focus and activity count",
-          "summary": "Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.",
+          "sha": "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+          "subject": "fix(browser-gateway): forward managed-network evidence in owner interaction payloads",
+          "summary": "Browser gateway owner interaction payloads now forward managed-network approval evidence, and malformed evidence falls back to the reject-only card instead of dropping the interaction.",
+          "breaking": false
+        },
+        {
+          "sha": "5e9c7f601856e1b42314b84b82145d31fdfa0dcf",
+          "subject": "fix(webview): keep transcript following latest after scroll clamping and viewport resize",
+          "summary": "The chat transcript keeps following the latest content after scroll clamping or viewport resizing, no longer mistaking browser-driven scrollTop reductions for a user scrolling up.",
+          "breaking": false
+        },
+        {
+          "sha": "54aa00373424f9bb1b44b9c3fa287ed7cac1e326",
+          "subject": "feat(approvals): remember Guardian-approved sandbox sites per session",
+          "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
+          "breaking": false
+        },
+        {
+          "sha": "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a",
+          "subject": "fix(marketplace): use unique display name for Marketplace listing",
+          "summary": "The VS Code extension's Marketplace display name changes to \"AgentLink: AI Coding Agent\" so it can be listed; the extension ID is unchanged.",
+          "breaking": false
+        },
+        {
+          "sha": "ec93e4b3421475008824877eb24d9804fae52b59",
+          "subject": "fix: let sandboxed Go CLIs verify TLS and stop web_fetch repeating short pages",
+          "summary": "Sandboxed Go CLIs such as gh can now verify TLS on macOS when the command has network access, and Codex web_fetch no longer repeats the same short page on continuation.",
           "breaking": false
         }
       ]
@@ -152,6 +270,46 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Refreshes the CLI third-party notices to match bumped dependency versions (marked, openai, zod).",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "10e062fe140db6f2acdf309a3a30c84bc9e10267": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Browser gateway owner interaction payloads now forward managed-network approval evidence, and malformed evidence falls back to the reject-only card instead of dropping the interaction.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "5e9c7f601856e1b42314b84b82145d31fdfa0dcf": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The chat transcript keeps following the latest content after scroll clamping or viewport resizing, no longer mistaking browser-driven scrollTop reductions for a user scrolling up.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "54aa00373424f9bb1b44b9c3fa287ed7cac1e326": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7e13bca7d1609fbb2a6067f885ef5776ab9ffb6a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The VS Code extension's Marketplace display name changes to \"AgentLink: AI Coding Agent\" so it can be listed; the extension ID is unchanged.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ec93e4b3421475008824877eb24d9804fae52b59": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Sandboxed Go CLIs such as gh can now verify TLS on macOS when the command has network access, and Codex web_fetch no longer repeats the same short page on continuation.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

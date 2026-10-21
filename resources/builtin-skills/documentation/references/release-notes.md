@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.60.0
+
 - `web_fetch` with Codex no longer stops partway through longer pages when you ask for a short preview. The provider ignores the requested continuation line and sizes each page by the requested output budget, which AgentLink took from `max_length`, so a 3,000-character preview fetched only about 16K characters and every continuation repeated that same page ("Provider pagination did not advance"). AgentLink now sizes the provider window from the retention budget and still trims the inline preview locally.
 - Sandboxed commands with network access on macOS can now reach the system certificate trust service, so `gh`, `gcloud`, `terraform`, `kubectl` and other Go CLIs verify TLS inside the sandbox instead of failing with `x509: OSStatus -26276` and needing a reviewed retry outside it. This matches Codex CLI's sandbox policy. Commands without network access keep the service blocked, and certificate verification is unchanged.
 

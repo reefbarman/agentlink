@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.25.0 — 2026-10-21
+
+- Guardian- or Jev-approved low/medium-risk public sandbox destinations are saved as exact session-scoped allow rules so later commands to the same site skip review, and tool guidance now steers web research to web_search/web_fetch over curl/wget.
+
 ## 0.24.1 — 2026-10-21
 
 - Condensing now works on Codex models, the CLI shows the underlying cause of failed turns, the activity count ignores the Context row, and Escape returns focus to the composer.
