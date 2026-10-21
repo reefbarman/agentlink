@@ -638,6 +638,21 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "read_workspace_session_excerpt",
+      "parameters": [
+        "end_message_index",
+        "session_id",
+        "snapshot_message_count",
+        "snapshot_revision",
+        "start_message_index"
+      ],
+      "cluster": "session",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "recall_memory",
       "parameters": ["limit", "minimum_score", "query", "scope"],
       "cluster": "memory",
@@ -717,6 +732,15 @@
     {
       "name": "search_session_history",
       "parameters": ["limit", "mode", "query", "role", "scope", "tool_name"],
+      "cluster": "session",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "search_workspace_sessions",
+      "parameters": ["limit", "query"],
       "cluster": "session",
       "sideEffect": "read",
       "devOnly": false,
@@ -881,5 +905,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "f1baf883588b59c1ffcae78affaf41d44176b3c956b809f9178b4bed56d50411"
+  "revision": "8e0b324f08ff4fc099cc041574022c948611d7cc4076273ece39530ad1557f87"
 }

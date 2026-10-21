@@ -1054,6 +1054,27 @@ The range may span at most 10 message positions, and the formatted output is cap
 
 **Errors:** `invalid_range` when indices are negative, reversed, outside the searched snapshot, or span more than 10 positions; `stale_snapshot` when the searched prefix no longer matches; and `session_transcript_unavailable` when the executing runtime does not expose a current-session transcript. Schema validation also rejects missing or incorrectly typed required parameters before execution.
 
+### search_workspace_sessions
+
+Search earlier saved foreground sessions that belong to the executing session's own project. The project is fixed by the host when the turn starts; tool input cannot select another project, storage path or scope. The executing session (use `search_session_history`), background and fleet sessions, sessions of other projects and sessions without a durable project identity are excluded. Available only to foreground VS Code sessions with saved history; not offered to background agents or bounded profiles, and not exempt from a skill's `allowed-tools`.
+
+| Parameter | Type    | Description                                                  |
+| --------- | ------- | ------------------------------------------------------------ |
+| `query`   | string  | Required words to look for, 1-500 characters.                |
+| `limit`   | number? | Maximum sessions to return (default: 5, minimum: 1, max: 5). |
+
+A disposable local lexical index (in VS Code global storage, separate from code search and Ask Agent memory) ranks candidate sessions. Existing history is indexed in the background; a search waits briefly for indexing and continues it afterwards. Changed sessions are reindexed and deleted ones removed. Credential-like text is not indexed. Every candidate is re-read from canonical history before it is returned.
+
+**Response includes:** `sessions[]` with `session_id`, `title`, `created_at`, `last_active_at`, `snapshot_message_count`, `snapshot_revision` and up to two `hits` (`message_index`, `role`, `condensed`, `match` of `exact`/`partial`/`indexed`, `excerpt`, `truncated`); `truncated`; and `index` coverage (`eligible_sessions`, `indexed_sessions`, `pending_sessions`, `failed_sessions`, `complete`, optional `note`). While `complete` is false, no match does not prove a topic was never discussed. Output is capped at 8,000 characters in non-instructional `<workspace-session-history>` framing.
+
+**Errors:** `invalid_query`, `index_unavailable`, and `workspace_session_history_unavailable` when the session has no project-scoped saved history.
+
+### read_workspace_session_excerpt
+
+Read a bounded exact excerpt from a session returned by `search_workspace_sessions`, using its `session_id`, inclusive zero-based `start_message_index`/`end_message_index` (at most 10 positions), and that session's `snapshot_message_count` and `snapshot_revision`. The session is re-validated against the project on every read. Append-only continuation stays valid; a rewritten, reverted or shortened transcript returns `stale_snapshot`. Rendering and exclusions match `read_session_excerpt`; output is capped at 12,000 characters.
+
+**Errors:** `invalid_session_id`, `invalid_range`, `stale_snapshot`, `current_session` (use `read_session_excerpt`), `session_unavailable` (deleted, moved or no longer eligible) and `workspace_session_history_unavailable`.
+
 ### diagnose_activity
 
 Inspect bounded, redacted evidence for recent tool results, warnings, and errors in the current executing session. Use this when diagnosing why an operation happened, how a write or command was authorized, or what caused a tool/runtime failure. Foreground and background agents see only their own session evidence.

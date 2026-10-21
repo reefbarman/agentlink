@@ -3496,6 +3496,72 @@ describe("AgentSessionManager host injection", () => {
     expect((mgr as any).activeInteractiveEngines.size).toBe(0);
   });
 
+  it("binds project-scoped workspace session history into the captured tool context", async () => {
+    const workspace = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-ws-history-")),
+    );
+    try {
+      const store = new SessionStore(workspace);
+      const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+      const engine = {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* () {}),
+        condenseSession: vi.fn(async function* () {}),
+        isOverCondenseThreshold: vi.fn(() => false),
+      };
+      const published: string[] = [];
+      const indexFactory = vi.fn(() => ({
+        listIndexed: async () => new Map<string, string>(),
+        publish: async (document: { sessionId: string }) => {
+          published.push(document.sessionId);
+        },
+        remove: async () => undefined,
+        query: async () => [],
+      }));
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        store,
+        undefined,
+        { maxConcurrent: 3 },
+        {
+          host: {
+            providers: new ProviderRegistry(),
+            createEngine: vi.fn(() => engine) as any,
+            createToolRuntime: createToolRuntime as any,
+          },
+          workspaceSessionHistoryIndexFactory: indexFactory,
+        },
+      );
+      const session = await mgr.createSession("code");
+      mgr.setToolContext({
+        approvalManager: { bindSessionProject: vi.fn() } as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: { getToolDefs: vi.fn(() => []), getServerConfig: vi.fn() },
+      } as any);
+      const interactive = (mgr as any).createInteractiveEngine(session.id);
+      const request = (mgr as any).bindEngineToSession(interactive, session);
+
+      expect(indexFactory).toHaveBeenCalledWith(session.projectScope);
+      const context = (createToolRuntime.mock.calls[0] as unknown[])[0] as any;
+      expect(context.workspaceSessionHistory).toMatchObject({
+        currentSessionId: session.id,
+      });
+      await expect(
+        context.workspaceSessionHistory.history.search({ query: "anything" }),
+      ).resolves.toMatchObject({ ok: true });
+
+      (mgr as any).releaseSessionToolContext(session.id, request);
+      (mgr as any).releaseInteractiveEngine(session.id, interactive);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an unknown explicit session instead of creating a fallback session", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const createCallsBeforeSend = mocks.createSession.mock.calls.length;

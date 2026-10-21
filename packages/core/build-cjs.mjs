@@ -39,6 +39,7 @@ const modules = [
   "turnLeases",
   "voice",
   "webAccess",
+  "workspaceSessionHistory",
 ];
 
 // Focused portable subpaths must not accidentally widen the historical root CJS surface.

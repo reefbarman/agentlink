@@ -213,6 +213,9 @@ import {
   type CheckpointManagerLike,
 } from "./AgentSessionManagerHost.js";
 import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
+import { WorkspaceSessionHistory } from "@agentlink/core/workspace-session-history";
+import { isWorkspaceHistoryIndexableText } from "../core/session/workspaceSessionHistoryIndex.js";
+import { createPersistedWorkspaceSessionHistorySource } from "./workspaceSessionHistorySource.js";
 import {
   createProjectlessSessionScope,
   createSessionProjectScope,
@@ -914,6 +917,12 @@ export class AgentSessionManager {
   private readonly skillCatalogFallbackProvider:
     | NonNullable<AgentSessionManagerOptions["skillCatalogFallbackProvider"]>
     | undefined;
+  private readonly workspaceSessionHistoryIndexFactory: AgentSessionManagerOptions["workspaceSessionHistoryIndexFactory"];
+  /** One history service per project identity, shared by that project's sessions. */
+  private readonly workspaceSessionHistories = new Map<
+    string,
+    WorkspaceSessionHistory
+  >();
   private readonly agentPluginCatalogProvider:
     | NonNullable<AgentSessionManagerOptions["agentPluginCatalogProvider"]>
     | undefined;
@@ -1222,6 +1231,8 @@ export class AgentSessionManager {
       opts?.projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
     this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
     this.skillCatalogFallbackProvider = opts?.skillCatalogFallbackProvider;
+    this.workspaceSessionHistoryIndexFactory =
+      opts?.workspaceSessionHistoryIndexFactory;
     this.agentPluginCatalogProvider = opts?.agentPluginCatalogProvider;
     this.hookRuntimeProvider = opts?.hookRuntimeProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
@@ -1842,6 +1853,7 @@ export class AgentSessionManager {
         onRespondToBackgroundQuestion: (
           request: BackgroundQuestionAnswerRequest,
         ) => this.respondToBackgroundQuestion(request),
+        ...this.workspaceSessionHistoryContext(session),
         ...(this.activityTraceRecorder.diagnoseSessionActivity
           ? {
               sessionActivityDiagnosticsProvider: {
@@ -1860,6 +1872,46 @@ export class AgentSessionManager {
       mcpHubLease?.release();
       throw error;
     }
+  }
+
+  /**
+   * Bind past-session history for the executing session's own project. Only
+   * persisted, project-scoped foreground sessions receive it; the binding is
+   * captured with the session, never re-resolved from the foreground tab.
+   */
+  private workspaceSessionHistoryContext(
+    session: AgentSession,
+  ): Pick<ToolDispatchContext, "workspaceSessionHistory"> {
+    const scope = session.projectScope;
+    if (
+      session.background ||
+      !this.persistence ||
+      !this.workspaceSessionHistoryIndexFactory ||
+      isProjectlessSessionScope(scope)
+    ) {
+      return {};
+    }
+    const key = `${scope.projectId}\u0000${scope.workspaceFolderUri}`;
+    let history = this.workspaceSessionHistories.get(key);
+    if (!history) {
+      history = new WorkspaceSessionHistory({
+        source: createPersistedWorkspaceSessionHistorySource({
+          persistence: this.persistence,
+          projectScope: scope,
+        }),
+        index: this.workspaceSessionHistoryIndexFactory(scope),
+        isIndexableText: isWorkspaceHistoryIndexableText,
+      });
+      this.workspaceSessionHistories.set(key, history);
+      // Backfill in the background; searches wait only a bounded time for it.
+      void history.synchronize();
+    }
+    return {
+      workspaceSessionHistory: Object.freeze({
+        history,
+        currentSessionId: session.id,
+      }),
+    };
   }
 
   private bindCapturedEngineToSession(

@@ -59,6 +59,7 @@ const sharedCoreModuleNames = new Set([
   "turnLeases",
   "voice",
   "webAccess",
+  "workspaceSessionHistory",
 ]);
 const sharedCoreModulesPlugin = {
   name: "shared-core-modules",
@@ -105,6 +106,7 @@ const cjs = await context({
     "src/turnLeases.ts",
     "src/voice.ts",
     "src/webAccess.ts",
+    "src/workspaceSessionHistory.ts",
   ],
   bundle: true,
   platform: "node",

@@ -8,9 +8,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 39233,
-      "estimatedTokens": 9809,
-      "sha256": "aedfd6a09f1fc210d07033ecb66dd77f2865039c772ac1810cf45d94d69cd444",
+      "chars": 39396,
+      "estimatedTokens": 9849,
+      "sha256": "20aee2602e838bb529d080088b05d83bc1284a004eb7dbd4cc2dc36ea00ed114",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -42,9 +42,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 41338,
-      "estimatedTokens": 10335,
-      "sha256": "b4aea6cc4e3ae46a9b4134e53b4f93d65b31b0421364fa854abdf0edc2aa3375",
+      "chars": 41501,
+      "estimatedTokens": 10376,
+      "sha256": "52745347e0ca9f542c79545039906af12c6ca0d1c3cc80ffa87b1384e43abf4e",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -76,9 +76,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 35281,
-      "estimatedTokens": 8821,
-      "sha256": "b5749497a6e50b623d5019f4e6e7ae6a3c29a1878e4d6164185ef9c47d849b51",
+      "chars": 35444,
+      "estimatedTokens": 8861,
+      "sha256": "7955e0ed5807efab5ccb4e80f395c9bb97740f31b5f000c60c0f979e2f9af85d",
       "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
@@ -98,9 +98,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 35273,
-      "estimatedTokens": 8819,
-      "sha256": "65c468bed41389817d7d3b9173493b22a419e51c9ae94f6298cc0c2aea7a80ac",
+      "chars": 35436,
+      "estimatedTokens": 8859,
+      "sha256": "bbe651512e55187791c7826ef1c6582f3812668bd7ce2b106fae5681b0ffd33d",
       "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
@@ -120,9 +120,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 35212,
-      "estimatedTokens": 8803,
-      "sha256": "b6af5e3405c8cb246a07662531021a6e7b76e7ac427cac8a18243245fb781fab",
+      "chars": 35375,
+      "estimatedTokens": 8844,
+      "sha256": "971f346be2b335f2538c28eb75901ef088bd6acc8a4386204cdca6f25e06de59",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -154,9 +154,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 37317,
-      "estimatedTokens": 9330,
-      "sha256": "7803b9c6aa1d5a1d7eca47291b29aa025e37b0de94e1ebc126c8613524260d37",
+      "chars": 37480,
+      "estimatedTokens": 9370,
+      "sha256": "f92f6ae51457c4b1272eaa399e9663400872097270ea95324a3f6045dfcb3155",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -188,9 +188,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 31260,
-      "estimatedTokens": 7815,
-      "sha256": "0da2d546c36239da025dd902d3895570e4837e33dd72d4a1899bc134b185afcb",
+      "chars": 31423,
+      "estimatedTokens": 7856,
+      "sha256": "8f5e8e3792fb92fafe5798a14e57ace4e47df5b7bf440eb722258584b3340226",
       "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
@@ -210,9 +210,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 31252,
-      "estimatedTokens": 7813,
-      "sha256": "8a7a9778b14c16cf24c75b3dc9d2a770ebe165e86d528f9ac52956f7df6f71e7",
+      "chars": 31415,
+      "estimatedTokens": 7854,
+      "sha256": "94e8170b46ad2b11c76780190a203207b99bdb198b2f0f2c648d93f9680e0a89",
       "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
@@ -232,9 +232,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 30760,
-      "estimatedTokens": 7690,
-      "sha256": "165de64acd2d79c9a19ee5f78432065970e8dd1c6d7f39eb81ff1f901e1d99f1",
+      "chars": 30923,
+      "estimatedTokens": 7731,
+      "sha256": "410b397f4f2b54a4b8b41783837a0613bc8ed73ae285e809a33e94684c9e1816",
       "sectionLabels": [
         "base",
         "mode:orchestrate",
@@ -266,9 +266,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 32865,
-      "estimatedTokens": 8217,
-      "sha256": "f23f44401bc48cd4af92be4a4b74403ed60f76b3b16a4ca2eefcfe437fe57271",
+      "chars": 33028,
+      "estimatedTokens": 8257,
+      "sha256": "ce253ba0445b4011d51e6ebab5b94b8a86d7b871c56219086063c5073bfc4412",
       "sectionLabels": [
         "base",
         "mode:orchestrate",
@@ -300,9 +300,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 26808,
-      "estimatedTokens": 6702,
-      "sha256": "b7d5069ea8e065106200afc3c3fbfce7fdc12d64fa7882d44923eaf1251b5772",
+      "chars": 26971,
+      "estimatedTokens": 6743,
+      "sha256": "7ab8874781effda24cde7a0e15df6e7d3e0a0ba221e80e8b40c3a9d318ac5e57",
       "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
     },
     {
@@ -322,9 +322,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 26800,
-      "estimatedTokens": 6700,
-      "sha256": "1bc473d3a6f0e87d90b33a6dd1e86d147d8946e2dc87a89a88537b669d8faae9",
+      "chars": 26963,
+      "estimatedTokens": 6741,
+      "sha256": "079a34c0207de01385f80f536c9a29fb1c24f89b2d00034d9912d2ee87edc920",
       "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
     },
     {
@@ -344,9 +344,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 29062,
-      "estimatedTokens": 7266,
-      "sha256": "44ea9c962a20bd02460d066ca9583407419b0be229ec93476baeaa1eec0fef5a",
+      "chars": 29225,
+      "estimatedTokens": 7307,
+      "sha256": "e278c4d9384d6c97c11f1ce36cb628d37fd59e866a5d0ee80d80e3372ac83eac",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -378,9 +378,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 31167,
-      "estimatedTokens": 7792,
-      "sha256": "ca6dcf795248e533539b654cb45e2d6c73d28325ba9296013d7ead463d1a2035",
+      "chars": 31330,
+      "estimatedTokens": 7833,
+      "sha256": "4d64c3f5bb151f398e83322cc7469ce84bd56cf0851db2811d53f84dfde86448",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -412,9 +412,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 25110,
-      "estimatedTokens": 6278,
-      "sha256": "5661d2f3906a0d7da671a992329341546c2c87f5ff59c1fb4f9cb351c92cfa1c",
+      "chars": 25273,
+      "estimatedTokens": 6319,
+      "sha256": "15c6c354916ff9948e948bcf6862657a47043bcc75a0b65e995dcf47df8ffed2",
       "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
@@ -434,9 +434,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 25102,
-      "estimatedTokens": 6276,
-      "sha256": "7bf87a42bd7335ddd938bc79555c94d8b2e5f4ab209f131d0c2d2eac06265d12",
+      "chars": 25265,
+      "estimatedTokens": 6317,
+      "sha256": "1222d42d21d12562f8360773745c8082dbee1a04f63d145c46d4665ed86b7005",
       "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
@@ -456,9 +456,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 31081,
-      "estimatedTokens": 7771,
-      "sha256": "bca21ccb24754c70dfffaf8137125f116d398cba90f80f74e5603b10edf8ea3f",
+      "chars": 31244,
+      "estimatedTokens": 7811,
+      "sha256": "0c5b0f909f61f559aad69c87b11a7cea7f05add99fa9920d1697ce60e5df42d0",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -490,9 +490,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 33186,
-      "estimatedTokens": 8297,
-      "sha256": "d89e854d3765fd18793313f0cbe5882991e40f7ff33b1fb255c51b4c4a2e967d",
+      "chars": 33349,
+      "estimatedTokens": 8338,
+      "sha256": "bd6713c11a8a0abcd6370ca0a09ba89d39c151c519a3afd6e6e9a2a66f3dd2a2",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -524,9 +524,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 27129,
-      "estimatedTokens": 6783,
-      "sha256": "6ac3bbb0d38d1ed1863e11c46f110e97d0434b4a335a2efeb4e2b5be36b1df8e",
+      "chars": 27292,
+      "estimatedTokens": 6823,
+      "sha256": "21882361f73d6e9f89189fc3f6af92c4c6cc62ceb61bcad93c9d502317552c68",
       "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
@@ -546,9 +546,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 27121,
-      "estimatedTokens": 6781,
-      "sha256": "549ba67c6fdc3f1505500b848967e104f1df48daa8b5ece1195c1ce3df4922b7",
+      "chars": 27284,
+      "estimatedTokens": 6821,
+      "sha256": "20d3d78744e50031607c41aea4e7e3a7fc9576b29bb8a2ffb839684d074ca65a",
       "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
@@ -568,9 +568,9 @@
       "model": "claude-opus-4-8",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 29651,
-      "estimatedTokens": 7413,
-      "sha256": "61d57408691bc1a3fc6bd172cbdc29ac8944e0533e428701481ff1e3f03c79e0",
+      "chars": 29814,
+      "estimatedTokens": 7454,
+      "sha256": "f1d6ab4e2393d5d089051a99a33ade9b69bb27423c740f9d3f55de877a70610c",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -602,9 +602,9 @@
       "model": "gpt-5.6-sol",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 31756,
-      "estimatedTokens": 7939,
-      "sha256": "5b53fab305ec8ceaf0204f6c396819e6b18d13326fd365d912a09ae6bc4ac592",
+      "chars": 31919,
+      "estimatedTokens": 7980,
+      "sha256": "0e9572bf25bb40e31a4aec3838669ab364a76c042d0080e52749ab9f99a76245",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -636,9 +636,9 @@
       "model": "openai-compatible-eval",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 25699,
-      "estimatedTokens": 6425,
-      "sha256": "84c27b48a65ffb458ef1600e463207f4d256e1ef79550c6a018b2f19e2c696ac",
+      "chars": 25862,
+      "estimatedTokens": 6466,
+      "sha256": "db9756d2c4f8ba6a51e47e40418759f5765e2567c07197213733496071b1e40e",
       "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     },
     {
@@ -658,9 +658,9 @@
       "model": "gemini-2.5-pro",
       "profile": "compatibility",
       "status": "measured",
-      "chars": 25691,
-      "estimatedTokens": 6423,
-      "sha256": "2e2946e4cebc5dd1818900db3db9e416d350285390c5867b7c3c53a6408b9dda",
+      "chars": 25854,
+      "estimatedTokens": 6464,
+      "sha256": "1366bb4adf1bbf1f20f4f141013039d9fc4e9fbd817b93472766cfc996e97928",
       "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     },
     {
@@ -678,95 +678,95 @@
   "toolsByMode": [
     {
       "mode": "code",
-      "toolCount": 64,
-      "chars": 102866,
-      "estimatedTokens": 25717,
-      "sha256": "157da02d9cb346bf7e936de58a0532a93b1cd851ab419b454e794434491f4cc9"
+      "toolCount": 66,
+      "chars": 105431,
+      "estimatedTokens": 26358,
+      "sha256": "6cfb0748d58b65ac82eb1793299c445a1b6fdb9710314f16efbb20519f5913fb"
     },
     {
       "mode": "architect",
-      "toolCount": 59,
-      "chars": 96587,
-      "estimatedTokens": 24147,
-      "sha256": "9394949041267f4abaef2b36ddc041dbd52ea43e46f442178d74efe7341b2627"
+      "toolCount": 61,
+      "chars": 99152,
+      "estimatedTokens": 24788,
+      "sha256": "452063c40305ff23a687ebade6d511921f457390370626ec470b93a96f04ea6d"
     },
     {
       "mode": "orchestrate",
-      "toolCount": 53,
-      "chars": 69625,
-      "estimatedTokens": 17407,
-      "sha256": "c6ea9a69079a48813491ffa0ddae1bb671e5131c74232fc928160efd0053f08c"
+      "toolCount": 55,
+      "chars": 72190,
+      "estimatedTokens": 18048,
+      "sha256": "4aca73e8b78d43d9c5df1bf6915b97d68b0238376eb34b7c49ed954af1a94145"
     },
     {
       "mode": "ask",
-      "toolCount": 38,
-      "chars": 61376,
-      "estimatedTokens": 15344,
-      "sha256": "4be5ac9e41bcf575ba8e3e2c070a40442ca664bb78773d64ae04bdd7e23caf91"
+      "toolCount": 40,
+      "chars": 63941,
+      "estimatedTokens": 15986,
+      "sha256": "f10aac360b1e7ccb51ecb37ae1849d49cae0c2e6414de4dec0829a8fb055a561"
     },
     {
       "mode": "debug",
-      "toolCount": 56,
-      "chars": 85106,
-      "estimatedTokens": 21277,
-      "sha256": "49cf7142dca27cf0a169f8a6501f9a77cbae46ed7dd0e4a4bb81dd5cce931929"
+      "toolCount": 58,
+      "chars": 87671,
+      "estimatedTokens": 21918,
+      "sha256": "2e1d0dabdc0182a4e520070ca095dfab994e1e3cb634e42e0e51d73bb8d50c6b"
     },
     {
       "mode": "review",
-      "toolCount": 50,
-      "chars": 81612,
-      "estimatedTokens": 20403,
-      "sha256": "7cd3ab6dbd4c6c2c3a903f9c81f0230c15230f6e1175a5ab830e4c71ee0d4035"
+      "toolCount": 52,
+      "chars": 84177,
+      "estimatedTokens": 21045,
+      "sha256": "19bf483bf901bb06816948664a032e64eac50f9ab9593d0c0fdd00e40c513e61"
     }
   ],
   "projectedToolsByMode": [
     {
       "mode": "code",
       "toolCount": 30,
-      "deferredToolCount": 34,
-      "chars": 64633,
-      "estimatedTokens": 16159,
-      "sha256": "c8e56dd1bcf801dfdadef4df08b6f2994c5f6ab80c7b51bdbd665530c1d807fb"
+      "deferredToolCount": 36,
+      "chars": 64845,
+      "estimatedTokens": 16212,
+      "sha256": "814ab6eceb6d575e40dde26a6a605e93acfa91eab52efab1543d57ea53fde2e7"
     },
     {
       "mode": "architect",
       "toolCount": 29,
-      "deferredToolCount": 30,
-      "chars": 62977,
-      "estimatedTokens": 15745,
-      "sha256": "c4c87e2d7cfde469eae005c8ece5f3c9b63d3293030fa7540fa4deaeca56e8b1"
+      "deferredToolCount": 32,
+      "chars": 63189,
+      "estimatedTokens": 15798,
+      "sha256": "40b5f45bc6904cf47976a96331e4c527be3983a7deb7dfb975ff706e58303dcd"
     },
     {
       "mode": "orchestrate",
       "toolCount": 25,
-      "deferredToolCount": 28,
-      "chars": 42709,
-      "estimatedTokens": 10678,
-      "sha256": "bb573a9a61827bdc498f8341498b803d0771ff38424681fc83a1f7498110bdf2"
+      "deferredToolCount": 30,
+      "chars": 42921,
+      "estimatedTokens": 10731,
+      "sha256": "7895403b07a2319b54285b23d06870f31e0ec13131913546e7e45cae2a22b8d4"
     },
     {
       "mode": "ask",
       "toolCount": 20,
-      "deferredToolCount": 18,
-      "chars": 42333,
-      "estimatedTokens": 10584,
-      "sha256": "f986c49d169431c8bd740cd55e91633b8e89d05ee61cfce30f17225e99bde7e0"
+      "deferredToolCount": 20,
+      "chars": 42545,
+      "estimatedTokens": 10637,
+      "sha256": "0e8806ca8545c27b57ad885d04498705735e4f3ccf84f0272435262e0a686aa3"
     },
     {
       "mode": "debug",
       "toolCount": 27,
-      "deferredToolCount": 29,
-      "chars": 57649,
-      "estimatedTokens": 14413,
-      "sha256": "0332c7363d2a2ed3daed8af444c58bec063032365b43acc426c115eae2e50f03"
+      "deferredToolCount": 31,
+      "chars": 57861,
+      "estimatedTokens": 14466,
+      "sha256": "b663fae2b08741e6d34e13803825d4cd444b4ea9d73d8eb42c00ebe20d861486"
     },
     {
       "mode": "review",
       "toolCount": 22,
-      "deferredToolCount": 28,
-      "chars": 56140,
-      "estimatedTokens": 14035,
-      "sha256": "00688e4b13725571672192626cb780c9bfa54e8f94da7c568ec2affc83e8567e"
+      "deferredToolCount": 30,
+      "chars": 56352,
+      "estimatedTokens": 14088,
+      "sha256": "4aa142f27ecbf20cc5524977422f4caa4fa9a5a1578789e39d076bb8d352d034"
     }
   ],
   "profileMatrix": {
@@ -801,7 +801,7 @@
     "sha256": "57b435501b7aa87c0b0662a9b44d42e331e78cb515623466b26d030765d93e83"
   },
   "toolInventory": {
-    "count": 73,
+    "count": 75,
     "driftCount": 0,
     "missingBySource": {
       "registry": [],
@@ -811,6 +811,6 @@
       "definition": [],
       "dispatch": []
     },
-    "sha256": "56b06413703d7756f106d79eddc5c21fe1d0ce0d854b56c7a532a5f7f4fa0d56"
+    "sha256": "6bd2cb54dfc5b4b3d00209fa77dcb0b3338fab755cf2f320fb5a6e5e07b6b5ee"
   }
 }

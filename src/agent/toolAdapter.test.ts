@@ -1324,6 +1324,8 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "inspect_page_images",
   "search_session_history",
   "read_session_excerpt",
+  "search_workspace_sessions",
+  "read_workspace_session_excerpt",
   "diagnose_activity",
   "recall_memory",
   "get_diagnostics",
@@ -5363,6 +5365,144 @@ describe("dispatchToolCall", () => {
 
     expect(getSessionTranscript).toHaveBeenCalledTimes(1);
     expect(parseRecallPayload(result).total_matches).toBe(1);
+  });
+
+  describe("workspace session history authority", () => {
+    const WORKSPACE_TOOLS = [
+      "search_workspace_sessions",
+      "read_workspace_session_excerpt",
+    ];
+    const names = (...args: Parameters<typeof getAgentTools>) =>
+      getAgentTools(...args).map((tool) => tool.name);
+    const codeMode = BUILT_IN_MODES.find((mode) => mode.slug === "code")!;
+
+    it("offers the tools to foreground read-capable modes only", () => {
+      expect(names(codeMode)).toEqual(expect.arrayContaining(WORKSPACE_TOOLS));
+      const background = names(codeMode, undefined, true);
+      for (const tool of WORKSPACE_TOOLS) {
+        expect(background).not.toContain(tool);
+      }
+      expect(background).toContain("search_session_history");
+    });
+
+    it.each(["review", "readonly-research", "btw", "worktree-setup"])(
+      "keeps them out of the bounded %s profile",
+      (profile) => {
+        const profileNames = names(undefined, undefined, false, profile);
+        for (const tool of WORKSPACE_TOOLS) {
+          expect(profileNames).not.toContain(tool);
+        }
+      },
+    );
+
+    it("requires restricted skills to name them explicitly", () => {
+      const restricted = names(codeMode, undefined, false, undefined, [
+        "read_file",
+      ]);
+      expect(restricted).toContain("search_session_history");
+      for (const tool of WORKSPACE_TOOLS) {
+        expect(restricted).not.toContain(tool);
+      }
+      expect(
+        names(codeMode, undefined, false, undefined, [
+          "search_workspace_sessions",
+        ]),
+      ).toContain("search_workspace_sessions");
+    });
+
+    function fakeBinding() {
+      const search = vi.fn(async () => ({
+        ok: true as const,
+        sessions: [],
+        truncated: false,
+        index: {
+          eligible_sessions: 7,
+          indexed_sessions: 7,
+          pending_sessions: 0,
+          failed_sessions: 0,
+          complete: true,
+        },
+      }));
+      return {
+        search,
+        binding: {
+          currentSessionId: "captured-session",
+          history: { search, readExcerpt: vi.fn() },
+        },
+      };
+    }
+
+    it("rejects deferred calls from a skill-restricted request catalog", async () => {
+      const { search, binding } = fakeBinding();
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        workspaceSessionHistory: binding,
+      });
+      const restrictedTools = getAgentTools(
+        codeMode,
+        undefined,
+        false,
+        undefined,
+        ["read_file"],
+      );
+      const nativeToolDisclosure =
+        createNativeToolDisclosureSnapshot(restrictedTools);
+      const result = await runtime.executeTool({
+        name: "call_native_tool",
+        input: {
+          name: "search_workspace_sessions",
+          input: { query: "previous work" },
+        },
+        context: {
+          sessionId: "runtime-session",
+          mode: "code",
+          availableToolNames: new Set(
+            nativeToolDisclosure.inlineTools.map((tool) => tool.name),
+          ),
+          modeAllowedToolNames: new Set(restrictedTools.map((t) => t.name)),
+          nativeToolDisclosure,
+          skillAllowedTools: ["read_file"],
+        },
+      });
+      expect(search).not.toHaveBeenCalled();
+      expect(JSON.stringify(result.content)).not.toContain("eligible_sessions");
+    });
+
+    it("dispatches to the binding captured in the runtime context", async () => {
+      const { search, binding } = fakeBinding();
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        workspaceSessionHistory: binding,
+      });
+      const result = await runtime.executeTool({
+        name: "search_workspace_sessions",
+        input: { query: "distinctive-history-query", limit: 2 },
+        context: { sessionId: "runtime-session" },
+      });
+      expect(search).toHaveBeenCalledWith({
+        query: "distinctive-history-query",
+        limit: 2,
+        excludeSessionId: "captured-session",
+      });
+      expect(JSON.stringify(result.content)).toContain("eligible_sessions");
+    });
+
+    it("reports unavailable when no binding was captured", async () => {
+      const result = await createAgentToolRuntime(mockCtx).executeTool({
+        name: "read_workspace_session_excerpt",
+        input: {
+          session_id: "s",
+          start_message_index: 0,
+          end_message_index: 0,
+          snapshot_message_count: 1,
+          snapshot_revision: "r",
+        },
+        context: { sessionId: "runtime-session" },
+      });
+      expect(JSON.stringify(result.content)).toContain(
+        "workspace_session_history_unavailable",
+      );
+    });
   });
 
   it("returns an error result for unknown tool names", async () => {

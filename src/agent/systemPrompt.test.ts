@@ -467,6 +467,9 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "wire that exact continuation into `continueLabel` and `continuePrompt`",
     );
+    expect(result).toContain(
+      "In `continuePrompt`, wrap any command, slash command, or code in backticks (for example `npm test`)",
+    );
   });
 
   it("makes the final-status summary the single home for the final response", async () => {

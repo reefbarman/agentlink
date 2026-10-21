@@ -6,6 +6,9 @@ import { getAgentTools } from "./toolAdapter.js";
 const FOREGROUND_ONLY_TOOLS = new Set([
   "compose",
   "respond_to_background_question",
+  // Cross-session history is bound only to foreground sessions.
+  "search_workspace_sessions",
+  "read_workspace_session_excerpt",
 ]);
 
 const mcpTools = [
@@ -29,9 +32,12 @@ describe("foreground/background capability parity contract", () => {
       expect(
         getAgentTools(mode, mcpTools, true).map((tool) => tool.name),
       ).not.toContain("compose");
-      expect(
-        getAgentTools(mode, mcpTools, true).map((tool) => tool.name),
-      ).not.toContain("respond_to_background_question");
+      const backgroundNames = getAgentTools(mode, mcpTools, true).map(
+        (tool) => tool.name,
+      );
+      for (const name of FOREGROUND_ONLY_TOOLS) {
+        expect(backgroundNames).not.toContain(name);
+      }
     });
   }
 

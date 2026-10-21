@@ -340,6 +340,18 @@
         "default": "./dist/cjs/sessionTranscriptRecall.cjs"
       }
     },
+    "./workspace-session-history": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/workspaceSessionHistory.d.ts",
+        "default": "./dist/workspaceSessionHistory.js"
+      },
+      "require": {
+        "types": "./dist/cjs/workspaceSessionHistory.d.cts",
+        "default": "./dist/cjs/workspaceSessionHistory.cjs"
+      }
+    },
     "./surface-model-messages": {
       "browser": null,
       "edge": null,

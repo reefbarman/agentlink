@@ -28,3 +28,4 @@ export * from "./turnKernel.js";
 export * from "./turnLeases.js";
 export * from "./voice.js";
 export * from "./webAccess.js";
+export * from "./workspaceSessionHistory.js";

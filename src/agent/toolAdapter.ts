@@ -189,6 +189,10 @@ import {
   handleReadSessionExcerpt,
   handleSearchSessionHistory,
 } from "../tools/sessionTranscriptRecall.js";
+import {
+  handleReadWorkspaceSessionExcerpt,
+  handleSearchWorkspaceSessions,
+} from "@agentlink/core/workspace-session-history";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleTriageFeedback } from "../tools/triageFeedback.js";
@@ -285,6 +289,15 @@ const SKILL_SESSION_CONTEXT_TOOLS = new Set([
   "search_session_history",
   "read_session_excerpt",
 ]);
+/**
+ * Cross-session history is bound only to foreground sessions. Unlike the
+ * current-session recall tools, these are not skill-exempt and are absent from
+ * bounded profiles and background agents.
+ */
+const WORKSPACE_SESSION_HISTORY_TOOLS = new Set([
+  "search_workspace_sessions",
+  "read_workspace_session_excerpt",
+]);
 const ALWAYS_AVAILABLE_DEV_TOOLS = new Set(["send_feedback"]);
 
 const EXCLUDED_TOOLS = new Set([
@@ -350,6 +363,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   search_files: schemas.searchFilesSchema,
   search_session_history: schemas.searchSessionHistorySchema,
   read_session_excerpt: schemas.readSessionExcerptSchema,
+  search_workspace_sessions: schemas.searchWorkspaceSessionsSchema,
+  read_workspace_session_excerpt: schemas.readWorkspaceSessionExcerptSchema,
   diagnose_activity: schemas.diagnoseActivitySchema,
   get_diagnostics: schemas.getDiagnosticsSchema,
   write_file: schemas.writeFileSchema,
@@ -579,7 +594,7 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
       continuePrompt: {
         type: "string",
         description:
-          "Visible user message sent when the continuation button is clicked. Make it specific enough to start the named next step, not just a generic 'continue', whenever there is remaining work from the original plan or a concrete follow-up in the summary.",
+          "Visible user message sent when the continuation button is clicked. Make it specific enough to start the named next step, not just a generic 'continue', whenever there is remaining work from the original plan or a concrete follow-up in the summary. Wrap any command, slash command, file path, or code in backticks (for example `npm test`) so sending the prompt unchanged cannot invoke it as a command.",
       },
     },
     required: ["status"],
@@ -1212,6 +1227,9 @@ export function getAgentTools(
       ([name]) =>
         name !== "compose" ||
         (composeEnabled === true && !isBackground && toolProfile === undefined),
+    )
+    .filter(
+      ([name]) => !WORKSPACE_SESSION_HISTORY_TOOLS.has(name) || !isBackground,
     )
     .filter(
       ([name]) =>
@@ -2110,6 +2128,11 @@ export interface ToolDispatchContext {
   getHandoffSourceTranscript?: AgentToolExecutionRequest["context"]["getHandoffSourceTranscript"];
   /** Returns bounded, redacted operation evidence for the executing session. */
   sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
+  /**
+   * Past-session history bound to the executing session's own project. Absent
+   * for background, projectless and unpersisted sessions.
+   */
+  workspaceSessionHistory?: import("@agentlink/core/workspace-session-history").WorkspaceSessionHistoryBinding;
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"];
   getSkillDiagnostics?: AgentToolExecutionRequest["context"]["getSkillDiagnostics"];
@@ -4462,6 +4485,13 @@ async function dispatchToolCallWithTrackedApprovals(
         params,
         ctx.getSessionTranscript,
         ctx.getHandoffSourceTranscript,
+      );
+    case "search_workspace_sessions":
+      return handleSearchWorkspaceSessions(params, ctx.workspaceSessionHistory);
+    case "read_workspace_session_excerpt":
+      return handleReadWorkspaceSessionExcerpt(
+        params,
+        ctx.workspaceSessionHistory,
       );
     case "diagnose_activity":
       return handleDiagnoseActivity(

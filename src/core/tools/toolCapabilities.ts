@@ -261,6 +261,22 @@ const toolCapabilities = [
     true,
   ),
   metadata(
+    "search_workspace_sessions",
+    "session",
+    ["session.transcript.read", "search.text"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
+    "read_workspace_session_excerpt",
+    "session",
+    ["session.transcript.read"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
     "diagnose_activity",
     "session",
     ["session.activity.read", "session.diagnostics"],

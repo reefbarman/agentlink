@@ -347,6 +347,18 @@ const CORE_MODULES = [
     ],
     loadEsm: () => import("@agentlink/core/web-access"),
   },
+  {
+    exportPath: "workspace-session-history",
+    fileName: "workspaceSessionHistory",
+    declarationDependencies: ["sessionTranscriptRecall"],
+    identityExports: [
+      "WorkspaceSessionHistory",
+      "buildWorkspaceSessionIndexDocument",
+      "handleReadWorkspaceSessionExcerpt",
+      "handleSearchWorkspaceSessions",
+    ],
+    loadEsm: () => import("@agentlink/core/workspace-session-history"),
+  },
 ] as const;
 
 const CORE_COMPATIBILITY_FACADES = [

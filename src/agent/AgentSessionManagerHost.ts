@@ -170,6 +170,13 @@ export interface AgentSessionManagerOptions {
   projectCustomizationRegistry?: ProjectCustomizationRegistry;
   projectMcpHubRegistry?: ProjectMcpHubRegistry;
   skillCatalogFallbackProvider?: SkillCatalogFallbackProvider;
+  /**
+   * Creates the disposable lexical index for one project's past sessions.
+   * Workspace session-history tools are unavailable when omitted.
+   */
+  workspaceSessionHistoryIndexFactory?: (
+    scope: import("@agentlink/protocol/workspace-project").SessionProjectScope,
+  ) => import("@agentlink/core/workspace-session-history").WorkspaceSessionHistoryIndex;
   agentPluginCatalogProvider?: AgentPluginCatalogProvider;
   hookRuntimeProvider?: import("./HookService.js").HookRuntimeProvider;
   browserPreferredProjectId?: string;

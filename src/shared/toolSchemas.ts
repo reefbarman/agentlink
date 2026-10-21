@@ -692,6 +692,55 @@ export const readSessionExcerptSchema = {
     ),
 };
 
+export const searchWorkspaceSessionsSchema = {
+  query: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe(
+      "Words to look for in this project's earlier sessions, such as a feature, file, error or decision.",
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(5)
+    .optional()
+    .describe("Maximum sessions to return (default 5, maximum 5)."),
+};
+
+export const readWorkspaceSessionExcerptSchema = {
+  session_id: z
+    .string()
+    .min(1)
+    .describe("Session ID returned by search_workspace_sessions."),
+  start_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Inclusive zero-based start message index from a search hit."),
+  end_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Inclusive zero-based end message index; maximum span is 10 messages.",
+    ),
+  snapshot_message_count: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Snapshot message count returned for this session by search_workspace_sessions.",
+    ),
+  snapshot_revision: z
+    .string()
+    .min(1)
+    .describe(
+      "Snapshot revision returned for this session by search_workspace_sessions.",
+    ),
+};
+
 export const getDiagnosticsSchema = {
   path: z
     .string()

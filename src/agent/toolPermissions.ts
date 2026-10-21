@@ -16,6 +16,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_editor_state",
     "search_session_history",
     "read_session_excerpt",
+    "search_workspace_sessions",
+    "read_workspace_session_excerpt",
     "diagnose_activity",
     "present_images",
     "inspect_page_images",

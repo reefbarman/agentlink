@@ -72,6 +72,7 @@ import { registerIndexStorageCommand } from "./indexer/indexStorageCommands.js";
 import { createCodeRetrievalHealthProvider } from "./indexer/codeRetrievalHealth.js";
 import { AutonomousMemoryToolProvider } from "./storage/retrieval/AutonomousMemoryToolProvider.js";
 import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrievalRepository.js";
+import { WorkspaceSessionHistoryIndexStore } from "./storage/retrieval/WorkspaceSessionHistoryIndexStore.js";
 import { RetrievalSkillCatalogFallbackProvider } from "./storage/retrieval/RetrievalSkillCatalogFallbackProvider.js";
 import { getRetrievalStoreRoot } from "./storage/retrieval/retrievalStorePaths.js";
 import { SharedMemoryConfigStore } from "./storage/retrieval/sharedMemoryConfig.js";
@@ -1449,6 +1450,21 @@ export async function activate(
           },
         )
       : undefined;
+  // Disposable local lexical index over this workspace's past sessions.
+  const workspaceSessionHistoryIndexStore =
+    sessionStore && workspaceSessionLocation.historyDirectory
+      ? new WorkspaceSessionHistoryIndexStore(
+          WorkspaceSessionHistoryIndexStore.rootFor(
+            context.globalStorageUri.fsPath,
+            workspaceSessionLocation.historyDirectory,
+          ),
+        )
+      : undefined;
+  if (workspaceSessionHistoryIndexStore) {
+    context.subscriptions.push({
+      dispose: () => void workspaceSessionHistoryIndexStore.close(),
+    });
+  }
   if (workspaceSessionLocation.status === "legacy_conflict") {
     log(
       `[history] Multiple legacy history namespaces found for workspace ${workspaceSessionLocation.workspaceIdentity}; persistence disabled until explicit resolution.`,
@@ -2138,6 +2154,8 @@ export async function activate(
       },
       projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
       skillCatalogFallbackProvider,
+      workspaceSessionHistoryIndexFactory:
+        workspaceSessionHistoryIndexStore?.forProject,
       agentPluginCatalogProvider: agentPluginCatalog,
       hookRuntimeProvider: hookService,
       executionUnavailableReason:
