@@ -130,6 +130,12 @@ When adding a new tool or changing tool parameters:
 - Surface-specific composition belongs in the owning surface package: VS Code in `src/agent`/`src/integrations`/extension composition, browser gateway in `src/browser-gateway`, webview UI in the relevant `webview` package.
 - If a concept may later be packaged as reusable core, name it generically (`sessionProtocol`, `modelAuth`, `capabilityPolicy`) and keep host-specific labels such as “Ask Agent tab” or browser routing in the surface layer.
 
+## Surface Parity
+
+- VS Code is the reference agent surface. The CLI, Assistant, Ask Agent (in Desktop and the browser gateway) and SDK-based agents should get its capabilities by porting shared code into the SDK packages as opt-in pieces, not by building new versions.
+- Match VS Code's tool names, schemas and results, record differences as gaps, never regress VS Code, and keep each surface's own role (Assistant persona and jobs, Ask Agent's projectless default, CLI terminal UX).
+- Load [surface-parity](.agentlink/skills/surface-parity/SKILL.md) before changing tools or agent behavior on any non-VS Code surface or in `packages/`.
+
 ## File Naming Conventions
 
 - Match existing local conventions before creating new files.
