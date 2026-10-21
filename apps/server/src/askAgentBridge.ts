@@ -798,6 +798,8 @@ export async function createAskAgentBridge(
       store.loadHistory({ sessions });
       // Runs working now keep their live chat over the partial history.
       for (const run of followed.values()) store.upsertSession(run.session);
+      // The chat shown first keeps the model and thinking level it used.
+      applyChatSelection(store.getActiveSessionId());
     })().catch((error: unknown) => {
       loaded = undefined;
       throw error;
@@ -810,6 +812,24 @@ export async function createAskAgentBridge(
     (sessionModels.has(storeSessionId) || followed.has(storeSessionId)
       ? storeSessionId
       : undefined);
+
+  /**
+   * Select the model and thinking level a chat last ran with. A chat that
+   * has not run yet, or whose model is no longer offered, keeps the current
+   * selection.
+   */
+  const applyChatSelection = (storeSessionId: string): boolean => {
+    const workspaceSessionId = workspaceSessionFor(storeSessionId);
+    const model = workspaceSessionId
+      ? sessionModels.get(workspaceSessionId)
+      : undefined;
+    if (!workspaceSessionId || !model || !store.setModel(modelKey(model))) {
+      return false;
+    }
+    const effort = sessionEfforts.get(workspaceSessionId);
+    if (effort) store.setReasoningEffort(effort);
+    return true;
+  };
 
   /** Re-read the watched chat's agents; overlapping calls coalesce. */
   const refreshAgents = (): Promise<void> => {
@@ -2322,10 +2342,7 @@ export async function createAskAgentBridge(
     }
     markRead(sessionId);
     const workspaceSessionId = workspaceSessionFor(sessionId);
-    const model = workspaceSessionId
-      ? sessionModels.get(workspaceSessionId)
-      : undefined;
-    if (model) store.setModel(modelKey(model));
+    applyChatSelection(sessionId);
     store.setTodos(
       (workspaceSessionId && sessionTodos.get(workspaceSessionId)) || [],
     );

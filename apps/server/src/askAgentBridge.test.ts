@@ -2178,6 +2178,49 @@ describe("Ask Agent bridge", () => {
     );
   });
 
+  it("reopens each chat on the model and thinking level it last used", async () => {
+    const first = await startBridge();
+    // A fresh bridge over the same state file, as after a restart.
+    const second = await startBridge(first.file);
+    second.fake.sessions.set("ws-old", {
+      model: REVIEW,
+      reasoningEffort: "low",
+      messages: [
+        { role: "user", content: "remember me" },
+        { role: "assistant", content: [{ type: "text", text: "I will" }] },
+      ],
+    });
+    const foreground = (body: Record<string, unknown>) =>
+      (
+        body.snapshot as {
+          session: {
+            foreground: { model?: string; reasoningEffort?: string };
+          };
+        }
+      ).session.foreground;
+
+    // The chat shown first after the restart keeps its own selection.
+    const shown = await second.call("/api/ask-agent/session");
+    expect(foreground(shown.body)).toMatchObject({
+      model: "claude/claude-review",
+      reasoningEffort: "low",
+    });
+
+    // Another chat picks something else; going back restores the old one.
+    await second.call("/api/ask-agent/session/new", {});
+    await second.call("/api/ask-agent/model", {
+      model: "claude/claude-review",
+    });
+    await second.call("/api/ask-agent/thinking", { effort: "max" });
+    const back = await second.call("/api/ask-agent/session/load", {
+      sessionId: "ws-old",
+    });
+    expect(foreground(back.body)).toMatchObject({
+      model: "claude/claude-review",
+      reasoningEffort: "low",
+    });
+  });
+
   it("shows a finished scheduled run's chat, titled and unread", async () => {
     const { bridge, fake, call, file } = await startBridge();
     const jobAuth: AssistantServerAuth = {
