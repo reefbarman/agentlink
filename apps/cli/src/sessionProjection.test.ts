@@ -276,6 +276,60 @@ describe("standalone session projection", () => {
     ]);
   });
 
+  it("hides stored condense summaries and tracks condense events", () => {
+    let state = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "session.selected",
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "Start" },
+          { role: "assistant", content: "Old", condenseParent: "c1" },
+          {
+            role: "user",
+            content: "SUMMARY",
+            isSummary: true,
+            condenseId: "c1",
+          },
+        ],
+      },
+    );
+    expect(state.transcript.map((message) => message.text)).toEqual([
+      "Start",
+      "Old",
+    ]);
+    state = reduceStandaloneSessionProjection(state, {
+      type: "turn.event",
+      event: event(
+        {
+          type: "context.condensing",
+          trigger: "threshold",
+          estimatedInputTokens: 10,
+        },
+        0,
+      ),
+    });
+    expect(state.condense).toEqual({
+      status: "condensing",
+      trigger: "threshold",
+    });
+    state = reduceStandaloneSessionProjection(state, {
+      type: "turn.event",
+      event: event(
+        {
+          type: "context.condensed",
+          trigger: "threshold",
+          status: "condensed",
+        },
+        1,
+      ),
+    });
+    expect(state.condense).toEqual({
+      status: "condensed",
+      trigger: "threshold",
+    });
+  });
+
   it("anchors restored suspended turns to the latest durable user message", () => {
     const state = reduceStandaloneSessionProjection(
       initialStandaloneSessionProjection("/project"),

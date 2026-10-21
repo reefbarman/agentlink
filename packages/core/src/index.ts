@@ -2,6 +2,7 @@ export * from "./agentEngine.js";
 export * from "./agentToolLoop.js";
 export * from "./client.js";
 export * from "./codex.js";
+export * from "./contextCondenser.js";
 export * from "./embeddedAgentWeb.js";
 export * from "./hostAdapterContracts.js";
 export * from "./hostApprovalTestKit.js";

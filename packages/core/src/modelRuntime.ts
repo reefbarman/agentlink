@@ -148,6 +148,17 @@ export interface CoreModelMessage {
   content: string | CoreModelContentBlock[];
   /** Provider-private data decoded only by the provider that created it. */
   providerReplay?: CoreProviderReplayEnvelope;
+  /**
+   * Context-condense markers, the same fields VS Code keeps on its messages.
+   * Stored with the transcript and never sent to providers: a summary
+   * (`isSummary`, `condenseId`) replaces the messages tagged with its id in
+   * `condenseParent` when the history is projected for a model request.
+   */
+  isSummary?: boolean;
+  isResumeContext?: boolean;
+  condenseId?: string;
+  condenseParent?: string;
+  preservedContext?: import("./condensePrompt.js").PreservedRuntimeContext;
 }
 
 export type CoreModelJsonSchema = {

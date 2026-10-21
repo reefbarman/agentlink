@@ -109,6 +109,12 @@ export interface StandaloneBackgroundAgentProjection {
   readonly steeringQueued: number;
 }
 
+export interface StandaloneCondenseProjection {
+  readonly status: "condensing" | "condensed" | "failed";
+  readonly trigger: "threshold" | "context_too_long";
+  readonly message?: string;
+}
+
 export interface StandaloneMcpServerProjection {
   readonly id: string;
   readonly source: "global" | "project";
@@ -134,6 +140,8 @@ export interface StandaloneSessionProjection {
   readonly queuedMessages: readonly string[];
   readonly activeQuestion?: string;
   readonly usage?: Extract<AgentTurnEvent, { type: "usage.updated" }>["usage"];
+  /** The latest context condense in this view, shown with the context usage. */
+  readonly condense?: StandaloneCondenseProjection;
   readonly execution?: Extract<
     AgentTurnEvent,
     { type: "execution.updated" }
@@ -542,6 +550,22 @@ function reduceTurnEvent(
       };
     case "usage.updated":
       return { ...state, revision, usage: event.usage };
+    case "context.condensing":
+      return {
+        ...state,
+        revision,
+        condense: { status: "condensing", trigger: event.trigger },
+      };
+    case "context.condensed":
+      return {
+        ...state,
+        revision,
+        condense: {
+          status: event.status,
+          trigger: event.trigger,
+          ...(event.message ? { message: event.message } : {}),
+        },
+      };
     case "execution.updated":
       return { ...state, revision, execution: event.event.snapshot };
     case "turn.completed":
@@ -641,6 +665,8 @@ function projectHydratedTranscript(
 ): readonly StandaloneTranscriptMessage[] {
   const projected: StandaloneTranscriptMessage[] = [];
   for (const [index, message] of messages.entries()) {
+    // A condense summary is model context, not something the user wrote.
+    if (message.isSummary) continue;
     const text =
       typeof message.content === "string"
         ? message.content

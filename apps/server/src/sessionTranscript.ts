@@ -44,6 +44,8 @@ export function projectSessionTranscript(
   };
   for (const message of messages) {
     if (!isRecord(message)) continue;
+    // A condense summary is model context, not something the user wrote.
+    if (message.isSummary === true) continue;
     const role = message.role;
     if (role !== "user" && role !== "assistant") continue;
     const content = message.content;

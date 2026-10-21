@@ -20,6 +20,14 @@ import {
   type HostToolLifecycleResolver,
   type HostToolValidationResult,
 } from "./hostTools.js";
+import {
+  estimateModelRequestTokens,
+  isContextTooLongError,
+  projectCondensedHistory,
+  stripCondenseMarkers,
+  type AgentContextCondenser,
+  type AgentContextCondenseResult,
+} from "./contextCondenser.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
 import {
   CoreModelAttemptLimitError,
@@ -37,6 +45,7 @@ import type {
 } from "./modelRuntime.js";
 import {
   resolveAgentModelSelection,
+  type AgentContextCondenseTrigger,
   type AgentInteractionRequest,
   type AgentResolvedModelSelection,
   type AgentTurnError,
@@ -169,6 +178,13 @@ export interface HeadlessTurnKernelOptions<
     | Promise<CoreModelAuthContext | undefined>;
   /** Injectable clock for deterministic event timestamps and execution limits. */
   readonly now?: () => number;
+  /**
+   * Summarises the session history when a turn's request would not fit:
+   * checked before a new turn's first request, and tried once when a
+   * provider rejects a request as too long. Without it, history is sent
+   * as stored (still projected past any earlier summary).
+   */
+  readonly contextCondenser?: AgentContextCondenser<TPrincipal>;
   /**
    * Observe the private cause of a failed turn before it is mapped to the
    * safe public error. Host-side only: whatever the host keeps or shows is
@@ -719,6 +735,108 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           options.authorizeToolCall !== undefined,
       )
       .map((tool) => tool.definition);
+    const systemPrompt = buildHeadlessTurnSystemPrompt(prepared.systemPrompt);
+    // The stored history keeps everything; requests carry VS Code's
+    // projection (first message, latest summary, resume context, later
+    // messages) without the condense markers.
+    let projectedFrom: readonly CoreModelMessage[] | undefined;
+    let projectedHistory: readonly CoreModelMessage[] = [];
+    const requestMessages = (
+      iterationMessages: readonly CoreModelMessage[],
+    ): CoreModelMessage[] => {
+      if (projectedFrom !== prepared.history) {
+        projectedFrom = prepared.history;
+        projectedHistory = projectCondensedHistory(prepared.history);
+      }
+      return [...projectedHistory, userMessage, ...iterationMessages].map(
+        stripCondenseMarkers,
+      );
+    };
+    const estimateRequest = (iterationMessages: readonly CoreModelMessage[]) =>
+      estimateModelRequestTokens({
+        systemPrompt,
+        messages: requestMessages(iterationMessages),
+        tools: toolDefinitions,
+      });
+    const condenseHistory = async (
+      condenser: AgentContextCondenser<TPrincipal>,
+      trigger: AgentContextCondenseTrigger,
+      iterationMessages: readonly CoreModelMessage[],
+      estimatedInputTokens: number,
+      signal: AbortSignal | undefined,
+    ): Promise<boolean> => {
+      emit({ type: "context.condensing", trigger, estimatedInputTokens });
+      let result: AgentContextCondenseResult;
+      try {
+        result = await condenser.condense({
+          trigger,
+          principal: prepared.request.principal,
+          sessionId: prepared.request.sessionId,
+          turnId: prepared.turnId,
+          model: resolvedRuntimeModel,
+          authContext: await resolveAuthContext(),
+          estimatedInputTokens,
+          history: prepared.history,
+          systemPrompt,
+          toolNames: toolDefinitions.map((tool) => tool.name),
+          signal,
+        });
+      } catch (error) {
+        throwIfTurnAborted(signal);
+        result = {
+          status: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      // The summariser reports its own cancellation as a failed result.
+      throwIfTurnAborted(signal);
+      if (result.status !== "condensed") {
+        emit({
+          type: "context.condensed",
+          trigger,
+          status: "failed",
+          message: result.message,
+        });
+        return false;
+      }
+      // Later reads of `prepared` (requests, suspension, the durable
+      // commit) carry the summary.
+      prepared = { ...prepared, history: structuredClone(result.history) };
+      durableMessages = [
+        ...structuredClone(prepared.history),
+        structuredClone(userMessage),
+        ...structuredClone(iterationMessages),
+      ];
+      emit({
+        type: "context.condensed",
+        trigger,
+        status: "condensed",
+        estimatedInputTokens: estimateRequest(iterationMessages),
+      });
+      return true;
+    };
+    if (
+      options.contextCondenser &&
+      !continuation &&
+      prepared.history.length > 0
+    ) {
+      const estimatedInputTokens = estimateRequest([]);
+      if (
+        options.contextCondenser.shouldCondense({
+          model: resolvedRuntimeModel,
+          estimatedInputTokens,
+        })
+      ) {
+        await condenseHistory(
+          options.contextCondenser,
+          "threshold",
+          [],
+          estimatedInputTokens,
+          runOptions.signal,
+        );
+      }
+    }
+    let contextTooLongCondenseAttempted = false;
     // Ids persisted by older continuations are ignored: an id alone does not
     // say which call or input was approved, so every pending call is
     // authorized again on its own input (the resumed call excepted).
@@ -767,133 +885,177 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         onModelCallAttempt,
         signal,
       }) => {
-        const modelResult: AgentToolLoopModelResult = {
-          text: "",
-          toolCalls: [],
-        };
-        const contentBlocks: CoreModelContentBlock[] = [];
-        for await (const event of options.models.stream({
-          principal: prepared.request.principal,
-          authContext: await resolveAuthContext(),
-          model: resolvedModel!.model,
-          request: {
-            systemPrompt: buildHeadlessTurnSystemPrompt(prepared.systemPrompt),
-            messages: [...prepared.history, userMessage, ...iterationMessages],
-            maxTokens: prepared.maxOutputTokens,
-            reasoningEffort: prepared.reasoningEffort,
-            tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
-            temperature: runOptions.modelRequest?.temperature,
-            state: runOptions.modelRequest?.state,
-            executionControls: runOptions.modelRequest?.executionControls,
-            providerHints: {
-              sessionId: prepared.request.sessionId,
-              codex: {
+        let streamedText = false;
+        const attempt = async (): Promise<AgentToolLoopModelResult> => {
+          const modelResult: AgentToolLoopModelResult = {
+            text: "",
+            toolCalls: [],
+          };
+          const contentBlocks: CoreModelContentBlock[] = [];
+          for await (const event of options.models.stream({
+            principal: prepared.request.principal,
+            authContext: await resolveAuthContext(),
+            model: resolvedModel!.model,
+            request: {
+              systemPrompt,
+              messages: requestMessages(iterationMessages),
+              maxTokens: prepared.maxOutputTokens,
+              reasoningEffort: prepared.reasoningEffort,
+              tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+              temperature: runOptions.modelRequest?.temperature,
+              state: runOptions.modelRequest?.state,
+              executionControls: runOptions.modelRequest?.executionControls,
+              providerHints: {
                 sessionId: prepared.request.sessionId,
-                turnState: codexTurnState,
-                fullHistory: true,
-                conversationState: runOptions.modelRequest?.conversationState,
+                codex: {
+                  sessionId: prepared.request.sessionId,
+                  turnState: codexTurnState,
+                  fullHistory: true,
+                  conversationState: runOptions.modelRequest?.conversationState,
+                },
+              },
+              signal,
+              onProviderRequestAttempt: (attempt) => {
+                onModelCallAttempt();
+                runOptions.modelRequest?.onProviderRequestAttempt?.(attempt);
               },
             },
-            signal,
-            onProviderRequestAttempt: (attempt) => {
-              onModelCallAttempt();
-              runOptions.modelRequest?.onProviderRequestAttempt?.(attempt);
-            },
-          },
-        })) {
-          if (event.type === "response_retry") {
-            modelResult.text = "";
-            modelResult.toolCalls.length = 0;
-            modelResult.stopReason = undefined;
-            modelResult.assistantMessage = undefined;
-            contentBlocks.length = 0;
-            onTextReset();
+          })) {
+            if (event.type === "response_retry") {
+              modelResult.text = "";
+              modelResult.toolCalls.length = 0;
+              modelResult.stopReason = undefined;
+              modelResult.assistantMessage = undefined;
+              contentBlocks.length = 0;
+              onTextReset();
+              emit({
+                type: "response.retry",
+                attempt: event.attempt,
+                phase: event.phase,
+                delayMs: event.delayMs,
+                reason: event.reason,
+              });
+            } else if (event.type === "thinking_start") {
+              emit({
+                type: "thinking.started",
+                thinkingId: event.thinkingId,
+              });
+            } else if (event.type === "thinking_delta") {
+              countModelOutput(event.text);
+              emit({
+                type: "thinking.delta",
+                thinkingId: event.thinkingId,
+                text: event.text,
+              });
+            } else if (event.type === "thinking_end") {
+              emit({
+                type: "thinking.completed",
+                thinkingId: event.thinkingId,
+              });
+            } else if (event.type === "text_delta") {
+              countModelOutput(event.text);
+              modelResult.text += event.text;
+              streamedText = true;
+              onText(event.text);
+              emit({ type: "text.delta", text: event.text });
+            } else if (event.type === "tool_done") {
+              countModelOutput(JSON.stringify(event.input));
+              modelResult.toolCalls.push(toToolCall(event));
+            } else if (event.type === "content_blocks") {
+              contentBlocks.push(...event.blocks);
+            } else if (event.type === "model_stop") {
+              modelResult.stopReason = event.reason;
+              modelResult.assistantMessage = event.assistantMessage;
+              stopReason = event.reason;
+            } else if (event.type === "usage") {
+              const currentUsage = toUsage(event);
+              usage = mergeUsage(usage, currentUsage);
+              emit({
+                type: "usage.updated",
+                model: resolvedModel!.model,
+                usage: currentUsage,
+              });
+            }
+          }
+          for (const call of modelResult.toolCalls) {
+            const tool = tools.get(call.name);
+            const displayInput = projectDisplayInput(tool, call.input);
             emit({
-              type: "response.retry",
-              attempt: event.attempt,
-              phase: event.phase,
-              delayMs: event.delayMs,
-              reason: event.reason,
-            });
-          } else if (event.type === "thinking_start") {
-            emit({
-              type: "thinking.started",
-              thinkingId: event.thinkingId,
-            });
-          } else if (event.type === "thinking_delta") {
-            countModelOutput(event.text);
-            emit({
-              type: "thinking.delta",
-              thinkingId: event.thinkingId,
-              text: event.text,
-            });
-          } else if (event.type === "thinking_end") {
-            emit({
-              type: "thinking.completed",
-              thinkingId: event.thinkingId,
-            });
-          } else if (event.type === "text_delta") {
-            countModelOutput(event.text);
-            modelResult.text += event.text;
-            onText(event.text);
-            emit({ type: "text.delta", text: event.text });
-          } else if (event.type === "tool_done") {
-            countModelOutput(JSON.stringify(event.input));
-            modelResult.toolCalls.push(toToolCall(event));
-          } else if (event.type === "content_blocks") {
-            contentBlocks.push(...event.blocks);
-          } else if (event.type === "model_stop") {
-            modelResult.stopReason = event.reason;
-            modelResult.assistantMessage = event.assistantMessage;
-            stopReason = event.reason;
-          } else if (event.type === "usage") {
-            const currentUsage = toUsage(event);
-            usage = mergeUsage(usage, currentUsage);
-            emit({
-              type: "usage.updated",
-              model: resolvedModel!.model,
-              usage: currentUsage,
+              type: "tool.requested",
+              toolCallId: call.id,
+              toolName: call.name,
+              effect: tool?.effect ?? "unknown",
+              ...(tool?.presentation
+                ? { presentation: tool.presentation }
+                : {}),
+              ...(displayInput !== undefined ? { displayInput } : {}),
             });
           }
-        }
-        for (const call of modelResult.toolCalls) {
-          const tool = tools.get(call.name);
-          const displayInput = projectDisplayInput(tool, call.input);
-          emit({
-            type: "tool.requested",
-            toolCallId: call.id,
-            toolName: call.name,
-            effect: tool?.effect ?? "unknown",
-            ...(tool?.presentation ? { presentation: tool.presentation } : {}),
-            ...(displayInput !== undefined ? { displayInput } : {}),
-          });
-        }
-        if (!modelResult.assistantMessage && contentBlocks.length > 0) {
-          const replayedToolCallIds = new Set(
-            contentBlocks.flatMap((block) =>
-              block.type === "tool_use" ? [block.id] : [],
-            ),
-          );
-          modelResult.assistantMessage = {
-            role: "assistant",
-            content: [
-              ...contentBlocks,
-              ...modelResult.toolCalls.flatMap((call) =>
-                replayedToolCallIds.has(call.id)
-                  ? []
-                  : [
-                      {
-                        type: "tool_use" as const,
-                        id: call.id,
-                        name: call.name,
-                        input: call.input,
-                      },
-                    ],
+          if (!modelResult.assistantMessage && contentBlocks.length > 0) {
+            const replayedToolCallIds = new Set(
+              contentBlocks.flatMap((block) =>
+                block.type === "tool_use" ? [block.id] : [],
               ),
-            ],
-          };
+            );
+            modelResult.assistantMessage = {
+              role: "assistant",
+              content: [
+                ...contentBlocks,
+                ...modelResult.toolCalls.flatMap((call) =>
+                  replayedToolCallIds.has(call.id)
+                    ? []
+                    : [
+                        {
+                          type: "tool_use" as const,
+                          id: call.id,
+                          name: call.name,
+                          input: call.input,
+                        },
+                      ],
+                ),
+              ],
+            };
+          }
+          return modelResult;
+        };
+        try {
+          return await attempt();
+        } catch (error) {
+          const condenser = options.contextCondenser;
+          if (
+            !condenser ||
+            contextTooLongCondenseAttempted ||
+            signal?.aborted ||
+            !(
+              isContextTooLongError(error) ||
+              condenser.isContextOverflow?.(error) === true
+            )
+          ) {
+            throw error;
+          }
+          // VS Code's recovery: condense once and retry the request.
+          contextTooLongCondenseAttempted = true;
+          const condensed = await condenseHistory(
+            condenser,
+            "context_too_long",
+            iterationMessages,
+            estimateRequest(iterationMessages),
+            signal,
+          );
+          if (!condensed) throw error;
+          onTextReset();
+          if (streamedText) {
+            // Text already shown for the rejected attempt is replaced.
+            emit({
+              type: "response.retry",
+              attempt: 1,
+              phase: "http",
+              delayMs: 0,
+              reason: "context_too_long",
+            });
+          }
+          return await attempt();
         }
-        return modelResult;
       },
       runTool: async (call, context) =>
         await executeTool(
@@ -1761,6 +1923,14 @@ function abortReason(signal: AbortSignal | undefined): string | undefined {
   if (typeof signal.reason === "string") return signal.reason;
   if (signal.reason instanceof Error) return signal.reason.message;
   return signal.reason === undefined ? undefined : String(signal.reason);
+}
+
+function throwIfTurnAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  const error = new Error(abortReason(signal) ?? "The turn was cancelled");
+  error.name = "AbortError";
+  throw error;
 }
 
 function isAbortError(error: unknown): boolean {

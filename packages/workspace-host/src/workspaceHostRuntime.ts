@@ -1,4 +1,5 @@
 import {
+  createSummarizingContextCondenser,
   createTurnInteractionTokenService,
   type AgentEngine,
   type AgentModelReference,
@@ -83,7 +84,9 @@ import {
   type CreateWorkspaceSessionInteractionToolsOptions,
 } from "./sessionInteractionTools.js";
 import {
+  createWorkspaceCondenseCompletion,
   createWorkspaceModelRuntime,
+  isWorkspaceContextLimitError,
   type WorkspaceModelRequestLimits,
   type WorkspaceProviderConfig,
 } from "./modelRuntime.js";
@@ -188,6 +191,14 @@ export interface CreateWorkspaceHostOptions {
    * in context).
    */
   readonly sessionRecall?: { readonly enabled: true };
+  /**
+   * VS Code's context condensing. Before a turn's first request, history
+   * near the model's limit is summarised with VS Code's summariser and
+   * default thresholds; a request the provider rejects as too long is
+   * retried once after condensing. Summaries are kept in the transcript and
+   * point the model at the recall tools, so this requires `sessionRecall`.
+   */
+  readonly condense?: { readonly enabled: true };
   /**
    * Where project file access, search, git status and `execute_command`
    * processes run. Defaults to this machine. Supplying one with commands
@@ -453,6 +464,9 @@ export async function createWorkspaceHost(
   }
   if (options.artifacts && options.agentInstructions) {
     throw new Error("agent_instructions_and_artifacts_are_exclusive");
+  }
+  if (options.condense && !options.sessionRecall) {
+    throw new Error("condense_requires_session_recall");
   }
   if (
     options.executionBackend &&
@@ -936,6 +950,16 @@ export async function createWorkspaceHost(
     defaultReasoningEffort: options.defaultReasoningEffort,
     maxOutputTokens: 4_096,
     ...(options.turnLimits ? { limits: options.turnLimits } : {}),
+    ...(options.condense
+      ? {
+          contextCondenser: createSummarizingContextCondenser({
+            // The host's own size check rejects before dispatch; condense
+            // and retry as for a provider's context-too-long error.
+            isContextOverflow: isWorkspaceContextLimitError,
+            complete: createWorkspaceCondenseCompletion(options.requestLimits),
+          }),
+        }
+      : {}),
     ...(options.onTurnError
       ? {
           onTurnError: ({ sessionId, turnId, error, publicError }) =>

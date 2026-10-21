@@ -815,6 +815,7 @@ async function createHost(options: {
     agentInstructions: { enabled: true },
     // VS Code's search_session_history and read_session_excerpt.
     sessionRecall: { enabled: true },
+    condense: { enabled: true },
     ...(options.enableCommands
       ? {
           commands: {

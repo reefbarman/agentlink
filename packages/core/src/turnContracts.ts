@@ -25,6 +25,9 @@ import type {
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type AgentModelSelectionSource = "turn" | "session" | "runtime";
+
+/** Why a turn condensed: the budget check before a request, or a provider rejection. */
+export type AgentContextCondenseTrigger = "threshold" | "context_too_long";
 export type AgentReasoningEffortSelectionSource =
   | "turn"
   | "session"
@@ -323,6 +326,23 @@ export type AgentTurnEvent =
       readonly interactionId: string;
       readonly decision: "allow" | "deny";
       readonly sessionRevision: string;
+    })
+  | (AgentTurnEventBase & {
+      /** The session history is being summarised so the request fits. */
+      readonly type: "context.condensing";
+      readonly trigger: AgentContextCondenseTrigger;
+      readonly estimatedInputTokens: number;
+    })
+  | (AgentTurnEventBase & {
+      /**
+       * Condensing finished. On `failed` the turn continues with the full
+       * history (and a `context_too_long` request then fails as before).
+       */
+      readonly type: "context.condensed";
+      readonly trigger: AgentContextCondenseTrigger;
+      readonly status: "condensed" | "failed";
+      readonly estimatedInputTokens?: number;
+      readonly message?: string;
     })
   | (AgentTurnEventBase & {
       readonly type: "usage.updated";

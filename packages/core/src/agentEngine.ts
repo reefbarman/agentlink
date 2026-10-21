@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
+import type { AgentContextCondenser } from "./contextCondenser.js";
 import type { HostToolLifecycleResolver } from "./hostTools.js";
 import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import type {
@@ -109,6 +110,12 @@ export interface CreateAgentEngineOptions<
     | undefined
     | Promise<CoreModelAuthContext | undefined>;
   readonly limits?: TurnExecutionLimits;
+  /**
+   * Opt-in context condensing (see `createSummarizingContextCondenser`).
+   * Summaries are stored in the transcript and requests carry only the
+   * history after the latest one.
+   */
+  readonly contextCondenser?: AgentContextCondenser<TPrincipal>;
   readonly maxOutputTokens?: number;
   readonly leaseTtlMs?: number;
   readonly leaseRenewIntervalMs?: number;
@@ -337,6 +344,7 @@ export function createAgentEngine<
     resolveAuthContext: options.resolveAuthContext,
     now,
     onTurnError: options.onTurnError,
+    contextCondenser: options.contextCondenser,
   });
 
   const read = async (request: {

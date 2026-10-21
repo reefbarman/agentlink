@@ -64,6 +64,7 @@ export {
   truncateMiddle,
   type TruncateMiddleOptions,
 } from "./truncateMiddle.js";
+export * from "./condenseThresholds.js";
 
 /**
  * A transcript message plus the markers condensing reads and writes. VS

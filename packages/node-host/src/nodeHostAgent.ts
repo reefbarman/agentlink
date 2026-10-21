@@ -99,6 +99,8 @@ export interface CreateNodeHostAgentOptions<
   readonly now?: () => number;
   /** Private cause of a failed turn, before it is made safe for events. */
   readonly onTurnError?: CreateAgentEngineOptions<TPrincipal>["onTurnError"];
+  /** Opt-in context condensing; see `createSummarizingContextCondenser`. */
+  readonly contextCondenser?: CreateAgentEngineOptions<TPrincipal>["contextCondenser"];
 }
 
 /**
@@ -154,5 +156,8 @@ export function createNodeHostAgent<
       : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.onTurnError ? { onTurnError: options.onTurnError } : {}),
+    ...(options.contextCondenser
+      ? { contextCondenser: options.contextCondenser }
+      : {}),
   });
 }

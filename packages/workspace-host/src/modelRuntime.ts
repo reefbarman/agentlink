@@ -7,13 +7,17 @@ import {
   type AgentModelReference,
   type AgentPrincipal,
   type CodexCredentialProvider,
+  type CoreModelAuthContext,
   type CoreModelBackend,
   type CoreModelCapabilities,
   type CoreModelCompleteOperationRequest,
+  type CoreModelCompleteRequest,
   type CoreModelCompleteResult,
   type CoreModelRuntime,
   type CoreModelStreamEvent,
   type CoreModelStreamOperationRequest,
+  type CoreModelStreamRequest,
+  type CoreResolvedModel,
   type CreateOpenAiCompatibleProviderOptions,
   type ResponsesTransportPolicy,
   type ResponsesWebSocketConnector,
@@ -99,6 +103,27 @@ export class WorkspaceContextLimitError extends Error {
     );
     this.name = "WorkspaceContextLimitError";
   }
+}
+
+/** A `WorkspaceContextLimitError`, directly or as the cause a backend wrapped. */
+export function isWorkspaceContextLimitError(error: unknown): boolean {
+  for (let current = error, depth = 0; depth < 4; depth += 1) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      !("code" in current || "cause" in current)
+    ) {
+      return false;
+    }
+    if (
+      (current as { code?: unknown }).code ===
+      "workspace_context_limit_exceeded"
+    ) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export function createWorkspaceModelRuntime(options: {
@@ -238,6 +263,70 @@ function minimumLimit(
   return Math.min(hostLimit, requestLimit);
 }
 
+/**
+ * Context-condense summariser calls with this host's retry and output limits
+ * and absolute byte ceiling. They skip the per-model envelope: the summariser
+ * fits its own input to the model, and it summarises the very history the
+ * envelope rejected.
+ */
+export function createWorkspaceCondenseCompletion(
+  limits: WorkspaceModelRequestLimits = {},
+) {
+  return async (completion: {
+    readonly principal: AgentPrincipal;
+    readonly authContext: CoreModelAuthContext | undefined;
+    readonly model: CoreResolvedModel;
+    readonly request: CoreModelCompleteRequest;
+  }): Promise<CoreModelCompleteResult> => {
+    const { request, model } = completion;
+    const existing = request.executionControls;
+    const absoluteByteLimit = limits.maxInputBytes ?? 8 * 1024 * 1024;
+    return await model.provider.complete(
+      {
+        ...request,
+        executionControls: {
+          maxRetries: minimumLimit(limits.maxRetries, existing?.maxRetries, 0),
+          maxOutputBytes: minimumLimit(
+            limits.maxOutputBytes,
+            existing?.maxOutputBytes,
+            1024 * 1024,
+          ),
+          beforeModelDispatch: (attempt) => {
+            const inputBytes = requestInputBytes(request);
+            if (inputBytes > absoluteByteLimit) {
+              throw new WorkspaceContextLimitError(
+                inputBytes,
+                absoluteByteLimit,
+                model.reference,
+              );
+            }
+            existing?.beforeModelDispatch(attempt);
+          },
+        },
+      },
+      { principal: completion.principal, authContext: completion.authContext },
+    );
+  };
+}
+
+function requestInputBytes(
+  request:
+    | Pick<
+        CoreModelStreamRequest,
+        "systemPrompt" | "messages" | "tools" | "hostedTools"
+      >
+    | Pick<CoreModelCompleteRequest, "systemPrompt" | "messages">,
+): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      systemPrompt: request.systemPrompt,
+      messages: request.messages,
+      tools: "tools" in request ? request.tools : undefined,
+      hostedTools: "hostedTools" in request ? request.hostedTools : undefined,
+    }),
+  );
+}
+
 function assertRequestWithinLimits(
   operation:
     | CoreModelStreamOperationRequest
@@ -246,17 +335,7 @@ function assertRequestWithinLimits(
   capabilities: CoreModelCapabilities,
   limits: WorkspaceModelRequestLimits,
 ): void {
-  const inputBytes = Buffer.byteLength(
-    JSON.stringify({
-      systemPrompt: operation.request.systemPrompt,
-      messages: operation.request.messages,
-      tools: "tools" in operation.request ? operation.request.tools : undefined,
-      hostedTools:
-        "hostedTools" in operation.request
-          ? operation.request.hostedTools
-          : undefined,
-    }),
-  );
+  const inputBytes = requestInputBytes(operation.request);
   const absoluteByteLimit = limits.maxInputBytes ?? 8 * 1024 * 1024;
   const modelInputLimit =
     (capabilities.maxInputTokens ??

@@ -244,9 +244,18 @@ Skills are discovered from the same global and project skill folders as VS Code 
 - A skill's `allowed-tools` is not enforced. The prompt tells the model to keep to those tools itself.
 - Prompt files under `commands/` are not offered to the model or as slash commands. The old `<data root>/artifacts/` folder is no longer read.
 
-## Session recall
+## Session recall and condensing
 
-Once a chat has an earlier turn, the model can search it with `search_session_history` and read exact messages with `read_session_excerpt`, the same tools and results as VS Code. They cover the chat's stored transcript from earlier turns. The CLI does not condense long chats yet, so a chat that outgrows the model's context window still fails rather than being summarised.
+Once a chat has an earlier turn, the model can search it with `search_session_history` and read exact messages with `read_session_excerpt`, the same tools and results as VS Code. They cover the chat's stored transcript from earlier turns, including messages a summary has replaced.
+
+Long chats are condensed with VS Code's summariser and default per-model thresholds. Before each turn's first request, if the conversation is near the model's limit, the earlier history is summarised; the full transcript is kept, and later requests send the first message, the summary, a resume note and everything after it. If a request is still rejected as too long (by the provider, or by the CLI's own size check before sending), the CLI condenses once and retries. The Context row in the activity shelf shows when this happens.
+
+Limits compared with VS Code:
+
+- No condensing in the middle of a turn's tool loop, so a single turn that outgrows the window can still fail.
+- No `/condense` command, per-model threshold setting, pre-condense nudge or background summary preparation.
+- The trigger uses an estimate of the next request (about four characters a token), not the previous request's reported usage, and no warm-cache bonus.
+- Summaries have no folded file outlines.
 
 ## MCP
 
@@ -313,7 +322,7 @@ Each MCP tool call is separately reviewed because MCP servers are unsandboxed an
 
 `agentlink status --project PATH` reports project identity, selected model, provider readiness, and session count without exposing secrets. `agentlink config show` prints non-secret CLI configuration and Keychain account names.
 
-Before every physical provider request, including a retry, the standalone host checks a conservative input envelope against both a fixed byte ceiling and the selected model's declared input capacity. An over-limit conversation stops before network dispatch and tells you to start a fresh session. Automatic condensation is not part of this slice.
+Before every physical provider request, including a retry, the standalone host checks a conservative input envelope against both a fixed byte ceiling and the selected model's declared input capacity. An over-limit conversation stops before network dispatch; the CLI then condenses the history once and retries (see Session recall and condensing), and only tells you to start a fresh session if it still does not fit. The check counts one byte as one token, so it is stricter than the model's real limit.
 
 The CLI stores provider secrets, MCP credentials, and OAuth records in macOS Keychain. Local configuration, durable sessions, command rules, retained process output, child results, and project trust state remain under the AgentLink data root. Removing the npm package does not delete that data or Keychain entries. Review and remove them separately when decommissioning a machine or account.
 

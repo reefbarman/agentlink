@@ -904,6 +904,113 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  // 14k: the next request is over VS Code's 90% threshold. 30k: it is under
+  // the threshold but over the host's byte-per-token envelope, which rejects
+  // it before dispatch.
+  it.each([
+    ["threshold", 14_000],
+    ["context_too_long", 30_000],
+  ] as const)(
+    "condenses a long chat (%s) with VS Code's summariser",
+    async (trigger, contextWindow) => {
+      const parent = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-")),
+      );
+      const projectRoot = path.join(parent, "project");
+      await fs.mkdir(projectRoot, { recursive: true });
+      const longReply = "parser detail ".repeat(3_000);
+      const sent: string[] = [];
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (_input, init) => {
+          const raw = String(init?.body);
+          if (raw.includes("CONTEXT CHECKPOINT COMPACTION")) {
+            return completion("<summary>WS-CONDENSED-SUMMARY</summary>");
+          }
+          sent.push(raw);
+          return completion(sent.length === 1 ? longReply : "second done");
+        });
+      const events: string[] = [];
+      const host = await createWorkspaceHost({
+        projectRoot,
+        dataRoot: path.join(parent, "data"),
+        ownerId: "condense",
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "fixture",
+            baseURL: "https://example.invalid/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture-model",
+                contextWindow,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+            fetch,
+          },
+        ],
+        defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+        sessionRecall: { enabled: true },
+        condense: { enabled: true },
+      });
+      const condensed: unknown[] = [];
+      try {
+        const sessionId = (await host.createSession()).sessionId;
+        await expect(
+          host.runTurn(sessionId, "start the parser"),
+        ).resolves.toMatchObject({ status: "completed" });
+        await expect(
+          host.runTurn(sessionId, "now add tests", {
+            onEvent: (event) => {
+              events.push(event.type);
+              if (event.type === "context.condensed") condensed.push(event);
+            },
+          }),
+        ).resolves.toMatchObject({ status: "completed", text: "second done" });
+        expect(events).toContain("context.condensing");
+        expect(condensed).toEqual([
+          expect.objectContaining({ trigger, status: "condensed" }),
+        ]);
+        // The envelope rejects before dispatch, so only the retry is sent.
+        expect(sent).toHaveLength(2);
+        expect(sent[1]).toContain("WS-CONDENSED-SUMMARY");
+        expect(sent[1]).not.toContain(longReply);
+        expect(sent[1]).not.toMatch(/isSummary|condenseId|condenseParent/);
+        const stored = JSON.stringify(
+          (await host.readSession(sessionId)).record.messages,
+        );
+        expect(stored).toContain(longReply);
+        expect(stored).toContain('"isSummary":true');
+      } finally {
+        await host.close();
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("refuses condense without sessionRecall", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    try {
+      await expect(
+        createWorkspaceHost({
+          projectRoot,
+          dataRoot: path.join(parent, "data"),
+          ownerId: "condense-recall",
+          providers: [],
+          defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+          condense: { enabled: true },
+        }),
+      ).rejects.toThrow("condense_requires_session_recall");
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("refuses agentInstructions combined with artifacts", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

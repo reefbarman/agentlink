@@ -398,6 +398,7 @@ export async function startSessionRunner(options: {
     agentInstructions: { enabled: true, homeDir: null },
     // VS Code's search_session_history and read_session_excerpt.
     sessionRecall: { enabled: true },
+    condense: { enabled: true },
     commands: {
       enabled: true,
       shellExecutable: spec.shell,

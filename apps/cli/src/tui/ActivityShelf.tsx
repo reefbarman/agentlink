@@ -178,17 +178,32 @@ export function buildActivityShelfItems(
   const currentTodo = findCurrentTodo(projection.todos);
   const items: ActivityShelfItem[] = [];
 
-  if (usage) {
+  const condense = projection.condense;
+  if (usage || condense) {
+    const usageSummary = usage
+      ? `${formatCount(usage.inputTokens)} in · ${formatCount(usage.outputTokens)} out`
+      : undefined;
     items.push({
       id: "context",
       label: "Context",
-      summary: `${formatCount(usage.inputTokens)} in · ${formatCount(usage.outputTokens)} out`,
+      summary:
+        condense?.status === "condensing"
+          ? "Condensing history"
+          : [usageSummary, condense?.status === "condensed" ? "condensed" : ""]
+              .filter(Boolean)
+              .join(" · ") || "Condensing failed",
       details: [
-        `Input ${formatCount(usage.inputTokens)} · output ${formatCount(usage.outputTokens)} · cache ${formatCount(usage.cacheReadTokens ?? 0)}`,
-        usage.estimated
-          ? "Provider usage is locally estimated"
-          : "Provider usage reported",
+        ...(usage
+          ? [
+              `Input ${formatCount(usage.inputTokens)} · output ${formatCount(usage.outputTokens)} · cache ${formatCount(usage.cacheReadTokens ?? 0)}`,
+              usage.estimated
+                ? "Provider usage is locally estimated"
+                : "Provider usage reported",
+            ]
+          : []),
+        ...(condense ? [formatCondense(condense)] : []),
       ],
+      attention: condense?.status === "failed",
     });
   }
 
@@ -358,6 +373,18 @@ function boundedDetails(
   if (rowLimit === 1) return [`… ${details.length} details`];
   const visible = details.slice(0, rowLimit - 1);
   return [...visible, `… ${details.length - visible.length} more`];
+}
+
+function formatCondense(
+  condense: NonNullable<StandaloneSessionProjection["condense"]>,
+): string {
+  const why =
+    condense.trigger === "context_too_long"
+      ? "after the model rejected the request as too long"
+      : "before the request, near the context limit";
+  if (condense.status === "condensing") return `Summarising history ${why}`;
+  if (condense.status === "condensed") return `History summarised ${why}`;
+  return `Condensing failed ${why}${condense.message ? `: ${condense.message}` : ""}`;
 }
 
 function formatCount(value: number): string {

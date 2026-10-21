@@ -581,6 +581,16 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
       };
     case "execution.updated":
       return { ...base, type: event.type };
+    case "context.condensing":
+      return { ...base, type: event.type, trigger: event.trigger };
+    case "context.condensed":
+      // The failure message can carry provider detail; only the outcome is projected.
+      return {
+        ...base,
+        type: event.type,
+        trigger: event.trigger,
+        status: event.status,
+      };
     case "turn.completed":
     case "turn.cancelled":
     case "turn.failed":

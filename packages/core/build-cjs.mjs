@@ -9,7 +9,9 @@ const modules = [
   "codexDeviceAuth",
   "client",
   "codex",
+  "condenseThresholds",
   "contextCondense",
+  "contextCondenser",
   "embeddedAgentWeb",
   "hostAdapterContracts",
   "hostApprovalTestKit",
@@ -43,6 +45,7 @@ const modules = [
 const focusedSubpathModules = new Set([
   "browserRuntime",
   "codexDeviceAuth",
+  "condenseThresholds",
   "contextCondense",
   "todoTool",
 ]);

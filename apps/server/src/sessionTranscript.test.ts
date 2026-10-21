@@ -3,6 +3,19 @@ import { describe, expect, it } from "vitest";
 import { projectSessionTranscript } from "./sessionTranscript.js";
 
 describe("projectSessionTranscript", () => {
+  it("leaves out condense summaries", () => {
+    expect(
+      projectSessionTranscript([
+        { role: "user", content: "hello" },
+        { role: "user", content: "SUMMARY", isSummary: true },
+        { role: "assistant", content: "hi" },
+      ]).entries,
+    ).toEqual([
+      { kind: "user", text: "hello" },
+      { kind: "assistant", text: "hi" },
+    ]);
+  });
+
   it("keeps user and assistant text and tool names, nothing else", () => {
     const transcript = projectSessionTranscript([
       { role: "user", content: "hello" },

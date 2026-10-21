@@ -161,6 +161,16 @@ export type EmbeddedAgentTurnEvent =
       readonly sessionRevision: string;
     })
   | (EmbeddedAgentTurnEventBase & {
+      /** The session history is being summarised so the request fits. */
+      readonly type: "context.condensing";
+      readonly trigger: "threshold" | "context_too_long";
+    })
+  | (EmbeddedAgentTurnEventBase & {
+      readonly type: "context.condensed";
+      readonly trigger: "threshold" | "context_too_long";
+      readonly status: "condensed" | "failed";
+    })
+  | (EmbeddedAgentTurnEventBase & {
       /** One model request finished; `usage` is that request's. */
       readonly type: "usage.updated";
       readonly usage?: EmbeddedAgentUsage;
@@ -865,6 +875,8 @@ export function reduceEmbeddedAgentTurnEvent(
     case "model.resolved":
     case "usage.updated":
     case "execution.updated":
+    case "context.condensing":
+    case "context.condensed":
       return base;
     case "thinking.started":
       return {
@@ -1005,6 +1017,13 @@ function isEmbeddedAgentTurnEvent(
       return true;
     case "usage.updated":
       return value.usage === undefined || isEmbeddedAgentUsage(value.usage);
+    case "context.condensing":
+      return isCondenseTrigger(value.trigger);
+    case "context.condensed":
+      return (
+        isCondenseTrigger(value.trigger) &&
+        (value.status === "condensed" || value.status === "failed")
+      );
     case "model.resolved":
       return isModelReference(value.model);
     case "thinking.started":
@@ -1184,6 +1203,10 @@ function validToolIdentity(value: Record<string, unknown>): boolean {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isCondenseTrigger(value: unknown): boolean {
+  return value === "threshold" || value === "context_too_long";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
