@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.55.0
+
+- The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.
+- Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.
+
 ## 1.54.0
 
 - New project chats now start with Approve for Me on. Set `agentlink.approveForMeByDefault` to `false` to start them with it off; you can still toggle it per chat from the composer toolbar.
