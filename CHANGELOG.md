@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.61.0
+
+- The ask_user question composer gains a Chat input button that sets the question aside so slash commands like /mcp can run while it stays pending, with a Back to question button to restore it.
+
 ## 1.60.0
 
 - `web_fetch` with Codex no longer stops partway through longer pages when you ask for a short preview. The provider ignores the requested continuation line and sizes each page by the requested output budget, which AgentLink took from `max_length`, so a 3,000-character preview fetched only about 16K characters and every continuation repeated that same page ("Provider pagination did not advance"). AgentLink now sizes the provider window from the retention budget and still trims the inline preview locally.
