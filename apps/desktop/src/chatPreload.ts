@@ -80,7 +80,9 @@ if (process.isMainFrame) {
       }),
     onViewRequest: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, mode: unknown) => {
-        if (mode === "ask" || mode === "vscode") listener(mode);
+        if (mode === "ask" || mode === "vscode" || mode === "assistant") {
+          listener(mode);
+        }
       };
       ipcRenderer.on("agentlink:assistant:show-view", handler);
       return () =>

@@ -67,6 +67,7 @@ function fixture(
   config: { origin: string; ca?: typeof CA } = { origin: ORIGIN },
   preload?: string,
 ) {
+  const reveal = vi.fn();
   const contents = Object.assign(new EventEmitter(), {
     mainFrame: { url: "http://127.0.0.1:47138/?surface=desktop" },
     send: vi.fn(),
@@ -88,6 +89,7 @@ function fixture(
     config,
     () => 1_000,
     preload,
+    reveal,
   );
   const sender = { sender: contents, senderFrame: contents.mainFrame };
   const layout = (mode: "ask" | "vscode" | "assistant") =>
@@ -110,6 +112,7 @@ function fixture(
     window,
     contents,
     assistant,
+    reveal,
     sender,
     layout,
     verify,
@@ -407,6 +410,17 @@ describe("desktop Assistant view", () => {
     );
     expect(views).toEqual([["agentlink:assistant:show-view", "ask"]]);
 
+    // A clicked notification shows the window on the Assistant view; only
+    // the Assistant page itself may ask.
+    electron.ipc.emit("agentlink:assistant-embed:focus", f.sender);
+    expect(f.reveal).not.toHaveBeenCalled();
+    electron.ipc.emit("agentlink:assistant-embed:focus", pageSender);
+    await vi.waitFor(() => expect(f.reveal).toHaveBeenCalledTimes(1));
+    expect(f.contents.send).toHaveBeenLastCalledWith(
+      "agentlink:assistant:show-view",
+      "assistant",
+    );
+
     // The page's unread inbox count badges the shell's Assistant tab.
     electron.ipc.emit("agentlink:assistant-embed:unread", f.sender, 9);
     electron.ipc.emit("agentlink:assistant-embed:unread", pageSender, -1);
@@ -434,6 +448,9 @@ describe("desktop Assistant view", () => {
       0,
     );
     expect(electron.ipc.listenerCount("agentlink:assistant-embed:unread")).toBe(
+      0,
+    );
+    expect(electron.ipc.listenerCount("agentlink:assistant-embed:focus")).toBe(
       0,
     );
   });

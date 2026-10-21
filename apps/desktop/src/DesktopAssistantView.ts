@@ -90,6 +90,8 @@ export class DesktopAssistantView {
     private config: DesktopAssistantConfig,
     private readonly now: () => number = Date.now,
     preload?: string,
+    /** Show and focus the app window (the Dock and macOS activation). */
+    private readonly reveal: () => void | Promise<void> = () => undefined,
   ) {
     this.assistantSession = session.fromPartition(ASSISTANT_PARTITION);
     // Only the paired Assistant page may show notifications (inbox alerts
@@ -189,6 +191,7 @@ export class DesktopAssistantView {
     ipcMain.on("agentlink:assistant-embed:ready", this.onEmbedReady);
     ipcMain.on("agentlink:assistant-embed:show-view", this.onShowView);
     ipcMain.on("agentlink:assistant-embed:unread", this.onUnread);
+    ipcMain.on("agentlink:assistant-embed:focus", this.onFocus);
     window.on("resize", this.onResize);
     window.on("closed", this.dispose);
     window.webContents.on("zoom-changed", this.onResize);
@@ -329,6 +332,19 @@ export class DesktopAssistantView {
     if (!this.isAssistantSender(event) || this.window.isDestroyed()) return;
     if (mode !== "ask" && mode !== "vscode") return;
     this.window.webContents.send("agentlink:assistant:show-view", mode);
+  };
+
+  /**
+   * A notification from the Assistant was clicked: show the window (it may
+   * be hidden in the menu bar) on the Assistant view, so the chat the page
+   * opens is the one in front instead of whatever view was last showing.
+   */
+  private readonly onFocus = (event: IpcMainEvent): void => {
+    if (!this.isAssistantSender(event) || this.window.isDestroyed()) return;
+    this.window.webContents.send("agentlink:assistant:show-view", "assistant");
+    void Promise.resolve()
+      .then(this.reveal)
+      .catch(() => undefined);
   };
 
   private readonly onUnread = (event: IpcMainEvent, count: unknown): void => {
@@ -536,6 +552,7 @@ export class DesktopAssistantView {
       this.onShowView,
     );
     ipcMain.removeListener("agentlink:assistant-embed:unread", this.onUnread);
+    ipcMain.removeListener("agentlink:assistant-embed:focus", this.onFocus);
     this.window.removeListener("resize", this.onResize);
     this.window.removeListener("closed", this.dispose);
     this.assistantSession.setCertificateVerifyProc(null);

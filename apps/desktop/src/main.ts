@@ -414,6 +414,7 @@ async function showChatWindow(): Promise<void> {
     await readAssistantConfig(preferencesPath),
     Date.now,
     getDesktopAssetPath("assistant-preload.cjs"),
+    () => revealWindow(nextWindow),
   );
   assistantView = nextAssistantView;
   // Closing hides the chat so reopening is instant and drafts survive; the

@@ -170,6 +170,9 @@ export function createNotificationBrowser(): NotificationBrowser {
           icon: "/agentlink-icon.png",
         });
         notification.onclick = () => {
+          // In the desktop app `window.focus()` cannot show its hidden
+          // window or switch to the Assistant view; the desktop does both.
+          window.agentlinkDesktopEmbed?.focus?.();
           window.focus();
           notification.close();
           onClick?.();

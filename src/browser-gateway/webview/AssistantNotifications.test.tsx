@@ -13,6 +13,7 @@ import {
   LOCAL_NOTIFICATIONS_KEY,
   NotificationSettings,
   base64UrlToBytes,
+  createNotificationBrowser,
   detectNotificationSupport,
   openTargetFromUrl,
   useLocalInboxNotifications,
@@ -27,6 +28,40 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");
+});
+
+describe("local notification clicks", () => {
+  it("bring the desktop app's Assistant forward before opening the chat", () => {
+    const shown: Array<{ onclick: (() => void) | null; close(): void }> = [];
+    vi.stubGlobal(
+      "Notification",
+      class {
+        onclick: (() => void) | null = null;
+        close = vi.fn();
+        constructor() {
+          shown.push(this);
+        }
+      },
+    );
+    const focus = vi.fn();
+    window.agentlinkDesktopEmbed = {
+      ready: vi.fn(),
+      showView: vi.fn(),
+      onChrome: () => () => {},
+      focus,
+    };
+    try {
+      const onClick = vi.fn();
+      createNotificationBrowser().showLocal({ title: "Done", onClick });
+      expect(shown).toHaveLength(1);
+      shown[0]!.onclick!();
+      expect(focus).toHaveBeenCalledOnce();
+      expect(onClick).toHaveBeenCalledOnce();
+      expect(shown[0]!.close).toHaveBeenCalledOnce();
+    } finally {
+      delete window.agentlinkDesktopEmbed;
+    }
+  });
 });
 
 type Route = (body: unknown) => unknown;

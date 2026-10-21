@@ -65,6 +65,11 @@ export interface DesktopEmbedBridge {
    * Assistant tab. Optional: older desktop builds do not offer it.
    */
   setUnread?(count: number): void;
+  /**
+   * Bring the desktop window forward on the Assistant view, for a clicked
+   * notification. Optional: older desktop builds do not offer it.
+   */
+  focus?(): void;
 }
 
 export interface DesktopQuickAskMedia {
@@ -101,10 +106,11 @@ export interface DesktopBridge {
   ): () => void;
   /** Mirror the shell's sidebar into the embedded Assistant. */
   setAssistantChrome?(chrome: DesktopAssistantChrome): void;
-  /** The embedded Assistant asked to show another view. */
-  onViewRequest?(
-    listener: (mode: Exclude<DesktopMode, "assistant">) => void,
-  ): () => void;
+  /**
+   * Show a view: the embedded Assistant asked for another one, or a clicked
+   * Assistant notification brought the Assistant forward.
+   */
+  onViewRequest?(listener: (mode: DesktopMode) => void): () => void;
   /** Opens the desktop Settings window (shortcut, login item, accounts). */
   openSettings?(): void;
   /** Quick-ask panel: hand a composed message to the main window. */

@@ -5,8 +5,10 @@ import type {
 import { contextBridge, ipcRenderer } from "electron";
 
 /**
- * The embedded Assistant page's only bridge: draw the desktop's sidebar and
- * ask for another view. It carries no credentials, files, or shell access.
+ * The embedded Assistant page's only bridge: draw the desktop's sidebar,
+ * ask for another view, and bring the Assistant forward when one of its
+ * notifications is clicked. It carries no credentials, files, or shell
+ * access.
  */
 if (process.isMainFrame) {
   const bridge: DesktopEmbedBridge = {
@@ -44,6 +46,7 @@ if (process.isMainFrame) {
         ipcRenderer.send("agentlink:assistant-embed:unread", count);
       }
     },
+    focus: () => ipcRenderer.send("agentlink:assistant-embed:focus"),
   };
   contextBridge.exposeInMainWorld("agentlinkDesktopEmbed", bridge);
 }

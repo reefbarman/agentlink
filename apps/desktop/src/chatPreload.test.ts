@@ -178,8 +178,9 @@ it("exposes only the shell bridge and strips Electron events from state callback
   )?.[1];
   viewHandler({}, "vscode");
   viewHandler({}, "assistant");
+  viewHandler({}, "settings");
   viewHandler({}, { mode: "ask" });
-  expect(viewListener).toHaveBeenCalledExactlyOnceWith("vscode");
+  expect(viewListener.mock.calls).toEqual([["vscode"], ["assistant"]]);
 });
 
 it("routes native release-update controls through the narrow IPC bridge", async () => {

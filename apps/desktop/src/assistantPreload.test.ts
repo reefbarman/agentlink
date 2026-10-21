@@ -31,6 +31,7 @@ it("gives the Assistant page only view navigation and the shell's sidebar", asyn
   );
   const bridge = electron.expose.mock.calls[0][1] as DesktopEmbedBridge;
   expect(Object.keys(bridge).sort()).toEqual([
+    "focus",
     "onChrome",
     "ready",
     "setUnread",
@@ -56,6 +57,10 @@ it("gives the Assistant page only view navigation and the shell's sidebar", asyn
     4,
   );
   expect(electron.send).toHaveBeenCalledTimes(3);
+  bridge.focus!();
+  expect(electron.send).toHaveBeenLastCalledWith(
+    "agentlink:assistant-embed:focus",
+  );
 
   const listener = vi.fn();
   const stop = bridge.onChrome(listener);
