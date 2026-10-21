@@ -1,0 +1,92 @@
+apps/server/src/sessionTranscript.test.ts
+  h_e08a86bb3a33a2 6-18
+packages/protocol/src/embeddedAgentTransport.ts
+  h_e08a86bb3a33a2 164-172,878-879,1020-1026,1208-1211
+  s_b6e03a39a2d9ac::t_095d18b20d310f 163
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 12,14,48
+packages/core/src/contextCondenser.test.ts
+  h_e08a86bb3a33a2 1-304
+apps/cli/src/tui/ActivityShelf.tsx
+  h_e08a86bb3a33a2 181-185,190-194,196-197,201-204,206,378-389
+  s_b6e03a39a2d9ac::t_becf133519d317 189,198-200
+packages/workspace-host/src/modelRuntime.ts
+  h_e08a86bb3a33a2 10,14,19-20,108-128,266-329,338
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 907-934,937-941,943-1013
+  s_b6e03a39a2d9ac::t_502b0ddf731072 935-936,942
+src/agent/condenseTargetWindow.ts
+  h_e08a86bb3a33a2 1-11
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 401
+packages/core/src/condenseThresholds.ts
+  h_e08a86bb3a33a2 1-188
+apps/server/src/sessionTranscript.ts
+  h_e08a86bb3a33a2 47-48
+packages/core/src/contextCondenser.ts
+  h_e08a86bb3a33a2 1-360
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 35,37,81,83
+apps/cli/src/sessionProjection.ts
+  h_e08a86bb3a33a2 112-117,143-144,553-568,668-669
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 247,249,251-258,325
+  s_b6e03a39a2d9ac::t_864f26c1c21084 250
+packages/core/README.md
+  h_e08a86bb3a33a2 49,63-64
+  s_b6e03a39a2d9ac::t_5591da04e29f9b 48,50-62,65
+packages/core/src/contextCondense.ts
+  h_e08a86bb3a33a2 67
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 2,87,89,195-201,468-469,953-962
+  s_b6e03a39a2d9ac::t_80ba2f843c035f 194,470
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1437
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 23-30,48,181-187,738-839,888-890,901,910-911,914-915,958,972-978,984-991,1005-1007,1014-1015,1017-1048,1050-1054,1057,1928-1933
+  s_b6e03a39a2d9ac::t_05be0c9239b74d 891-900,902-908,912-913,916-920,923-957,959-971,979-982,993-1004,1008-1013,1016,1934-1935
+packages/core/src/turnContracts.ts
+  h_e08a86bb3a33a2 28-30,331-346
+  s_b6e03a39a2d9ac::t_ec4ed0a5554d81 330
+packages/node-host/src/nodeHostAgent.ts
+  h_e08a86bb3a33a2 102-103,159-161
+src/agent/modelCondenseThresholds.ts
+  h_e08a86bb3a33a2 4-5,7-8,12-21,23
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 6,113-118,347
+packages/core/src/embeddedAgentWeb.ts
+  h_e08a86bb3a33a2 584-593
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 818
+packages/core/src/modelRuntime.ts
+  h_e08a86bb3a33a2 151-161
+apps/cli/src/sessionProjection.test.ts
+  h_e08a86bb3a33a2 279-332
+packages/core/src/index.ts
+  h_e08a86bb3a33a2 5
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac35da7d7772e39e5a0a0c4f1a522f1e27ce62f2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_b6e03a39a2d9ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80a815b9-a517-467d-b6fb-ddff95b3d5c7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
