@@ -386,9 +386,20 @@ export function InputArea({
   sendBlockedReason,
   placeholder,
   submitOnEnter = true,
-  contextMode = null,
+  contextMode: requestedContextMode = null,
   onComposerEvent,
 }: InputAreaProps) {
+  // An open question card can be set aside so the composer behaves as the
+  // normal chat input (slash commands such as /mcp, mode/model controls)
+  // while the question stays pending and mounted. Keyed to the context so a
+  // new question or step brings the card back automatically.
+  const [chatInputContextKey, setChatInputContextKey] = useState<string | null>(
+    null,
+  );
+  const questionSetAside =
+    Boolean(requestedContextMode?.actions) &&
+    chatInputContextKey === requestedContextMode?.key;
+  const contextMode = questionSetAside ? null : requestedContextMode;
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [attachmentPreviews, setAttachmentPreviews] = useState<
@@ -1843,9 +1854,22 @@ export function InputArea({
 
   return (
     <div
-      class={`input-area${contextMode?.actions ? " question-context-composer" : ""}`}
+      class={`input-area${contextMode?.actions ? " question-context-composer" : ""}${questionSetAside ? " question-set-aside" : ""}`}
     >
-      {contextMode?.content}
+      {requestedContextMode?.content}
+      {questionSetAside && (
+        <div class="question-set-aside-banner" role="status">
+          <i class="codicon codicon-question" aria-hidden="true" />
+          <span>The agent is still waiting for your answer</span>
+          <button
+            type="button"
+            class="question-nav-btn"
+            onClick={() => setChatInputContextKey(null)}
+          >
+            Back to question
+          </button>
+        </div>
+      )}
       {questionNavigation}
       {contextMode?.actions && (
         <div
@@ -1858,6 +1882,20 @@ export function InputArea({
               Add supporting details, a screenshot, or answer in your own words
             </span>
           </div>
+          <button
+            type="button"
+            class="question-chat-input-btn"
+            title="Use the normal chat input (for example /mcp) while this question stays open"
+            onClick={() => {
+              setChatInputContextKey(contextMode.key);
+              requestAnimationFrame(() => {
+                focusAndAutosizeTextarea(textareaRef.current);
+              });
+            }}
+          >
+            <i class="codicon codicon-comment" aria-hidden="true" />
+            Chat input
+          </button>
         </div>
       )}
       <>

@@ -1101,6 +1101,90 @@ describe("InputArea slash popup", () => {
     });
   });
 
+  it("sets a question aside so slash commands run from the chat input", async () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const onContextSubmit = vi.fn();
+    const contextMode: ComposerContextMode = {
+      key: "question-1:choice",
+      questionId: "choice",
+      title: "Adding context to agent question",
+      placeholder: "Add details…",
+      initialText: "Draft answer",
+      onSubmit: onContextSubmit,
+      onCancel: vi.fn(),
+      content: <div class="question-card">Pick one</div>,
+      actions: {
+        canGoBack: false,
+        onBack: vi.fn(),
+        primaryLabel: "Submit",
+        primaryDisabled: false,
+        onPrimary: vi.fn(),
+      },
+    };
+    const { container, getByRole, rerender } = renderInputArea(
+      [
+        {
+          name: "mcp",
+          description: "Manage MCP servers",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      { onExecuteBuiltinCommand },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "Normal draft";
+    fireEvent.input(input);
+    rerender(
+      <InputArea
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        streaming={true}
+        reasoningEffort="none"
+        onSetReasoningEffort={vi.fn()}
+        onExportTranscript={vi.fn()}
+        hasMessages={false}
+        vscodeApi={{ postMessage: vi.fn() }}
+        injection={null}
+        onInjectionConsumed={vi.fn()}
+        slashCommands={[
+          {
+            name: "mcp",
+            description: "Manage MCP servers",
+            source: "builtin",
+            builtin: true,
+          },
+        ]}
+        onExecuteBuiltinCommand={onExecuteBuiltinCommand}
+        contextMode={contextMode}
+      />,
+    );
+    await waitFor(() => expect(input.value).toBe("Draft answer"));
+
+    fireEvent.click(getByRole("button", { name: "Chat input" }));
+    await waitFor(() => expect(input.value).toBe("Normal draft"));
+    // The card stays mounted so its answers survive, just hidden.
+    expect(container.querySelector(".question-card")).toBeTruthy();
+    expect(
+      container
+        .querySelector(".input-area")
+        ?.classList.contains("question-set-aside"),
+    ).toBe(true);
+
+    input.value = "/mcp";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("mcp", "");
+
+    fireEvent.click(getByRole("button", { name: "Back to question" }));
+    await waitFor(() => expect(input.value).toBe("Draft answer"));
+    expect(
+      container
+        .querySelector(".input-area")
+        ?.classList.contains("question-context-composer"),
+    ).toBe(true);
+  });
+
   it("does not sync the previous question's draft into the next question", async () => {
     const actions = {
       canGoBack: false,
