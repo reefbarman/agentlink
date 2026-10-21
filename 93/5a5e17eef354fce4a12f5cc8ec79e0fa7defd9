@@ -1,0 +1,109 @@
+apps/cli/src/tui/ActivityShelf.tsx
+  h_e08a86bb3a33a2 196-198,201,389-391,395-398
+  s_a5ff6ac2e35be2::t_a2f3025ef63043 192-195,199,392-393
+apps/cli/src/sessionProjection.ts
+  h_e08a86bb3a33a2 113-114,199-204,358-371
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 85,88-90,354-357,568,626,654,829-830,1067,1097,1329-1345,1544-1596
+  s_4a40434eac0105::t_06f4156d5ee410 87,1597
+apps/cli/src/condenseThresholds.test.ts
+  h_e08a86bb3a33a2 1-56
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 34-35,210-220,223-238,287-296,703-831,833-837
+  s_0071fc3ec76380::t_ae0d33c42f8554 33,36,221-222,239,832,838-840
+apps/cli/src/sessionController.test.ts
+  h_e08a86bb3a33a2 656-734
+packages/core/src/turnContracts.ts
+  h_e08a86bb3a33a2 30-36
+  s_a5ff6ac2e35be2::t_40ed7072d994b4 29
+packages/protocol/src/embeddedAgentTransport.ts
+  h_e08a86bb3a33a2 166,170,1209-1211
+packages/core/src/contextCondenser.ts
+  h_e08a86bb3a33a2 269-275,312-314,354
+  s_a5ff6ac2e35be2::t_4b3c2eacdce851 268
+apps/cli/src/tui/tuiCommand.ts
+  h_e08a86bb3a33a2 17-22,56-57,92-109,111,116
+  s_a5ff6ac2e35be2::t_ddbf038ae90b02 110,112-113
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 995-1066
+  s_a5ff6ac2e35be2::t_60ef29240be2d1 992-994
+apps/cli/src/tui/tuiShellState.ts
+  h_e08a86bb3a33a2 102-112
+  s_a5ff6ac2e35be2::t_b5bcaa944ec052 101
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 31,227-234,237-254,257-271,300-394,675-681
+  s_d4f73b444fe8a0::t_c5a7156e172e0a 255-256,395
+packages/core/src/contextCondenser.test.ts
+  h_e08a86bb3a33a2 518-684,704-724
+apps/cli/src/condenseThresholds.ts
+  h_e08a86bb3a33a2 1-67
+CHANGELOG.md
+  h_e08a86bb3a33a2 7-9
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 144,253-256,259
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 200-201,205-210,466-480,483-492,995-997,1625-1644
+  s_0071fc3ec76380::t_c5f752cb71e922 203-204,493,1645
+apps/cli/src/tui/tuiShellState.test.ts
+  h_e08a86bb3a33a2 217-240
+apps/cli/src/sessionController.ts
+  h_e08a86bb3a33a2 15,82-88,139,405-463
+  s_4a40434eac0105::t_76ee9995a5a4b1 464
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 75
+resources/builtin-skills/documentation/references/release-notes.md
+  s_3416a3b0593460::t_e16607753f2c31 7-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "935a5e17eef354fce4a12f5cc8ec79e0fa7defd9",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0071fc3ec76380": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a59cd925-6ce2-4de5-ab20-f38f27ff10bc",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_3416a3b0593460": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ea5f408-9b2f-4726-ba5d-edf7b1d007b1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_4a40434eac0105": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f265a63a-f3cf-4119-a8a0-626d787af8f7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a5ff6ac2e35be2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c36ab02-90a2-4168-b2a9-b0945e8dd734",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_d4f73b444fe8a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf100348-106c-4ca6-92cc-1600614b4c5a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
