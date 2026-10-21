@@ -180,6 +180,50 @@ describe("useAutoScroll", () => {
     expect(container.scrollTop).toBe(480);
   });
 
+  it("keeps following when content shrinkage clamps scrollTop downward", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    let scrollHeight = 600;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: { configurable: true, writable: true, value: 500 },
+    });
+    fireEvent.scroll(container);
+
+    // A collapsed block or replaced snapshot shortens the transcript, so the
+    // browser clamps the old bottom position to the new maximum.
+    scrollHeight = 400;
+    container.scrollTop = 300;
+    fireEvent.scroll(container);
+
+    scrollHeight = 700;
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(700);
+  });
+
+  it("keeps following when iOS elastic overscroll settles at the bottom", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, writable: true, value: 540 },
+    });
+    fireEvent.scroll(container);
+    container.scrollTop = 500;
+    fireEvent.scroll(container);
+
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(600);
+  });
+
+  it("follows viewport shrinkage by observing the scroll container", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    expect(resizeObservers[0].observe).toHaveBeenCalledWith(container);
+  });
+
   it("cancels remaining layout scrolls when the user scrolls upward", () => {
     const { getByTestId, rerender } = render(<Harness />);
     const container = getByTestId("container");
@@ -206,7 +250,7 @@ describe("useAutoScroll", () => {
 
     rerender(<Harness contentPresent />);
     expect(resizeObservers).toHaveLength(1);
-    expect(resizeObservers[0].observe).toHaveBeenCalledTimes(1);
+    expect(resizeObservers[0].observe).toHaveBeenCalledTimes(2);
 
     // Preact 11 defers unmount effect cleanup until after paint; flush it.
 

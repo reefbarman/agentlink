@@ -327,10 +327,10 @@ describe("ChatView message windowing", () => {
       }),
     );
 
-    // Auto-scroll follows content growth; jump navigation watches both the
-    // viewport and content so its buttons track layout changes.
+    // Auto-scroll follows content growth and viewport shrinkage; jump
+    // navigation watches both so its buttons track layout changes.
     expect(resizeObserverInstances).toHaveLength(2);
-    expect(resizeObserverInstances[0]?.observe).toHaveBeenCalledTimes(1);
+    expect(resizeObserverInstances[0]?.observe).toHaveBeenCalledTimes(2);
     expect(resizeObserverInstances[1]?.observe).toHaveBeenCalledTimes(2);
   });
 

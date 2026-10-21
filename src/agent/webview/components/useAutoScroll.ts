@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef } from "preact/hooks";
 
 const BOTTOM_DISTANCE_THRESHOLD = 150;
 const POST_LAYOUT_FRAMES = 3;
+/** Ignore sub-pixel scrollTop jitter from fractional layout and zoom. */
+const UPWARD_SCROLL_TOLERANCE = 1;
 
 interface UseAutoScrollOptions {
   contentPresent: boolean;
@@ -59,6 +61,10 @@ export function useAutoScroll({ contentPresent }: UseAutoScrollOptions) {
       if (shouldAutoScrollRef.current) scrollToBottom();
     });
     observer.observe(content);
+    // The viewport also shrinks when the activity shelf or an approval card
+    // grows; keep the latest content visible while following.
+    const container = containerRef.current;
+    if (container) observer.observe(container);
     return () => observer.disconnect();
   }, [contentPresent, scrollToBottom]);
 
@@ -75,7 +81,18 @@ export function useAutoScroll({ contentPresent }: UseAutoScrollOptions) {
 
     const previousScrollTop = lastObservedScrollTopRef.current;
     lastObservedScrollTopRef.current = scrollTop;
-    if (previousScrollTop !== null && scrollTop < previousScrollTop) {
+    // When content or the viewport shrinks, or iOS elastic overscroll settles,
+    // the browser lowers scrollTop because the old position no longer fits.
+    // Only a decrease below the still-reachable position is a user scroll up.
+    const maxScrollTop = Math.max(
+      0,
+      container.scrollHeight - container.clientHeight,
+    );
+    if (
+      previousScrollTop !== null &&
+      scrollTop <
+        Math.min(previousScrollTop, maxScrollTop) - UPWARD_SCROLL_TOLERANCE
+    ) {
       shouldAutoScrollRef.current = false;
       cancelPendingScrolls();
       return;
