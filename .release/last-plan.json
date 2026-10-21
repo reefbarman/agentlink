@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2c34f61956ef135eed801a5f0db94ac822267d43",
-  "createdAt": "2026-10-21T02:59:50.780Z",
+  "sourceSha": "6613159c90cd002b9395666a668cf64bdb9b4059",
+  "createdAt": "2026-10-21T03:15:13.697Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.54.0",
-      "baselineRef": "v1.54.0",
-      "reserved": "1.54.0",
-      "commits": [
-        "5c177485226fc8806e1887ed0644c81ee719995d",
-        "2c34f61956ef135eed801a5f0db94ac822267d43"
-      ],
+      "published": "1.55.0",
+      "baselineRef": "v1.55.0",
+      "reserved": "1.55.0",
+      "commits": ["6613159c90cd002b9395666a668cf64bdb9b4059"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.55.0",
-      "effectiveBump": "minor",
+      "version": "1.55.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.55.0",
+      "tag": "v1.55.1",
       "notes": [
         {
-          "sha": "5c177485226fc8806e1887ed0644c81ee719995d",
-          "subject": "feat(agent): make the final-status summary the single home for the final response",
-          "summary": "The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.",
-          "breaking": false
-        },
-        {
-          "sha": "2c34f61956ef135eed801a5f0db94ac822267d43",
-          "subject": "feat(browser-gateway): align Ask Agent final responses with the summary-only contract",
-          "summary": "Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.",
+          "sha": "6613159c90cd002b9395666a668cf64bdb9b4059",
+          "subject": "fix(approvals): apply Approve for Me default to chats opened in tabs",
+          "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.40.0",
-      "baselineRef": "desktop-v0.40.0",
-      "reserved": "0.40.0",
-      "commits": [
-        "5c177485226fc8806e1887ed0644c81ee719995d",
-        "2c34f61956ef135eed801a5f0db94ac822267d43"
-      ],
+      "published": "0.41.0",
+      "baselineRef": "desktop-v0.41.0",
+      "reserved": "0.41.0",
+      "commits": ["6613159c90cd002b9395666a668cf64bdb9b4059"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.41.0",
-      "effectiveBump": "minor",
+      "version": "0.41.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.41.0",
+      "tag": "desktop-v0.41.1",
       "notes": [
         {
-          "sha": "5c177485226fc8806e1887ed0644c81ee719995d",
-          "subject": "feat(agent): make the final-status summary the single home for the final response",
-          "summary": "The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.",
-          "breaking": false
-        },
-        {
-          "sha": "2c34f61956ef135eed801a5f0db94ac822267d43",
-          "subject": "feat(browser-gateway): align Ask Agent final responses with the summary-only contract",
-          "summary": "Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.",
+          "sha": "6613159c90cd002b9395666a668cf64bdb9b4059",
+          "subject": "fix(approvals): apply Approve for Me default to chats opened in tabs",
+          "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
           "breaking": false
         }
       ]
@@ -100,37 +82,16 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.12.0",
-      "baselineRef": "assistant-v0.12.0",
-      "reserved": "0.12.0",
-      "commits": [
-        "5c177485226fc8806e1887ed0644c81ee719995d",
-        "2c34f61956ef135eed801a5f0db94ac822267d43"
-      ],
+      "published": "0.13.0",
+      "baselineRef": "assistant-v0.13.0",
+      "reserved": "0.13.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.13.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.13.0",
-      "notes": [
-        {
-          "sha": "5c177485226fc8806e1887ed0644c81ee719995d",
-          "subject": "feat(agent): make the final-status summary the single home for the final response",
-          "summary": "The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.",
-          "breaking": false
-        },
-        {
-          "sha": "2c34f61956ef135eed801a5f0db94ac822267d43",
-          "subject": "feat(browser-gateway): align Ask Agent final responses with the summary-only contract",
-          "summary": "Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -146,6 +107,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "6613159c90cd002b9395666a668cf64bdb9b4059": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

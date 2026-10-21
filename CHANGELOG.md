@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.55.1
+
+- New chats opened in tabs now respect the "Approve for Me by default" setting instead of starting with the configured policy.
+
 ## 1.55.0
 
 - The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.
