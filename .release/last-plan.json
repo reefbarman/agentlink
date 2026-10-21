@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "6613159c90cd002b9395666a668cf64bdb9b4059",
-  "createdAt": "2026-10-21T03:15:13.697Z",
+  "sourceSha": "913efb42b082104d2761db85fff12f293d683034",
+  "createdAt": "2026-10-21T03:37:10.153Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.55.0",
-      "baselineRef": "v1.55.0",
-      "reserved": "1.55.0",
-      "commits": ["6613159c90cd002b9395666a668cf64bdb9b4059"],
+      "published": "1.55.1",
+      "baselineRef": "v1.55.1",
+      "reserved": "1.55.1",
+      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.55.1",
-      "effectiveBump": "patch",
+      "version": "1.56.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.55.1",
+      "tag": "v1.56.0",
       "notes": [
         {
-          "sha": "6613159c90cd002b9395666a668cf64bdb9b4059",
-          "subject": "fix(approvals): apply Approve for Me default to chats opened in tabs",
-          "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
+          "sha": "913efb42b082104d2761db85fff12f293d683034",
+          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
+          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.41.0",
-      "baselineRef": "desktop-v0.41.0",
-      "reserved": "0.41.0",
-      "commits": ["6613159c90cd002b9395666a668cf64bdb9b4059"],
+      "published": "0.41.1",
+      "baselineRef": "desktop-v0.41.1",
+      "reserved": "0.41.1",
+      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.41.1",
-      "effectiveBump": "patch",
+      "version": "0.42.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.41.1",
+      "tag": "desktop-v0.42.0",
       "notes": [
         {
-          "sha": "6613159c90cd002b9395666a668cf64bdb9b4059",
-          "subject": "fix(approvals): apply Approve for Me default to chats opened in tabs",
-          "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
+          "sha": "913efb42b082104d2761db85fff12f293d683034",
+          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
+          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
           "breaking": false
         }
       ]
@@ -61,37 +61,73 @@
       "published": "0.29.0",
       "baselineRef": "cli-v0.29.0",
       "reserved": "0.29.0",
-      "commits": [],
+      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.30.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.30.0",
+      "notes": [
+        {
+          "sha": "913efb42b082104d2761db85fff12f293d683034",
+          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
+          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.20.0",
       "baselineRef": "sdk-v0.20.0",
       "reserved": "0.20.0",
-      "commits": [],
+      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.21.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.21.0",
+      "notes": [
+        {
+          "sha": "913efb42b082104d2761db85fff12f293d683034",
+          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
+          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.13.0",
       "baselineRef": "assistant-v0.13.0",
       "reserved": "0.13.0",
-      "commits": [],
+      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.14.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.14.0",
+      "notes": [
+        {
+          "sha": "913efb42b082104d2761db85fff12f293d683034",
+          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
+          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -116,6 +152,14 @@
       "breakingUnits": [],
       "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
       "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "913efb42b082104d2761db85fff12f293d683034": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

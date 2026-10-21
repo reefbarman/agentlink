@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.56.0
+
 - The standalone CLI and Assistant now have `search_session_history` and `read_session_excerpt`, offered once a chat has an earlier turn, with the same descriptions, inputs and results as VS Code. VS Code's context-condense summariser and `todo_write` tool moved into `@agentlink/core` (`context-condense`, `todo-tool`) so other agents can use them; VS Code behaviour is unchanged. Condensing long CLI and Assistant chats comes next.
 
 ## 1.55.1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.21.0 — 2026-10-21
+
+- The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.
+
 ## 0.20.0 — 2026-10-21
 
 - The SDK, CLI, Assistant and Ask Agent now share VS Code's instruction, rule and skill discovery, adding load_skill, read_skill_resource and load_rule. The CLI replaces list_artifacts/load_artifact with these tools.
