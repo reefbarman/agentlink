@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f0831961244d6ba2942470164eb4239cd2f80102",
-  "createdAt": "2026-10-21T04:43:08.854Z",
+  "sourceSha": "c4ea20b05216c7fc9fe36572ca3209509d869ef2",
+  "createdAt": "2026-10-21T05:15:10.731Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,196 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.57.0",
-      "baselineRef": "v1.57.0",
-      "reserved": "1.57.0",
-      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
+      "published": "1.58.0",
+      "baselineRef": "v1.58.0",
+      "reserved": "1.58.0",
+      "commits": [
+        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+        "e9323ceadc4dcac37bbc744827e625fe90968949"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.58.0",
+      "version": "1.59.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.58.0",
+      "tag": "v1.59.0",
       "notes": [
         {
-          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
-          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
-          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
+          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
+          "breaking": false
+        },
+        {
+          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
+          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
+          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.43.0",
-      "baselineRef": "desktop-v0.43.0",
-      "reserved": "0.43.0",
-      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
+      "published": "0.44.0",
+      "baselineRef": "desktop-v0.44.0",
+      "reserved": "0.44.0",
+      "commits": [
+        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+        "e9323ceadc4dcac37bbc744827e625fe90968949"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.44.0",
+      "version": "0.45.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.44.0",
+      "tag": "desktop-v0.45.0",
       "notes": [
         {
-          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
-          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
-          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
+          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
+          "breaking": false
+        },
+        {
+          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
+          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
+          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.31.0",
-      "baselineRef": "cli-v0.31.0",
-      "reserved": "0.31.0",
-      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
+      "published": "0.32.0",
+      "baselineRef": "cli-v0.32.0",
+      "reserved": "0.32.0",
+      "commits": ["e9323ceadc4dcac37bbc744827e625fe90968949"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.32.0",
+      "version": "0.33.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.32.0",
+      "tag": "cli-v0.33.0",
       "notes": [
         {
-          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
-          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
-          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
+          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
+          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.22.0",
-      "baselineRef": "sdk-v0.22.0",
-      "reserved": "0.22.0",
-      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
+      "published": "0.23.0",
+      "baselineRef": "sdk-v0.23.0",
+      "reserved": "0.23.0",
+      "commits": ["e9323ceadc4dcac37bbc744827e625fe90968949"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.23.0",
+      "version": "0.24.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.23.0",
+      "tag": "sdk-v0.24.0",
       "notes": [
         {
-          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
-          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
-          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
+          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
+          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.15.0",
-      "baselineRef": "assistant-v0.15.0",
-      "reserved": "0.15.0",
-      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
+      "published": "0.16.0",
+      "baselineRef": "assistant-v0.16.0",
+      "reserved": "0.16.0",
+      "commits": [
+        "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+        "e792155be87155b50a525dd792c1977f8913a8ba",
+        "e9323ceadc4dcac37bbc744827e625fe90968949",
+        "c4ea20b05216c7fc9fe36572ca3209509d869ef2"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.16.0",
+      "tag": "assistant-v0.17.0",
       "notes": [
         {
-          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
-          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
-          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+          "sha": "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a",
+          "subject": "fix(assistant): restyle the Remembered strip and theme the activity shelf",
+          "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
+          "breaking": false
+        },
+        {
+          "sha": "e792155be87155b50a525dd792c1977f8913a8ba",
+          "subject": "fix(assistant): pass the note written on an approval card to the agent",
+          "summary": "A note or denial reason written on an Assistant approval card is now passed to the agent as a user message after the tool result, instead of being silently dropped.",
+          "breaking": false
+        },
+        {
+          "sha": "e9323ceadc4dcac37bbc744827e625fe90968949",
+          "subject": "feat(cli): add /condense and shared per-model condense thresholds",
+          "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+          "breaking": false
+        },
+        {
+          "sha": "c4ea20b05216c7fc9fe36572ca3209509d869ef2",
+          "subject": "fix(assistant): reopen chats on the model and thinking level they last used",
+          "summary": "Assistant chats now reopen on the model and thinking level they last used, keeping the current selection if the chat has not run or the model is no longer offered.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "361b59a642a5b77bbe6f165ee45c3897842ef5ab": {
+    "4c1bf5ef992f1bd731066c8f1bfec312ee65e80a": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e792155be87155b50a525dd792c1977f8913a8ba": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "A note or denial reason written on an Assistant approval card is now passed to the agent as a user message after the tool result, instead of being silently dropped.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e9323ceadc4dcac37bbc744827e625fe90968949": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
+      "summary": "The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c4ea20b05216c7fc9fe36572ca3209509d869ef2": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Assistant chats now reopen on the model and thinking level they last used, keeping the current selection if the chat has not run or the model is no longer offered.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

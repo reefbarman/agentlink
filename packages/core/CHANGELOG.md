@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.24.0 — 2026-10-21
+
+- The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).
+
 ## 0.23.0 — 2026-10-21
 
 - The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.

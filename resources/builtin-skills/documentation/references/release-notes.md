@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.59.0
+
+- The Assistant's Remembered lines above the composer get a restyled look with a clearer Undo button, and the activity shelf background now follows the theme.
+- The standalone CLI gains /condense and /condense threshold, sharing per-model condense thresholds with VS Code, backed by new SDK condense APIs (manual trigger, sessions.condense, host.condenseSession, condense.thresholds).
+
 ## 1.58.0
 
 - The standalone CLI and Assistant now also condense in the middle of a turn, before each model call after the first, as VS Code does. A single turn whose tool results outgrow the model is summarised (including that turn's own work so far) and keeps going, instead of failing. A summary made while a tool is waiting for approval survives the pause.
