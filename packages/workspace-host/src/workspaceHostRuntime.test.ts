@@ -904,15 +904,15 @@ describe("createWorkspaceHost", () => {
     }
   });
 
-  // 14k: the next request is over VS Code's 90% threshold. 30k: it is under
-  // the threshold but over the host's byte-per-token envelope, which rejects
-  // it before dispatch.
+  // The next request is about 12k estimated tokens. 14k: that is over VS
+  // Code's 90% threshold. 30k with a 16k safety margin: it is under the
+  // threshold but over the host's envelope, which rejects it before dispatch.
   it.each([
-    ["threshold", 14_000],
-    ["context_too_long", 30_000],
+    ["threshold", 14_000, undefined],
+    ["context_too_long", 30_000, 16_000],
   ] as const)(
     "condenses a long chat (%s) with VS Code's summariser",
-    async (trigger, contextWindow) => {
+    async (trigger, contextWindow, inputSafetyTokens) => {
       const parent = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-")),
       );
@@ -955,6 +955,7 @@ describe("createWorkspaceHost", () => {
         defaultModel: { providerId: "fixture", modelId: "fixture-model" },
         sessionRecall: { enabled: true },
         condense: { enabled: true },
+        ...(inputSafetyTokens ? { requestLimits: { inputSafetyTokens } } : {}),
       });
       const condensed: unknown[] = [];
       try {

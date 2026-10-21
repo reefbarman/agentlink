@@ -64,6 +64,11 @@ export interface DurableToolInteractionContinuation<
   readonly prepared: PreparedAgentTurnRequest<TPrincipal>;
   /** Exact private model/tool sequence through the assistant tool turn. */
   readonly iterationMessages: readonly CoreModelMessage[];
+  /**
+   * Set after a mid-turn condense: `prepared.history` already holds the
+   * turn's user message and this many leading `iterationMessages`.
+   */
+  readonly foldedIterationMessages?: number;
   /** Current and subsequent calls from that exact assistant turn. */
   readonly pendingToolCalls: readonly AgentToolLoopCall[];
   /** Calls already reserved in the persisted execution snapshot. */

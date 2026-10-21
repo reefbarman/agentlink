@@ -4,6 +4,7 @@ import {
   createCodexProvider,
   createOpenAICompatibleProvider,
   createOpenAIProvider,
+  estimateModelRequestTokens,
   type AgentModelReference,
   type AgentPrincipal,
   type CodexCredentialProvider,
@@ -86,7 +87,11 @@ export interface WorkspaceModelRequestLimits {
   readonly maxInputBytes?: number;
   readonly maxOutputBytes?: number;
   readonly maxRetries?: number;
-  /** Conservative upper bound: one UTF-8 byte is treated as one token. */
+  /**
+   * Tokens held back from the model's usable input. Input is estimated as the
+   * context condenser does (about four characters per token), so this margin
+   * absorbs estimate error before a request reaches the provider.
+   */
   readonly inputSafetyTokens?: number;
 }
 
@@ -94,12 +99,17 @@ export class WorkspaceContextLimitError extends Error {
   readonly code = "workspace_context_limit_exceeded";
 
   constructor(
-    readonly inputBytes: number,
-    readonly maxInputTokens: number,
+    /** Request size in `unit`s. */
+    readonly needed: number,
+    readonly limit: number,
+    readonly unit: "bytes" | "tokens",
     readonly model: AgentModelReference,
   ) {
+    const target = `${model.providerId}/${model.modelId}`;
     super(
-      `Conversation needs at most ${inputBytes.toLocaleString()} conservative input tokens, but ${model.providerId}/${model.modelId} allows ${maxInputTokens.toLocaleString()}. Start a fresh session.`,
+      unit === "bytes"
+        ? `Request is ${needed.toLocaleString()} bytes, above this host's ${limit.toLocaleString()}-byte ceiling for ${target}. Start a fresh session.`
+        : `Conversation needs about ${needed.toLocaleString()} input tokens, but ${target} allows ${limit.toLocaleString()}. Start a fresh session.`,
     );
     this.name = "WorkspaceContextLimitError";
   }
@@ -297,6 +307,7 @@ export function createWorkspaceCondenseCompletion(
               throw new WorkspaceContextLimitError(
                 inputBytes,
                 absoluteByteLimit,
+                "bytes",
                 model.reference,
               );
             }
@@ -335,21 +346,40 @@ function assertRequestWithinLimits(
   capabilities: CoreModelCapabilities,
   limits: WorkspaceModelRequestLimits,
 ): void {
-  const inputBytes = requestInputBytes(operation.request);
+  const { request } = operation;
+  const inputBytes = requestInputBytes(request);
   const absoluteByteLimit = limits.maxInputBytes ?? 8 * 1024 * 1024;
   const modelInputLimit =
     (capabilities.maxInputTokens ??
-      capabilities.contextWindow - operation.request.maxTokens) -
+      capabilities.contextWindow - request.maxTokens) -
     (limits.inputSafetyTokens ?? 1024);
   if (modelInputLimit <= 0) {
     throw new Error(
       `Model ${model.providerId}/${model.modelId} has no usable input capacity after reserving output and safety tokens`,
     );
   }
-  if (inputBytes > absoluteByteLimit || inputBytes > modelInputLimit) {
+  if (inputBytes > absoluteByteLimit) {
     throw new WorkspaceContextLimitError(
       inputBytes,
-      Math.min(absoluteByteLimit, modelInputLimit),
+      absoluteByteLimit,
+      "bytes",
+      model,
+    );
+  }
+  // The condenser's estimate, so the envelope agrees with when it condenses.
+  const inputTokens = estimateModelRequestTokens({
+    systemPrompt: request.systemPrompt,
+    messages: request.messages,
+    ...("tools" in request && request.tools ? { tools: request.tools } : {}),
+    ...("hostedTools" in request && request.hostedTools
+      ? { hostedTools: request.hostedTools }
+      : {}),
+  });
+  if (inputTokens > modelInputLimit) {
+    throw new WorkspaceContextLimitError(
+      inputTokens,
+      modelInputLimit,
+      "tokens",
       model,
     );
   }

@@ -723,10 +723,24 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
     emit({ type: "model.resolved", provenance: resolvedProvenance });
 
     const userMessage = toUserMessage(prepared);
-    durableMessages = [
-      ...structuredClone(prepared.history),
-      structuredClone(userMessage),
-    ];
+    // After a mid-turn condense, `prepared.history` already holds this turn's
+    // user message and its first `foldedIterationMessages` in-turn messages
+    // (summarised), as VS Code's session history does. The tool loop's
+    // in-turn list only grows, so the rest is the part past this offset.
+    let foldedIterationMessages: number | undefined =
+      continuation?.state.foldedIterationMessages;
+    let requestState = runOptions.modelRequest?.state;
+    const turnTail = (
+      iterationMessages: readonly CoreModelMessage[],
+    ): CoreModelMessage[] =>
+      foldedIterationMessages === undefined
+        ? [userMessage, ...iterationMessages]
+        : iterationMessages.slice(foldedIterationMessages);
+    const storedMessages = (
+      iterationMessages: readonly CoreModelMessage[],
+    ): CoreModelMessage[] =>
+      structuredClone([...prepared.history, ...turnTail(iterationMessages)]);
+    durableMessages = storedMessages([]);
     const toolDefinitions = [...tools.values()]
       .filter(
         (tool) =>
@@ -748,7 +762,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         projectedFrom = prepared.history;
         projectedHistory = projectCondensedHistory(prepared.history);
       }
-      return [...projectedHistory, userMessage, ...iterationMessages].map(
+      return [...projectedHistory, ...turnTail(iterationMessages)].map(
         stripCondenseMarkers,
       );
     };
@@ -758,6 +772,12 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         messages: requestMessages(iterationMessages),
         tools: toolDefinitions,
       });
+    /**
+     * Condense the stored history. Before the turn's first model call this
+     * summarises earlier turns. Once the turn has its own messages, they are
+     * summarised too (folded into the history), as VS Code condenses its
+     * whole session mid-turn.
+     */
     const condenseHistory = async (
       condenser: AgentContextCondenser<TPrincipal>,
       trigger: AgentContextCondenseTrigger,
@@ -765,6 +785,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       estimatedInputTokens: number,
       signal: AbortSignal | undefined,
     ): Promise<boolean> => {
+      const fold = iterationMessages.length > (foldedIterationMessages ?? 0);
       emit({ type: "context.condensing", trigger, estimatedInputTokens });
       let result: AgentContextCondenseResult;
       try {
@@ -776,7 +797,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           model: resolvedRuntimeModel,
           authContext: await resolveAuthContext(),
           estimatedInputTokens,
-          history: prepared.history,
+          history: fold ? storedMessages(iterationMessages) : prepared.history,
           systemPrompt,
           toolNames: toolDefinitions.map((tool) => tool.name),
           signal,
@@ -802,11 +823,15 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       // Later reads of `prepared` (requests, suspension, the durable
       // commit) carry the summary.
       prepared = { ...prepared, history: structuredClone(result.history) };
-      durableMessages = [
-        ...structuredClone(prepared.history),
-        structuredClone(userMessage),
-        ...structuredClone(iterationMessages),
-      ];
+      if (fold) foldedIterationMessages = iterationMessages.length;
+      // A host-supplied response chain points at the pre-condense
+      // conversation; later requests send the rewritten history in full,
+      // as VS Code resets provider state when it replaces messages.
+      if (requestState?.previousResponseId !== undefined) {
+        const { previousResponseId: _dropped, ...rest } = requestState;
+        requestState = rest;
+      }
+      durableMessages = storedMessages(iterationMessages);
       emit({
         type: "context.condensed",
         trigger,
@@ -885,6 +910,37 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         onModelCallAttempt,
         signal,
       }) => {
+        // VS Code's check before each model call after the first: the
+        // turn's own tool results can cross the threshold mid-turn. Like
+        // VS Code (`hasUnansweredUserTurn`), a steering message the model
+        // has not answered yet is never summarised away; an overflow still
+        // condenses it below.
+        const midTurnCondenser = options.contextCondenser;
+        const lastMessage = iterationMessages.at(-1);
+        if (
+          midTurnCondenser &&
+          iterationMessages.length > (foldedIterationMessages ?? 0) &&
+          !(
+            lastMessage?.role === "user" &&
+            typeof lastMessage.content === "string"
+          )
+        ) {
+          const estimatedInputTokens = estimateRequest(iterationMessages);
+          if (
+            midTurnCondenser.shouldCondense({
+              model: resolvedRuntimeModel,
+              estimatedInputTokens,
+            })
+          ) {
+            await condenseHistory(
+              midTurnCondenser,
+              "threshold",
+              iterationMessages,
+              estimatedInputTokens,
+              signal,
+            );
+          }
+        }
         let streamedText = false;
         const attempt = async (): Promise<AgentToolLoopModelResult> => {
           const modelResult: AgentToolLoopModelResult = {
@@ -903,7 +959,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
               reasoningEffort: prepared.reasoningEffort,
               tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
               temperature: runOptions.modelRequest?.temperature,
-              state: runOptions.modelRequest?.state,
+              state: requestState,
               executionControls: runOptions.modelRequest?.executionControls,
               providerHints: {
                 sessionId: prepared.request.sessionId,
@@ -1061,7 +1117,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         await executeTool(
           options,
           call,
-          context,
+          { ...context, foldedIterationMessages },
           tools,
           prepared,
           resolvedModel!,
@@ -1095,20 +1151,12 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
         }),
       onIterationMessagesComplete: (messages) => {
         durableIterationMessages = structuredClone(messages);
-        durableMessages = [
-          ...structuredClone(prepared.history),
-          structuredClone(userMessage),
-          ...structuredClone(messages),
-        ];
+        durableMessages = storedMessages(messages);
       },
       // A failed model call keeps the work before it, and any steering
       // message admitted for it: the owner's words are never dropped.
       onModelCallFailed: (messages) => {
-        durableMessages = [
-          ...structuredClone(prepared.history),
-          structuredClone(userMessage),
-          ...structuredClone(messages),
-        ];
+        durableMessages = storedMessages(messages);
       },
       finishSuccess: (text) => ({ text }),
       finishEmpty: () => ({ text: "" }),
@@ -1128,11 +1176,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       return suspended;
     }
 
-    durableMessages = [
-      ...structuredClone(prepared.history),
-      structuredClone(userMessage),
-      ...structuredClone(durableIterationMessages),
-    ];
+    durableMessages = storedMessages(durableIterationMessages);
     publishDurableState();
     const completed: Extract<AgentTurnResult, { status: "completed" }> = {
       status: "completed",
@@ -1208,6 +1252,8 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
     iterationMessages: readonly CoreModelMessage[];
     pendingToolCalls: readonly AgentToolLoopCall[];
     reservedToolCalls: readonly AgentToolLoopCall[];
+    /** See `DurableToolInteractionContinuation.foldedIterationMessages`. */
+    foldedIterationMessages: number | undefined;
   },
   tools: ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>,
   prepared: PreparedAgentTurnRequest<TPrincipal>,
@@ -1392,6 +1438,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
     iterationMessages: readonly CoreModelMessage[];
     pendingToolCalls: readonly AgentToolLoopCall[];
     reservedToolCalls: readonly AgentToolLoopCall[];
+    foldedIterationMessages: number | undefined;
   },
   tool: HeadlessTurnTool<TPrincipal>,
   prepared: PreparedAgentTurnRequest<TPrincipal>,
@@ -1450,6 +1497,9 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
       continuation: {
         prepared: structuredClone(prepared),
         iterationMessages: structuredClone(context.iterationMessages),
+        ...(context.foldedIterationMessages !== undefined
+          ? { foldedIterationMessages: context.foldedIterationMessages }
+          : {}),
         pendingToolCalls: structuredClone(
           replaceToolCall(context.pendingToolCalls, call),
         ),

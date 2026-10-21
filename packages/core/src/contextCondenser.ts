@@ -58,8 +58,10 @@ export type AgentContextCondenseResult =
 
 /**
  * Condenses a session's history when a model request would not fit. The turn
- * kernel asks `shouldCondense` before a turn's first request and calls
- * `condense` then, or once after a provider rejects a request as too long.
+ * kernel asks `shouldCondense` before every model request (before the first,
+ * the history holds earlier turns; after that, it also holds the turn's own
+ * messages so far, as VS Code condenses mid-turn) and calls `condense` then,
+ * or once after a provider rejects a request as too long.
  * Summaries point the model at `search_session_history`, so a host that
  * condenses should also offer the session recall tools.
  */
@@ -167,12 +169,15 @@ export function estimateModelRequestTokens(request: {
   readonly systemPrompt: string;
   readonly messages: readonly CoreModelMessage[];
   readonly tools?: readonly CoreModelToolDefinition[];
+  /** Provider-hosted tool definitions (for example web search domain lists). */
+  readonly hostedTools?: readonly unknown[];
 }): number {
   let fixed = 0;
   const serialized = JSON.stringify(
     {
       messages: request.messages.map(stripCondenseMarkers),
       tools: request.tools,
+      hostedTools: request.hostedTools,
     },
     (key, value: unknown) => {
       if (
