@@ -1,0 +1,26 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+resources/builtin-skills/documentation/references/release-notes.md
+  s_7ddda13ddf9f5a::t_eb456af1ccacb6 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f0831961244d6ba2942470164eb4239cd2f80102",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_7ddda13ddf9f5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f1d08e0-a8ca-4fb3-9c33-6c4bbd3ebd00",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
