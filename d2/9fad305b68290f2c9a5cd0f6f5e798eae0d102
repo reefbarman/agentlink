@@ -1,0 +1,95 @@
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 695-743
+src/core/tools/toolCapabilities.ts
+  h_e08a86bb3a33a2 264-278
+  s_2011c77fda45e8::t_9b795f3360d3be 263
+packages/core/package.json
+  h_e08a86bb3a33a2 343-354
+src/agent/backgroundParity.contract.test.ts
+  h_e08a86bb3a33a2 9-11,35-40
+packages/core/src/workspaceSessionHistory.test.ts
+  h_e08a86bb3a33a2 1-387
+packages/core/README.md
+  h_e08a86bb3a33a2 64
+packages/core/src/workspaceSessionHistory.ts
+  h_e08a86bb3a33a2 1-795
+src/agent/workspaceSessionHistorySource.ts
+  h_e08a86bb3a33a2 1-62
+src/storage/retrieval/WorkspaceSessionHistoryIndexStore.ts
+  h_e08a86bb3a33a2 1-46
+src/agent/AgentSessionManagerHost.ts
+  h_e08a86bb3a33a2 173-179
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 42
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 470-472
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 62,109
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 197
+src/core/session/workspaceSessionHistoryIndex.test.ts
+  h_e08a86bb3a33a2 1-124
+src/agent/workspaceSessionHistorySource.test.ts
+  h_e08a86bb3a33a2 1-121
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 216-218,920-925,1234-1235,1856,1877-1907,1909-1914
+  s_2011c77fda45e8::t_95a47fb1f66d91 1908,1915-1916
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 192-195,292-299,366-367,597,1232,2131-2135,4489-4494
+  s_2011c77fda45e8::t_2565d8e053afe7 300,1231,1233,4495
+src/agent/unifiedContextBaselines.test.ts
+  h_e08a86bb3a33a2 796
+src/agent/toolPermissions.ts
+  h_e08a86bb3a33a2 19-20
+packages/core/src/sessionTranscriptRecall.ts
+  h_e08a86bb3a33a2 12-14,16,99-100,285-300,303-313,316-340,371-372
+  s_2011c77fda45e8::t_2bec42090509f8 15,314-315,373
+src/corePackageBoundary.test.ts
+  h_e08a86bb3a33a2 350-361
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 194
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 1327-1328,5370-5505
+  s_2011c77fda45e8::t_058ce9aced33a2 5506-5507
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 3499-3564
+src/extension.ts
+  h_e08a86bb3a33a2 75,1453-1467,2157-2158
+packages/core/src/index.ts
+  h_e08a86bb3a33a2 31
+src/core/session/workspaceSessionHistoryIndex.ts
+  h_e08a86bb3a33a2 1-129
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 108-117
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1057-1077
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_2011c77fda45e8::t_e55d3b6c8a0df4 11-13,45-47,79-81,101-103,123-125,157-159,191-193,213-215,235-237,269-271,303-305,325-327,347-349,381-383,415-417,437-439,459-461,493-495,527-529,549-551,571-573,605-607,639-641,661-663,681-684,688-691,695-698,702-705,709-712,716-719,726-729,734-737,742-745,750-753,758-761,766-769,804,814
+resources/builtin-skills/documentation/references/release-notes.md
+  s_2011c77fda45e8::t_1789b7247ff5a0 5-6
+scripts/tool-inventory.json
+  s_2011c77fda45e8::t_944e179956e5d3 640-654,741-749,908
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2011c77fda45e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f9e051cf-bbfe-4f2f-983e-640ebd20ad20",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
