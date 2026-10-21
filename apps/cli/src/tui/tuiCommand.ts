@@ -14,6 +14,12 @@ export type TuiCommand =
       readonly message: string;
     }
   | { readonly type: "approvals" }
+  | { readonly type: "condense" }
+  | {
+      readonly type: "condense-threshold";
+      /** A fraction of usable input, null to reset, undefined to show. */
+      readonly threshold: number | null | undefined;
+    }
   | { readonly type: "exit" }
   | { readonly type: "help" }
   | { readonly type: "mcp" }
@@ -47,6 +53,8 @@ export function parseTuiCommand(input: string): TuiCommand | undefined {
       return { type: "mode" };
     case "/mcp":
       return { type: "mcp" };
+    case "/condense":
+      return parseCondenseCommand(args);
     case "/sessions":
       return args[0]
         ? { type: "session-select", sessionId: args[0] }
@@ -81,9 +89,31 @@ export function parseTuiCommand(input: string): TuiCommand | undefined {
   }
 }
 
+function parseCondenseCommand(args: readonly string[]): TuiCommand {
+  if (args.length === 0) return { type: "condense" };
+  const [subcommand, value, ...rest] = args;
+  if (subcommand !== "threshold" || rest.length > 0) {
+    throw new Error("Usage: /condense, or /condense threshold [0.1-1|default]");
+  }
+  if (value === undefined)
+    return { type: "condense-threshold", threshold: undefined };
+  if (value === "default" || value === "reset") {
+    return { type: "condense-threshold", threshold: null };
+  }
+  const percent = value.endsWith("%");
+  const parsed = Number(percent ? value.slice(0, -1) : value);
+  const threshold = percent ? parsed / 100 : parsed;
+  if (!Number.isFinite(threshold) || threshold < 0.1 || threshold > 1) {
+    throw new Error(
+      "The condense threshold is a fraction of the model's usable input from 0.1 to 1 (or 10% to 100%), or default",
+    );
+  }
+  return { type: "condense-threshold", threshold };
+}
+
 export function renderTuiHelp(): string {
   return [
-    "Commands: /new, /sessions, /model, /reasoning, /mode, /mcp, /processes, /output ID,",
+    "Commands: /new, /sessions, /model, /reasoning, /mode, /mcp, /condense, /condense threshold [0.1-1|default], /processes, /output ID,",
     "/stop ID, /agents, /approvals, /agent-steer ID MESSAGE, /agent-stop ID, /exit",
     "Keys: Enter send, Ctrl+J newline, Tab focus, Ctrl+O controls, Ctrl+T TODOs, Ctrl+Z suspend; transcript Page Up/Down/Home/End and Enter tool details; activity Up/Down/Home/End and Enter/Space details; Ctrl+C cancel/exit",
     "Composer: type / for commands and @ for project file attachments; pasting a project file path also attaches it.",

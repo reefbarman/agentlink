@@ -110,8 +110,8 @@ export interface StandaloneBackgroundAgentProjection {
 }
 
 export interface StandaloneCondenseProjection {
-  readonly status: "condensing" | "condensed" | "failed";
-  readonly trigger: "threshold" | "context_too_long";
+  readonly status: "condensing" | "condensed" | "failed" | "cancelled";
+  readonly trigger: "threshold" | "context_too_long" | "manual";
   readonly message?: string;
 }
 
@@ -196,6 +196,12 @@ export type StandaloneSessionProjectionAction =
       readonly reasoningEffort?: CoreReasoningEffort;
     }
   | { readonly type: "todos.refreshed"; readonly todos: readonly TodoItem[] }
+  /** A /condense outside a turn (turns report theirs as turn events). */
+  | {
+      readonly type: "condense.updated";
+      /** Undefined restores "no condense yet" when none was needed. */
+      readonly condense: StandaloneCondenseProjection | undefined;
+    }
   | { readonly type: "controller.failed"; readonly error: string }
   | { readonly type: "controller.closed" };
 
@@ -349,6 +355,20 @@ export function reduceStandaloneSessionProjection(
       };
     case "todos.refreshed":
       return { ...state, revision: nextRevision, todos: [...action.todos] };
+    case "condense.updated":
+      // Running while it summarises, so the working indicator shows and
+      // Ctrl+C cancels it instead of exiting.
+      return {
+        ...state,
+        revision: nextRevision,
+        condense: action.condense,
+        phase:
+          action.condense?.status === "condensing"
+            ? "running"
+            : state.phase === "running" || state.phase === "cancelling"
+              ? "idle"
+              : state.phase,
+      };
     case "controller.failed":
       return {
         ...state,

@@ -197,8 +197,17 @@ export interface CreateWorkspaceHostOptions {
    * default thresholds; a request the provider rejects as too long is
    * retried once after condensing. Summaries are kept in the transcript and
    * point the model at the recall tools, so this requires `sessionRecall`.
+   * The model can also condense in the middle of a turn, and
+   * `condenseSession` condenses on request (VS Code's /condense).
    */
-  readonly condense?: { readonly enabled: true };
+  readonly condense?: {
+    readonly enabled: true;
+    /**
+     * Per-model thresholds (fraction of usable input, keyed by model ID),
+     * like VS Code's `modelCondenseThresholds`. Read before every check.
+     */
+    readonly thresholds?: () => Readonly<Record<string, number>> | undefined;
+  };
   /**
    * Where project file access, search, git status and `execute_command`
    * processes run. Defaults to this machine. Supplying one with commands
@@ -454,7 +463,33 @@ export interface WorkspaceHost {
     },
   ): Promise<AgentTurnResult>;
   cancel(sessionId: string, reason?: string): Promise<void>;
+  /**
+   * Summarise an idle session's history now, as VS Code's /condense does.
+   * Requires the `condense` option; `cancel` stops it.
+   */
+  condenseSession(
+    sessionId: string,
+    options?: {
+      readonly signal?: AbortSignal;
+      /**
+       * Only if over the automatic threshold, as VS Code does after a
+       * threshold change; otherwise `not_needed`.
+       */
+      readonly ifOverThreshold?: boolean;
+    },
+  ): Promise<WorkspaceCondenseResult>;
 }
+
+export type WorkspaceCondenseResult =
+  | { readonly status: "not_needed" }
+  | {
+      readonly status: "condensed";
+      /** Estimated input of the next request, before and after. */
+      readonly previousInputTokens: number;
+      readonly estimatedInputTokens: number;
+    }
+  | { readonly status: "failed"; readonly message: string }
+  | { readonly status: "cancelled" };
 
 export async function createWorkspaceHost(
   options: CreateWorkspaceHostOptions,
@@ -957,6 +992,9 @@ export async function createWorkspaceHost(
             // and retry as for a provider's context-too-long error.
             isContextOverflow: isWorkspaceContextLimitError,
             complete: createWorkspaceCondenseCompletion(options.requestLimits),
+            ...(options.condense.thresholds
+              ? { thresholds: options.condense.thresholds }
+              : {}),
           }),
         }
       : {}),
@@ -1583,6 +1621,27 @@ export async function createWorkspaceHost(
     async cancel(sessionId, reason) {
       assertForegroundSession(sessionId);
       await engine.sessions.cancel({ principal, sessionId, reason });
+    },
+    async condenseSession(sessionId, condenseOptions = {}) {
+      assertForegroundSession(sessionId);
+      if (!options.condense) throw new Error("condense_not_enabled");
+      const result = await engine.sessions.condense({
+        principal,
+        sessionId,
+        ...(condenseOptions.signal ? { signal: condenseOptions.signal } : {}),
+        ...(condenseOptions.ifOverThreshold ? { ifOverThreshold: true } : {}),
+      });
+      if (result.status === "condensed") {
+        return {
+          status: "condensed",
+          previousInputTokens: result.previousInputTokens,
+          estimatedInputTokens: result.estimatedInputTokens,
+        };
+      }
+      if (result.status === "failed") {
+        return { status: "failed", message: result.message };
+      }
+      return { status: result.status };
     },
   };
 }

@@ -653,4 +653,83 @@ describe("standalone session controller", () => {
     expect(host.close).toHaveBeenCalledTimes(1);
     expect(controller.getState().phase).toBe("closed");
   });
+
+  it("condenses on request, blocks turns meanwhile and projects the result", async () => {
+    let finish!: (value: unknown) => void;
+    const condenseSession = vi.fn(
+      (_sessionId: string, _options?: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { host, controller } = fixture({
+      condenseSession: condenseSession as never,
+    });
+    await controller.initialize();
+
+    const condensing = controller.condense();
+    expect(controller.getState().condense).toEqual({
+      status: "condensing",
+      trigger: "manual",
+    });
+    // So Ctrl+C cancels the condense rather than exiting.
+    expect(controller.getState().phase).toBe("running");
+    await expect(controller.submit("hello")).rejects.toThrow("already active");
+    expect(host.runTurn).not.toHaveBeenCalled();
+    expect(condenseSession).toHaveBeenCalledWith("session-1", {
+      signal: expect.any(AbortSignal),
+    });
+
+    finish({
+      status: "condensed",
+      previousInputTokens: 120_000,
+      estimatedInputTokens: 9_000,
+    });
+    await expect(condensing).resolves.toMatchObject({ status: "condensed" });
+    expect(controller.getState().phase).toBe("idle");
+    expect(controller.getState().condense).toMatchObject({
+      status: "condensed",
+      trigger: "manual",
+      message: expect.stringContaining("→"),
+    });
+  });
+
+  it("restores the Context state when a threshold check needs no condense", async () => {
+    const condenseSession = vi.fn(async () => ({ status: "not_needed" }));
+    const { controller } = fixture({
+      condenseSession: condenseSession as never,
+    });
+    await controller.initialize();
+    await expect(
+      controller.condense({ ifOverThreshold: true }),
+    ).resolves.toEqual({ status: "not_needed" });
+    expect(condenseSession).toHaveBeenCalledWith("session-1", {
+      signal: expect.any(AbortSignal),
+      ifOverThreshold: true,
+    });
+    expect(controller.getState().condense).toBeUndefined();
+    expect(controller.getState().phase).toBe("idle");
+  });
+
+  it("aborts a running condense on cancel", async () => {
+    const condenseSession = vi.fn(
+      (_sessionId: string, options?: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          options?.signal?.addEventListener("abort", () =>
+            resolve({ status: "cancelled" }),
+          );
+        }),
+    );
+    const { controller } = fixture({
+      condenseSession: condenseSession as never,
+    });
+    await controller.initialize();
+    const condensing = controller.condense();
+    await controller.cancel();
+    await expect(condensing).resolves.toEqual({ status: "cancelled" });
+    expect(controller.getState().condense).toEqual({
+      status: "cancelled",
+      trigger: "manual",
+    });
+  });
 });

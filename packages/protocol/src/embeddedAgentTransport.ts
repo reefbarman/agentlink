@@ -163,11 +163,11 @@ export type EmbeddedAgentTurnEvent =
   | (EmbeddedAgentTurnEventBase & {
       /** The session history is being summarised so the request fits. */
       readonly type: "context.condensing";
-      readonly trigger: "threshold" | "context_too_long";
+      readonly trigger: "threshold" | "context_too_long" | "manual";
     })
   | (EmbeddedAgentTurnEventBase & {
       readonly type: "context.condensed";
-      readonly trigger: "threshold" | "context_too_long";
+      readonly trigger: "threshold" | "context_too_long" | "manual";
       readonly status: "condensed" | "failed";
     })
   | (EmbeddedAgentTurnEventBase & {
@@ -1206,7 +1206,9 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isCondenseTrigger(value: unknown): boolean {
-  return value === "threshold" || value === "context_too_long";
+  return (
+    value === "threshold" || value === "context_too_long" || value === "manual"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

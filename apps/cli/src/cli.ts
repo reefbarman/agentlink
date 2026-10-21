@@ -82,7 +82,12 @@ import {
   attachmentPathsFromText,
   resolveCliAttachments,
 } from "./attachments.js";
+import { getEffectiveAutoCondenseThreshold } from "@agentlink/core/context-condense";
 import { CliMcpHubOAuthProvider } from "./CliMcpHubOAuthProvider.js";
+import {
+  createCliCondenseThresholds,
+  type CliCondenseThresholds,
+} from "./condenseThresholds.js";
 import {
   CliMcpOAuthRuntime,
   isSafePublicHttpsDestination,
@@ -346,6 +351,10 @@ export async function runCli(
       );
       return undefined;
     });
+  const condenseThresholds = createCliCondenseThresholds(
+    sessionPreferencesStore,
+    sessionPreferences,
+  );
   const sharedCodeModel = sessionPreferences?.modeModels.code?.trim();
   const sharedCodeReasoningEffort =
     sessionPreferences?.modeReasoningEfforts.code;
@@ -556,6 +565,7 @@ export async function runCli(
     enableLanguageIntelligence: languageEnablement.enabled,
     interactionBridge,
     mcpOAuth,
+    condenseThresholds,
   }).catch(async (error) => {
     await mcpOAuth?.close();
     await ownership?.release();
@@ -613,7 +623,7 @@ export async function runCli(
     interactionBridge,
     mcpOAuth!,
     ownership!,
-    { dataRoot, config, environment, updateServiceFactory },
+    { dataRoot, config, environment, updateServiceFactory, condenseThresholds },
   );
   return 0;
 }
@@ -641,6 +651,7 @@ async function createHost(options: {
   enableLanguageIntelligence: boolean;
   interactionBridge: CliInteractionBridge;
   mcpOAuth?: CliMcpOAuthRuntime;
+  condenseThresholds: CliCondenseThresholds;
 }): Promise<WorkspaceHost> {
   const providers: WorkspaceProviderConfig[] = [];
   const policy = new ResponsesTransportPolicy();
@@ -815,7 +826,8 @@ async function createHost(options: {
     agentInstructions: { enabled: true },
     // VS Code's search_session_history and read_session_excerpt.
     sessionRecall: { enabled: true },
-    condense: { enabled: true },
+    // Thresholds follow VS Code's shared modelCondenseThresholds.
+    condense: { enabled: true, thresholds: options.condenseThresholds.read },
     ...(options.enableCommands
       ? {
           commands: {
@@ -1052,6 +1064,7 @@ async function runInteractiveChat(
     config: CliConfig;
     environment: NodeJS.ProcessEnv;
     updateServiceFactory: CliReleaseUpdateServiceFactory;
+    condenseThresholds: CliCondenseThresholds;
   },
 ): Promise<void> {
   return await runInkInteractiveChat(
@@ -1081,6 +1094,7 @@ async function runInkInteractiveChat(
     config: CliConfig;
     environment: NodeJS.ProcessEnv;
     updateServiceFactory: CliReleaseUpdateServiceFactory;
+    condenseThresholds: CliCondenseThresholds;
   },
 ): Promise<void> {
   const initialized = await controller.initialize();
@@ -1312,6 +1326,23 @@ async function runInkInteractiveChat(
         case "mcp":
           await showMcp();
           return {};
+        case "condense": {
+          const result = await controller.condense();
+          return {
+            status:
+              result.status === "condensed"
+                ? `Condensed: about ${result.previousInputTokens.toLocaleString()} → ${result.estimatedInputTokens.toLocaleString()} tokens`
+                : result.status === "failed"
+                  ? `Condense failed: ${result.message}`
+                  : result.status === "cancelled"
+                    ? "Condense cancelled"
+                    : "Nothing to condense",
+          };
+        }
+        case "condense-threshold":
+          return {
+            status: await condenseThresholdCommand(command.threshold),
+          };
         case "new":
           sessionId = await controller.newSession();
           return { status: `New session: ${sessionId}` };
@@ -1509,6 +1540,60 @@ async function runInkInteractiveChat(
     sessionId = await controller.selectSession(response.optionId);
     if (controller.getState().pendingInteraction)
       await reviewCurrentInteraction();
+  };
+  const condenseThresholdCommand = async (
+    requested: number | null | undefined,
+  ): Promise<string> => {
+    const model =
+      controller.getState().model ?? updateContext.config.defaultModel;
+    const modelId = model.modelId;
+    if (requested !== undefined) {
+      await updateContext.condenseThresholds.set(modelId, requested);
+    }
+    const saved = updateContext.condenseThresholds.read()[modelId];
+    const models = await controller.listModels().catch(() => []);
+    const capabilities = models.find(
+      (candidate) =>
+        candidate.ref.providerId === model.providerId &&
+        candidate.ref.modelId === modelId,
+    );
+    const effective = getEffectiveAutoCondenseThreshold(
+      modelId,
+      saved === undefined ? undefined : { [modelId]: saved },
+      capabilities
+        ? {
+            contextWindow: capabilities.contextWindow,
+            ...(capabilities.maxInputTokens !== undefined
+              ? { maxInputTokens: capabilities.maxInputTokens }
+              : {}),
+            ...(capabilities.maxOutputTokens !== undefined
+              ? { maxOutputTokens: capabilities.maxOutputTokens }
+              : {}),
+          }
+        : undefined,
+    );
+    const percent = `${Math.round(effective * 100)}%`;
+    const summary =
+      saved === undefined
+        ? `${modelId} condenses at about the default ${percent} of usable input (shared with VS Code)`
+        : `${modelId} condenses at ${percent} of usable input (saved in session-preferences.json, shared with VS Code)`;
+    // Like VS Code after a threshold change, condense an idle session that
+    // is now over the new point.
+    const state = controller.getState();
+    if (
+      requested === undefined ||
+      state.phase === "running" ||
+      state.phase === "cancelling" ||
+      state.pendingInteraction
+    ) {
+      return summary;
+    }
+    const result = await controller.condense({ ifOverThreshold: true });
+    return result.status === "condensed"
+      ? `${summary}. Condensed now: about ${result.previousInputTokens.toLocaleString()} → ${result.estimatedInputTokens.toLocaleString()} tokens`
+      : result.status === "failed"
+        ? `${summary}. Condense failed: ${result.message}`
+        : summary;
   };
   const chooseModel = async () => {
     const models = await controller.listModels();

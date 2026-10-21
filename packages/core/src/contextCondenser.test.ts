@@ -515,6 +515,173 @@ describe("engine mid-turn context condensing", () => {
   });
 });
 
+describe("engine manual condense (sessions.condense)", () => {
+  it("summarises an idle session on request and keeps the full transcript", async () => {
+    const backend = new ScriptedBackend(
+      [finalTurn(LONG_REPLY), finalTurn("next")],
+      caps(1_000_000),
+    );
+    const { engine, run } = setup(backend);
+    await engine.sessions.create({ principal: PRINCIPAL });
+    await run("start the parser");
+
+    const result = await engine.sessions.condense({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    expect(result).toMatchObject({ status: "condensed" });
+    if (result.status !== "condensed") throw new Error("not condensed");
+    expect(result.estimatedInputTokens).toBeLessThan(
+      result.previousInputTokens,
+    );
+    expect(backend.completions).toHaveLength(1);
+
+    const read = await engine.sessions.read({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    if (!read.ok) throw new Error("session missing");
+    expect(read.revision).toBe(result.revision);
+    expect(read.record.runState).toEqual({ phase: "idle" });
+    expect(textOf(read.record.messages)).toContain(LONG_REPLY);
+    expect(read.record.messages.some((message) => message.isSummary)).toBe(
+      true,
+    );
+
+    await run("what next");
+    expect(textOf(backend.requests[1]!.messages)).not.toContain(LONG_REPLY);
+  });
+
+  it("only condenses over the threshold when asked to, and counts host-resolved tools", async () => {
+    const backend = new ScriptedBackend([finalTurn("short")], caps(14_000));
+    const bigTool: HeadlessTurnTool = {
+      definition: {
+        name: "big_tool",
+        description: "x".repeat(40_000),
+        input_schema: { type: "object" },
+      },
+      execute: async () => ({ modelContent: "ok" }),
+    };
+    let resolved = 0;
+    const { engine, run } = setup(backend, undefined, {
+      resolveTools: () => {
+        resolved += 1;
+        return { tools: [bigTool] };
+      },
+    });
+    await engine.sessions.create({ principal: PRINCIPAL });
+    await run("hi");
+
+    // ~10k tokens of tool schema push the next request over 90% of 9,904.
+    const result = await engine.sessions.condense({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+      ifOverThreshold: true,
+    });
+    expect(resolved).toBe(2);
+    expect(result.status).not.toBe("not_needed");
+    expect(backend.completions).toHaveLength(1);
+  });
+
+  it("returns not_needed under the threshold when asked to check first", async () => {
+    const backend = new ScriptedBackend([finalTurn("short")], caps(14_000));
+    const { engine, run } = setup(backend);
+    await engine.sessions.create({ principal: PRINCIPAL });
+    await run("hi");
+    await expect(
+      engine.sessions.condense({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        ifOverThreshold: true,
+      }),
+    ).resolves.toMatchObject({ status: "not_needed" });
+    expect(backend.completions).toHaveLength(0);
+  });
+
+  it("reports too little history as failed without saving", async () => {
+    const backend = new ScriptedBackend([], caps(1_000_000));
+    const { engine } = setup(backend);
+    const created = await engine.sessions.create({ principal: PRINCIPAL });
+    await expect(
+      engine.sessions.condense({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      revision: created.revision,
+    });
+    expect(backend.completions).toHaveLength(0);
+  });
+
+  it("refuses while an approval is pending", async () => {
+    const backend = new ScriptedBackend(
+      [toolTurn("call-1", "write_record")],
+      caps(1_000_000),
+    );
+    const write: HeadlessTurnTool = {
+      definition: {
+        name: "write_record",
+        description: "Write a record",
+        input_schema: { type: "object" },
+      },
+      effect: "write",
+      authorization: "required",
+      execute: async () => ({ modelContent: "ok" }),
+    };
+    const { engine, run } = setup(backend, [write], {
+      interactionTokens: createTurnInteractionTokenService({
+        secret: "0123456789abcdef0123456789abcdef",
+        createResponseId: () => "response-1",
+      }),
+      createInteractionId: () => "interaction-1",
+      authorizeToolCall: () => ({
+        decision: "require_user",
+        summary: "Approve write",
+      }),
+    });
+    await engine.sessions.create({ principal: PRINCIPAL });
+    expect((await run("write it")).result.status).toBe("suspended");
+    await expect(
+      engine.sessions.condense({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+      }),
+    ).rejects.toMatchObject({ code: "session_busy" });
+  });
+
+  it("is cancelled by sessions.cancel while summarising", async () => {
+    let engineRef: ReturnType<typeof setup>["engine"] | undefined;
+    const backend = new ScriptedBackend(
+      [finalTurn(LONG_REPLY)],
+      caps(1_000_000),
+      () =>
+        void engineRef!.sessions.cancel({
+          principal: PRINCIPAL,
+          sessionId: "session-1",
+        }),
+    );
+    const { engine, run } = setup(backend);
+    engineRef = engine;
+    await engine.sessions.create({ principal: PRINCIPAL });
+    await run("start the parser");
+    await expect(
+      engine.sessions.condense({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    const read = await engine.sessions.read({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    if (!read.ok) throw new Error("session missing");
+    expect(read.record.messages.some((message) => message.isSummary)).toBe(
+      false,
+    );
+  });
+});
+
 describe("engine context condensing cancellation", () => {
   it("reports a turn cancelled while summarising as cancelled", async () => {
     const abort = new AbortController();
@@ -534,6 +701,27 @@ describe("engine context condensing cancellation", () => {
 });
 
 describe("condense helpers", () => {
+  it("reads per-model thresholds from a function on every check", () => {
+    let thresholds: Record<string, number> | undefined;
+    const condenser = createSummarizingContextCondenser({
+      thresholds: () => thresholds,
+    });
+    const registry = new CoreModelBackendRegistry();
+    registry.register(new ScriptedBackend([], caps(14_000)));
+    const model = new DefaultCoreModelRuntime(registry, {
+      ownerId: "test",
+    }).resolveModel({
+      principal: PRINCIPAL,
+      authContext: undefined,
+      model: MODEL,
+    });
+    // ~50% of the 9,904-token usable input: under the 0.9 default.
+    const request = { model, estimatedInputTokens: 5_000 };
+    expect(condenser.shouldCondense(request)).toBe(false);
+    thresholds = { [MODEL.modelId]: 0.4 };
+    expect(condenser.shouldCondense(request)).toBe(true);
+  });
+
   it("counts hosted tool definitions in the request estimate", () => {
     const base = { systemPrompt: "", messages: [] };
     expect(

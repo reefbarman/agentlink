@@ -72,6 +72,7 @@ function controllerFixture(): StandaloneSessionController {
     getState: () => fixture.projection,
     subscribe: () => () => undefined,
     initialize: vi.fn(),
+    condense: vi.fn(),
     submit: vi.fn(),
     resumeInteraction: vi.fn(),
     cancel: vi.fn(async () => undefined),

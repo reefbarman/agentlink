@@ -26,8 +26,14 @@ import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type AgentModelSelectionSource = "turn" | "session" | "runtime";
 
-/** Why a turn condensed: the budget check before a request, or a provider rejection. */
-export type AgentContextCondenseTrigger = "threshold" | "context_too_long";
+/**
+ * Why history condensed: the budget check before a request, a provider
+ * rejection, or the user asking (`sessions.condense`, VS Code's /condense).
+ */
+export type AgentContextCondenseTrigger =
+  | "threshold"
+  | "context_too_long"
+  | "manual";
 export type AgentReasoningEffortSelectionSource =
   | "turn"
   | "session"

@@ -6,6 +6,9 @@
 
 - The standalone CLI and Assistant now also condense in the middle of a turn, before each model call after the first, as VS Code does. A single turn whose tool results outgrow the model is summarised (including that turn's own work so far) and keeps going, instead of failing. A summary made while a tool is waiting for approval survives the pause.
 - The CLI and Assistant no longer condense at about a quarter of the model's window. Their check before sending a request used to count one byte as one token; it now uses the condenser's estimate of about four characters a token, so condensing happens near VS Code's point. The fixed request-size ceiling is unchanged, and `inputSafetyTokens` is the margin for estimate error.
+- The CLI now has `/condense`, which summarises the current session's history on request, as VS Code's `/condense` does. It runs only while the session is idle, Ctrl+C stops it, and the Context row shows the estimated request size before and after.
+- `/condense threshold [0.1-1|default]` in the CLI shows or sets when the current model condenses automatically. It uses the same per-model `modelCondenseThresholds` in `~/.agentlink/session-preferences.json` as VS Code's condense threshold control, so a change in either applies to both, and a running CLI picks up VS Code's changes within a few seconds. As in VS Code, an idle session already over the new point is condensed straight away.
+- SDK: `engine.sessions.condense()` summarises an idle session with the configured `contextCondenser` (trigger `"manual"`), workspace-host adds `host.condenseSession()`, and `createSummarizingContextCondenser({ thresholds })` and workspace-host `condense: { thresholds }` accept a function read on every check. VS Code behaviour is unchanged.
 
 ## 1.57.0
 

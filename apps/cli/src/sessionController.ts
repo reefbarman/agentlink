@@ -12,6 +12,7 @@ import type {
   WorkspaceCommandObservation,
   WorkspaceCommandRecord,
   WorkspaceCommandRule,
+  WorkspaceCondenseResult,
   WorkspaceHost,
   WorkspaceHostSession,
 } from "@agentlink/workspace-host";
@@ -78,6 +79,13 @@ export interface StandaloneSessionController {
     attachments?: readonly StandaloneSubmitAttachment[],
   ): Promise<AgentTurnResult>;
   resumeInteraction(decision: "allow" | "deny"): Promise<AgentTurnResult>;
+  /**
+   * Summarise the idle session's history now; `cancel` stops it. With
+   * `ifOverThreshold`, only when over the automatic threshold.
+   */
+  condense(options?: {
+    readonly ifOverThreshold?: boolean;
+  }): Promise<WorkspaceCondenseResult>;
   cancel(reason?: string): Promise<void>;
   newSession(): Promise<string>;
   listSessions(): Promise<readonly StandaloneSessionSummary[]>;
@@ -128,7 +136,7 @@ export function createStandaloneSessionController(
   let state = initialStandaloneSessionProjection(options.host.project.root);
   let sessionId: string | undefined;
   let activeController: AbortController | undefined;
-  let activeTurn: Promise<AgentTurnResult> | undefined;
+  let activeTurn: Promise<unknown> | undefined;
   let initialization: StandaloneSessionInitialization | undefined;
   let closed = false;
   let promptTail: Promise<void> = Promise.resolve();
@@ -393,6 +401,66 @@ export function createStandaloneSessionController(
           onEvent,
         }),
       );
+    },
+    async condense(condenseOptions = {}) {
+      const currentSession = requireSession();
+      if (activeTurn) throw new Error("A session turn is already active");
+      if (state.pendingInteraction) {
+        throw new Error("Answer the pending approval before condensing");
+      }
+      const trigger = condenseOptions.ifOverThreshold ? "threshold" : "manual";
+      const previous = state.condense;
+      const controller = new AbortController();
+      activeController = controller;
+      dispatch({
+        type: "condense.updated",
+        condense: { status: "condensing", trigger },
+      });
+      const running = options.host.condenseSession(currentSession, {
+        signal: controller.signal,
+        ...(condenseOptions.ifOverThreshold ? { ifOverThreshold: true } : {}),
+      });
+      activeTurn = running;
+      try {
+        const result = await running;
+        if (!closed && sessionId === currentSession) {
+          dispatch({
+            type: "condense.updated",
+            condense:
+              result.status === "not_needed"
+                ? previous
+                : result.status === "condensed"
+                  ? {
+                      status: "condensed",
+                      trigger,
+                      message: `about ${result.previousInputTokens.toLocaleString()} → ${result.estimatedInputTokens.toLocaleString()} tokens`,
+                    }
+                  : result.status === "failed"
+                    ? {
+                        status: "failed",
+                        trigger,
+                        message: result.message,
+                      }
+                    : { status: "cancelled", trigger },
+          });
+        }
+        return result;
+      } catch (error) {
+        if (!closed && sessionId === currentSession) {
+          dispatch({
+            type: "condense.updated",
+            condense: {
+              status: "failed",
+              trigger,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+        throw error;
+      } finally {
+        if (activeController === controller) activeController = undefined;
+        if (activeTurn === running) activeTurn = undefined;
+      }
     },
     async cancel(reason = "Cancelled by user") {
       const currentSession = requireSession();

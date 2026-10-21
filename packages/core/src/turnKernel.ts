@@ -28,7 +28,7 @@ import {
   type AgentContextCondenser,
   type AgentContextCondenseResult,
 } from "./contextCondenser.js";
-import type { AgentPrincipal } from "./modelIdentity.js";
+import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import {
   CoreModelAttemptLimitError,
   CoreModelOutputLimitError,
@@ -224,7 +224,50 @@ export interface HeadlessTurnKernel<
     request: ResumeToolInteractionRequest<TPrincipal>,
     options?: AgentTurnRunOptions,
   ): AgentTurnStream;
+  /**
+   * Condense stored history outside a turn (VS Code's manual /condense),
+   * with the turn's model, auth and system prompt. Throws
+   * `context_condense_not_configured` without a `contextCondenser`.
+   */
+  condenseHistory(
+    request: HeadlessCondenseHistoryRequest<TPrincipal>,
+  ): Promise<HeadlessCondenseHistoryResult>;
 }
+
+export interface HeadlessCondenseHistoryRequest<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  /** Operation id, passed to auth resolution and the condenser. */
+  readonly turnId: string;
+  readonly history: readonly CoreModelMessage[];
+  readonly model: AgentModelReference;
+  /** App instructions, as `PreparedAgentTurnRequest.systemPrompt`. */
+  readonly systemPrompt: string;
+  readonly signal: AbortSignal | undefined;
+  /**
+   * Condense only if the next request is over the automatic threshold
+   * (with the automatic summary prompt), as VS Code does right after a
+   * threshold change. Otherwise this is a manual condense.
+   */
+  readonly ifOverThreshold?: boolean;
+}
+
+export type HeadlessCondenseHistoryResult =
+  | { readonly status: "not_needed"; readonly previousInputTokens: number }
+  | {
+      readonly status: "condensed";
+      readonly history: readonly CoreModelMessage[];
+      /** Estimated input of the next request, before and after. */
+      readonly previousInputTokens: number;
+      readonly estimatedInputTokens: number;
+    }
+  | {
+      readonly status: "failed";
+      readonly message: string;
+      readonly previousInputTokens: number;
+    };
 
 export function createHeadlessTurnKernel<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
@@ -253,6 +296,102 @@ export function createHeadlessTurnKernel<
     },
     resumeInteraction(request, runOptions = { signal: undefined }) {
       return streamResumedInteraction(options, tools, request, runOptions);
+    },
+    async condenseHistory(request) {
+      const condenser = options.contextCondenser;
+      if (!condenser) {
+        throw new HeadlessTurnKernelError(
+          "context_condense_not_configured",
+          "Context condensing is not configured",
+        );
+      }
+      const authContext = await options.resolveAuthContext?.({
+        principal: request.principal,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+      });
+      const model = options.models.resolveModel({
+        principal: request.principal,
+        authContext,
+        model: request.model,
+      });
+      const systemPrompt = buildHeadlessTurnSystemPrompt(request.systemPrompt);
+      // The tools the next turn would offer, as a turn resolves them, so the
+      // estimate and the checkpoint's tool list match a real request.
+      const resolution = await resolveTurnTools(options, tools, {
+        request: {
+          principal: request.principal,
+          sessionId: request.sessionId,
+          input: { text: "", attachments: undefined },
+        },
+        turnId: request.turnId,
+      });
+      let toolDefinitions: CoreModelToolDefinition[];
+      try {
+        toolDefinitions = [...resolution.tools.values()]
+          .filter(
+            (tool) =>
+              tool.authorization === undefined ||
+              tool.authorization === "none" ||
+              options.authorizeToolCall !== undefined,
+          )
+          .map((tool) => tool.definition);
+      } finally {
+        await resolution.dispose?.();
+      }
+      const estimate = (history: readonly CoreModelMessage[]) =>
+        estimateModelRequestTokens({
+          systemPrompt,
+          messages: projectCondensedHistory(history),
+          tools: toolDefinitions,
+        });
+      const previousInputTokens = estimate(request.history);
+      // VS Code's check after a threshold change (`maybeAutoCondenseSession`).
+      if (
+        request.ifOverThreshold &&
+        !condenser.shouldCondense({
+          model,
+          estimatedInputTokens: previousInputTokens,
+        })
+      ) {
+        return { status: "not_needed", previousInputTokens };
+      }
+      let result: AgentContextCondenseResult;
+      try {
+        result = await condenser.condense({
+          trigger: request.ifOverThreshold ? "threshold" : "manual",
+          principal: request.principal,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          model,
+          authContext,
+          estimatedInputTokens: previousInputTokens,
+          history: request.history,
+          systemPrompt,
+          toolNames: toolDefinitions.map((tool) => tool.name),
+          signal: request.signal,
+        });
+      } catch (error) {
+        throwIfTurnAborted(request.signal);
+        result = {
+          status: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      throwIfTurnAborted(request.signal);
+      if (result.status !== "condensed") {
+        return {
+          status: "failed",
+          message: result.message,
+          previousInputTokens,
+        };
+      }
+      return {
+        status: "condensed",
+        history: structuredClone(result.history),
+        previousInputTokens,
+        estimatedInputTokens: estimate(result.history),
+      };
     },
   };
 }
@@ -533,7 +672,13 @@ function streamHeadlessTurn<TPrincipal extends AgentPrincipal>(
 async function resolveTurnTools<TPrincipal extends AgentPrincipal>(
   options: HeadlessTurnKernelOptions<TPrincipal>,
   staticTools: ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>,
-  prepared: PreparedAgentTurnRequest<TPrincipal>,
+  prepared: {
+    readonly request: Pick<
+      PreparedAgentTurnRequest<TPrincipal>["request"],
+      "principal" | "sessionId" | "input"
+    >;
+    readonly turnId: string;
+  },
 ): Promise<{
   tools: ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>;
   dispose?: () => void | Promise<void>;

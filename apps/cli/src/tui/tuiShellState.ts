@@ -99,6 +99,18 @@ export const TUI_COMMANDS: readonly TuiPickerItem[] = [
     insertText: "/mcp",
   },
   {
+    id: "/condense",
+    label: "/condense",
+    detail: "Summarise this session's history now",
+    insertText: "/condense",
+  },
+  {
+    id: "/condense threshold",
+    label: "/condense threshold",
+    detail: "Show or set the auto-condense point for this model",
+    insertText: "/condense threshold ",
+  },
+  {
     id: "/sessions",
     label: "/sessions",
     detail: "List project sessions",

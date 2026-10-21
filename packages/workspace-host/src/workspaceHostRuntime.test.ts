@@ -992,6 +992,81 @@ describe("createWorkspaceHost", () => {
     },
   );
 
+  it.each(["manual", "thresholds"] as const)(
+    "condenses through the host (%s)",
+    async (path_) => {
+      const parent = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-")),
+      );
+      const projectRoot = path.join(parent, "project");
+      await fs.mkdir(projectRoot, { recursive: true });
+      const longReply = "parser detail ".repeat(3_000);
+      const sent: string[] = [];
+      let summaries = 0;
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (_input, init) => {
+          const raw = String(init?.body);
+          if (raw.includes("CONTEXT CHECKPOINT COMPACTION")) {
+            summaries += 1;
+            return completion("<summary>WS-MANUAL-SUMMARY</summary>");
+          }
+          sent.push(raw);
+          return completion(sent.length === 1 ? longReply : "second done");
+        });
+      const thresholds = vi.fn(() =>
+        // About 8k of the ~56k usable input: under the ~11k next request.
+        path_ === "thresholds" ? { "fixture-model": 0.15 } : undefined,
+      );
+      const host = await createWorkspaceHost({
+        projectRoot,
+        dataRoot: path.join(parent, "data"),
+        ownerId: "condense-manual",
+        providers: [
+          {
+            type: "openai-compatible",
+            id: "fixture",
+            baseURL: "https://example.invalid/v1",
+            noAuth: true,
+            models: [
+              {
+                id: "fixture-model",
+                // About 12k estimated tokens fit under the default threshold.
+                contextWindow: 60_000,
+                maxOutputTokens: 4_096,
+                supportsToolUse: true,
+              },
+            ],
+            fetch,
+          },
+        ],
+        defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+        sessionRecall: { enabled: true },
+        condense: { enabled: true, thresholds },
+      });
+      try {
+        const sessionId = (await host.createSession()).sessionId;
+        await host.runTurn(sessionId, "start the parser");
+        if (path_ === "manual") {
+          await expect(host.condenseSession(sessionId)).resolves.toMatchObject({
+            status: "condensed",
+          });
+          expect(summaries).toBe(1);
+        }
+        await expect(
+          host.runTurn(sessionId, "now add tests"),
+        ).resolves.toMatchObject({ status: "completed" });
+        expect(summaries).toBe(1);
+        expect(thresholds).toHaveBeenCalled();
+        expect(sent[1]).toContain("WS-MANUAL-SUMMARY");
+        expect(sent[1]).not.toContain(longReply);
+      } finally {
+        await host.close();
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("refuses condense without sessionRecall", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

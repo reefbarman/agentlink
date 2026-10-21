@@ -214,4 +214,28 @@ describe("TUI commands", () => {
     );
     expect(parseTuiCommand("normal prompt")).toBeUndefined();
   });
+
+  it("parses /condense and its threshold setting", () => {
+    expect(parseTuiCommand("/condense")).toEqual({ type: "condense" });
+    expect(parseTuiCommand("/condense threshold")).toEqual({
+      type: "condense-threshold",
+      threshold: undefined,
+    });
+    expect(parseTuiCommand("/condense threshold 0.7")).toEqual({
+      type: "condense-threshold",
+      threshold: 0.7,
+    });
+    expect(parseTuiCommand("/condense threshold 75%")).toEqual({
+      type: "condense-threshold",
+      threshold: 0.75,
+    });
+    expect(parseTuiCommand("/condense threshold default")).toEqual({
+      type: "condense-threshold",
+      threshold: null,
+    });
+    expect(() => parseTuiCommand("/condense threshold 0.05")).toThrow(
+      "from 0.1 to 1",
+    );
+    expect(() => parseTuiCommand("/condense now")).toThrow("Usage: /condense");
+  });
 });

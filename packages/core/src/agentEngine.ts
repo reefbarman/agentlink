@@ -30,7 +30,10 @@ import type {
   AgentTurnStream,
   PreparedAgentTurnRequest,
 } from "./turnContracts.js";
-import { resolveAgentReasoningEffort } from "./turnContracts.js";
+import {
+  resolveAgentModelSelection,
+  resolveAgentReasoningEffort,
+} from "./turnContracts.js";
 import type {
   AuthorizeToolCall,
   DurableToolInteractionRepository,
@@ -204,6 +207,36 @@ export interface ResumeAgentInteractionRequest<
   readonly decision: ToolAuthorizationDecision;
 }
 
+export interface CondenseAgentSessionRequest<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  readonly signal?: AbortSignal;
+  /**
+   * Condense only if the next request is over the automatic threshold, as
+   * VS Code does right after a threshold change; otherwise `not_needed`.
+   */
+  readonly ifOverThreshold?: boolean;
+}
+
+export type CondenseAgentSessionResult =
+  | { readonly status: "not_needed"; readonly revision: AgentSessionRevision }
+  | {
+      readonly status: "condensed";
+      readonly revision: AgentSessionRevision;
+      /** Estimated input of the next request, before and after. */
+      readonly previousInputTokens: number;
+      readonly estimatedInputTokens: number;
+    }
+  | {
+      /** Nothing was saved; `message` says why (for example too little history). */
+      readonly status: "failed";
+      readonly message: string;
+      readonly revision: AgentSessionRevision;
+    }
+  | { readonly status: "cancelled"; readonly revision: AgentSessionRevision };
+
 export interface AgentSessionOperations<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 > {
@@ -251,6 +284,16 @@ export interface AgentSessionOperations<
     readonly sessionId: string;
     readonly reason?: string;
   }): Promise<ReadAgentSessionResult<TPrincipal>>;
+  /**
+   * Summarise an idle session's history now (VS Code's manual /condense),
+   * with the configured `contextCondenser` and the session's model. Holds
+   * the turn lease while summarising, so no turn can start meanwhile, and
+   * `cancel` aborts it. Throws `session_busy` while a turn or approval is
+   * pending.
+   */
+  condense(
+    request: CondenseAgentSessionRequest<TPrincipal>,
+  ): Promise<CondenseAgentSessionResult>;
   delete(request: {
     readonly principal: TPrincipal;
     readonly sessionId: string;
@@ -654,6 +697,144 @@ export function createAgentEngine<
           if (!interrupted.ok) throwSessionMutation(interrupted.reason);
           return await read(request);
         } finally {
+          await releaseLease(options.turnLeases, lease);
+        }
+      },
+      async condense(
+        request: CondenseAgentSessionRequest<TPrincipal>,
+      ): Promise<CondenseAgentSessionResult> {
+        if (!options.contextCondenser) {
+          throw new AgentEngineError(
+            "invalid_engine_configuration",
+            "Context condensing is not configured",
+          );
+        }
+        const activeKey = activeTurnKey(request.principal, request.sessionId);
+        if (activeTurns.has(activeKey)) {
+          throw new AgentEngineError(
+            "session_busy",
+            "Session has an active turn",
+          );
+        }
+        const turnId = requiredText(createTurnId(), "turnId");
+        const lease = await acquireLease(options.turnLeases, {
+          principal: request.principal,
+          sessionId: request.sessionId,
+          turnId,
+          ownerId,
+          ttlMs: leaseTtlMs,
+        });
+        const leaseAbort = new AbortController();
+        const lifecycleAbort = new AbortController();
+        const active: ActiveEngineTurn = { turnId, abort: lifecycleAbort };
+        activeTurns.set(activeKey, active);
+        const keeper = keepLeaseAlive(
+          options.turnLeases,
+          lease,
+          leaseTtlMs,
+          leaseRenewIntervalMs,
+          leaseAbort,
+        );
+        const signal = combineAbortSignals(
+          leaseAbort.signal,
+          lifecycleAbort.signal,
+          request.signal,
+        );
+        try {
+          const current = await requireSession(options.sessions, request);
+          assertRunnable(current.record);
+          const history = await readTranscript(
+            transcriptPolicy,
+            current.record,
+          );
+          const model = resolveAgentModelSelection({
+            turnModel: undefined,
+            sessionModel: current.record.selectedModel,
+            runtimeDefaultModel: options.defaultModel,
+          });
+          if (!model) {
+            return {
+              status: "failed",
+              message: "No model is selected for this session",
+              revision: current.revision,
+            };
+          }
+          const instructions = await options.resolveInstructions({
+            principal: request.principal,
+            session: current.record,
+            turnId,
+            model: model.model,
+          });
+          let result;
+          try {
+            result = await kernel.condenseHistory({
+              principal: request.principal,
+              sessionId: request.sessionId,
+              turnId,
+              history,
+              model: model.model,
+              systemPrompt: formatInstructions(instructions),
+              signal,
+              ...(request.ifOverThreshold ? { ifOverThreshold: true } : {}),
+            });
+          } catch (error) {
+            if (signal?.aborted && !leaseAbort.signal.aborted) {
+              return { status: "cancelled", revision: current.revision };
+            }
+            throw error;
+          }
+          if (leaseAbort.signal.aborted) {
+            throw new AgentEngineError(
+              "turn_lease_lost",
+              "Turn lease was lost while the session was condensing",
+              true,
+            );
+          }
+          if (result.status === "not_needed") {
+            return { status: "not_needed", revision: current.revision };
+          }
+          if (result.status !== "condensed") {
+            return {
+              status: "failed",
+              message: result.message,
+              revision: current.revision,
+            };
+          }
+          await validateLease(options.turnLeases, lease);
+          // The commit is the boundary: a cancel before it saves nothing.
+          if (signal?.aborted) {
+            return { status: "cancelled", revision: current.revision };
+          }
+          const saved = await options.sessions.saveSession({
+            record: {
+              ...current.record,
+              updatedAt: monotonicTimestamp(current.record.updatedAt, now),
+              messages: durableSessionMessages(
+                transcriptPolicy,
+                result.history,
+              ),
+            },
+            expectedRevision: current.revision,
+            fencingToken: lease.fencingToken,
+          });
+          if (!saved.ok) throwSessionMutation(saved.reason);
+          await writeTranscript(
+            transcriptPolicy,
+            current.record,
+            result.history,
+          );
+          return {
+            status: "condensed",
+            revision: saved.revision,
+            previousInputTokens: result.previousInputTokens,
+            estimatedInputTokens: result.estimatedInputTokens,
+          };
+        } finally {
+          keeper.stop();
+          await keeper.settled;
+          if (activeTurns.get(activeKey) === active) {
+            activeTurns.delete(activeKey);
+          }
           await releaseLease(options.turnLeases, lease);
         }
       },

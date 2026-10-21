@@ -265,8 +265,14 @@ export interface SummarizingContextCondenserOptions {
   readonly complete?: (
     completion: AgentContextCondenseCompletion,
   ) => Promise<CoreModelCompleteResult>;
-  /** Per-model threshold overrides (fraction of usable input), as in VS Code's `modelCondenseThresholds`. */
-  readonly thresholds?: ModelCondenseThresholdMap;
+  /**
+   * Per-model threshold overrides (fraction of usable input) keyed by model
+   * ID, as in VS Code's `modelCondenseThresholds`. A function is read on
+   * every check, so a host can follow a preferences file without restarting.
+   */
+  readonly thresholds?:
+    | ModelCondenseThresholdMap
+    | (() => ModelCondenseThresholdMap | undefined);
   /**
    * Folded outlines of files the session read, appended to the summary. VS
    * Code supplies tree-sitter outlines; without this, none are added.
@@ -303,7 +309,9 @@ export function createSummarizingContextCondenser<
           usedTokens: request.estimatedInputTokens,
           threshold: getEffectiveAutoCondenseThreshold(
             request.model.modelId,
-            options.thresholds,
+            typeof options.thresholds === "function"
+              ? options.thresholds()
+              : options.thresholds,
             request.model.capabilities,
           ),
         }).triggerReason !== null
@@ -343,7 +351,7 @@ export function createSummarizingContextCondenser<
         provider: client,
         activeModel: request.model.modelId,
         systemPrompt: request.systemPrompt,
-        isAutomatic: true,
+        isAutomatic: request.trigger !== "manual",
         preservedContext: { toolNames: [...request.toolNames] },
         signal: request.signal,
         ...(files && options.foldFileContext

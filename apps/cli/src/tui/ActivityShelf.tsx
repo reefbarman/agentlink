@@ -189,9 +189,16 @@ export function buildActivityShelfItems(
       summary:
         condense?.status === "condensing"
           ? "Condensing history"
-          : [usageSummary, condense?.status === "condensed" ? "condensed" : ""]
+          : [
+              usageSummary,
+              condense?.status === "condensed"
+                ? "condensed"
+                : condense?.status === "failed"
+                  ? "condensing failed"
+                  : "",
+            ]
               .filter(Boolean)
-              .join(" · ") || "Condensing failed",
+              .join(" · ") || "Condensing cancelled",
       details: [
         ...(usage
           ? [
@@ -379,11 +386,16 @@ function formatCondense(
   condense: NonNullable<StandaloneSessionProjection["condense"]>,
 ): string {
   const why =
-    condense.trigger === "context_too_long"
-      ? "after the model rejected the request as too long"
-      : "before the request, near the context limit";
+    condense.trigger === "manual"
+      ? "on request (/condense)"
+      : condense.trigger === "context_too_long"
+        ? "after the model rejected the request as too long"
+        : "before the request, near the context limit";
   if (condense.status === "condensing") return `Summarising history ${why}`;
-  if (condense.status === "condensed") return `History summarised ${why}`;
+  if (condense.status === "condensed") {
+    return `History summarised ${why}${condense.message ? `: ${condense.message}` : ""}`;
+  }
+  if (condense.status === "cancelled") return `Condensing cancelled ${why}`;
   return `Condensing failed ${why}${condense.message ? `: ${condense.message}` : ""}`;
 }
 
