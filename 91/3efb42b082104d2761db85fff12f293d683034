@@ -1,0 +1,109 @@
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 12,31,43-49
+packages/core/src/contextCondense.ts
+  h_e08a86bb3a33a2 1-1485
+src/agent/types.ts
+  h_e08a86bb3a33a2 24,40-41
+src/agent/sessionRecallToolParity.test.ts
+  h_e08a86bb3a33a2 1-30
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 24,186-190,599-604,949,976-978
+  s_27b1e4a6337186::t_7d45f5d80eb8ef 185,979-980
+src/agent/condensePrompt.ts
+  h_e08a86bb3a33a2 1-9
+packages/core/src/contextCondense.test.ts
+  h_e08a86bb3a33a2 1-97
+src/agent/contextCondenseParity.test.ts
+  h_e08a86bb3a33a2 1-32
+packages/core/src/condensePrompt.ts
+  h_e08a86bb3a33a2 1-180
+src/tools/sessionTranscriptRecall.ts
+  h_e08a86bb3a33a2 1-4
+packages/core/README.md
+  h_e08a86bb3a33a2 49,63-64
+  s_3406d766c55819::t_7b978f13031963 48,50-62,65
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 399-400
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 247-250
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 825-906
+packages/node-host/src/index.ts
+  h_e08a86bb3a33a2 3
+src/agent/todoTool.ts
+  h_e08a86bb3a33a2 2-3,5
+src/util/truncateMiddle.ts
+  h_e08a86bb3a33a2 1-5
+packages/core/src/todoTool.ts
+  h_e08a86bb3a33a2 1-326
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 816-817
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 35,51,79,95
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 192
+packages/core/package.json
+  h_e08a86bb3a33a2 307-330
+packages/core/src/sessionTranscriptRecall.ts
+  h_e08a86bb3a33a2 748-1057
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 132,141-142
+packages/node-host/src/sessionRecallTools.ts
+  h_e08a86bb3a33a2 1-192
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1435-1436
+packages/core/src/truncateMiddle.ts
+  h_e08a86bb3a33a2 1-63
+src/agent/condense.ts
+  h_e08a86bb3a33a2 4-7,10,17,20-23,25-35,130-133,135,137,143,145-148
+  s_02e81956320876::t_a0f9ff29f48896 144
+resources/builtin-skills/documentation/references/release-notes.md
+  s_9d2d6e607a7e45::t_71b7568973bc4f 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "913efb42b082104d2761db85fff12f293d683034",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02e81956320876": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ed5d59e-b875-4ce0-b5a6-31f414a434e3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_27b1e4a6337186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54883793-a218-4796-b23b-18e5491a591c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_3406d766c55819": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc1e2c0c-42dc-41fc-b9e2-ced3365a2ced",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_9d2d6e607a7e45": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c469cc26-923c-4530-bc36-8d1e2ddb65e3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
