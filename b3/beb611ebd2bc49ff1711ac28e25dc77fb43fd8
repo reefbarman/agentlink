@@ -1,0 +1,16 @@
+.agentlink/skills/surface-parity/SKILL.md
+  h_e08a86bb3a33a2 1-66
+CLAUDE.md
+  h_e08a86bb3a33a2 133-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b3beb611ebd2bc49ff1711ac28e25dc77fb43fd8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
