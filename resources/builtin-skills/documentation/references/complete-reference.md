@@ -1739,12 +1739,12 @@ Mark the current built-in agent turn's final status. This ends the current respo
 | Parameter        | Type     | Description                                                                                                            |
 | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `status`         | string   | Required final status: `completed`, `waiting_for_user`, `blocked`, or `cancelled`                                      |
-| `summary`        | string?  | User-facing final result. Make it self-contained: what changed, why it matters, validation run/skipped, and follow-up. |
+| `summary`        | string?  | The turn's final message, shown in the final-status card. Contains the complete response, not a recap of earlier text. |
 | `continueLabel`  | string?  | Optional button label for a clear continuation action                                                                  |
 | `continuePrompt` | string?  | Optional prompt added to the composer for review and editing when the continuation action is clicked                   |
 | `completeTodos`  | boolean? | With `status: "completed"`, mark all current todos completed without a separate final `todo_write` call                |
 
-For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragraphs over a terse “Done.” Include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help. Use `completeTodos: true` only when the existing todo list accurately represents finished work.
+The summary is the single home for the turn's final response: the agent puts the full answer, findings, or change report there instead of writing it as text first and then restating it, so the last thing in the transcript is the complete response. It is sized to the content: one sentence for a tiny answer, a full structured breakdown for detailed explanations or non-trivial work, and never a terse “Done.” For code changes, include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help. Use `completeTodos: true` only when the existing todo list accurately represents finished work.
 
 ### ask_user
 

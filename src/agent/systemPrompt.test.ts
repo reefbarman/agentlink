@@ -469,6 +469,18 @@ describe("buildSystemPrompt", () => {
     );
   });
 
+  it("makes the final-status summary the single home for the final response", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("The `summary` is the turn's final message");
+    expect(result).toContain(
+      "do **not** also write it as text before calling `set_task_status`",
+    );
+    expect(result).not.toContain("3-6 bullets or 1-2 short paragraphs");
+    expect(result).not.toContain(
+      "One of those two slots must carry the substance",
+    );
+  });
+
   it("requires TODO state to stay synchronized with actual work", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("## TODO Discipline");
