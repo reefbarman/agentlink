@@ -29,12 +29,20 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # A service principal may have no Visual Studio profile until it joins a
+      # publisher or organization, so fall back to connectionData's identity.
       - name: Show Marketplace user ID
         run: |
+          RESOURCE=499b84ac-1321-427f-aa17-267ca6975798
+          az rest \
+            -u https://app.vssps.visualstudio.com/_apis/connectionData \
+            --resource "$RESOURCE" \
+            --query '{id: authenticatedUser.id, descriptor: authenticatedUser.descriptor, displayName: authenticatedUser.providerDisplayName}'
           az rest \
             -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
-            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
-            --query '{id: id, displayName: displayName}'
+            --resource "$RESOURCE" \
+            --query '{profileId: id, displayName: displayName}' ||
+            echo "No Visual Studio profile yet; use the connectionData id above."
 
       - name: Verify publish rights for agentlink
         run: npx --yes @vscode/vsce@3.9.2 verify-pat agentlink --azure-credential
