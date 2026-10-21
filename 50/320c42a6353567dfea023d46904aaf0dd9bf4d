@@ -1,0 +1,55 @@
+apps/cli/src/tui/ActivityShelf.test.tsx
+  h_e08a86bb3a33a2 10,147-171
+  s_e86170541b587d::t_1f77bfd6b896d2 172-173
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 19,359-360,572,635-636,666,843-848,1086,1117,1426-1428
+  s_e86170541b587d::t_c2281d723ac040 630-634,637
+packages/workspace-host/src/index.ts
+  h_e08a86bb3a33a2 19
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 3,427-441,444-468
+  s_e86170541b587d::t_19a0f4f28abc29 442-443
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-9
+apps/cli/src/tui/ActivityShelf.tsx
+  h_e08a86bb3a33a2 49-50,63
+packages/core/src/contextCondenser.ts
+  h_e08a86bb3a33a2 335-346,356-357
+apps/server/src/turnFailures.ts
+  h_e08a86bb3a33a2 2-5,8,10-11,13
+  s_e86170541b587d::t_a2486152b023dc 9
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 252-264,1455-1456,1458-1463
+  s_e86170541b587d::t_f1e37cedc1b0b7 1454,1457
+apps/cli/src/sessionProjection.ts
+  h_e08a86bb3a33a2 396-398
+packages/core/src/contextCondenser.test.ts
+  h_e08a86bb3a33a2 519-534,554-556
+packages/workspace-host/src/turnFailureDetail.ts
+  h_e08a86bb3a33a2 1-89
+apps/cli/src/sessionProjection.test.ts
+  h_e08a86bb3a33a2 333-352
+resources/builtin-skills/documentation/references/release-notes.md
+  s_e86170541b587d::t_d046a51f2940e9 5-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50320c42a6353567dfea023d46904aaf0dd9bf4d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e86170541b587d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1f7e7d02-ddc3-4162-b036-89d2a78fa113",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
