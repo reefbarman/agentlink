@@ -1672,6 +1672,61 @@ describe("AgentSessionManager host injection", () => {
     );
   });
 
+  it.each([
+    [true, "approve-for-me", "session"],
+    [false, "sensitive", "prompt"],
+  ] as const)(
+    "starts new foreground chats per approveForMeByDefault=%s",
+    async (enabled, expectedPolicy, expectedWrites) => {
+      let writeApproval: "prompt" | "session" = "prompt";
+      const setAgentWriteApprovalSelection = vi.fn(
+        (_sessionId: string, selection: "session") => {
+          writeApproval = selection;
+          return true;
+        },
+      );
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        {
+          host: {
+            config: {
+              resolveModelForMode: (_mode: string, fallback: string) =>
+                fallback,
+              getCommandApprovalPolicy: () => "sensitive",
+              getApproveForMeByDefault: () => enabled,
+            } as any,
+          },
+        },
+      );
+      mgr.setToolContext({
+        approvalManager: {
+          bindSessionProject: vi.fn(),
+          clearSession: vi.fn(),
+          getAgentWriteApprovalState: () => writeApproval,
+          setAgentWriteApprovalSelection,
+          resetSessionAgentWriteApproval: vi.fn(),
+        } as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+      });
+
+      const session = await mgr.createForegroundSession("code");
+
+      expect(mgr.getCommandApprovalPolicy(session.id, "sensitive")).toBe(
+        expectedPolicy,
+      );
+      expect(Boolean(session.approveForMe)).toBe(enabled);
+      expect(writeApproval).toBe(expectedWrites);
+    },
+  );
+
   it("persists approval dimensions when a live session policy changes", async () => {
     const saveSession = vi.fn(
       async (_args: {

@@ -5232,6 +5232,22 @@ body.chat-activity-shelf-resizing * {
   text-overflow: ellipsis;
 }
 
+/* Stack every label variant in one cell so toggling never changes width. */
+.toolbar-stable-label {
+  display: inline-grid;
+}
+
+.toolbar-stable-label > span {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-stable-label-reserve {
+  visibility: hidden;
+}
+
 .toolbar-control:hover:not(:disabled) {
   opacity: 1;
   background: var(--vscode-toolbar-hoverBackground);
@@ -5257,6 +5273,7 @@ body.chat-activity-shelf-resizing * {
     var(--vscode-focusBorder, var(--vscode-button-background));
 }
 
+.approve-for-me-toggle.active:hover:not(:disabled),
 .auto-continue-toggle.active:hover:not(:disabled),
 .speed-tier-toggle.active:hover:not(:disabled) {
   background: var(

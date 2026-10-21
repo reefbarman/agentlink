@@ -675,12 +675,25 @@ describe("InputArea slash popup", () => {
       />,
     );
 
-    const activeButton = getByRole("button", { name: "Approve for Me On" });
+    // The label stays the same when toggled so the toolbar never reflows.
+    const activeButton = getByRole("button", { name: "Approve for Me" });
     expect(activeButton.getAttribute("aria-pressed")).toBe("true");
     expect(activeButton.classList.contains("active")).toBe(true);
     expect(activeButton.title).toContain("guardrail-triggered commands");
     fireEvent.click(activeButton);
     expect(onSetCommandApprovalPolicy).toHaveBeenLastCalledWith("sensitive");
+  });
+
+  it("reserves the widest session approval label so toggling keeps its width", () => {
+    const { getByRole } = renderInputArea([], {
+      sessionApprovalMode: "ask",
+      onSetSessionApprovalMode: vi.fn(),
+    });
+
+    const button = getByRole("button", { name: "Ask first" });
+    const reserved = button.querySelector(".toolbar-stable-label-reserve");
+    expect(reserved?.textContent).toBe("Auto-run");
+    expect(reserved?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("renders and toggles Auto Continue from the toolbar", () => {
@@ -690,7 +703,7 @@ describe("InputArea slash popup", () => {
       onToggleAutoContinue,
     });
 
-    const button = getByRole("button", { name: "Auto Continue On" });
+    const button = getByRole("button", { name: "Auto Continue" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
     expect(button.classList.contains("active")).toBe(true);
     expect(button.classList.contains("auto-continue-toggle")).toBe(true);

@@ -995,6 +995,23 @@ textarea {
   flex-shrink: 0;
 }
 
+/* Stack every label variant in one cell so toggling never changes width. */
+.toolbar-stable-label {
+  display: inline-grid;
+}
+
+.toolbar-stable-label > span {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-stable-label-reserve {
+  visibility: hidden;
+}
+
+.approve-for-me-toggle.active,
 .auto-continue-toggle.active,
 .speed-tier-toggle.active {
   opacity: 1;
@@ -1004,6 +1021,7 @@ textarea {
   box-shadow: 0 0 0 1px var(--vscode-focusBorder, var(--ag-accent));
 }
 
+.approve-for-me-toggle.active:hover:not(:disabled),
 .auto-continue-toggle.active:hover:not(:disabled),
 .speed-tier-toggle.active:hover:not(:disabled) {
   background: var(

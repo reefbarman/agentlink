@@ -67,6 +67,34 @@ import {
 } from "./composerVoiceInput";
 
 /** Alt+M: hold for push-to-talk, tap to toggle dictation. */
+const SESSION_APPROVAL_LABELS = ["Ask first", "Auto-run"] as const;
+
+/**
+ * Toggle label that always reserves the width of its widest variant, so
+ * flipping the toggle never resizes the button or rewraps the toolbar.
+ */
+function StableToggleLabel({
+  current,
+  labels,
+}: {
+  current: string;
+  labels: readonly string[];
+}) {
+  return (
+    <span class="toolbar-stable-label">
+      {labels.map((label) => (
+        <span
+          key={label}
+          class={label === current ? undefined : "toolbar-stable-label-reserve"}
+          aria-hidden={label === current ? undefined : "true"}
+        >
+          {label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function isVoiceShortcut(event: KeyboardEvent): boolean {
   return (
     event.code === "KeyM" &&
@@ -1904,9 +1932,12 @@ export function InputArea({
                 <i
                   class={`codicon codicon-${sessionApprovalMode === "ask" ? "shield" : "zap"}`}
                 />
-                <span>
-                  {sessionApprovalMode === "ask" ? "Ask first" : "Auto-run"}
-                </span>
+                <StableToggleLabel
+                  current={
+                    sessionApprovalMode === "ask" ? "Ask first" : "Auto-run"
+                  }
+                  labels={SESSION_APPROVAL_LABELS}
+                />
               </ToolbarControlButton>
             )}
             {!contextMode && onSetCommandApprovalPolicy && (
@@ -1929,11 +1960,7 @@ export function InputArea({
                 type="button"
               >
                 <i class="codicon codicon-shield" />
-                <span>
-                  {commandApprovalPolicy === "approve-for-me"
-                    ? "Approve for Me On"
-                    : "Approve for Me"}
-                </span>
+                <span>Approve for Me</span>
               </ToolbarControlButton>
             )}
             {!contextMode && onToggleAutoContinue && (
@@ -1951,9 +1978,7 @@ export function InputArea({
                 type="button"
               >
                 <i class="codicon codicon-debug-continue" />
-                <span>
-                  {autoContinueEnabled ? "Auto Continue On" : "Auto Continue"}
-                </span>
+                <span>Auto Continue</span>
               </ToolbarControlButton>
             )}
             {allowAttachments && (

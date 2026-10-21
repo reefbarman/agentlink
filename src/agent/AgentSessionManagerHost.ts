@@ -80,6 +80,8 @@ export interface AgentSessionConfigHost {
     import("@agentlink/protocol/command-approval-policy").CommandApprovalPolicy,
     "approve-for-me"
   >;
+  /** Whether new foreground project chats start with Approve for Me on. */
+  getApproveForMeByDefault?(scope?: Readonly<SessionProjectScope>): boolean;
 
   getBackgroundAgentSettings(
     scope?: Readonly<SessionProjectScope>,
@@ -260,6 +262,9 @@ export function createDefaultAgentSessionManagerHost(args: {
             "commandAutoApproveTier",
           ),
         ),
+      getApproveForMeByDefault: (scope) =>
+        // The contributed package.json default (true) applies when unset.
+        configurationFor(scope).get<boolean>("approveForMeByDefault") === true,
 
       getBackgroundAgentSettings: (scope) => {
         const config = configurationFor(scope);

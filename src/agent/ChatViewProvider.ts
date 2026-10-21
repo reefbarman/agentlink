@@ -1702,10 +1702,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const effectiveSessionId =
       sessionId ?? this.sessionManager?.getForegroundSession()?.id ?? "agent";
     const configured = this.getConfiguredCommandApprovalPolicy(projectScope);
+    // Before a chat exists, show the policy its first message will start with.
+    const fallback: CommandApprovalPolicy =
+      effectiveSessionId === "agent" &&
+      this.getProjectConfiguration(projectScope)?.get<boolean>(
+        "approveForMeByDefault",
+      ) === true
+        ? "approve-for-me"
+        : configured;
     return (
       this.sessionManager?.getSessionApprovalMode?.(
         effectiveSessionId,
-        configured,
+        fallback,
       ) ?? {
         commandApprovalPolicy: configured,
         approvalPolicy: "on-request",

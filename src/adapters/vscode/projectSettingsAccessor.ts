@@ -19,6 +19,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "indexExclusions",
   "recentApprovalTtl",
   "commandAutoApproveTier",
+  "approveForMeByDefault",
   "worktreeDirectorySuffix",
 
   "modelPromptProfiles",

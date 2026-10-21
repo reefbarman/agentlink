@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New project chats now start with Approve for Me on. Set `agentlink.approveForMeByDefault` to `false` to start them with it off; you can still toggle it per chat from the composer toolbar.
+- Composer toolbar toggles no longer change width when switched, so turning Approve for Me, Auto Continue or Ask first / Auto-run on or off no longer pushes other buttons onto the next row. Approve for Me and Auto Continue keep the same label and show their on state with the filled button style (now also in the browser view for Approve for Me).
 - The standalone CLI, Assistant and Ask Agent (Desktop and the browser gateway) now find instructions, rules and skills the same way the VS Code agent does, using VS Code's own code. The CLI now reads `~/.agentlink/CLAUDE.md`, `~/.claude/CLAUDE.md`, `AGENTS.local.md`, deferred rules, and the global and project skill folders, and uses `load_skill`, `read_skill_resource` and `load_rule` in place of `list_artifacts` and `load_artifact`. Assistant project chats and tasks read the project's instructions, rules and skills but not your global ones, so the Assistant's own persona and memory stay in charge. Ask Agent has no project, so it uses your global instructions and skills plus the built-in skills. Outside VS Code, a skill's `allowed-tools` is a prompt instruction, not an enforced restriction. VS Code behaviour is unchanged.
 
 ## 1.53.0

@@ -37,6 +37,7 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 ## Approvals and safety
 
 - `commandAutoApproveTier` — auto-approve commands at or below a safety tier
+- `approveForMeByDefault` — start new project chats with Approve for Me on (default `true`). Each chat can still turn it off from the composer toolbar; set this to `false` to start new chats with it off. Restored chats keep the policy they were saved with, and projectless chats are unaffected.
 - `writeRules` — glob patterns whose writes are always auto-approved
 - `recentApprovalTtl` — seconds an identical command approval repeats within the same session without re-prompting
 - `masterBypass` — skip ordinary command and file-write prompts; native escalation, outside-path reads, MCP tools, protected paths, and read-only/delegation boundaries still apply

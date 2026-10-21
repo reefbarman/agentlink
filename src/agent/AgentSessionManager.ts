@@ -5223,6 +5223,8 @@ export class AgentSessionManager {
         this.sessionApprovalModes.set(session.id, pendingApprovalMode);
         this.sessionApprovalModes.delete("agent");
         this.syncSessionApproveForMe(session);
+      } else {
+        this.applyDefaultApproveForMe(session);
       }
       this.foregroundId = session.id;
     }
@@ -5523,6 +5525,26 @@ export class AgentSessionManager {
         `[approval] disabled Approve for Me because restored session write approval could not be recreated (${session.id})`,
       );
     }
+  }
+
+  /**
+   * Start a new foreground project chat with Approve for Me on when
+   * `agentlink.approveForMeByDefault` allows it. Uses the restored-session
+   * reconciliation to establish the session write grant Approve for Me needs,
+   * and falls back to the configured policy if that grant cannot be created.
+   */
+  private applyDefaultApproveForMe(session: AgentSession): void {
+    if (isProjectlessSessionScope(session.projectScope)) return;
+    if (!this.toolCtx?.approvalManager) return;
+    if (!this.host.config.getApproveForMeByDefault?.(session.projectScope)) {
+      return;
+    }
+    this.sessionApprovalModes.set(
+      session.id,
+      Object.freeze(approvalModeFromLegacyPolicy("approve-for-me")),
+    );
+    this.syncSessionApproveForMe(session);
+    this.reconcileRestoredSessionApproval(session);
   }
 
   private syncSessionApproveForMe(session: AgentSession | undefined): void {
