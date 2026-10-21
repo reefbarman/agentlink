@@ -1,0 +1,31 @@
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 1558-1632
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 2068-2074,2111-2112,2141-2142,3147-3162
+  s_bf46ec1b319904::t_57c9aec883f800 3163-3164
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 231-236,533,537,633-642,802,825,829,857-858
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 941-999
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "962f2902fef5cfa1053f5bf345fdaecfb52e853f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_bf46ec1b319904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90bc81f9-bdc5-4aa7-86f7-795c5081a72b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
