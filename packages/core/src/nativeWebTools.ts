@@ -16,9 +16,9 @@ export const CORE_NATIVE_WEB_TOOL_PREFERENCE_GUIDANCE: Readonly<
   Record<CoreWebToolKind, string>
 > = Object.freeze({
   search:
-    "Prefer this native tool over general-purpose MCP web-search tools: try it first. Fall back to an MCP web-search tool when this tool fails, returns too few or irrelevant results, or when the user requests that server or needs an MCP-specific capability.",
+    "Prefer this native tool over general-purpose MCP web-search tools and curl/wget scripts: try it first. Fall back to an MCP web-search tool when this tool fails, returns too few or irrelevant results, or when the user requests that server or needs an MCP-specific capability.",
   fetch:
-    "Prefer this native tool over general-purpose MCP page-reading tools: try it first. Fall back to an MCP page-reading tool when this tool fails, cannot read the page, returns incomplete content, or when the user requests that server or needs an MCP-specific capability.",
+    "Prefer this native tool over general-purpose MCP page-reading tools and curl/wget scripts: try it first. Fall back to an MCP page-reading tool when this tool fails, cannot read the page, returns incomplete content, or when the user requests that server or needs an MCP-specific capability.",
 });
 
 export function appendNativeWebToolPreference(

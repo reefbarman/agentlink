@@ -23,6 +23,14 @@ describe("native web tool definitions", () => {
     );
   });
 
+  it("steers web research away from shell HTTP clients", () => {
+    for (const kind of ["search", "fetch"] as const) {
+      expect(CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind].description).toContain(
+        "tools and curl/wget scripts: try it first",
+      );
+    }
+  });
+
   it("appends preference guidance idempotently", () => {
     const initial = "Search the web.";
     const once = appendNativeWebToolPreference("search", initial);

@@ -8,6 +8,8 @@
 - When a CLI turn fails, the error now says why (for example the provider's message) instead of only "Turn execution failed". The cause is redacted the same way as the Assistant's job and Inbox failure details, which now share the code through workspace-host's `describeTurnFailure`.
 - The CLI's activity shelf no longer counts the Context row as live activity, so an idle session no longer shows "1 live", and a failed condense is cleared from the Context row when the next turn starts.
 - Escape in the CLI no longer leaves the composer unable to take input. Ink's focus manager cleared focus on Escape; focus now returns to the composer.
+- Approve for Me now remembers public sites that Guardian (or the Jev first pass) approves at low or medium risk for the rest of the chat session, so later sandboxed commands reaching the same exact destination no longer wait for another review. The saved rule is an ordinary session network rule: it appears with your other session rules, can be removed, and disappears with the session. Network Prompt/Forbidden rules, private-address blocking and human fallback for risky or unavailable reviews are unchanged.
+- `web_search`, `web_fetch` and `execute_command` descriptions now steer web research and page reading to the native web tools instead of `curl`, `wget` or ad hoc fetch scripts, which need a network approval for every new site when sandboxed.
 
 ## 1.59.0
 

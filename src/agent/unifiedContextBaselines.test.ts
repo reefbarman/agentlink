@@ -793,7 +793,7 @@ describe("unified context Stage 0 baselines", () => {
     expect(codeProjectedToolTokens).toBeDefined();
     expect(
       codeReasoningPromptTokens + codeProjectedToolTokens!,
-    ).toBeLessThanOrEqual(18_500);
+    ).toBeLessThanOrEqual(18_550);
     if (process.env.UPDATE_UNIFIED_CONTEXT_BASELINE === "1") {
       fs.writeFileSync(
         path.join(fixtureRoot, "runtime-measurements.json"),

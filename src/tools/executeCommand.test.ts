@@ -6712,6 +6712,7 @@ describe("handleExecuteCommand", () => {
                 : ("unmatched" as const),
         matches: [],
       }));
+      const addNetworkRule = vi.fn(() => true);
       const { handleExecuteCommand } = await import("./executeCommand.js");
       const { createNetworkApprovalReviewer } =
         await import("../approvals/networkApprovalReview.js");
@@ -6756,6 +6757,7 @@ describe("handleExecuteCommand", () => {
             scope: "project",
           })),
           evaluateNetworkRules,
+          addNetworkRule,
         } as never,
         {
           isRecentlyApproved: () => true,
@@ -6843,6 +6845,22 @@ describe("handleExecuteCommand", () => {
             userObjective: "Check the Vite version on npm",
           }),
         );
+      // Reviewer approvals with a known source are remembered for the session
+      // so later commands to the same exact site skip repeated reviews.
+      if (["allow", "first-pass", "late-socket"].includes(scenario)) {
+        expect(addNetworkRule).toHaveBeenCalledTimes(1);
+        expect(addNetworkRule).toHaveBeenCalledWith(
+          "session-managed-network",
+          {
+            pattern: "https://registry.npmjs.org:443",
+            mode: "exact",
+            decision: "allow",
+          },
+          "session",
+        );
+      } else {
+        expect(addNetworkRule).not.toHaveBeenCalled();
+      }
       const audit = result.uiMeta?.authorizationAudit;
       expect(audit?.decisions.length).toBeGreaterThan(0);
       const basis = ["forbidden", "rule"].includes(scenario)

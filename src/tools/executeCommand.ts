@@ -2038,8 +2038,21 @@ async function reviewManagedNetworkRequest(
         denialKey,
       ) &&
       !providers.commandReviewTurnCircuit?.interrupted
-    )
+    ) {
+      // Remember a reviewed low/medium-risk destination for this session so
+      // later commands reaching the same exact site skip repeated reviews.
+      // The rule is visible and revocable like a human session approval;
+      // explicit Prompt/Forbidden rules still take priority. Failure to save
+      // only loses the shortcut, not this reviewed connection.
+      if (review.source) {
+        approvalManager.addNetworkRule(
+          request.sessionId,
+          { pattern: currentPolicy.key, mode: "exact", decision: "allow" },
+          "session",
+        );
+      }
       return finish("allow-once", review.source ?? "unknown");
+    }
     if (review?.status === "reviewed" && review.outcome === "deny") {
       providers.retainedCommandReviewDenials?.retain(
         request.sessionId,
