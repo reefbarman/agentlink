@@ -21,6 +21,7 @@ import {
   createRetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 
+import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { ConfinementPreparingTerminalProvider } from "../core/capabilities/terminal.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { SandboxPreparationError } from "../terminal/sandbox/SandboxPreparationError.js";
@@ -3232,6 +3233,88 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).approval).toEqual({
       by: "routine_tier",
       tier: "sensitive",
+    });
+  });
+
+  describe("partially rule-allowed commands", () => {
+    const rules = {
+      session: [],
+      project: [
+        {
+          pattern: "terraform plan",
+          mode: "exact" as const,
+          decision: "allow" as const,
+        },
+      ],
+      global: [],
+    };
+    const run = async (
+      command: string,
+      review: CommandApprovalReviewer["review"],
+    ) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command },
+        {
+          evaluateCommandRules: (_sessionId: string, value: string) =>
+            evaluateCommandRulePolicy(rules, value),
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        "session-partial-rule",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
+      return { result, enqueueCommandApproval };
+    };
+
+    it("judges only segments no Allow rule covers", async () => {
+      const review = vi.fn();
+      const { result, enqueueCommandApproval } = await run(
+        'terraform plan && git commit -m "update"',
+        review,
+      );
+
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result).approval).toEqual({
+        by: "routine_tier",
+        tier: "sensitive",
+        rule_allowed_subcommands: 1,
+      });
+    });
+
+    it("sends rule coverage to the Guardian when a pipe joins segments", async () => {
+      const review = vi.fn().mockResolvedValue({
+        outcome: "allow",
+        risk: "low",
+        userAuthorization: "high",
+        rationale: "Rule-allowed plan",
+        model: "guardian",
+        status: "reviewed",
+      });
+      const { result } = await run("git log | terraform plan", review);
+
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0]?.[0]).toMatchObject({
+        command: "git log | terraform plan",
+        ruleAllowedSubCommands: [false, true],
+      });
+      expect(textPayload(result).approval).toMatchObject({
+        by: "model_reviewer",
+      });
     });
   });
 

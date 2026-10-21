@@ -13,13 +13,18 @@ import {
 
 import type { AgentMessage } from "../agent/types.js";
 import type { CommandReviewEvidence } from "./commandReviewEvidence.js";
+import type { CommandSegmentRuleEvaluation } from "./commandRulePolicy.js";
+import { expandSubCommands } from "./commandSplitter.js";
 import type { HumanDecisionRecordSnapshot } from "../agent/HumanDecisionRecord.js";
 import type { InlineCommandFilePreview } from "../util/commandInlineFiles.js";
 import type { MessageParam } from "../agent/providers/types.js";
 import type { ModelProvider } from "../agent/providers/types.js";
 import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 import { createHash } from "crypto";
-import { scanShellLexTokens } from "../util/shellLex.js";
+import {
+  scanShellLexBoundaries,
+  scanShellLexTokens,
+} from "../util/shellLex.js";
 import {
   GUARDIAN_REVIEW_SYSTEM_PROMPT,
   getGuardianPolicy,
@@ -69,6 +74,11 @@ export interface CommandApprovalReviewInput {
   userObjective?: string;
   context?: CommandReviewContextEntry[];
   classified: ClassifiedCommand;
+  /**
+   * Host-owned, aligned with `classified.perSubCommand`: true when an explicit
+   * Allow command rule matches that sub-command's complete shell segment.
+   */
+  ruleAllowedSubCommands?: readonly boolean[];
   security?: TerminalExecutionSecuritySummary;
   inlineFiles?: readonly InlineCommandFilePreview[];
   evidence?: CommandReviewEvidence;
@@ -351,6 +361,85 @@ export function isRoutineApproveForMeCommand(
       ROUTINE_APPROVE_FOR_ME_RISK_CODES.has(result.code),
     )
   );
+}
+
+const SUB_COMMAND_TIER_RANK = { safe: 1, sensitive: 2, dangerous: 3 } as const;
+
+/**
+ * Marks each classified sub-command whose complete shell segment is explicitly
+ * allowed by a command rule. Wrapper expansion (for example `sudo X` into
+ * `sudo` and `X`) is covered only when the rule matches the whole segment.
+ * Returns undefined when rule segments and classifier output cannot be aligned
+ * exactly, so callers fall back to treating nothing as rule-covered.
+ */
+export function ruleAllowedSubCommandMask(
+  classified: ClassifiedCommand,
+  ruleSegments: readonly CommandSegmentRuleEvaluation[],
+): boolean[] | undefined {
+  const mask: boolean[] = [];
+  for (const segment of ruleSegments) {
+    for (const command of expandSubCommands([segment.command])) {
+      const entry = classified.perSubCommand[mask.length];
+      if (!entry || entry.command.trim() !== command.trim()) return undefined;
+      mask.push(segment.explicitlyAllowed);
+    }
+  }
+  return mask.length === classified.perSubCommand.length ? mask : undefined;
+}
+
+const DIRECTORY_CHANGE_EXECUTABLES = new Set(["cd", "pushd", "popd"]);
+
+/**
+ * Whether deterministic auto-approval may judge only the sub-commands no Allow
+ * rule covers. A rule vouches for its segment as written, so this is refused
+ * when another segment could change what an allowed segment does: a pipe can
+ * feed it unreviewed data, and a directory change in the remainder can move it
+ * to a different target. The Guardian still sees the rule coverage in those
+ * cases and judges the combination.
+ */
+export function canDiscountRuleAllowedSubCommands(
+  command: string,
+  classified: ClassifiedCommand,
+  mask: readonly boolean[],
+): boolean {
+  const scan = scanShellLexBoundaries(command);
+  if (scan.finalState.quote !== null || scan.finalState.danglingEscape) {
+    return false;
+  }
+  if (
+    scan.boundaries.some(
+      (boundary) => boundary.kind === "separator" && boundary.operator === "|",
+    )
+  ) {
+    return false;
+  }
+  return classified.perSubCommand.every(({ command: subCommand }, index) => {
+    if (mask[index]) return true;
+    const executable =
+      (scanShellLexTokens(subCommand).tokens[0] ?? "").split("/").pop() ?? "";
+    return !DIRECTORY_CHANGE_EXECUTABLES.has(executable);
+  });
+}
+
+/**
+ * The classification restricted to sub-commands no Allow rule covers, with the
+ * aggregate tier recomputed from what remains.
+ */
+export function withoutRuleAllowedSubCommands(
+  classified: ClassifiedCommand,
+  mask: readonly boolean[],
+): ClassifiedCommand {
+  const perSubCommand = classified.perSubCommand.filter(
+    (_entry, index) => !mask[index],
+  );
+  const tier = perSubCommand.reduce<ClassifiedCommand["tier"]>(
+    (max, { result }) =>
+      SUB_COMMAND_TIER_RANK[result.tier] > SUB_COMMAND_TIER_RANK[max]
+        ? result.tier
+        : max,
+    "safe",
+  );
+  return { tier, perSubCommand };
 }
 
 export function getCommandAutoApprovalEligibility(
@@ -790,11 +879,14 @@ function serializeReviewData(
       classification: {
         tier: input.classified.tier,
         subcommands: input.classified.perSubCommand.map(
-          ({ command, result }) => ({
+          ({ command, result }, index) => ({
             command,
             tier: result.tier,
             code: result.code,
             executable: result.executable ?? null,
+            ...(input.ruleAllowedSubCommands?.[index]
+              ? { allowedByRule: true }
+              : {}),
           }),
         ),
       },

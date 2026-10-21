@@ -67,6 +67,9 @@ import {
   getCommandAutoApprovalEligibility,
   isRoutineApproveForMeCommand,
   isRoutineGitWorkflowNativeCommand,
+  canDiscountRuleAllowedSubCommands,
+  ruleAllowedSubCommandMask,
+  withoutRuleAllowedSubCommands,
   type CommandReviewContextEntry,
   type CommandApprovalReviewer,
   type CommandApprovalReviewResult,
@@ -135,9 +138,14 @@ type CommandApprovalAudit =
   | { by: "explicit_rule" }
   | { by: "recent_approval" }
   | { by: "coordinator" }
-  | { by: "sandbox_verification" }
-  | { by: "routine_tier"; tier: CommandTier }
-  | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
+  | { by: "sandbox_verification"; rule_allowed_subcommands?: number }
+  | { by: "routine_tier"; tier: CommandTier; rule_allowed_subcommands?: number }
+  | {
+      by: "tier";
+      tier: CommandTier;
+      threshold: "safe" | "sensitive";
+      rule_allowed_subcommands?: number;
+    }
   | {
       by: "model_reviewer";
       model: string;
@@ -4979,6 +4987,35 @@ async function approveSubCommands(
     cwd,
     workspaceRoots,
   });
+  // Segments matched in full by an explicit Allow rule already carry standing
+  // user authority. Automatic decisions below judge only the remainder, so a
+  // risky but rule-allowed segment does not force review of a routine command.
+  // Recovery re-executions keep judging the whole command.
+  const ruleAllowedMask =
+    options?.ruleFastPathAllowed !== false && rulePolicy.decision !== "prompt"
+      ? ruleAllowedSubCommandMask(tierInfo, rulePolicy.segments)
+      : undefined;
+  const ruleAllowedCount = ruleAllowedMask?.filter(Boolean).length ?? 0;
+  const residualTierInfo =
+    ruleAllowedMask &&
+    ruleAllowedCount > 0 &&
+    canDiscountRuleAllowedSubCommands(
+      classificationCommand,
+      tierInfo,
+      ruleAllowedMask,
+    )
+      ? withoutRuleAllowedSubCommands(tierInfo, ruleAllowedMask)
+      : undefined;
+  // An empty remainder means every segment is covered but the full-rule fast
+  // path above declined it; keep judging the whole command in that case.
+  const autoTierInfo =
+    residualTierInfo && residualTierInfo.perSubCommand.length > 0
+      ? residualTierInfo
+      : tierInfo;
+  const ruleAllowedAudit =
+    autoTierInfo !== tierInfo
+      ? { rule_allowed_subcommands: ruleAllowedCount }
+      : {};
   const policy =
     options?.routeContext.commandApprovalPolicySnapshot ?? "manual";
   const threshold = policy === "sensitive" ? "sensitive" : "safe";
@@ -4995,14 +5032,14 @@ async function approveSubCommands(
     options.security.confinement === "verified-baseline" &&
     options.routeContext.permissionIntent === "default" &&
     workspaceRoots.some((root) => isCommandPathInsideWorkspace(cwd, [root])) &&
-    tierInfo.perSubCommand.length > 0 &&
-    tierInfo.perSubCommand.every(
+    autoTierInfo.perSubCommand.length > 0 &&
+    autoTierInfo.perSubCommand.every(
       ({ result }) => result.code === "project_toolchain",
     );
   if (sandboxVerificationApproved) {
     return {
       approved: true,
-      approval: { by: "sandbox_verification" },
+      approval: { by: "sandbox_verification", ...ruleAllowedAudit },
     };
   }
 
@@ -5012,13 +5049,18 @@ async function approveSubCommands(
     !retainedDenial &&
     !options?.requireFreshReview &&
     options?.routeContext.permissionIntent !== "native-escalation" &&
-    ((tierInfo.tier === "safe" && policy !== "manual") ||
-      (tierInfo.tier === "sensitive" && policy === "sensitive"));
+    ((autoTierInfo.tier === "safe" && policy !== "manual") ||
+      (autoTierInfo.tier === "sensitive" && policy === "sensitive"));
   if (deterministicallyApproved) {
     return {
       approved: true,
-      approval: { by: "tier", tier: tierInfo.tier, threshold },
-      autoApprovedByTier: { tier: tierInfo.tier, threshold },
+      approval: {
+        by: "tier",
+        tier: autoTierInfo.tier,
+        threshold,
+        ...ruleAllowedAudit,
+      },
+      autoApprovedByTier: { tier: autoTierInfo.tier, threshold },
     };
   }
 
@@ -5041,13 +5083,17 @@ async function approveSubCommands(
     !circuitInterrupted &&
     workspaceRoots.some((root) => isCommandPathInsideWorkspace(cwd, [root])) &&
     ((options?.routeContext.permissionIntent === "default" &&
-      isRoutineApproveForMeCommand(tierInfo)) ||
+      isRoutineApproveForMeCommand(autoTierInfo)) ||
       (options?.routeContext.permissionIntent === "native-escalation" &&
-        isRoutineGitWorkflowNativeCommand(tierInfo)));
+        isRoutineGitWorkflowNativeCommand(autoTierInfo)));
   if (routineApproveForMeApproved) {
     return {
       approved: true,
-      approval: { by: "routine_tier", tier: tierInfo.tier },
+      approval: {
+        by: "routine_tier",
+        tier: autoTierInfo.tier,
+        ...ruleAllowedAudit,
+      },
     };
   }
 
@@ -5101,7 +5147,7 @@ async function approveSubCommands(
     reviewProviders?.commandApprovalReviewer
   ) {
     const eligibility = getCommandAutoApprovalEligibility({
-      classified: tierInfo,
+      classified: autoTierInfo,
       cwd,
       workspaceRoots,
       inlineFiles,
@@ -5161,6 +5207,9 @@ async function approveSubCommands(
             contextSnapshot?.context ??
             reviewProviders.getReviewContext?.(sessionId),
           classified: tierInfo,
+          ...(ruleAllowedCount > 0 && ruleAllowedMask
+            ? { ruleAllowedSubCommands: ruleAllowedMask }
+            : {}),
           security: options?.security,
           inlineFiles,
           evidence: collectedEvidence.evidence,

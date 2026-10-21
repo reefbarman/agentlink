@@ -14,6 +14,7 @@ import {
   MAX_COMMAND_REVIEW_ATTEMPTS,
   buildCommandReviewContext,
   buildCommandReviewContextWithMetadata,
+  canDiscountRuleAllowedSubCommands,
   createCommandApprovalReviewer,
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
@@ -21,11 +22,14 @@ import {
   isRoutineApproveForMeCommand,
   isRoutineGitWorkflowNativeCommand,
   parseCommandApprovalReviewResponse,
+  ruleAllowedSubCommandMask,
   selectCommandReviewObjective,
+  withoutRuleAllowedSubCommands,
 } from "./commandApprovalReview.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { classifyCommand } from "./commandTierClassifier.js";
+import { evaluateCommandRulePolicy } from "./commandRulePolicy.js";
 
 const root = path.resolve("/workspace/project");
 const context = { cwd: root, workspaceRoots: [root] };
@@ -1273,6 +1277,38 @@ describe("one-shot command approval reviewer", () => {
       signal: expect.any(AbortSignal),
     });
   });
+  it("marks rule-allowed subcommands as host-owned review data", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const input = reviewInput("terraform plan && curl https://example.com");
+
+    await reviewer.review({ ...input, ruleAllowedSubCommands: [true, false] });
+
+    const request = complete.mock.calls[0]?.[0];
+    expect(request?.systemPrompt).toContain(
+      "A classification subcommand with allowedByRule: true is host-verified",
+    );
+    const content = String(request?.messages[0]?.content);
+    const data = JSON.parse(
+      content
+        .replace("<untrusted-command-review-data>\n", "")
+        .replace("\n</untrusted-command-review-data>", ""),
+    ) as {
+      classification: {
+        subcommands: Array<{ command: string; allowedByRule?: boolean }>;
+      };
+    };
+    expect(data.classification.subcommands).toEqual([
+      expect.objectContaining({
+        command: "terraform plan",
+        allowedByRule: true,
+      }),
+      expect.not.objectContaining({ allowedByRule: expect.anything() }),
+    ]);
+  });
+
   it("uses the session model and an isolated bounded completion request", async () => {
     const { provider, complete, sessionModel } = makeProvider({});
     const reviewer = createCommandApprovalReviewer({
@@ -1876,6 +1912,62 @@ describe("one-shot command approval reviewer", () => {
       outcome: "deny",
       rationale: "Command review was cancelled",
     });
+  });
+});
+
+describe("rule-allowed subcommand coverage", () => {
+  const rules = {
+    session: [],
+    project: [
+      { pattern: "terraform plan", mode: "exact" as const, decision: "allow" },
+    ],
+    global: [],
+  } as Parameters<typeof evaluateCommandRulePolicy>[0];
+  const coverage = (command: string) => {
+    const classified = classifyCommand(command, context);
+    const mask = ruleAllowedSubCommandMask(
+      classified,
+      evaluateCommandRulePolicy(rules, command).segments,
+    );
+    return { classified, mask };
+  };
+
+  it("marks only complete segments matched by an Allow rule", () => {
+    const { classified, mask } = coverage("terraform plan && git status");
+    expect(mask).toEqual([true, false]);
+    const residual = withoutRuleAllowedSubCommands(classified, mask!);
+    expect(residual.perSubCommand.map(({ command }) => command)).toEqual([
+      "git status",
+    ]);
+    expect(isRoutineApproveForMeCommand(classified)).toBe(false);
+    expect(isRoutineApproveForMeCommand(residual)).toBe(true);
+  });
+
+  it("does not cover wrapped commands through an inner-command rule", () => {
+    const { mask } = coverage("sudo terraform plan && git status");
+    expect(mask).toEqual([false, false, false]);
+  });
+
+  it("refuses to align mismatched classifier output", () => {
+    const classified = classifyCommand("git status", context);
+    expect(
+      ruleAllowedSubCommandMask(
+        classified,
+        evaluateCommandRulePolicy(rules, "terraform plan").segments,
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["git log | terraform plan", false],
+    ["cd .. && terraform plan", false],
+    ["terraform plan || git status", true],
+    ["terraform plan; git status", true],
+  ])("decides whether %s may discount covered segments", (command, allowed) => {
+    const { classified, mask } = coverage(command);
+    expect(canDiscountRuleAllowedSubCommands(command, classified, mask!)).toBe(
+      allowed,
+    );
   });
 });
 
