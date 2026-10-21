@@ -1,0 +1,60 @@
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 5226-5227,5530-5547
+  s_19d2d23dfad135::t_73a3ba12d9fa27 5548-5549
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 998-1014,1024
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 40
+src/agent/AgentSessionManagerHost.ts
+  h_e08a86bb3a33a2 83-84,265-267
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 678-679,687-698,706
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 1705-1712,1716
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_e08a86bb3a33a2 22
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 1675-1729
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 70-97,1935-1939,1963,1981
+  s_19d2d23dfad135::t_32a533aaed8069 1940
+package.json
+  h_e08a86bb3a33a2 1074-1079
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 5235-5250,5276
+resources/builtin-skills/documentation/references/package-contract.md
+  s_1bc2b3456652e2::t_2c5ac7e6f47506 80
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1bc2b3456652e2::t_b90cf5f185aa62 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4e511b40e59eb87322881b616bdc64a31437dd66",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_19d2d23dfad135": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b8534e8-c9a9-4430-9cf6-c82f44fc1f89",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1bc2b3456652e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e0e3c3b2-51d5-4326-bc29-0c402ad2deea",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
