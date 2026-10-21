@@ -9,6 +9,7 @@ const modules = [
   "codexDeviceAuth",
   "client",
   "codex",
+  "contextCondense",
   "embeddedAgentWeb",
   "hostAdapterContracts",
   "hostApprovalTestKit",
@@ -27,6 +28,7 @@ const modules = [
   "sessionRepository",
   "sessionTranscriptRecall",
   "surfaceModelMessages",
+  "todoTool",
   "toolCallBudget",
   "turnContracts",
   "turnExecution",
@@ -38,9 +40,13 @@ const modules = [
 ];
 
 // Focused portable subpaths must not accidentally widen the historical root CJS surface.
-const rootModules = modules.filter(
-  (name) => name !== "browserRuntime" && name !== "codexDeviceAuth",
-);
+const focusedSubpathModules = new Set([
+  "browserRuntime",
+  "codexDeviceAuth",
+  "contextCondense",
+  "todoTool",
+]);
+const rootModules = modules.filter((name) => !focusedSubpathModules.has(name));
 const sharedCoreModuleNames = new Set(modules);
 const sharedCoreModulesPlugin = {
   name: "shared-core-modules",

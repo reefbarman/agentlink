@@ -21,6 +21,7 @@ import {
   createFileNodeHostPersistence,
   createNodeHostAgent,
   createNodeHostLocalFileSystem,
+  createNodeHostSessionRecallTools,
 } from "@agentlink/node-host";
 import { randomBytes } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
@@ -181,6 +182,12 @@ export interface CreateWorkspaceHostOptions {
     /** Built-in skill folders this host ships. Defaults to none. */
     readonly builtinSkillDirs?: readonly string[];
   };
+  /**
+   * VS Code's `search_session_history` and `read_session_excerpt` over the
+   * session's stored transcript (earlier turns; the current turn is already
+   * in context).
+   */
+  readonly sessionRecall?: { readonly enabled: true };
   /**
    * Where project file access, search, git status and `execute_command`
    * processes run. Defaults to this machine. Supplying one with commands
@@ -589,6 +596,12 @@ export async function createWorkspaceHost(
       })
     : undefined;
   let engine!: AgentEngine;
+  const sessionRecallTools = options.sessionRecall
+    ? createNodeHostSessionRecallTools({
+        readTranscript: async (request) =>
+          (await engine.sessions.hydrate(request)).record.messages,
+      })
+    : undefined;
   backgroundSupervisor = options.background
     ? await WorkspaceBackgroundSupervisor.create({
         stateDirectory: backgroundStateDirectory,
@@ -933,6 +946,7 @@ export async function createWorkspaceHost(
     commandTools ||
     artifactTools ||
     agentInstructions ||
+    sessionRecallTools ||
     mcpTools ||
     sharedMcpTools ||
     backgroundTools ||
@@ -957,6 +971,11 @@ export async function createWorkspaceHost(
                   ...(agentInstructions
                     ? requireUnauthorizedTools(
                         await agentInstructions.resolveTools(request),
+                      )
+                    : []),
+                  ...(sessionRecallTools
+                    ? requireUnauthorizedTools(
+                        await sessionRecallTools.resolveTools(request),
                       )
                     : []),
                   ...(mcpTools

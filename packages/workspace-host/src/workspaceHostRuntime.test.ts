@@ -822,6 +822,88 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("recalls an earlier turn through search_session_history", async () => {
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-")),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot, { recursive: true });
+    const toolResults: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages?: Array<{ role?: string; content?: string }>;
+          tools?: Array<{ function?: { name?: string } }>;
+        };
+        const names = body.tools?.map((tool) => tool.function?.name) ?? [];
+        const lastUser = [...(body.messages ?? [])]
+          .reverse()
+          .find((message) => message.role === "user")?.content;
+        if (String(lastUser).includes("ALPHA-RECALL-77")) {
+          // Nothing to search on a first turn.
+          expect(names).not.toContain("search_session_history");
+          return completion("noted");
+        }
+        expect(names).toEqual(
+          expect.arrayContaining([
+            "search_session_history",
+            "read_session_excerpt",
+          ]),
+        );
+        const result = body.messages?.find(
+          (message) => message.role === "tool",
+        );
+        if (result) {
+          toolResults.push(String(result.content));
+          return completion("recalled");
+        }
+        return toolCall("search_session_history", {
+          query: "ALPHA-RECALL-77",
+        });
+      });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "session-recall",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      sessionRecall: { enabled: true },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      await expect(
+        host.runTurn(sessionId, "remember the code ALPHA-RECALL-77"),
+      ).resolves.toMatchObject({ status: "completed", text: "noted" });
+      await expect(
+        host.runTurn(sessionId, "what was the code?"),
+      ).resolves.toMatchObject({ status: "completed", text: "recalled" });
+      const recalled = toolResults.join("\n");
+      expect(recalled).toContain("<session-transcript-recall>");
+      expect(recalled).toContain("ALPHA-RECALL-77");
+      expect(recalled).toContain('"total_matches": 1');
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("refuses agentInstructions combined with artifacts", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-host-"));
     const projectRoot = path.join(parent, "project");

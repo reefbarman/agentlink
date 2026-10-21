@@ -1432,6 +1432,8 @@ export async function startAssistantService(
         // Never the server's home folder: the persona and memory stand in
         // for the owner's global instructions.
         agentInstructions: { enabled: true, homeDir: null },
+        // VS Code's search_session_history and read_session_excerpt.
+        sessionRecall: { enabled: true },
         // Read each turn, so a persona change applies without a restart.
         instructions: async (request) =>
           kind === "project"

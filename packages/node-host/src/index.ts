@@ -1,5 +1,6 @@
 export * from "./agentInstructionPrompt.js";
 export * from "./agentInstructions.js";
+export * from "./sessionRecallTools.js";
 export * from "./codexOAuthManager.js";
 export * from "./codexOAuthRuntime.js";
 export * from "./responsesWebSocket.js";

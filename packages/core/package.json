@@ -304,6 +304,30 @@
         "default": "./dist/cjs/sessionRepository.cjs"
       }
     },
+    "./context-condense": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/contextCondense.d.ts",
+        "default": "./dist/contextCondense.js"
+      },
+      "require": {
+        "types": "./dist/cjs/contextCondense.d.cts",
+        "default": "./dist/cjs/contextCondense.cjs"
+      }
+    },
+    "./todo-tool": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/todoTool.d.ts",
+        "default": "./dist/todoTool.js"
+      },
+      "require": {
+        "types": "./dist/cjs/todoTool.d.cts",
+        "default": "./dist/cjs/todoTool.cjs"
+      }
+    },
     "./session-transcript-recall": {
       "browser": null,
       "edge": null,

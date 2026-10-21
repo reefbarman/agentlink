@@ -21,6 +21,7 @@ import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 import type { CondenseTiming } from "../telemetry/ContextUsageTelemetry.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import type { PreservedRuntimeContext } from "@agentlink/core/context-condense";
 import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { TodoItem } from "./todoTool.js";
 
@@ -36,13 +37,8 @@ import type { TodoItem } from "./todoTool.js";
 export type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
 export type AgentRuntimeError = AgentRuntimeErrorPresentation;
 
-export interface PreservedRuntimeContext {
-  toolNames: string[];
-  mcpServerNames?: string[];
-  activeSkills?: string[];
-  /** Canonical task state reattached after context condensation. */
-  todos?: TodoItem[];
-}
+/** Shared with every AgentLink agent through `@agentlink/core/context-condense`. */
+export type { PreservedRuntimeContext } from "@agentlink/core/context-condense";
 
 /** Validated SKILL.md content attached to the message that selected it. */
 export interface ExplicitSkillContext {

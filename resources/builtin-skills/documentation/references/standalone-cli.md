@@ -244,6 +244,10 @@ Skills are discovered from the same global and project skill folders as VS Code 
 - A skill's `allowed-tools` is not enforced. The prompt tells the model to keep to those tools itself.
 - Prompt files under `commands/` are not offered to the model or as slash commands. The old `<data root>/artifacts/` folder is no longer read.
 
+## Session recall
+
+Once a chat has an earlier turn, the model can search it with `search_session_history` and read exact messages with `read_session_excerpt`, the same tools and results as VS Code. They cover the chat's stored transcript from earlier turns. The CLI does not condense long chats yet, so a chat that outgrows the model's context window still fails rather than being summarised.
+
 ## MCP
 
 For shared `mcpServers` declarations, CLI tool calls follow the same effective per-tool policy as the VS Code agent: `toolPolicy: "allow"` and names in `allowedTools` do not request a second tool-call approval after connection consent; the default `ask` policy requires a CLI approval. Connection launch and destination approval remain separate. The legacy v1 CLI declaration and its trust rules remain a separate compatibility path.

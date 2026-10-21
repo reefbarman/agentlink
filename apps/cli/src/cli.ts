@@ -813,6 +813,8 @@ async function createHost(options: {
     // VS Code's instructions, rules and skills: ~/.agents, ~/.claude and
     // ~/.agentlink, then the project, with load_skill and load_rule.
     agentInstructions: { enabled: true },
+    // VS Code's search_session_history and read_session_excerpt.
+    sessionRecall: { enabled: true },
     ...(options.enableCommands
       ? {
           commands: {
