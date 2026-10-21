@@ -228,6 +228,15 @@ export interface AskAgentBridgeOptions {
    */
   readonly chatDeleted?: (workspaceSessionId: string) => Promise<void>;
   /**
+   * The owner opened or is looking at a chat: clear what else the server
+   * flags about it (its unread Inbox entries). `projectId` is the chat's
+   * own project, which differs from this bridge's for a linked task chat.
+   */
+  readonly chatViewed?: (chat: {
+    readonly projectId: string;
+    readonly workspaceSessionId: string;
+  }) => void;
+  /**
    * A message the owner wrote in a linked chat (a coding task's). The task
    * runner takes it (steering a working task, continuing a finished one),
    * so the server's checks still run; the chat then follows its work.
@@ -1194,6 +1203,11 @@ export async function createAskAgentBridge(
   const markRead = (storeSessionId: string) => {
     const workspaceSessionId = workspaceSessionFor(storeSessionId);
     if (!workspaceSessionId) return;
+    options.chatViewed?.({
+      projectId:
+        state.linked[workspaceSessionId]?.projectId ?? options.projectId,
+      workspaceSessionId,
+    });
     const index = state.unread.indexOf(workspaceSessionId);
     if (index < 0) return;
     state.unread.splice(index, 1);

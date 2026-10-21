@@ -276,6 +276,9 @@ async function startBridge(
     readonly chatDeleted?: Parameters<
       typeof createAskAgentBridge
     >[0]["chatDeleted"];
+    readonly chatViewed?: Parameters<
+      typeof createAskAgentBridge
+    >[0]["chatViewed"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -309,6 +312,7 @@ async function startBridge(
     ...(options.linkedMessage ? { linkedMessage: options.linkedMessage } : {}),
     ...(options.stopRun ? { stopRun: options.stopRun } : {}),
     ...(options.chatDeleted ? { chatDeleted: options.chatDeleted } : {}),
+    ...(options.chatViewed ? { chatViewed: options.chatViewed } : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -2146,6 +2150,45 @@ describe("Ask Agent bridge", () => {
     };
     expect(saved.titles["ws-run"]).toBe("Brief · 12 Oct, 07:30");
     expect(saved.unread).toContain("ws-run");
+  });
+
+  it("reports a chat the owner opens, so its Inbox entries clear", async () => {
+    const chatViewed = vi.fn();
+    const { bridge, fake, call } = await startBridge(undefined, {
+      chatViewed,
+    });
+    await call("/api/ask-agent/sessions");
+    fake.sessions.set("ws-run", {
+      model: MODEL,
+      messages: [
+        { role: "user", content: "Brief me" },
+        { role: "assistant", content: [{ type: "text", text: "All quiet" }] },
+      ],
+    });
+    const jobAuth: AssistantServerAuth = {
+      principal: { tenantId: "agentlink-server", subjectId: "owner" },
+      session: {
+        ownerId: "owner",
+        sessionId: "job-run-1",
+        deviceId: "job-1",
+        deviceLabel: "Job: Brief",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => jobAuth,
+    };
+    await bridge.adoptSession(jobAuth, "ws-run", "Brief");
+    expect(chatViewed).not.toHaveBeenCalled();
+
+    await expect(
+      call("/api/ask-agent/session/load", { sessionId: "ws-run" }),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(chatViewed).toHaveBeenCalledWith({
+      projectId: "home",
+      workspaceSessionId: "ws-run",
+    });
   });
 
   it("follows a scheduled run's chat live and answers its approval", async () => {

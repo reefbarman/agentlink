@@ -86,6 +86,11 @@ export interface InboxStore {
   markRunRead(runId: string, kind: InboxEntryKind): Promise<number>;
   /** Mark a task's unread entries read (it is working again). */
   markTaskRead(taskId: string): Promise<number>;
+  /** Mark a chat's unread entries read (the owner opened it). */
+  markSessionRead(about: {
+    readonly projectId: string;
+    readonly sessionId: string;
+  }): Promise<number>;
   /**
    * Delete the entries about a deleted chat or task, read or not, from the
    * file. Resolves to how many.
@@ -509,6 +514,13 @@ export async function openInboxStore(options: {
     },
     markTaskRead(taskId) {
       return markWhere((entry) => entry.taskId === taskId);
+    },
+    markSessionRead(about) {
+      return markWhere(
+        (entry) =>
+          entry.sessionId === about.sessionId &&
+          entry.projectId === about.projectId,
+      );
     },
     async remove(about) {
       const matches = (entry: InboxEntry) =>

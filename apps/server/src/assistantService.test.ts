@@ -1116,6 +1116,26 @@ describe("assistant service notifications", () => {
       "switched off",
     );
 
+    // Opening the run's chat (as the chat list does) reads its entry.
+    await expect(
+      request({
+        method: "POST",
+        path: "/api/ask-agent/projects/select",
+        cookie,
+        body: { projectId: "home", sessionId: entry!.sessionId },
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await request({ path: "/api/inbox", cookie })).body,
+        ).toMatchObject({
+          unread: 0,
+          entries: [expect.objectContaining({ id: entry!.id, read: true })],
+        }),
+      { timeout: 5_000, interval: 50 },
+    );
+
     // Revoking the device deletes its subscription.
     await expect(
       request({

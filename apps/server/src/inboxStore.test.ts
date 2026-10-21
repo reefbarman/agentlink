@@ -267,6 +267,29 @@ describe("openInboxStore", () => {
     expect(await store.add(ready, 4)).toBeDefined();
   });
 
+  it("marks an opened chat's entries read, in its own project only", async () => {
+    const store = await openInboxStore({ directory: await tempDir() });
+    const about = { projectId: "home", sessionId: "chat-1" };
+    await store.add({ kind: "run_completed", title: "Brief", ...about }, 1);
+    await store.add({ kind: "needs_approval", title: "Approve", ...about }, 2);
+    await store.add(
+      { kind: "run_completed", title: "Other", ...about, projectId: "work" },
+      3,
+    );
+    await store.add(
+      { kind: "run_completed", title: "Elsewhere", projectId: "home" },
+      4,
+    );
+    expect(await store.markSessionRead(about)).toBe(2);
+    expect(
+      store
+        .list()
+        .filter((entry) => !entry.read)
+        .map((entry) => entry.title),
+    ).toEqual(["Elsewhere", "Other"]);
+    expect(await store.markSessionRead(about)).toBe(0);
+  });
+
   it("removes a deleted chat's or task's entries from the file", async () => {
     const directory = await tempDir();
     const store = await openInboxStore({ directory });

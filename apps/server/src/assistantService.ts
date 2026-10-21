@@ -1668,6 +1668,18 @@ export async function startAssistantService(
           await inbox.remove({ projectId, sessionId: workspaceSessionId });
           assistantChanged();
         },
+        // Opening a chat reads what the Inbox says about it.
+        chatViewed: (chat) => {
+          void inbox
+            .markSessionRead({
+              projectId: chat.projectId,
+              sessionId: chat.workspaceSessionId,
+            })
+            .then((marked) => {
+              if (marked > 0) assistantChanged();
+            })
+            .catch(() => undefined);
+        },
         // Written in a task's own chat: its runner reads it in its next
         // step, or continues the task with it once it has stopped.
         linkedMessage: async (workspaceSessionId, text) => {
