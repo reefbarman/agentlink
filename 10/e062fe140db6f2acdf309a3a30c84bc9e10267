@@ -1,0 +1,27 @@
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_e08a86bb3a33a2 780-831
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_e08a86bb3a33a2 18-20,135-148,294-317,319-327
+  s_0ba1b25b9a8d84::t_30e2e20e35f3d4 17,318,328-329
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10e062fe140db6f2acdf309a3a30c84bc9e10267",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0ba1b25b9a8d84": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b73a65fc-371a-44a4-82a6-81c7654bc732",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
