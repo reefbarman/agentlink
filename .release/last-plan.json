@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-  "createdAt": "2026-10-21T04:14:10.962Z",
+  "sourceSha": "f0831961244d6ba2942470164eb4239cd2f80102",
+  "createdAt": "2026-10-21T04:43:08.854Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,131 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.56.0",
-      "baselineRef": "v1.56.0",
-      "reserved": "1.56.0",
-      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
+      "published": "1.57.0",
+      "baselineRef": "v1.57.0",
+      "reserved": "1.57.0",
+      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.57.0",
+      "version": "1.58.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.57.0",
+      "tag": "v1.58.0",
       "notes": [
         {
-          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
-          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
+          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
+          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.42.0",
-      "baselineRef": "desktop-v0.42.0",
-      "reserved": "0.42.0",
-      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
+      "published": "0.43.0",
+      "baselineRef": "desktop-v0.43.0",
+      "reserved": "0.43.0",
+      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.43.0",
+      "version": "0.44.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.43.0",
+      "tag": "desktop-v0.44.0",
       "notes": [
         {
-          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
-          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
+          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
+          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.30.0",
-      "baselineRef": "cli-v0.30.0",
-      "reserved": "0.30.0",
-      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
+      "published": "0.31.0",
+      "baselineRef": "cli-v0.31.0",
+      "reserved": "0.31.0",
+      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.31.0",
+      "version": "0.32.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.31.0",
+      "tag": "cli-v0.32.0",
       "notes": [
         {
-          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
-          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
+          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
+          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.21.0",
-      "baselineRef": "sdk-v0.21.0",
-      "reserved": "0.21.0",
-      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
+      "published": "0.22.0",
+      "baselineRef": "sdk-v0.22.0",
+      "reserved": "0.22.0",
+      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.22.0",
+      "tag": "sdk-v0.23.0",
       "notes": [
         {
-          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
-          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
+          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
+          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.14.0",
-      "baselineRef": "assistant-v0.14.0",
-      "reserved": "0.14.0",
-      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
+      "published": "0.15.0",
+      "baselineRef": "assistant-v0.15.0",
+      "reserved": "0.15.0",
+      "commits": ["361b59a642a5b77bbe6f165ee45c3897842ef5ab"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.15.0",
+      "tag": "assistant-v0.16.0",
       "notes": [
         {
-          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
-          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
-          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+          "sha": "361b59a642a5b77bbe6f165ee45c3897842ef5ab",
+          "subject": "feat(sdk): condense mid-turn and estimate the CLI request envelope like the condenser",
+          "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "497a4a4e60093772e538e497d452537b7b11e0a6": {
+    "361b59a642a5b77bbe6f165ee45c3897842ef5ab": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+      "summary": "The CLI and Assistant now condense long conversations mid-turn and estimate request size like VS Code (about four characters per token), so they condense near VS Code's threshold instead of failing early.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

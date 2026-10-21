@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.58.0
+
 - The standalone CLI and Assistant now also condense in the middle of a turn, before each model call after the first, as VS Code does. A single turn whose tool results outgrow the model is summarised (including that turn's own work so far) and keeps going, instead of failing. A summary made while a tool is waiting for approval survives the pause.
 - The CLI and Assistant no longer condense at about a quarter of the model's window. Their check before sending a request used to count one byte as one token; it now uses the condenser's estimate of about four characters a token, so condensing happens near VS Code's point. The fixed request-size ceiling is unchanged, and `inputSafetyTokens` is the margin for estimate error.
 
