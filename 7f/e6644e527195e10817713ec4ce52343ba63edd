@@ -1,0 +1,28 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 135-136
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 70-72,141-142,144-148,4990-5018,5035-5036,5042,5052-5053,5059-5061,5063,5086,5088,5094-5095,5150,5210-5212
+  h_e08a86bb3a33a2 143,5057-5058,5062,5092-5093,5096
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 17,25,27,32,1280-1311,1918-1973
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 24,3239-3320
+src/approvals/guardianPolicy.test.ts
+  h_e08a86bb3a33a2 21
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 16-17,25-27,77-81,366-433,435-442,882,887-889
+  h_e08a86bb3a33a2 24,434,443-444
+src/approvals/guardianPolicy.ts
+  h_e08a86bb3a33a2 27,29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7fe6644e527195e10817713ec4ce52343ba63edd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
