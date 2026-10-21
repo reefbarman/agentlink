@@ -1,5 +1,6 @@
 import {
   InkChatApp,
+  controllerStatus,
   shellLayout,
   suspendForShell,
   visibleControlOptions,
@@ -419,6 +420,48 @@ describe("Ink chat app", () => {
       expect(screen.lastFrame()).toContain(
         "Execution accounting not available yet",
       ),
+    );
+    screen.unmount();
+  });
+
+  it("adds the private failure cause to a generic turn error", () => {
+    const failed = {
+      status: "failed",
+      turnId: "turn-1",
+      error: {
+        code: "turn_execution_failed",
+        category: "internal",
+        message: "Turn execution failed",
+        retryable: false,
+      },
+    } as unknown as Parameters<typeof controllerStatus>[0];
+    expect(controllerStatus(failed)).toBe("Error: Turn execution failed");
+    expect(controllerStatus(failed, "Socket closed (HTTP 502)")).toBe(
+      "Error: Turn execution failed: Socket closed (HTTP 502)",
+    );
+  });
+
+  it("keeps the composer taking input after Escape", async () => {
+    const controller = controllerFixture();
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={controller.getState()}
+        loadFileSuggestions={async () => []}
+        onSubmit={async () => undefined}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    await nextInputDispatch();
+    screen.stdin.write("\u001b");
+    // Ink waits 20ms before treating a lone ESC as the Escape key.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await nextInputDispatch();
+    screen.stdin.write("still typing");
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("still typing"),
     );
     screen.unmount();
   });

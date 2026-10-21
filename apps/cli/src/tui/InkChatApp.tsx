@@ -249,6 +249,19 @@ export function InkChatApp({
           : "composer",
     });
   }, [activity.isFocused, transcript.isFocused]);
+  // Ink's focus manager blurs everything on Escape, leaving no area taking
+  // keys. Return to the composer instead, as Escape does in VS Code's chat.
+  const composerFocus = composer.focus;
+  useEffect(() => {
+    if (!transcript.isFocused && !activity.isFocused && !composer.isFocused) {
+      composerFocus("composer");
+    }
+  }, [
+    activity.isFocused,
+    composer.isFocused,
+    composerFocus,
+    transcript.isFocused,
+  ]);
   useEffect(() => {
     const picker = shell.picker;
     if (picker?.kind !== "files") return;
@@ -1438,8 +1451,16 @@ export async function suspendForShell(
   await suspendTerminal(async () => suspendProcess("SIGTSTP"));
 }
 
-export function controllerStatus(result: AgentTurnResult): string | undefined {
-  if (result.status === "failed") return `Error: ${result.error.message}`;
+export function controllerStatus(
+  result: AgentTurnResult,
+  failureDetail?: string,
+): string | undefined {
+  if (result.status === "failed") {
+    const { message } = result.error;
+    return failureDetail && failureDetail !== message
+      ? `Error: ${message}: ${failureDetail}`
+      : `Error: ${message}`;
+  }
   if (result.status === "cancelled") return "Cancelled";
   return undefined;
 }

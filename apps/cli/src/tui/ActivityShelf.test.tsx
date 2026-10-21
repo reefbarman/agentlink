@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import React from "react";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
+import { initialStandaloneSessionProjection } from "../sessionProjection.js";
 import { render } from "ink-testing-library";
 import { stripVTControlCharacters } from "node:util";
 
@@ -141,6 +142,33 @@ describe("activity shelf", () => {
     expect(screen.lastFrame()).toContain("activity · 4 live · focused");
     expect(screen.lastFrame()).toContain("printf '␛[2J'");
     expect(screen.lastFrame()).not.toContain("printf '\u001b[2J'");
+    screen.unmount();
+  });
+
+  it("does not count the standing Context row as live activity", () => {
+    const projection = {
+      ...initialStandaloneSessionProjection("/project"),
+      usage: { inputTokens: 11_000, outputTokens: 5 },
+      condense: {
+        status: "failed" as const,
+        trigger: "manual" as const,
+        message: "Not enough messages to condense.",
+      },
+    };
+    const screen = render(
+      <ActivityShelf
+        projection={projection}
+        selectedIndex={0}
+        expandedIds={[]}
+        focused={false}
+        height={3}
+      />,
+    );
+
+    const frame = stripVTControlCharacters(screen.lastFrame()!);
+    expect(frame).toContain("activity ─");
+    expect(frame).not.toContain("live");
+    expect(frame).toContain("Context");
     screen.unmount();
   });
 });

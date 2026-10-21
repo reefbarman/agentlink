@@ -16,6 +16,7 @@ import { validateAndCoerceMcpElicitationValues } from "@agentlink/protocol/mcp-e
 import {
   acquireWorkspaceOwnership,
   createWorkspaceHost,
+  describeTurnFailure,
   disableManagedTypeScriptForProject,
   enableManagedTypeScriptForProject,
   getManagedTypeScriptStatus,
@@ -355,6 +356,8 @@ export async function runCli(
     sessionPreferencesStore,
     sessionPreferences,
   );
+  // Why a turn failed, by turn id, read once when the TUI shows the error.
+  const turnFailureDetails = new Map<string, string>();
   const sharedCodeModel = sessionPreferences?.modeModels.code?.trim();
   const sharedCodeReasoningEffort =
     sessionPreferences?.modeReasoningEfforts.code;
@@ -566,6 +569,7 @@ export async function runCli(
     interactionBridge,
     mcpOAuth,
     condenseThresholds,
+    turnFailureDetails,
   }).catch(async (error) => {
     await mcpOAuth?.close();
     await ownership?.release();
@@ -623,7 +627,14 @@ export async function runCli(
     interactionBridge,
     mcpOAuth!,
     ownership!,
-    { dataRoot, config, environment, updateServiceFactory, condenseThresholds },
+    {
+      dataRoot,
+      config,
+      environment,
+      updateServiceFactory,
+      condenseThresholds,
+      turnFailureDetails,
+    },
   );
   return 0;
 }
@@ -652,6 +663,7 @@ async function createHost(options: {
   interactionBridge: CliInteractionBridge;
   mcpOAuth?: CliMcpOAuthRuntime;
   condenseThresholds: CliCondenseThresholds;
+  turnFailureDetails: Map<string, string>;
 }): Promise<WorkspaceHost> {
   const providers: WorkspaceProviderConfig[] = [];
   const policy = new ResponsesTransportPolicy();
@@ -828,6 +840,12 @@ async function createHost(options: {
     sessionRecall: { enabled: true },
     // Thresholds follow VS Code's shared modelCondenseThresholds.
     condense: { enabled: true, thresholds: options.condenseThresholds.read },
+    // The public turn error is often just "Turn execution failed"; keep the
+    // redacted cause so the TUI can say what actually went wrong.
+    onTurnError: ({ turnId, error }) => {
+      const detail = describeTurnFailure(error);
+      if (detail) options.turnFailureDetails.set(turnId, detail);
+    },
     ...(options.enableCommands
       ? {
           commands: {
@@ -1065,6 +1083,7 @@ async function runInteractiveChat(
     environment: NodeJS.ProcessEnv;
     updateServiceFactory: CliReleaseUpdateServiceFactory;
     condenseThresholds: CliCondenseThresholds;
+    turnFailureDetails: Map<string, string>;
   },
 ): Promise<void> {
   return await runInkInteractiveChat(
@@ -1095,6 +1114,7 @@ async function runInkInteractiveChat(
     environment: NodeJS.ProcessEnv;
     updateServiceFactory: CliReleaseUpdateServiceFactory;
     condenseThresholds: CliCondenseThresholds;
+    turnFailureDetails: Map<string, string>;
   },
 ): Promise<void> {
   const initialized = await controller.initialize();
@@ -1403,7 +1423,9 @@ async function runInkInteractiveChat(
     );
     const result = await controller.submit(resolved.text, resolved.attachments);
     if (result.status === "suspended") await reviewCurrentInteraction();
-    return { status: controllerStatus(result) };
+    const failureDetail = updateContext.turnFailureDetails.get(result.turnId);
+    updateContext.turnFailureDetails.delete(result.turnId);
+    return { status: controllerStatus(result, failureDetail) };
   };
   const requireControl = (): PresentTuiControl => {
     if (!presentControl) throw new Error("TUI control panel is unavailable");

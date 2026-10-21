@@ -332,8 +332,18 @@ export function createSummarizingContextCondenser<
             }
           : {}),
         getCapabilities: (model) => backend.getCapabilities(model),
-        complete: async (completeRequest) =>
-          options.complete
+        complete: async (requested) => {
+          // The summariser asks for temperature 0. VS Code's providers drop
+          // it where unsupported; SDK backends reject it, so omit it here
+          // unless the target model advertises support.
+          const { temperature, ...rest } = requested;
+          const completeRequest =
+            temperature !== undefined &&
+            backend.getCapabilities(requested.model).supportsTemperature ===
+              true
+              ? requested
+              : rest;
+          return options.complete
             ? await options.complete({
                 principal: request.principal,
                 authContext: request.authContext,
@@ -343,7 +353,8 @@ export function createSummarizingContextCondenser<
             : await backend.complete(completeRequest, {
                 principal: request.principal,
                 authContext: request.authContext,
-              }),
+              });
+        },
       };
       const files = options.filesRead?.(request);
       const result = await summarizeConversation({

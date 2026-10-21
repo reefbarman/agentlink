@@ -330,6 +330,26 @@ describe("standalone session projection", () => {
     });
   });
 
+  it("clears a failed condense when the next turn starts", () => {
+    let state = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "condense.updated",
+        condense: {
+          status: "failed",
+          trigger: "manual",
+          message: "Not enough messages to condense.",
+        },
+      },
+    );
+    expect(state.condense?.status).toBe("failed");
+    state = reduceStandaloneSessionProjection(state, {
+      type: "turn.event",
+      event: event({ type: "turn.started" }, 0),
+    });
+    expect(state.condense).toBeUndefined();
+  });
+
   it("anchors restored suspended turns to the latest durable user message", () => {
     const state = reduceStandaloneSessionProjection(
       initialStandaloneSessionProjection("/project"),

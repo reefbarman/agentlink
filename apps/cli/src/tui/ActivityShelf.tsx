@@ -46,6 +46,8 @@ export function ActivityShelf({
     selected,
     Math.max(1, bodyRows - detailRows),
   );
+  // The Context row is standing status, not live activity.
+  const live = items.filter((item) => item.id !== "context").length;
 
   return (
     <Box
@@ -58,7 +60,7 @@ export function ActivityShelf({
       <ShelfRule
         width={width}
         focused={focused}
-        title={`activity · ${items.length} live${focused ? " · focused" : ""}`}
+        title={`activity${live > 0 ? ` · ${live} live` : ""}${focused ? " · focused" : ""}`}
         hint="⏎ expand · ^t todos"
       />
       {visible.map(({ item, index }) => {

@@ -516,6 +516,22 @@ describe("engine mid-turn context condensing", () => {
 });
 
 describe("engine manual condense (sessions.condense)", () => {
+  it("keeps the summariser's temperature where the model supports it", async () => {
+    const backend = new ScriptedBackend([finalTurn(LONG_REPLY)], {
+      ...caps(1_000_000),
+      supportsTemperature: true,
+    });
+    const { engine, run } = setup(backend);
+    await engine.sessions.create({ principal: PRINCIPAL });
+    await run("start the parser");
+
+    await engine.sessions.condense({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    expect(backend.completions[0]).toMatchObject({ temperature: 0 });
+  });
+
   it("summarises an idle session on request and keeps the full transcript", async () => {
     const backend = new ScriptedBackend(
       [finalTurn(LONG_REPLY), finalTurn("next")],
@@ -535,6 +551,9 @@ describe("engine manual condense (sessions.condense)", () => {
       result.previousInputTokens,
     );
     expect(backend.completions).toHaveLength(1);
+    // caps() does not advertise temperature, so the summariser's 0 is
+    // omitted rather than sent to a backend that rejects it.
+    expect(backend.completions[0]).not.toHaveProperty("temperature");
 
     const read = await engine.sessions.read({
       principal: PRINCIPAL,

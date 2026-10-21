@@ -393,6 +393,9 @@ function reduceTurnEvent(
         revision,
         phase: "running",
         responseTextStart: 0,
+        // A failed condense is reported once, not carried into later turns.
+        condense:
+          state.condense?.status === "failed" ? undefined : state.condense,
         transcript: associateLatestUserWithTurn(state.transcript, event.turnId),
       };
     case "model.resolved":
