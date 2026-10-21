@@ -6,14 +6,14 @@ This bundled reference is generated from the extension's `package.json` during b
 
 ## Extension metadata
 
-| Field          | Value       |
-| -------------- | ----------- |
-| Name           | `AgentLink` |
-| Version        | `1.59.1`    |
-| Publisher      | `agentlink` |
-| License        | `MIT`       |
-| VS Code engine | `^1.140.0`  |
-| Node.js engine | `>=22.19.0` |
+| Field          | Value                        |
+| -------------- | ---------------------------- |
+| Name           | `AgentLink: AI Coding Agent` |
+| Version        | `1.59.1`                     |
+| Publisher      | `agentlink`                  |
+| License        | `MIT`                        |
+| VS Code engine | `^1.140.0`                   |
+| Node.js engine | `>=22.19.0`                  |
 
 ## Commands
 

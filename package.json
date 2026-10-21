@@ -1,6 +1,6 @@
 {
   "name": "agentlink",
-  "displayName": "AgentLink",
+  "displayName": "AgentLink: AI Coding Agent",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
   "version": "1.59.1",
   "publisher": "agentlink",
