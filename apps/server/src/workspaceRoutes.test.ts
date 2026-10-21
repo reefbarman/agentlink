@@ -938,6 +938,65 @@ describe("assistant workspace routes", () => {
     ).resolves.toEqual({ queued: false });
   });
 
+  it("takes the owner's note on an approval into the resumed turn", async () => {
+    const harness = await startHarness();
+    const { sessionId, base, decision } = await suspendForApproval(harness);
+    const auth: AssistantServerAuth = {
+      principal: {
+        tenantId: "agentlink-server",
+        subjectId: harness.server.store.ownerId!,
+      },
+      session: {
+        ownerId: harness.server.store.ownerId!,
+        sessionId: "s",
+        deviceId: harness.owner.deviceId,
+        deviceLabel: "Laptop",
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+      signal: new AbortController().signal,
+      revalidate: async () => ({ valid: true }),
+      detach: () => auth,
+    };
+    const { operations } = harness.routes;
+    await expect(
+      operations.answerInteraction(auth, "home", sessionId, {
+        ...decision,
+        decision: "allow",
+        followUp: { id: "bad id", text: "then add a second line" },
+      }),
+    ).rejects.toMatchObject({ code: "interjection_id_invalid" });
+
+    const stream = await harness.events(harness.owner, sessionId);
+    await stream.waitFor((event) => event.event === "ready");
+    await operations.answerInteraction(auth, "home", sessionId, {
+      ...decision,
+      decision: "allow",
+      followUp: { id: "note-1", text: "then add a second line" },
+    });
+    await harness.routes.whenIdle("home", sessionId);
+
+    // After the write's result, the model sees the note as a user message.
+    expect(harness.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.stringify(lastUser(harness.fetch.mock.calls[1]![1] as RequestInit)),
+    ).toContain("then add a second line");
+    const interjected = await stream.waitFor((event) => {
+      const data = event.data as {
+        event?: { kind?: string; event?: { type?: string } };
+      };
+      return data.event?.event?.type === "user.interjected";
+    });
+    expect(
+      (interjected.data as { event: { event: unknown } }).event.event,
+    ).toMatchObject({
+      interjectionId: "note-1",
+      text: "then add a second line",
+    });
+    stream.close();
+    await expect(readPending(harness, base)).resolves.toBeUndefined();
+  });
+
   it("takes back a message the running turn has not taken in yet", async () => {
     const harness = await startHarness();
     const sessionId = await createSession(harness);

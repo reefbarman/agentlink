@@ -2065,6 +2065,13 @@ export async function createAskAgentBridge(
     if (typeof body.id !== "string" || typeof body.decision !== "string") {
       throw new HttpError(400, "invalid_request");
     }
+    const allowed = ALLOW_DECISIONS.has(body.decision);
+    // What the owner wrote on the card: a follow-up, or why they denied it.
+    // The resumed turn takes it in once the call's result is in.
+    const note = approvalNote(body, allowed);
+    const followUp = note
+      ? { id: `ask-agent-approval-note-${now()}-${randomSuffix()}`, text: note }
+      : undefined;
     const agentApproval = parseAgentApprovalId(body.id);
     if (agentApproval) {
       const shown = agentApprovalRequest(agentWatch.records);
@@ -2101,7 +2108,8 @@ export async function createAskAgentBridge(
         {
           interactionId: waiting.interactionId,
           interactionRevision: waiting.interactionRevision,
-          decision: ALLOW_DECISIONS.has(body.decision) ? "allow" : "deny",
+          decision: allowed ? "allow" : "deny",
+          ...(followUp ? { followUp } : {}),
         },
       );
       // The same request may be shown in the task's chat and here.
@@ -2130,7 +2138,8 @@ export async function createAskAgentBridge(
       {
         interactionId: pending.interactionId,
         interactionRevision: pending.interactionRevision,
-        decision: ALLOW_DECISIONS.has(body.decision) ? "allow" : "deny",
+        decision: allowed ? "allow" : "deny",
+        ...(followUp ? { followUp } : {}),
       },
     );
     if (pendingInteraction === pending) pendingInteraction = undefined;
@@ -3133,6 +3142,24 @@ function isReasoningEffort(value: string): value is CoreReasoningEffort {
 
 function hasItems(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
+}
+
+/**
+ * The owner's note on an approval card: the follow-up written with either
+ * answer, or else the reason given for a denial.
+ */
+function approvalNote(
+  body: Readonly<Record<string, unknown>>,
+  allowed: boolean,
+): string | undefined {
+  const followUp =
+    typeof body.followUp === "string" ? body.followUp.trim() : "";
+  if (followUp) return followUp;
+  const reason =
+    !allowed && typeof body.rejectionReason === "string"
+      ? body.rejectionReason.trim()
+      : "";
+  return reason || undefined;
 }
 
 function randomSuffix(): string {

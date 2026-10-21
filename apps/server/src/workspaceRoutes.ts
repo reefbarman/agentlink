@@ -228,6 +228,12 @@ export interface AssistantSessionOperations {
       readonly interactionId: string;
       readonly interactionRevision: string;
       readonly decision: "allow" | "deny";
+      /**
+       * The owner's note written on the card (a follow-up or a reason to
+       * deny), taken in by the resumed turn once the call's result is in,
+       * like a queued message, and reported with `user.interjected`.
+       */
+      readonly followUp?: AgentTurnInterjection;
     },
   ): Promise<{ readonly taskId: string }>;
   /**
@@ -524,10 +530,11 @@ export function createAssistantWorkspaceRoutes(
       takeInterjections: () => readonly AgentTurnInterjection[],
     ) => Promise<AgentTurnResult>,
     text?: string,
+    initialInterjections: readonly AgentTurnInterjection[] = [],
   ): string => {
     const key = sessionKey(projectId, sessionId);
     const taskId = randomUUID();
-    const interjections: AgentTurnInterjection[] = [];
+    const interjections: AgentTurnInterjection[] = [...initialInterjections];
     // Deliberately not `auth.signal`: closing the browser must not stop work.
     const controller = new AbortController();
     const started = hub.publish(key, {
@@ -620,6 +627,16 @@ export function createAssistantWorkspaceRoutes(
   const assertSessionId = (sessionId: string) => {
     if (!SESSION_ID_PATTERN.test(sessionId)) {
       throw new HttpError(404, "session_not_found");
+    }
+  };
+
+  const assertInterjection = (interjection: AgentTurnInterjection) => {
+    const { text } = interjection;
+    if (!text.trim() || text.length > MAX_TURN_TEXT_LENGTH) {
+      throw new HttpError(400, "text_invalid");
+    }
+    if (!INTERJECTION_ID_PATTERN.test(interjection.id)) {
+      throw new HttpError(400, "interjection_id_invalid");
     }
   };
 
@@ -782,12 +799,7 @@ export function createAssistantWorkspaceRoutes(
       assertSessionId(sessionId);
       await authorize(auth, projectId, "write");
       const text = interjection.text;
-      if (!text.trim() || text.length > MAX_TURN_TEXT_LENGTH) {
-        throw new HttpError(400, "text_invalid");
-      }
-      if (!INTERJECTION_ID_PATTERN.test(interjection.id)) {
-        throw new HttpError(400, "interjection_id_invalid");
-      }
+      assertInterjection(interjection);
       await assertStillAuthorized(auth);
       const task = tasks.get(sessionKey(projectId, sessionId));
       // Nothing running (idle, or waiting on an approval): the sender keeps
@@ -810,10 +822,11 @@ export function createAssistantWorkspaceRoutes(
     async answerInteraction(auth, projectId, sessionId, answer) {
       assertSessionId(sessionId);
       const mount = await authorize(auth, projectId, "approve");
-      const { interactionId, interactionRevision, decision } = answer;
+      const { interactionId, interactionRevision, decision, followUp } = answer;
       if (decision !== "allow" && decision !== "deny") {
         throw new HttpError(400, "decision_invalid");
       }
+      if (followUp) assertInterjection(followUp);
       const key = sessionKey(projectId, sessionId);
       assertStartable(key);
       const pending = (await readSnapshot(mount, sessionId)).pendingInteraction;
@@ -841,6 +854,8 @@ export function createAssistantWorkspaceRoutes(
             takeInterjections,
             expected: { interactionId, interactionRevision },
           }),
+        undefined,
+        followUp ? [{ id: followUp.id, text: followUp.text }] : [],
       );
       return { taskId };
     },

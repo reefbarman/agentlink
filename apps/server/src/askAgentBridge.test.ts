@@ -1555,6 +1555,81 @@ describe("Ask Agent bridge", () => {
     });
   });
 
+  it("hands the owner's note on an approval card to the resumed turn", async () => {
+    const { fake, call } = await startBridge();
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, {
+        type: "interaction.required",
+        interaction: {
+          interactionId: "int-job",
+          toolName: "schedule_job",
+          summary: 'Change the scheduled job "Morning brief"?',
+          displayInput: {},
+        },
+        interactionRevision: "rev-job",
+      });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "suspended",
+      });
+      // The resumed turn takes the note in after the change's result.
+      fake.setScript((resumed, resumeTask) => {
+        const calls = fake.operations.answerInteraction.mock
+          .calls as unknown as unknown[][];
+        const answer = calls.at(-1)?.[3] as {
+          followUp?: { id: string; text: string };
+        };
+        fake.turn(resumed, {
+          type: "user.interjected",
+          interjectionId: answer.followUp!.id,
+          text: answer.followUp!.text,
+        });
+        fake.turn(resumed, {
+          type: "turn.completed",
+          result: { text: "Moved it to 8:00 too." },
+        });
+        fake.publish(resumed, {
+          kind: "task",
+          state: "finished",
+          taskId: resumeTask,
+          status: "completed",
+        });
+      });
+    });
+
+    const send = call("/api/ask-agent/send", { text: "pause my brief" });
+    await vi.waitFor(async () => {
+      const { body } = await call("/api/ask-agent/session");
+      expect(snapshotOf(body).ui.approval).toMatchObject({ id: "int-job" });
+    });
+    await call("/api/ask-agent/approval", {
+      id: "int-job",
+      decision: "accept",
+      followUp: "  and move it to 8:00  ",
+    });
+    expect(fake.operations.answerInteraction).toHaveBeenCalledWith(
+      expect.anything(),
+      "home",
+      "ws-1",
+      expect.objectContaining({
+        decision: "allow",
+        followUp: {
+          id: expect.stringMatching(/^ask-agent-approval-note-/u),
+          text: "and move it to 8:00",
+        },
+      }),
+    );
+    const finished = await send;
+    const messages = snapshotOf(finished.body).session.foreground
+      .projectedMessages;
+    expect(messages.slice(-2)).toMatchObject([
+      { role: "user", content: "and move it to 8:00" },
+      { role: "assistant", content: "Moved it to 8:00 too." },
+    ]);
+  });
+
   it("shows a proposed job change in full on its approval card", async () => {
     const { fake, call } = await startBridge();
     const text = [
