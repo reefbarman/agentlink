@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.22.0 — 2026-10-21
+
+- Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.
+
 ## 0.21.0 — 2026-10-21
 
 - The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.

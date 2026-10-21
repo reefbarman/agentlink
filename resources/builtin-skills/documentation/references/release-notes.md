@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.57.0
+
 - The standalone CLI and Assistant now condense long chats with VS Code's summariser and default thresholds instead of failing once the conversation outgrows the model. Before a turn near the limit, earlier history is summarised and kept in the transcript; a request rejected as too long (by the provider or the host's own size check) is condensed and retried once. The CLI shows it in the activity shelf's Context row, and stored summaries are hidden from restored transcripts. SDK engines opt in with `contextCondenser: createSummarizingContextCondenser()` (or workspace-host `condense: { enabled: true }`, which requires `sessionRecall`). Condensing in the middle of a turn, `/condense` and threshold settings are not in the CLI yet. VS Code behaviour is unchanged.
 
 ## 1.56.0

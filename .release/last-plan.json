@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "913efb42b082104d2761db85fff12f293d683034",
-  "createdAt": "2026-10-21T03:37:10.153Z",
+  "sourceSha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+  "createdAt": "2026-10-21T04:14:10.962Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,156 +10,132 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.55.1",
-      "baselineRef": "v1.55.1",
-      "reserved": "1.55.1",
-      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
+      "published": "1.56.0",
+      "baselineRef": "v1.56.0",
+      "reserved": "1.56.0",
+      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.56.0",
+      "version": "1.57.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.56.0",
+      "tag": "v1.57.0",
       "notes": [
         {
-          "sha": "913efb42b082104d2761db85fff12f293d683034",
-          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
-          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
+          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.41.1",
-      "baselineRef": "desktop-v0.41.1",
-      "reserved": "0.41.1",
-      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
+      "published": "0.42.0",
+      "baselineRef": "desktop-v0.42.0",
+      "reserved": "0.42.0",
+      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.42.0",
+      "version": "0.43.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.42.0",
+      "tag": "desktop-v0.43.0",
       "notes": [
         {
-          "sha": "913efb42b082104d2761db85fff12f293d683034",
-          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
-          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
+          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.29.0",
-      "baselineRef": "cli-v0.29.0",
-      "reserved": "0.29.0",
-      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
+      "published": "0.30.0",
+      "baselineRef": "cli-v0.30.0",
+      "reserved": "0.30.0",
+      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.30.0",
+      "version": "0.31.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.30.0",
+      "tag": "cli-v0.31.0",
       "notes": [
         {
-          "sha": "913efb42b082104d2761db85fff12f293d683034",
-          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
-          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
+          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.20.0",
-      "baselineRef": "sdk-v0.20.0",
-      "reserved": "0.20.0",
-      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
+      "published": "0.21.0",
+      "baselineRef": "sdk-v0.21.0",
+      "reserved": "0.21.0",
+      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.21.0",
+      "tag": "sdk-v0.22.0",
       "notes": [
         {
-          "sha": "913efb42b082104d2761db85fff12f293d683034",
-          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
-          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
+          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.13.0",
-      "baselineRef": "assistant-v0.13.0",
-      "reserved": "0.13.0",
-      "commits": ["913efb42b082104d2761db85fff12f293d683034"],
+      "published": "0.14.0",
+      "baselineRef": "assistant-v0.14.0",
+      "reserved": "0.14.0",
+      "commits": ["497a4a4e60093772e538e497d452537b7b11e0a6"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.14.0",
+      "version": "0.15.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.14.0",
+      "tag": "assistant-v0.15.0",
       "notes": [
         {
-          "sha": "913efb42b082104d2761db85fff12f293d683034",
-          "subject": "feat(sdk): share VS Code's condense summariser and session recall tools",
-          "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
+          "sha": "497a4a4e60093772e538e497d452537b7b11e0a6",
+          "subject": "feat(sdk): condense long CLI and Assistant chats with VS Code's summariser",
+          "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "5c177485226fc8806e1887ed0644c81ee719995d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The built-in agent now writes its complete final response in the final-status summary instead of writing it as text first and then recapping it, and the summary is sized to its content.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2c34f61956ef135eed801a5f0db94ac822267d43": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Ask Agent now puts its complete final response in the status summary, and a summary-only reply is no longer shown twice in the chat, while history and memory still keep the content.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6613159c90cd002b9395666a668cf64bdb9b4059": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "New chats opened in tabs now respect the \"Approve for Me by default\" setting instead of starting with the configured policy.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "913efb42b082104d2761db85fff12f293d683034": {
+    "497a4a4e60093772e538e497d452537b7b11e0a6": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "The CLI and Assistant now offer search_session_history and read_session_excerpt once a chat has an earlier turn, and the SDK adds context-condense, todo-tool, and session recall exports and options; VS Code behaviour is unchanged.",
-      "coverage": "partial",
+      "summary": "Long CLI and Assistant chats are now automatically condensed with VS Code's summariser near the context limit or after a too-long rejection, and the SDK gains opt-in contextCondenser, a condense option, and condense turn events.",
+      "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }
