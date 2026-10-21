@@ -1,0 +1,32 @@
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 1476,1478-1480,1482
+  s_1a1022205b7d4c::t_484271de35ae04 1481
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_e08a86bb3a33a2 94,106,448,459
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 6461-6462,6464,6472,6505,6507-6513
+  s_1a1022205b7d4c::t_4a12ea3df36142 6471
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 8939
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c34f61956ef135eed801a5f0db94ac822267d43",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1a1022205b7d4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bafd4e5d-bbd7-407c-b24f-a9fd87e0da57",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
