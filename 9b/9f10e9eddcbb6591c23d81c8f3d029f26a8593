@@ -1,0 +1,20 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 191
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 5113-5156
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 389,392-402,1857,1859-1872,1885-1898
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 1104-1187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9b9f10e9eddcbb6591c23d81c8f3d029f26a8593",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
