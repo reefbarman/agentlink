@@ -1002,6 +1002,13 @@ export class AgentSessionManager {
   >();
   /** Coordinators with an internally queued question turn not yet reflected in status. */
   private backgroundCoordinatorTurnsStarting = new Set<string>();
+  /**
+   * Accepted interactive turns (send or retry) whose session status has not
+   * yet become "streaming". Turn preparation (hooks, checkpoints, condense,
+   * memory recall) can take seconds; surfaces use this to keep showing the
+   * turn as running instead of briefly projecting an idle, empty response.
+   */
+  private interactiveTurnsStarting = new Map<string, number>();
   /** Routing metadata per background session. */
   private bgMeta = new Map<
     string,
@@ -4542,6 +4549,29 @@ export class AgentSessionManager {
     }
   }
 
+  /** True while an accepted send/retry is still preparing its first request. */
+  isTurnStarting(sessionId: string): boolean {
+    return this.interactiveTurnsStarting.has(sessionId);
+  }
+
+  private markTurnStarting(sessionId: string): () => void {
+    this.interactiveTurnsStarting.set(
+      sessionId,
+      (this.interactiveTurnsStarting.get(sessionId) ?? 0) + 1,
+    );
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.interactiveTurnsStarting.get(sessionId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.interactiveTurnsStarting.set(sessionId, remaining);
+      } else {
+        this.interactiveTurnsStarting.delete(sessionId);
+      }
+    };
+  }
+
   private async withSessionSendQueue(
     sessionId: string,
     fn: () => Promise<void>,
@@ -7230,6 +7260,25 @@ export class AgentSessionManager {
       });
     }
 
+    const releaseTurnStart = this.markTurnStarting(session.id);
+    try {
+      return await this.sendMessageInQueue(
+        session,
+        text,
+        opts,
+        releaseTurnStart,
+      );
+    } finally {
+      releaseTurnStart();
+    }
+  }
+
+  private sendMessageInQueue(
+    session: AgentSession,
+    text: string,
+    opts: Parameters<AgentSessionManager["sendMessage"]>[3],
+    releaseTurnStart: () => void,
+  ): Promise<void> {
     return this.withSessionSendQueue(session.id, async () => {
       if (!isProjectlessSessionScope(session.projectScope)) {
         this.requireSessionExecution(session);
@@ -7603,6 +7652,7 @@ export class AgentSessionManager {
               preparedTurn.context,
             );
           session.status = "streaming";
+          releaseTurnStart();
           if (!session.background) {
             session.runState = { phase: "running", startedAt: Date.now() };
           }
@@ -8328,12 +8378,20 @@ export class AgentSessionManager {
   async retrySession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    await this.withSessionSendQueue(session.id, () =>
-      this.retrySessionExecution(session),
-    );
+    const releaseTurnStart = this.markTurnStarting(session.id);
+    try {
+      await this.withSessionSendQueue(session.id, () =>
+        this.retrySessionExecution(session, releaseTurnStart),
+      );
+    } finally {
+      releaseTurnStart();
+    }
   }
 
-  private async retrySessionExecution(session: AgentSession): Promise<void> {
+  private async retrySessionExecution(
+    session: AgentSession,
+    releaseTurnStart: () => void,
+  ): Promise<void> {
     if (!isProjectlessSessionScope(session.projectScope)) {
       this.requireSessionExecution(session);
     }
@@ -8351,6 +8409,7 @@ export class AgentSessionManager {
         preparedTurn.context,
       );
       session.status = "streaming";
+      releaseTurnStart();
       if (!session.background) {
         session.runState = { phase: "running", startedAt: Date.now() };
         await this.saveSessionNow(session.id);

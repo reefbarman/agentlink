@@ -10826,12 +10826,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const dropIfNotStreaming = (): boolean => {
       if (this.projectedForegroundStore.isStreaming) return false;
       const liveFg = this.sessionManager?.getForegroundSession();
-      const liveStreaming = Boolean(
-        liveFg &&
-        (liveFg.status === "streaming" ||
-          liveFg.status === "tool_executing" ||
-          liveFg.status === "awaiting_approval"),
-      );
+      const liveStreaming = this.isSessionTurnLive(liveFg);
       if (liveStreaming) {
         this.projectedForegroundStore.setStreaming(true);
         return false;
@@ -11681,10 +11676,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 sessionId: fg.id,
                 mode: fg.mode,
                 model: fg.model,
-                streaming:
-                  fg.status === "streaming" ||
-                  fg.status === "tool_executing" ||
-                  fg.status === "awaiting_approval",
+                streaming: this.isSessionTurnLive(fg),
                 condenseThreshold,
                 contextBudget: this.buildContextBudget(
                   fg,
@@ -13608,6 +13600,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /**
+   * Whether the session has a live turn, including an accepted send or retry
+   * that is still preparing (hooks, checkpoint, condense, memory) before its
+   * status becomes "streaming". Reporting that window as idle made the
+   * transcript briefly render "(No response)" before the spinner appeared.
+   */
+  private isSessionTurnLive(session: AgentSession | undefined): boolean {
+    if (!session) return false;
+    return (
+      session.status === "streaming" ||
+      session.status === "tool_executing" ||
+      session.status === "awaiting_approval" ||
+      this.sessionManager?.isTurnStarting?.(session.id) === true
+    );
+  }
+
   private buildChatState(session: AgentSession | undefined): ChatState {
     if (!this.sessionManager) {
       throw new Error("Agent session manager is unavailable");
@@ -13659,16 +13667,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           null),
       mode,
       model: modelId,
-      streaming:
-        session?.status === "streaming" ||
-        session?.status === "tool_executing" ||
-        session?.status === "awaiting_approval",
+      streaming: this.isSessionTurnLive(session),
       interrupted:
         Boolean(session?.runState) &&
         session?.runState?.phase !== "awaiting_question" &&
-        session?.status !== "streaming" &&
-        session?.status !== "tool_executing" &&
-        session?.status !== "awaiting_approval",
+        !this.isSessionTurnLive(session),
       condenseThreshold,
       contextBudget,
       contextHealth: this.contextHealth,
@@ -14207,10 +14210,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const backgroundResults =
       this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
       [];
-    const streaming =
-      session.status === "streaming" ||
-      session.status === "tool_executing" ||
-      session.status === "awaiting_approval";
+    const streaming = this.isSessionTurnLive(session);
     // Optional chaining tolerates stub sessions in tests; a real AgentSession
     // always exposes the live-tail snapshot.
     const inFlight = session.inFlightAssistantBlocks ?? [];

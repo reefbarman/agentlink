@@ -8599,6 +8599,40 @@ describe("AgentSessionManager memory candidate nudges", () => {
     }
   });
 
+  it("reports a send or retry as starting until its status becomes streaming", async () => {
+    const { mgr, session, run } = await makeSendHarness();
+    let releaseMemory!: () => void;
+    const memoryGate = new Promise<undefined>((resolve) => {
+      releaseMemory = () => resolve(undefined);
+    });
+    vi.spyOn(mgr as any, "prepareAutomaticMemoryContext").mockReturnValue(
+      memoryGate,
+    );
+    const startingAtRun: boolean[] = [];
+    const runImpl = run.getMockImplementation() as any;
+    (run as any).mockImplementation((...args: any[]) => {
+      startingAtRun.push(mgr.isTurnStarting(session.id));
+      return runImpl(...args);
+    });
+
+    expect(mgr.isTurnStarting(session.id)).toBe(false);
+    const sent = mgr.sendMessage(session.id, "hello", session.mode);
+    expect(mgr.isTurnStarting(session.id)).toBe(true);
+    await vi.waitFor(() =>
+      expect((mgr as any).prepareAutomaticMemoryContext).toHaveBeenCalled(),
+    );
+    expect(mgr.isTurnStarting(session.id)).toBe(true);
+    releaseMemory();
+    await sent;
+    expect(mgr.isTurnStarting(session.id)).toBe(false);
+
+    const retried = mgr.retrySession(session.id);
+    expect(mgr.isTurnStarting(session.id)).toBe(true);
+    await retried;
+    expect(mgr.isTurnStarting(session.id)).toBe(false);
+    expect(startingAtRun).toEqual([false, false]);
+  });
+
   it("stores a model-facing memory reminder while preserving display text", async () => {
     const { mgr, session } = await makeSendHarness();
     const text = "Going forward, always ask me before switching modes.";
