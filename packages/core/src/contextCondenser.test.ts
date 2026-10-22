@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createAgentEngine } from "./agentEngine.js";
+import { defineTool } from "./hostTools.js";
 import {
   createSummarizingContextCondenser,
   estimateModelRequestTokens,
@@ -22,10 +23,7 @@ import {
 import { InMemoryAgentStateRepository } from "./sessionRepository.js";
 import type { AgentTurnEvent, AgentTurnRunOptions } from "./turnContracts.js";
 import { createTurnInteractionTokenService } from "./turnInteractions.js";
-import {
-  createHeadlessTurnKernel,
-  type HeadlessTurnTool,
-} from "./turnKernel.js";
+import type { HeadlessTurnTool } from "./turnKernel.js";
 import { InMemoryAgentTurnLeaseProvider } from "./turnLeases.js";
 
 const PRINCIPAL = { tenantId: "tenant-a", subjectId: "subject-a" };
@@ -361,44 +359,12 @@ describe("engine mid-turn context condensing", () => {
       [toolTurn("call-1"), finalTurn("read it")],
       caps(14_000),
     );
-    const registry = new CoreModelBackendRegistry();
-    registry.register(backend);
-    // The kernel directly: the engine does not forward `modelRequest`.
-    const kernel = createHeadlessTurnKernel({
-      models: new DefaultCoreModelRuntime(registry, { ownerId: "test" }),
-      tools: [readBig],
-      contextCondenser: createSummarizingContextCondenser(),
+    const { engine, run } = setup(backend, [readBig]);
+    await engine.sessions.create({ principal: PRINCIPAL });
+    const turn = await run("read the big file", undefined, {
+      modelRequest: { state: { previousResponseId: "resp-1", store: true } },
     });
-    const stream = kernel.runTurn(
-      {
-        request: {
-          principal: PRINCIPAL,
-          sessionId: "session-1",
-          input: { text: "read the big file", attachments: undefined },
-          model: undefined,
-        },
-        turnId: "turn-1",
-        history: [],
-        sessionModel: undefined,
-        runtimeDefaultModel: MODEL,
-        systemPrompt: "You are a test assistant.",
-        maxOutputTokens: 512,
-        reasoningEffort: undefined,
-        limits: undefined,
-        sessionRevision: "1",
-      },
-      {
-        signal: undefined,
-        modelRequest: { state: { previousResponseId: "resp-1", store: true } },
-      },
-    );
-    for (;;) {
-      const next = await stream.next();
-      if (next.done) {
-        expect(next.value).toMatchObject({ status: "completed" });
-        break;
-      }
-    }
+    expect(turn.result).toMatchObject({ status: "completed" });
     expect(backend.requests[0]!.state).toEqual({
       previousResponseId: "resp-1",
       store: true,
@@ -573,19 +539,19 @@ describe("engine manual condense (sessions.condense)", () => {
 
   it("only condenses over the threshold when asked to, and counts host-resolved tools", async () => {
     const backend = new ScriptedBackend([finalTurn("short")], caps(14_000));
-    const bigTool: HeadlessTurnTool = {
-      definition: {
-        name: "big_tool",
-        description: "x".repeat(40_000),
-        input_schema: { type: "object" },
-      },
-      execute: async () => ({ modelContent: "ok" }),
-    };
+    const bigTool = defineTool({
+      name: "big_tool",
+      description: "x".repeat(40_000),
+      inputSchema: { type: "object" },
+      effect: "read",
+      authorization: "none",
+      handler: async () => ({ modelContent: "ok" }),
+    });
     let resolved = 0;
     const { engine, run } = setup(backend, undefined, {
       resolveTools: () => {
         resolved += 1;
-        return { tools: [bigTool] };
+        return { tools: [bigTool], dispose: () => undefined };
       },
     });
     await engine.sessions.create({ principal: PRINCIPAL });

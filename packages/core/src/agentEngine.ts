@@ -1209,6 +1209,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
     let durableState: AgentTurnDurableState | undefined;
     try {
       prepared = await args.prepare(lease, {
+        ...args.runOptions,
         signal: combineAbortSignals(
           leaseAbort.signal,
           lifecycleAbort.signal,
@@ -1219,9 +1220,6 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
           durableState = structuredClone(state);
           args.runOptions.onDurableState?.(structuredClone(state));
         },
-        ...(args.runOptions.takeInterjections
-          ? { takeInterjections: args.runOptions.takeInterjections }
-          : {}),
       });
       stream = prepared.stream;
       let pendingTerminalEvent: AgentTurnEvent | undefined;

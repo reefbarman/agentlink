@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createAgentEngine, type AgentEngine } from "./agentEngine.js";
+import { ResponsesConversationState } from "./codex/responsesRecovery.js";
 import { defineTool } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
 import {
@@ -177,6 +178,80 @@ async function collect(
 }
 
 describe("public E6 agent engine", () => {
+  it("forwards request-scoped model controls through the engine to the backend", async () => {
+    const backend = new ScriptedBackend([finalTurn("configured")]);
+    const agent = engine(backend);
+    const conversationState = new ResponsesConversationState();
+    const beforeModelDispatch = () => undefined;
+    const attempts: string[] = [];
+    const modelRequest = {
+      temperature: 0.37,
+      state: { previousResponseId: "response-distinctive", store: true },
+      conversationState,
+      executionControls: {
+        maxRetries: 3,
+        beforeModelDispatch,
+        maxOutputBytes: 12_345,
+      },
+      onProviderRequestAttempt: (attempt: { readonly model: string }) => {
+        attempts.push(attempt.model);
+      },
+    };
+
+    await agent.sessions.create({ principal: PRINCIPAL, model: MODEL });
+    await collect(
+      agent.sessions.runTurn(
+        {
+          principal: PRINCIPAL,
+          sessionId: "session-1",
+          input: { text: "Use request controls", attachments: undefined },
+          model: undefined,
+        },
+        { signal: undefined, modelRequest },
+      ),
+    );
+
+    expect(backend.requests).toHaveLength(1);
+    expect(backend.requests[0]).toMatchObject({
+      temperature: 0.37,
+      state: { previousResponseId: "response-distinctive", store: true },
+      executionControls: {
+        maxRetries: 3,
+        maxOutputBytes: 12_345,
+      },
+      providerHints: {
+        codex: { conversationState },
+      },
+    });
+    expect(backend.requests[0]!.executionControls?.beforeModelDispatch).toBe(
+      beforeModelDispatch,
+    );
+    expect(attempts).toEqual([MODEL.modelId]);
+  });
+
+  it("forwards request-scoped output limits into the turn kernel", async () => {
+    const backend = new ScriptedBackend([finalTurn("too large")]);
+    const agent = engine(backend);
+    await agent.sessions.create({ principal: PRINCIPAL, model: MODEL });
+
+    const run = await collect(
+      agent.sessions.runTurn(
+        {
+          principal: PRINCIPAL,
+          sessionId: "session-1",
+          input: { text: "Use the output limit", attachments: undefined },
+          model: undefined,
+        },
+        { signal: undefined, maxModelOutputBytes: 1 },
+      ),
+    );
+
+    expect(run.result).toMatchObject({
+      status: "failed",
+      error: { code: "model_output_limit_exceeded" },
+    });
+  });
+
   it("forwards the actual one-turn model to host instruction composition without changing session selection", async () => {
     const backend = new ScriptedBackend([finalTurn("override")]);
     const entries = backend.listModels();
@@ -772,16 +847,29 @@ describe("public E6 agent engine", () => {
     });
 
     const resumed = await collect(
-      second.sessions.resumeInteraction({
-        principal: PRINCIPAL,
-        sessionId: "session-1",
-        turnId: "turn-1",
-        interactionId: required!.interaction.interactionId,
-        interactionRevision: required!.interactionRevision,
-        expectedSessionRevision: required!.sessionRevision,
-        decision: "allow",
-      }),
+      second.sessions.resumeInteraction(
+        {
+          principal: PRINCIPAL,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          interactionId: required!.interaction.interactionId,
+          interactionRevision: required!.interactionRevision,
+          expectedSessionRevision: required!.sessionRevision,
+          decision: "allow",
+        },
+        {
+          signal: undefined,
+          modelRequest: {
+            temperature: 0.41,
+            state: { previousResponseId: "resume-response", store: true },
+          },
+        },
+      ),
     );
+    expect(backend.requests[1]).toMatchObject({
+      temperature: 0.41,
+      state: { previousResponseId: "resume-response", store: true },
+    });
     expect(resumed.result).toMatchObject({
       status: "completed",
       text: "Updated",
