@@ -525,6 +525,7 @@ export type GatewaySnapshot = {
     approval: ApprovalRequest | null;
     question: {
       id: string;
+      toolCallId?: string;
       context: string;
       questions: Question[];
       backgroundTask?: string;
@@ -598,6 +599,7 @@ export type GatewaySnapshot = {
       queueInterjectionAvailable?: boolean;
       questionRequest: {
         id: string;
+        toolCallId?: string;
         context: string;
         questions: Question[];
         backgroundTask?: string;
@@ -1157,6 +1159,22 @@ function UrlElicitationPanel({
  * message was queued but applied after the queued response.
  */
 const ASK_AGENT_STALE_QUEUE_GRACE_MS = 2_000;
+
+export function isQuestionResolvedInTranscript(
+  messages: readonly ChatMessage[],
+  toolCallId: string | undefined,
+): boolean {
+  if (!toolCallId) return false;
+  return messages.some((message) =>
+    message.blocks.some(
+      (block) =>
+        (block.type === "question_answer" && block.toolCallId === toolCallId) ||
+        (block.type === "tool_call" &&
+          block.id === toolCallId &&
+          block.complete === true),
+    ),
+  );
+}
 
 function isWithinStaleQueueGrace(
   confirmedAt: number,
@@ -3451,11 +3469,21 @@ export function BrowserGatewayApp({
   // Both question sources can briefly disappear while a turn is running. Keep
   // the card mounted unless its request was explicitly cleared.
   const lastPendingQuestion = lastPendingQuestionRef.current;
-  const questionWasCleared = snapshot?.ui.recentEvents.some(
-    (event) =>
-      event.type === "agentQuestionCleared" &&
-      event.id === lastPendingQuestion?.question.id,
-  );
+  // `recentEvents` is a bounded window and is always empty on the relay data
+  // plane, so also treat an answered/completed ask_user call in the transcript
+  // as cleared. Otherwise a question answered on another surface (VS Code)
+  // would stay mounted until the turn ends.
+  const questionWasCleared =
+    snapshot?.ui.recentEvents.some(
+      (event) =>
+        event.type === "agentQuestionCleared" &&
+        event.id === lastPendingQuestion?.question.id,
+    ) ||
+    (lastPendingQuestion !== null &&
+      isQuestionResolvedInTranscript(
+        messages,
+        lastPendingQuestion.question.toolCallId,
+      ));
   const pendingQuestion =
     snapshotQuestion ??
     ((foreground?.status === "awaiting_approval" || foreground?.streaming) &&

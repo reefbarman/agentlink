@@ -7697,6 +7697,94 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await waitFor(() => expect(screen.queryByText("Continue?")).toBeNull());
   });
 
+  it("drops a workspace question answered on another surface while the turn keeps streaming", async () => {
+    const question = {
+      id: "question-1",
+      toolCallId: "tool-ask-1",
+      context: "Need your input before continuing.",
+      questions: [
+        { id: "continue", type: "yes_no" as const, question: "Continue?" },
+      ],
+    };
+    const pending = createSnapshot();
+    pending.session.foreground.status = "tool_executing";
+    pending.session.foreground.streaming = true;
+    pending.session.foreground.questionRequest = question;
+    pending.ui.question = question;
+    // Answered in VS Code: both question sources are gone, the turn is still
+    // streaming, and no agentQuestionCleared event is in recentEvents (the
+    // relay data plane never carries one). The transcript records the answer.
+    const answered = structuredClone(pending);
+    answered.session.foreground.questionRequest = null;
+    answered.ui.question = null;
+    answered.session.foreground.projectedMessages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "",
+        timestamp: 1_000,
+        blocks: [
+          {
+            type: "tool_call",
+            id: "tool-ask-1",
+            name: "ask_user",
+            inputJson: "{}",
+            result: "",
+            complete: false,
+          },
+          {
+            type: "question_answer",
+            toolCallId: "tool-ask-1",
+            items: [{ question: "Continue?", answer: "Yes" }],
+          },
+        ],
+      },
+    ];
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const pathname = String(input).split("?")[0];
+      if (pathname === "/api/instances") {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+            },
+          ],
+        });
+      }
+      if (pathname === "/api/ui-state") return jsonResponse(pending);
+      if (pathname === "/api/models") return jsonResponse({ models: [] });
+      if (pathname === "/api/sessions") return jsonResponse({ sessions: [] });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await screen.findByRole("button", { name: "Yes" });
+    const source = MockEventSource.instances.at(-1)!;
+
+    await act(async () => {
+      source.emit("snapshot", answered);
+    });
+    // The transcript's answer summary still shows the question text; the
+    // card's answer controls must be gone.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Yes" })).toBeNull(),
+    );
+  });
+
   it("renders Ask Agent question and todo snapshots and routes question responses locally", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const askSnapshot = createAskAgentSessionResponse().snapshot;
