@@ -1,0 +1,91 @@
+.vscodeignore
+  h_e08a86bb3a33a2 47-48
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 5,198-206
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 173-178
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 97-207
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 46-62
+packages/node-host/src/credentialsHelperClient.ts
+  h_e08a86bb3a33a2 1-200
+packages/node-host/src/index.ts
+  h_e08a86bb3a33a2 14-19
+scripts/verify-cli-bundle.mjs
+  h_e08a86bb3a33a2 9-13,15,27,84-85,88,168-169,177,182,188-190
+  s_00cfef72b3c1df::t_6658153be05d0e 165-167,170
+apps/cli/src/cliReleaseInstall.test.ts
+  h_e08a86bb3a33a2 40,81,89-90,202
+  s_00cfef72b3c1df::t_042328bd25312b 91
+scripts/verify-cli-bundle.test.mjs
+  h_e08a86bb3a33a2 24,29,68,71,127-143,165
+  s_00cfef72b3c1df::t_f5e94a0db5795e 163-164,166
+src/extension.ts
+  h_e08a86bb3a33a2 137,516-523,528-530,2770-2772
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/node-host/native/credentials-helper/main.swift
+  h_e08a86bb3a33a2 1-178
+apps/desktop/sign.mjs
+  h_e08a86bb3a33a2 2-5,19,27-38,40,58-60
+  s_04212033aa3a37::t_4300bbee49c777 1
+scripts/package-vsix.mjs
+  h_e08a86bb3a33a2 1-4,6,17,49-79
+apps/cli/bundle.mjs
+  h_e08a86bb3a33a2 6-8,42-46,48,175,196-201,208-209
+  s_00cfef72b3c1df::t_dd085a301be915 5
+apps/cli/src/cliReleaseInstall.ts
+  h_e08a86bb3a33a2 29-30
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 55
+scripts/install-cli.mjs
+  h_e08a86bb3a33a2 96-97
+  s_00cfef72b3c1df::t_2144582ddaa5bb 95
+scripts/build-credentials-helper.mjs
+  h_e08a86bb3a33a2 1-76
+apps/cli/README.md
+  h_e08a86bb3a33a2 25
+packages/node-host/src/keychainSecretStorage.ts
+  h_e08a86bb3a33a2 5-11,30-38,58,63-77,156-192
+  s_2dc0f7ec8b84f8::t_193358709989b0 193-194
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_00cfef72b3c1df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2853dde7-65a8-4a7f-8610-93294cc25f91",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_04212033aa3a37": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6387286-7391-4805-bfb8-6f415bc0c598",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_2dc0f7ec8b84f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1aa416a-3363-4c1c-9d79-44d3e589718e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
