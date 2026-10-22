@@ -1,0 +1,29 @@
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 118,2872
+src/agent/webview/questionDetection.ts
+  h_e08a86bb3a33a2 150-178,191
+src/agent/webview/questionDetection.test.ts
+  h_e08a86bb3a33a2 2-5,7-29,88-93
+  s_1f8e1496703216::t_2c433a76452275 94-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "990ccb71cd3fb52137b5822494781f7a8480d128",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1f8e1496703216": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3a330d7-f25a-432c-8dae-1c593d0ab409",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
