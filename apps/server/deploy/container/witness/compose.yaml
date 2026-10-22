@@ -23,7 +23,7 @@ name: agentlink-witness
 
 services:
   witness:
-    image: restic/rest-server:0.13.0
+    image: restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5
     restart: unless-stopped
     environment:
       # Reached only over the private network below.

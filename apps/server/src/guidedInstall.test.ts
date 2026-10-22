@@ -369,7 +369,7 @@ describe("guided release installer", { timeout: 20_000 }, () => {
     ).toBe(true);
     // The witness is pulled before any state exists, like the GHCR images.
     expect(pulls.map((call) => call.args[1])).toContain(
-      "restic/rest-server:0.13.0",
+      "restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5",
     );
     const lastPull = docker.map((call) => call.args[0]).lastIndexOf("pull");
     const firstUp = docker.findIndex(
@@ -699,7 +699,10 @@ describe("guided release installer", { timeout: 20_000 }, () => {
 
   it("leaves nothing behind when the witness image cannot be pulled", () => {
     const f = fixture();
-    const result = f.install({ TEST_DOCKER_FAIL: "restic/rest-server:0.13.0" });
+    const result = f.install({
+      TEST_DOCKER_FAIL:
+        "restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5",
+    });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("could not pull the backup witness image");
     expect(result.stderr).toContain("can be retried");
