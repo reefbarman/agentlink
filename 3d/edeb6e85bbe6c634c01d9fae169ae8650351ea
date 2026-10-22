@@ -1,0 +1,37 @@
+packages/node-host/src/keychainMcpCredentialRepository.ts
+  h_e08a86bb3a33a2 1-3,25-26,30-33,45-51,56-64,72,75-79,86,137,141,156,301-322,330-332,335-344,348-512,536-540,544-546,610-662,666-832,878-892
+  h_e08a86bb3a33a2 73-74,138-140,142,323-324,333,513-514,541-543,547,663-665,833-834,893-894
+packages/node-host/src/credentialsHelperClient.ts
+  h_e08a86bb3a33a2 197-198
+packages/node-host/src/keychainSecretStorage.ts
+  h_e08a86bb3a33a2 49-50,155-156
+  h_e08a86bb3a33a2 157
+packages/node-host/src/keychainMcpCredentialRepository.test.ts
+  h_e08a86bb3a33a2 23-25,89-121
+packages/node-host/README.md
+  h_e08a86bb3a33a2 140-141
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 8-10,21,40-42,58,79-99,262-306,308-596
+  h_e08a86bb3a33a2 307,597-598
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 56,59
+apps/cli/src/mcpOAuthRuntime.ts
+  h_e08a86bb3a33a2 7,112
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.ts
+  h_e08a86bb3a33a2 222-223
+CHANGELOG.md
+  h_e08a86bb3a33a2 5,8
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5,8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
