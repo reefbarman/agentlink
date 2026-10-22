@@ -3546,6 +3546,16 @@ describe("AgentSessionManager host injection", () => {
             providers: new ProviderRegistry(),
             createEngine: vi.fn(() => engine) as any,
             createToolRuntime: createToolRuntime as any,
+            // Real checkpoints run git in the background and can race the
+            // temp-workspace cleanup; this test only covers history binding.
+            createCheckpointManager: vi.fn(() => ({
+              baseCommit: null,
+              initialize: vi.fn(async () => true),
+              createCheckpoint: vi.fn(async () => null),
+              previewRevert: vi.fn(async () => null),
+              revertToCheckpoint: vi.fn(async () => false),
+              getDiffBetween: vi.fn(async () => ""),
+            })) as any,
           },
           workspaceSessionHistoryIndexFactory: indexFactory,
         },
