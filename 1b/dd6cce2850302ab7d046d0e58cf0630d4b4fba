@@ -1,0 +1,24 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 1212
+packages/core/src/contextCondenser.test.ts
+  h_e08a86bb3a33a2 4,26,362-365,367,542,545-549,554
+  h_e08a86bb3a33a2 543-544
+packages/core/src/agentEngine.test.ts
+  h_e08a86bb3a33a2 4,181-254,859-866,869-872
+  h_e08a86bb3a33a2 850-858,867
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
