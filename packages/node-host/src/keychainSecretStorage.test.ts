@@ -98,7 +98,9 @@ describe("createKeychainSecretStorage", () => {
     // A stand-in helper speaking the same stdin/stdout protocol. Its state
     // file lets the test see what the "Keychain" holds and which labels and
     // operations it was given.
-    async function fakeHelper(mode: "ok" | "reject" | "error") {
+    async function fakeHelper(
+      mode: "ok" | "reject" | "error" | "detect-concurrency",
+    ) {
       const root = await fs.mkdtemp(
         path.join(os.tmpdir(), "agentlink-fake-helper-"),
       );
@@ -113,6 +115,15 @@ const state = fs.existsSync(${JSON.stringify(statePath)})
   ? JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"))
   : { values: {}, requests: [] };
 const request = JSON.parse(fs.readFileSync(0, "utf8"));
+const concurrencyMarker = ${JSON.stringify(path.join(os.tmpdir(), `agentlink-helper-concurrency-${process.pid}`))};
+if (${JSON.stringify(mode)} === "detect-concurrency") {
+  try { fs.mkdirSync(concurrencyMarker); }
+  catch {
+    process.stdout.write(JSON.stringify({ ok: false, error: "keychain_error", message: "concurrent helper request" }));
+    process.exit(1);
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+}
 state.requests.push({ op: request.op, account: request.account, label: request.label });
 let reply;
 if (${JSON.stringify(mode)} === "reject") reply = { ok: false, error: "caller_rejected" };
@@ -124,6 +135,7 @@ else {
   reply = { ok: true, value: request.op === "get" ? (state.values[key] ?? null) : null };
 }
 fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+if (${JSON.stringify(mode)} === "detect-concurrency") fs.rmdirSync(concurrencyMarker);
 process.stdout.write(JSON.stringify(reply));
 `,
         { mode: 0o755 },
@@ -133,11 +145,16 @@ process.stdout.write(JSON.stringify(reply));
           values: Record<string, string>;
           requests: Array<{ op: string; account: string; label: string }>;
         };
-      const storage = async (account = "codex-oauth-credentials") => {
-        const lockRoot = await fs.mkdtemp(
-          path.join(os.tmpdir(), "agentlink-keychain-helper-"),
-        );
-        temporaryRoots.push(lockRoot);
+      const storage = async (
+        account = "codex-oauth-credentials",
+        sharedLockRoot?: string,
+      ) => {
+        const lockRoot =
+          sharedLockRoot ??
+          (await fs.mkdtemp(
+            path.join(os.tmpdir(), "agentlink-keychain-helper-"),
+          ));
+        if (!sharedLockRoot) temporaryRoots.push(lockRoot);
         return await createKeychainSecretStorage({
           service: "test-service",
           account,
@@ -177,6 +194,23 @@ process.stdout.write(JSON.stringify(reply));
       expect(values.get("test-service:test-account")).toBe("direct-value");
       // One rejected attempt, then direct access for the rest of the process.
       expect((await helper.readState()).requests).toHaveLength(1);
+    });
+
+    it("serializes helper prompts across accounts and host processes", async () => {
+      const helper = await fakeHelper("detect-concurrency");
+      const lockRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-keychain-shared-helper-"),
+      );
+      temporaryRoots.push(lockRoot);
+      const [codex, mcp] = await Promise.all([
+        helper.storage("codex-oauth-credentials", lockRoot),
+        helper.storage("agentlink-mcp-oauth-v1", lockRoot),
+      ]);
+      await expect(Promise.all([codex.get(), mcp.get()])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+      expect((await helper.readState()).requests).toHaveLength(2);
     });
 
     it("reports a Keychain error without retrying directly and prompting twice", async () => {

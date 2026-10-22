@@ -64,20 +64,24 @@ export async function createKeychainSecretStorage(
     options.credentialsHelperPath === null
       ? undefined
       : (options.credentialsHelperPath ?? resolveCredentialsHelperPath());
-  const entry: KeychainEntry = helperPath
-    ? withDirectFallback(
+  const lockRoot =
+    options.lockRoot ??
+    path.join(os.homedir(), ".agentlink", "credential-locks");
+  const helperEntry = helperPath
+    ? serializeHelperAccess(
         createCredentialsHelperEntry({
           helperPath,
           service,
           account,
           label: options.label ?? describeSharedCredential(account),
         }),
-        nativeEntry,
+        path.join(lockRoot, "credentials-helper.lock"),
+        options,
       )
+    : undefined;
+  const entry: KeychainEntry = helperEntry
+    ? withDirectFallback(helperEntry, nativeEntry)
     : nativeEntry;
-  const lockRoot =
-    options.lockRoot ??
-    path.join(os.homedir(), ".agentlink", "credential-locks");
   const storageStem = `${safeLockSegment(service)}--${safeLockSegment(account)}`;
   const lockPath = path.join(lockRoot, `${storageStem}.lock`);
   const revisionPath = path.join(lockRoot, `${storageStem}.revision`);
@@ -160,6 +164,32 @@ interface KeychainEntry {
 }
 
 /**
+ * Startup has several independent credential consumers, and multiple VS Code
+ * windows add more. Without one queue, they can all ask the helper before the
+ * first "Always Allow" updates an old item's ACL, leaving macOS with a stack
+ * of already-queued prompts. Serialize every helper request across accounts,
+ * consumers and processes. Direct Keychain access keeps its previous behaviour.
+ */
+function serializeHelperAccess(
+  helper: KeychainEntry,
+  lockPath: string,
+  options: KeychainSecretStorageOptions,
+): KeychainEntry {
+  const run = <T>(operation: () => Promise<T>): Promise<T> =>
+    withFileLock(lockPath, operation, {
+      ...options,
+      // A prompt can legitimately wait for the user. Other consumers should
+      // keep waiting rather than time out and start independent requests.
+      lockTimeoutMs: Math.max(options.lockTimeoutMs ?? 0, 5 * 60_000),
+    });
+  return {
+    getPassword: () => run(() => helper.getPassword()),
+    setPassword: (value) => run(() => helper.setPassword(value)),
+    deletePassword: () => run(() => helper.deletePassword()),
+  };
+}
+
+/**
  * Use the helper, but switch to direct Keychain access for good when it is
  * unavailable (missing, unrunnable, or this program is not an allowed
  * caller), which is the behaviour before the helper existed. Keychain errors
@@ -232,6 +262,47 @@ function requireSegment(value: string, label: string): string {
 
 function safeLockSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 200);
+}
+
+/** Atomically publish the helper queue as one owner-bearing file. */
+async function withFileLock<T>(
+  lockPath: string,
+  operation: () => Promise<T>,
+  options: KeychainSecretStorageOptions,
+): Promise<T> {
+  const lockTimeoutMs = options.lockTimeoutMs ?? 60_000;
+  const retryDelayMs = options.retryDelayMs ?? 50;
+  const deadline = Date.now() + lockTimeoutMs;
+  await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  const ownerToken = `${process.pid}:${randomUUID()}`;
+  let handle: fs.FileHandle;
+  while (true) {
+    try {
+      const candidate = await fs.open(lockPath, "wx", 0o600);
+      try {
+        await candidate.writeFile(ownerToken, "utf-8");
+      } catch (error) {
+        await candidate.close();
+        await fs.rm(lockPath, { force: true });
+        throw error;
+      }
+      handle = candidate;
+      break;
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      if (Date.now() >= deadline) {
+        throw new Error("agentlink_keychain_helper_lock_timeout");
+      }
+      await sleep(retryDelayMs);
+    }
+  }
+  try {
+    return await operation();
+  } finally {
+    await handle.close();
+    const currentOwner = await fs.readFile(lockPath, "utf-8").catch(() => null);
+    if (currentOwner === ownerToken) await fs.rm(lockPath, { force: true });
+  }
 }
 
 async function withDirectoryLock<T>(

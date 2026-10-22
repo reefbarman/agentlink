@@ -116,6 +116,7 @@ function runHelper(
   const spawn = options.spawn ?? spawnProcess;
   return new Promise((resolve, reject) => {
     let settled = false;
+    let terminationError: Error | undefined;
     const finish = (action: () => void) => {
       if (settled) return;
       settled = true;
@@ -128,8 +129,10 @@ function runHelper(
     const chunks: Buffer[] = [];
     let size = 0;
     const timer = setTimeout(() => {
+      terminationError = new Error("agentlink_credentials_helper_timeout");
       child.kill();
-      finish(() => reject(new Error("agentlink_credentials_helper_timeout")));
+      // Keep the caller's serialization lock until close confirms the process
+      // that owns a possible Keychain prompt is actually gone.
     }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     child.on("error", (error: NodeJS.ErrnoException) =>
       finish(() =>
@@ -143,16 +146,20 @@ function runHelper(
     child.stdout?.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_OUTPUT_BYTES) {
-        child.kill();
-        finish(() =>
-          reject(new Error("agentlink_credentials_helper_output_too_large")),
+        terminationError = new Error(
+          "agentlink_credentials_helper_output_too_large",
         );
+        child.kill();
         return;
       }
       chunks.push(chunk);
     });
     child.on("close", () =>
       finish(() => {
+        if (terminationError) {
+          reject(terminationError);
+          return;
+        }
         try {
           const parsed = JSON.parse(
             Buffer.concat(chunks).toString("utf8"),
