@@ -3960,7 +3960,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
         approvalRequest: sameSession ? state.approvalRequest : null,
         questionRequest: sameSession ? state.questionRequest : null,
         detectedQuestion: null,
-        dismissedDetectedQuestionIds: [],
+        dismissedDetectedQuestionIds: sameSession
+          ? state.dismissedDetectedQuestionIds
+          : [],
         chatState: {
           ...state.chatState,
           sessionId: action.sessionId,

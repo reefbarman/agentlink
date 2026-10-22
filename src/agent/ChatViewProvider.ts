@@ -1418,6 +1418,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     messageId: string;
     assistantText: string;
   } | null = null;
+  /** The next projected detection pass evaluates a restored session. */
+  private projectedRestoreDetectPending = false;
   private projectedLastDetectKey: string | null = null;
   private agentPluginManagerHost: AgentPluginManagerHost | undefined;
   private agentPluginCatalogProvider: AgentPluginCatalogProvider | undefined;
@@ -10594,6 +10596,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private maybeStartProjectedDetectedQuestionRequest(): void {
+    // A pass right after hydration evaluates a restored message rather than a
+    // turn that just finished live, so it only re-offers waiting_for_user cards.
+    const restored = this.projectedRestoreDetectPending;
+    this.projectedRestoreDetectPending = false;
     if (this.webviewReady) return;
 
     const state = this.projectedForegroundState;
@@ -10648,6 +10654,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const detectKey = `${lastMsg.id}:${waitingForUser}:${assistantText}`;
     if (this.projectedLastDetectKey === detectKey) {
+      return;
+    }
+
+    if (restored && !waitingForUser) {
+      // Mark the restored message as handled so later events do not detect it.
+      if (this.projectedDetectRequest) {
+        this.detectRequestInputs.delete(this.projectedDetectRequest.requestId);
+      }
+      this.projectedDetectRequest = null;
+      this.projectedLastDetectKey = detectKey;
       return;
     }
 
@@ -10713,6 +10729,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.projectedForegroundStore.reset();
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
+    this.projectedRestoreDetectPending = false;
     this.detectRequestInputs.clear();
   }
 
@@ -10758,6 +10775,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
+    this.projectedRestoreDetectPending = true;
     this.detectRequestInputs.clear();
   }
 
@@ -11137,6 +11155,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           streaming: extMsg.streaming,
           interrupted: extMsg.interrupted,
         });
+        this.projectedRestoreDetectPending = true;
         break;
       }
 
@@ -11314,6 +11333,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!fg) return null;
 
     this.ensureProjectedForegroundSession(fg);
+    if (this.projectedRestoreDetectPending) {
+      this.maybeStartProjectedDetectedQuestionRequest();
+    }
 
     return createBrowserForegroundSnapshot(fg.id, {
       ...this.projectedForegroundState,

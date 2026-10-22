@@ -466,6 +466,8 @@ export function App({
     };
   }, [pane.surface]);
   const previousStreamingRef = useRef(state.streaming);
+  /** The next detection pass evaluates a just-loaded (restored) session. */
+  const restoreDetectPendingRef = useRef(false);
   const activeDetectRequestRef = useRef<{
     requestId: string;
     messageId: string;
@@ -1894,6 +1896,7 @@ export function App({
           if (msg.hasMoreBefore !== true) {
             loadingSessionIdRef.current = null;
           }
+          restoreDetectPendingRef.current = true;
           dispatch({
             type: "LOAD_SESSION",
             sessionId: msg.sessionId,
@@ -2840,13 +2843,12 @@ export function App({
   useEffect(() => {
     const wasStreaming = previousStreamingRef.current;
     const isStreaming = state.streaming;
-
-    if (!wasStreaming || isStreaming) {
-      previousStreamingRef.current = isStreaming;
-      return;
-    }
-
+    const restored = restoreDetectPendingRef.current;
+    restoreDetectPendingRef.current = false;
     previousStreamingRef.current = isStreaming;
+
+    const streamEnded = wasStreaming && !isStreaming;
+    if (isStreaming || (!streamEnded && !restored)) return;
 
     if (state.questionRequest) {
       dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
@@ -2869,6 +2871,14 @@ export function App({
       return;
     }
 
+    // A restored session only re-offers a card when the agent was explicitly
+    // waiting on the user; older turns are history, not open questions.
+    const waitingForUser = lastMsg.finalMarker?.status === "waiting_for_user";
+    if (!streamEnded && !waitingForUser) {
+      dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
+      return;
+    }
+
     const assistantText = getQuestionDetectionText(lastMsg);
 
     if (!assistantText) {
@@ -2887,7 +2897,7 @@ export function App({
       requestId,
       messageId: lastMsg.id,
       text: assistantText,
-      waitingForUser: lastMsg.finalMarker?.status === "waiting_for_user",
+      waitingForUser,
     });
   }, [
     state.streaming,

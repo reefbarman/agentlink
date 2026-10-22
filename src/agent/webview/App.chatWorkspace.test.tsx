@@ -1611,4 +1611,74 @@ describe("App chat workspace integration", () => {
     );
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  describe("detected questions on session restore", () => {
+    function loadWithFinalMarker(marker?: Record<string, unknown>) {
+      deliver({
+        ...sessionLoaded("session-1", "Ship it"),
+        messages: [
+          { role: "user", content: "Ship it" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Pushed to main." }],
+            ...(marker ? { uiHint: { finalMarker: marker } } : {}),
+          },
+        ],
+      });
+    }
+
+    it("re-offers a card when the restored turn was waiting for the user", () => {
+      const vscodeApi = createVsCodeApi();
+      render(<App vscodeApi={vscodeApi} />);
+      deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+      loadWithFinalMarker({
+        status: "waiting_for_user",
+        source: "tool",
+        summary: "Pushed to main. Have you reloaded VS Code?",
+      });
+
+      const requests = postedCommands(
+        vscodeApi.postMessage,
+        "agentDetectQuestion",
+      );
+      expect(requests).toEqual([
+        expect.objectContaining({
+          text: "Pushed to main. Have you reloaded VS Code?",
+          waitingForUser: true,
+        }),
+      ]);
+
+      deliver({
+        type: "agentDetectQuestionResult",
+        requestId: requests[0].requestId,
+        messageId: requests[0].messageId,
+        detected: {
+          kind: "yes_no",
+          prompt: "Have you reloaded VS Code?",
+          options: [
+            { label: "Yes", payload: "Yes" },
+            { label: "No", payload: "No" },
+          ],
+        },
+      });
+      expect(screen.getByText("Detected choice prompt")).toBeTruthy();
+    });
+
+    it.each([
+      ["no final marker", undefined],
+      [
+        "a completed final marker",
+        { status: "completed", source: "tool", summary: "Should I proceed?" },
+      ],
+    ])("does not detect restored turns with %s", (_label, marker) => {
+      const vscodeApi = createVsCodeApi();
+      render(<App vscodeApi={vscodeApi} />);
+      deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+      loadWithFinalMarker(marker);
+
+      expect(
+        postedCommands(vscodeApi.postMessage, "agentDetectQuestion"),
+      ).toEqual([]);
+    });
+  });
 });

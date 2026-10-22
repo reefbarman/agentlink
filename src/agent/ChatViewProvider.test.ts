@@ -4946,6 +4946,9 @@ describe("ChatViewProvider session state sync", () => {
       { get: vi.fn(), update: vi.fn() } as never,
     );
 
+    const waitingMarker = {
+      finalMarker: { status: "waiting_for_user", source: "tool" },
+    };
     const foreground = {
       id: "session-1",
       mode: "code",
@@ -4960,6 +4963,7 @@ describe("ChatViewProvider session state sync", () => {
           {
             role: "assistant",
             content: [{ type: "text", text: "Choose A or B." }],
+            uiHint: waitingMarker,
           },
         ] as unknown[],
     };
@@ -4996,6 +5000,7 @@ describe("ChatViewProvider session state sync", () => {
         {
           role: "assistant",
           content: [{ type: "text", text: "Choose A or B." }],
+          uiHint: waitingMarker,
         },
       ],
       lastInputTokens: 0,
@@ -5066,6 +5071,90 @@ describe("ChatViewProvider session state sync", () => {
     expect(
       provider.getBrowserProjectedForegroundState()?.detectedQuestion,
     ).toBeUndefined();
+  });
+
+  describe("projected detected questions on session restore", () => {
+    function restoredForeground(uiHint?: Record<string, unknown>) {
+      return {
+        id: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        status: "idle",
+        title: "Session 1",
+        estimatedTotalUsed: 0,
+        lastInputTokens: 0,
+        lastOutputTokens: 0,
+        getAllMessages: () =>
+          [
+            { role: "user", content: "Ship it" },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Should I proceed?" }],
+              ...(uiHint ? { uiHint } : {}),
+            },
+          ] as unknown[],
+      };
+    }
+
+    async function createProvider(foreground: unknown) {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      provider.setSessionManager({
+        getForegroundSession: vi.fn(() => foreground),
+        getConfig: vi.fn(() => ({
+          model: "claude-sonnet-4-6",
+          autoCondenseThreshold: 0.8,
+        })),
+        getSessionInfos: vi.fn(() => []),
+        getBgSessionInfos: vi.fn(() => []),
+        onEvent: undefined,
+        onSessionsChanged: undefined,
+      } as never);
+      return provider;
+    }
+
+    it("detects a waiting_for_user question when the browser first hydrates", async () => {
+      const provider = await createProvider(
+        restoredForeground({
+          finalMarker: {
+            status: "waiting_for_user",
+            source: "tool",
+            summary: "Pushed to main. Have you reloaded VS Code?",
+          },
+        }),
+      );
+
+      const projected = provider.getBrowserProjectedForegroundState();
+      expect(projected?.detectedQuestion).toMatchObject({
+        kind: "yes_no",
+        prompt: "Have you reloaded VS Code?",
+      });
+    });
+
+    it("does not detect restored turns that were not waiting for the user", async () => {
+      const provider = await createProvider(restoredForeground());
+
+      expect(
+        provider.getBrowserProjectedForegroundState()?.detectedQuestion ?? null,
+      ).toBeNull();
+
+      // Later non-streaming events must not re-detect the restored message.
+      (
+        provider as unknown as {
+          projectExtensionMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).projectExtensionMessage({
+        type: "agentTodoUpdate",
+        sessionId: "session-1",
+        todos: [],
+      });
+      expect(
+        provider.getBrowserProjectedForegroundState()?.detectedQuestion ?? null,
+      ).toBeNull();
+    });
   });
 
   it("projects revert recovery notice into browser foreground state", async () => {
@@ -5240,6 +5329,10 @@ describe("ChatViewProvider session state sync", () => {
       { fsPath: "/tmp/ext" } as never,
       { get: vi.fn(), update: vi.fn() } as never,
     );
+    // Restored sessions only re-detect turns that were waiting for the user.
+    const waitingMarker = {
+      finalMarker: { status: "waiting_for_user", source: "tool" },
+    };
 
     const foreground = {
       id: "session-1",
@@ -5255,6 +5348,7 @@ describe("ChatViewProvider session state sync", () => {
           {
             role: "assistant",
             content: [{ type: "text", text: "Should I proceed?" }],
+            uiHint: waitingMarker,
           },
         ] as unknown[],
     };
@@ -5291,6 +5385,7 @@ describe("ChatViewProvider session state sync", () => {
         {
           role: "assistant",
           content: [{ type: "text", text: "Should I proceed?" }],
+          uiHint: waitingMarker,
         },
       ],
       lastInputTokens: 0,

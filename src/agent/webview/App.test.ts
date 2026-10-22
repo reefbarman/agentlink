@@ -2687,6 +2687,29 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.messages[1]).toMatchObject({ role: "assistant" });
   });
 
+  it("keeps detected question dismissals when the same session reloads", () => {
+    const load = (sessionId: string) => ({
+      type: "LOAD_SESSION" as const,
+      sessionId,
+      title: "Session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      messages: [],
+      todos: [],
+    });
+    let state = reducer(initialState, load("session-1"));
+    state = reducer(state, {
+      type: "DISMISS_DETECTED_QUESTION",
+      messageId: "assistant-1",
+    });
+
+    state = reducer(state, load("session-1"));
+    expect(state.dismissedDetectedQuestionIds).toEqual(["assistant-1"]);
+
+    state = reducer(state, load("session-2"));
+    expect(state.dismissedDetectedQuestionIds).toEqual([]);
+  });
+
   it("dismisses detected question when user sends a normal message", () => {
     let state = reducer(initialState, {
       type: "SET_DETECTED_QUESTION",
