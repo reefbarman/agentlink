@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.65.0
+
+- Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.
+
 ## 1.64.0
 
 - When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; "A or B" questions are excluded.

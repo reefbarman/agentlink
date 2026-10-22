@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
-  "createdAt": "2026-10-22T06:34:52.401Z",
+  "sourceSha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
+  "createdAt": "2026-10-22T06:57:09.727Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.63.1",
-      "baselineRef": "v1.63.1",
-      "reserved": "1.63.1",
-      "commits": ["9d7bcacf33737f581333bd0a96854bf40ffbcb09"],
+      "published": "1.64.0",
+      "baselineRef": "v1.64.0",
+      "reserved": "1.64.0",
+      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.64.0",
+      "version": "1.65.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.64.0",
+      "tag": "v1.65.0",
       "notes": [
         {
-          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
-          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
-          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
+          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
+          "subject": "feat(agent): restore detected question cards when reloading a session",
+          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.49.1",
-      "baselineRef": "desktop-v0.49.1",
-      "reserved": "0.49.1",
-      "commits": ["9d7bcacf33737f581333bd0a96854bf40ffbcb09"],
+      "published": "0.50.0",
+      "baselineRef": "desktop-v0.50.0",
+      "reserved": "0.50.0",
+      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.50.0",
+      "version": "0.51.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.50.0",
+      "tag": "desktop-v0.51.0",
       "notes": [
         {
-          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
-          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
-          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
+          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
+          "subject": "feat(agent): restore detected question cards when reloading a session",
+          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
           "breaking": false
         }
       ]
@@ -82,41 +82,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.21.0",
-      "baselineRef": "assistant-v0.21.0",
-      "reserved": "0.21.1",
-      "commits": [
-        "1375d07f4d54533a1126115a8d58620ab0831636",
-        "990ccb71cd3fb52137b5822494781f7a8480d128",
-        "9d7bcacf33737f581333bd0a96854bf40ffbcb09"
-      ],
+      "published": "0.22.0",
+      "baselineRef": "assistant-v0.22.0",
+      "reserved": "0.22.0",
+      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.22.0",
+      "tag": "assistant-v0.23.0",
       "notes": [
         {
-          "sha": "1375d07f4d54533a1126115a8d58620ab0831636",
-          "subject": "fix(browser-gateway): drop question cards answered on another surface",
-          "summary": "Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.",
-          "breaking": false
-        },
-        {
-          "sha": "990ccb71cd3fb52137b5822494781f7a8480d128",
-          "subject": "fix(agent): detect choice prompts from the final message only",
-          "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
-          "breaking": false
-        },
-        {
-          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
-          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
-          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
+          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
+          "subject": "feat(agent): restore detected question cards when reloading a session",
+          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
           "breaking": false
         }
       ]
@@ -143,6 +127,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "364175354dab1b442032a2b0d736263d4c4cd4a4": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
