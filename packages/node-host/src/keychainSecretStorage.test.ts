@@ -5,6 +5,9 @@ import * as path from "node:path";
 import {
   CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
   DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+  KeychainMcpCredentialRepository,
+  SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+  createStandaloneMcpCredentialRepository,
 } from "./keychainMcpCredentialRepository.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +18,7 @@ const values = new Map<string, string>();
 let getPasswordCalls = 0;
 let setPasswordCalls = 0;
 const constructorCalls: unknown[][] = [];
+const failSetOnce = new Set<string>();
 
 vi.mock("@napi-rs/keyring", () => ({
   AsyncEntry: class {
@@ -33,7 +37,9 @@ vi.mock("@napi-rs/keyring", () => ({
 
     async setPassword(value: string): Promise<void> {
       setPasswordCalls += 1;
-      values.set(`${this.service}:${this.account}`, value);
+      const key = `${this.service}:${this.account}`;
+      if (failSetOnce.delete(key)) throw new Error(`write failed: ${key}`);
+      values.set(key, value);
     }
 
     async deletePassword(): Promise<boolean> {
@@ -49,6 +55,7 @@ afterEach(async () => {
   getPasswordCalls = 0;
   setPasswordCalls = 0;
   constructorCalls.length = 0;
+  failSetOnce.clear();
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -69,14 +76,27 @@ async function createStorage() {
 }
 
 describe("createKeychainSecretStorage", () => {
-  it("isolates CLI and Desktop OAuth entries from each other and the former default", async () => {
-    expect(
-      new Set([
-        CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
-        DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
-        "agentlink-mcp-oauth-v1",
-      ]).size,
-    ).toBe(3);
+  it("composes CLI and Desktop with one standalone account and distinct compatibility replicas", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-composition-"),
+    );
+    temporaryRoots.push(lockRoot);
+    await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service: "test-mcp-service",
+      lockRoot,
+    });
+    await createStandaloneMcpCredentialRepository({
+      surface: "desktop",
+      service: "test-mcp-service",
+      lockRoot,
+    });
+    expect(constructorCalls).toEqual([
+      ["test-mcp-service", SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT],
+      ["test-mcp-service", CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT],
+      ["test-mcp-service", SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT],
+      ["test-mcp-service", DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT],
+    ]);
   });
 
   it("does not rewrite an unchanged value, which would reset macOS access for other surfaces", async () => {
@@ -237,6 +257,343 @@ process.stdout.write(JSON.stringify(reply));
       await storage.store("value");
       expect(values.get("test-service:test-account")).toBe("value");
     });
+  });
+
+  it("migrates and mirrors one surface tenant without overwriting the other standalone tenant", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-shared-vault-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const service = "test-mcp-service";
+    const cliPrincipal = { tenantId: "local", subjectId: "project-a" };
+    const desktopPrincipal = {
+      tenantId: "agentlink-desktop",
+      subjectId: "ask-agent",
+    };
+    const record = (principal: typeof cliPrincipal, token: string) => ({
+      schemaVersion: 1 as const,
+      principal,
+      serverId: "records",
+      client: { client_id: `${principal.tenantId}-client` },
+      tokens: { access_token: token, token_type: "bearer" },
+      updatedAt: 100,
+    });
+    const state = (entries: Array<ReturnType<typeof record>>) => ({
+      schemaVersion: 1,
+      credentials: Object.fromEntries(
+        entries.map((entry) => [
+          JSON.stringify([
+            entry.principal.tenantId,
+            entry.principal.subjectId,
+            entry.serverId,
+          ]),
+          { record: entry, revision: 1 },
+        ]),
+      ),
+      authorizations: {},
+    });
+    const primaryStorage = await createKeychainSecretStorage({
+      service,
+      account: SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+      lockRoot,
+    });
+    await primaryStorage.store(
+      JSON.stringify(state([record(desktopPrincipal, "desktop-token")])),
+    );
+    const legacyStorage = await createKeychainSecretStorage({
+      service,
+      account: CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+      lockRoot,
+    });
+    await legacyStorage.store(
+      JSON.stringify(state([record(cliPrincipal, "cli-token")])),
+    );
+
+    const repository = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service,
+      lockRoot,
+    });
+    await expect(
+      repository.readCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      record: { tokens: { access_token: "cli-token" } },
+    });
+    await expect(
+      repository.readCredential({
+        principal: desktopPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      record: { tokens: { access_token: "desktop-token" } },
+    });
+    const mirroredLegacy = JSON.parse(
+      values.get(`${service}:${CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT}`) ?? "{}",
+    ) as {
+      credentials?: Record<
+        string,
+        { record: { principal: { tenantId: string } } }
+      >;
+    };
+    expect(
+      Object.values(mirroredLegacy.credentials ?? {}).map(
+        ({ record: mirrored }) => mirrored.principal.tenantId,
+      ),
+    ).toEqual(["local"]);
+
+    await legacyStorage.store(
+      JSON.stringify(state([record(cliPrincipal, "same-revision-new-token")])),
+    );
+    await expect(
+      repository.readCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      revision: "2",
+      record: { tokens: { access_token: "same-revision-new-token" } },
+    });
+
+    const oldCli = new KeychainMcpCredentialRepository(legacyStorage);
+    await expect(
+      oldCli.deleteCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+        expectedRevision: "2",
+      }),
+    ).resolves.toEqual({ ok: true, revision: "2" });
+    await expect(
+      repository.readCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+    await expect(
+      repository.readCredential({
+        principal: desktopPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await oldCli.saveCredential({
+      record: record(cliPrincipal, "cli-token-recreated"),
+      expectedRevision: undefined,
+    });
+    await expect(
+      repository.readCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await legacyStorage.delete();
+    await expect(
+      repository.readCredential({
+        principal: cliPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+
+    await repository.reset();
+    await expect(
+      repository.readCredential({
+        principal: desktopPrincipal,
+        serverId: "records",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(values.has(`${service}:${CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT}`)).toBe(
+      false,
+    );
+  });
+
+  it("serializes concurrent mutations and consumes one callback only once", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-concurrent-vault-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const repository = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service: "test-mcp-concurrent",
+      lockRoot,
+    });
+    await Promise.all(
+      Array.from({ length: 12 }, async (_, index) => {
+        const principal = { tenantId: "local", subjectId: `project-${index}` };
+        await expect(
+          repository.saveCredential({
+            record: {
+              schemaVersion: 1,
+              principal,
+              serverId: "records",
+              client: { client_id: `client-${index}` },
+              tokens: { access_token: `token-${index}` },
+              updatedAt: index,
+            },
+            expectedRevision: undefined,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+      }),
+    );
+    for (let index = 0; index < 12; index += 1) {
+      await expect(
+        repository.readCredential({
+          principal: { tenantId: "local", subjectId: `project-${index}` },
+          serverId: "records",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    }
+
+    const principal = { tenantId: "local", subjectId: "project-callback" };
+    const authorization = {
+      schemaVersion: 1 as const,
+      transactionId: "transaction",
+      principal,
+      serverId: "records",
+      redirectUri: "http://127.0.0.1/callback",
+      state: "state",
+      codeVerifier: "verifier",
+      createdAt: 10,
+      expiresAt: 100,
+    };
+    await repository.createPendingAuthorization({ authorization });
+    const outcomes = await Promise.all([
+      repository.consumePendingAuthorization({
+        principal,
+        serverId: "records",
+        transactionId: "transaction",
+        state: "state",
+        consumedAt: 20,
+      }),
+      repository.consumePendingAuthorization({
+        principal,
+        serverId: "records",
+        transactionId: "transaction",
+        state: "state",
+        consumedAt: 20,
+      }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+    expect(outcomes.filter((outcome) => !outcome.ok)).toEqual([
+      { ok: false, reason: "consumed" },
+    ]);
+  });
+
+  it("repairs the shared MCP vault after the legacy write succeeds and the shared write fails", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-partial-write-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const service = "test-mcp-partial-write";
+    const principal = { tenantId: "local", subjectId: "project-a" };
+    const legacyStorage = await createKeychainSecretStorage({
+      service,
+      account: CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+      lockRoot,
+    });
+    const oldCli = new KeychainMcpCredentialRepository(legacyStorage);
+    await oldCli.saveCredential({
+      record: {
+        schemaVersion: 1,
+        principal,
+        serverId: "records",
+        client: { client_id: "client" },
+        tokens: { access_token: "first" },
+        updatedAt: 1,
+      },
+      expectedRevision: undefined,
+    });
+    const repository = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service,
+      lockRoot,
+    });
+    await expect(
+      repository.readCredential({ principal, serverId: "records" }),
+    ).resolves.toMatchObject({ ok: true, revision: "1" });
+    failSetOnce.add(
+      `${service}:${SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT}`,
+    );
+    await expect(
+      repository.saveCredential({
+        record: {
+          schemaVersion: 1,
+          principal,
+          serverId: "records",
+          client: { client_id: "client" },
+          tokens: { access_token: "second" },
+          updatedAt: 2,
+        },
+        expectedRevision: "1",
+      }),
+    ).rejects.toThrow("write failed");
+
+    const reopened = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service,
+      lockRoot,
+    });
+    await expect(
+      reopened.readCredential({ principal, serverId: "records" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      revision: "2",
+      record: { tokens: { access_token: "second" } },
+    });
+  });
+
+  it("resets corrupt shared and legacy MCP items", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-corrupt-reset-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const service = "test-mcp-corrupt-reset";
+    values.set(
+      `${service}:${SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT}`,
+      "not-json",
+    );
+    values.set(`${service}:${CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT}`, "also-not-json");
+    const repository = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service,
+      lockRoot,
+    });
+    await expect(repository.reset()).resolves.toBeUndefined();
+    await expect(
+      repository.readCredential({
+        principal: { tenantId: "local", subjectId: "project-a" },
+        serverId: "records",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("does not create an empty legacy MCP item for a new installation", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-new-vault-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const service = "test-mcp-service";
+    const repository = await createStandaloneMcpCredentialRepository({
+      surface: "cli",
+      service,
+      lockRoot,
+    });
+    await expect(
+      repository.readCredential({
+        principal: { tenantId: "local", subjectId: "project-a" },
+        serverId: "records",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+    expect(
+      values.has(`${service}:${SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT}`),
+    ).toBe(true);
+    expect(values.has(`${service}:${CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT}`)).toBe(
+      false,
+    );
   });
 
   it("keeps the native default store selection when no Linux store is requested", async () => {

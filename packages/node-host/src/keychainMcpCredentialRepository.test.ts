@@ -20,6 +20,9 @@ function createStorage(
     async delete() {
       storage.value = undefined;
     },
+    async getRevision() {
+      return null;
+    },
     async withMutationLock(operation) {
       return await operation();
     },
@@ -81,6 +84,39 @@ describe("KeychainMcpCredentialRepository", () => {
         expectedRevision: "1",
       }),
     ).resolves.toEqual({ ok: true, revision: "2" });
+  });
+
+  it("advances revisions across delete and recreate to reject stale CAS tokens", async () => {
+    const repository = new KeychainMcpCredentialRepository(createStorage());
+    await expect(
+      repository.saveCredential({
+        record: credential("secret-a"),
+        expectedRevision: undefined,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+    await expect(
+      repository.deleteCredential({
+        principal,
+        serverId: "records",
+        expectedRevision: "1",
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+    await expect(
+      repository.saveCredential({
+        record: credential("secret-b", principal.subjectId, 200),
+        expectedRevision: undefined,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "2" });
+    await expect(
+      repository.saveCredential({
+        record: credential("stale", principal.subjectId, 300),
+        expectedRevision: "1",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "revision_conflict",
+      currentRevision: "2",
+    });
   });
 
   it("atomically consumes pending authorization by principal, server, state, and expiry", async () => {

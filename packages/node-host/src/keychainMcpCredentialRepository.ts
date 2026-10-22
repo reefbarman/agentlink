@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+
 import type {
   AgentPrincipal,
   ConsumeMcpPendingAuthorizationResult,
@@ -19,10 +22,15 @@ import {
 } from "./keychainSecretStorage.js";
 
 const DEFAULT_KEYCHAIN_ACCOUNT = "agentlink-mcp-oauth-v1";
+export const SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT =
+  "agentlink-standalone-mcp-oauth-v2";
 export const CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT = "agentlink-cli-mcp-oauth-v1";
 export const DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT =
   "agentlink-desktop-mcp-oauth-v1";
-const MAX_STORED_ENTRIES = 200;
+const MAX_LEGACY_STORED_ENTRIES = 200;
+const MAX_STORED_ENTRIES = MAX_LEGACY_STORED_ENTRIES * 2;
+const MAX_LEGACY_REPLICAS = 8;
+const MIGRATION_LOCK_TIMEOUT_MS = 6 * 60_000;
 
 interface StoredCredential<TPrincipal extends AgentPrincipal> {
   record: McpCredentialRecord<TPrincipal>;
@@ -34,10 +42,26 @@ interface StoredAuthorization<TPrincipal extends AgentPrincipal> {
   consumed: boolean;
 }
 
+interface LegacyReplicaSnapshot {
+  revision: string | null;
+  present: boolean;
+  credentials: Record<string, string>;
+  authorizations: Record<string, string>;
+}
+
 interface KeychainMcpCredentialState<TPrincipal extends AgentPrincipal> {
   schemaVersion: 1;
   credentials: Record<string, StoredCredential<TPrincipal>>;
   authorizations: Record<string, StoredAuthorization<TPrincipal>>;
+  credentialGeneration?: number;
+  legacyReplicas?: Record<string, LegacyReplicaSnapshot>;
+}
+
+export interface LegacyMcpCredentialReplica {
+  /** Older surface-specific Keychain account to migrate and compatibility-mirror. */
+  account: string;
+  /** Only this tenant's records are imported from writes made by an older build. */
+  tenantId: string;
 }
 
 export interface CreateKeychainMcpCredentialRepositoryOptions extends Omit<
@@ -45,13 +69,21 @@ export interface CreateKeychainMcpCredentialRepositoryOptions extends Omit<
   "account"
 > {
   account?: string;
+  legacyReplica?: LegacyMcpCredentialReplica;
+}
+
+export interface CreateStandaloneMcpCredentialRepositoryOptions extends Omit<
+  CreateKeychainMcpCredentialRepositoryOptions,
+  "account" | "legacyReplica"
+> {
+  surface: "cli" | "desktop";
 }
 
 /**
  * Native, same-machine MCP OAuth repository. The complete versioned document is
  * kept in one Keychain entry and every mutation is serialized by the shared
  * Keychain storage lock, preserving core compare-and-swap semantics across
- * Desktop and extension-host processes.
+ * local host processes.
  */
 export class KeychainMcpCredentialRepository<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
@@ -102,8 +134,12 @@ export class KeychainMcpCredentialRepository<
           return { result: { ok: false, reason: "not_found" } };
         }
         assertCapacity(state.credentials, key);
-        state.credentials[key] = { record: clone(request.record), revision: 1 };
-        return { changed: true, result: { ok: true, revision: "1" } };
+        const revision = nextCredentialRevision(state);
+        state.credentials[key] = { record: clone(request.record), revision };
+        return {
+          changed: true,
+          result: { ok: true, revision: String(revision) },
+        };
       }
       if (request.expectedRevision === undefined) {
         return { result: { ok: false, reason: "already_exists" } };
@@ -117,7 +153,7 @@ export class KeychainMcpCredentialRepository<
           },
         };
       }
-      const revision = current.revision + 1;
+      const revision = nextCredentialRevision(state);
       state.credentials[key] = { record: clone(request.record), revision };
       return {
         changed: true,
@@ -262,16 +298,218 @@ export class KeychainMcpCredentialRepository<
   }
 }
 
+/** Shared standalone vault composition; VS Code keeps its mature Memento path. */
+export async function createStandaloneMcpCredentialRepository<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+>(
+  options: CreateStandaloneMcpCredentialRepositoryOptions,
+): Promise<KeychainMcpCredentialRepository<TPrincipal>> {
+  const { surface, ...keychain } = options;
+  return await createKeychainMcpCredentialRepository<TPrincipal>({
+    ...keychain,
+    lockTimeoutMs: Math.max(
+      keychain.lockTimeoutMs ?? 0,
+      MIGRATION_LOCK_TIMEOUT_MS,
+    ),
+    account: SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+    legacyReplica:
+      surface === "cli"
+        ? { account: CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT, tenantId: "local" }
+        : {
+            account: DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+            tenantId: "agentlink-desktop",
+          },
+  });
+}
+
 export async function createKeychainMcpCredentialRepository<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 >(
   options: CreateKeychainMcpCredentialRepositoryOptions = {},
 ): Promise<KeychainMcpCredentialRepository<TPrincipal>> {
-  const storage = await createKeychainSecretStorage({
-    ...options,
-    account: options.account?.trim() || DEFAULT_KEYCHAIN_ACCOUNT,
+  const { account, legacyReplica, ...storageOptions } = options;
+  const primary = await createKeychainSecretStorage({
+    ...storageOptions,
+    account: account?.trim() || DEFAULT_KEYCHAIN_ACCOUNT,
   });
+  const storage = legacyReplica
+    ? new LegacyCompatibleMcpStorage(
+        primary,
+        await createKeychainSecretStorage({
+          ...storageOptions,
+          account: legacyReplica.account,
+        }),
+        legacyReplica,
+      )
+    : primary;
   return new KeychainMcpCredentialRepository<TPrincipal>(storage);
+}
+
+/**
+ * Keep one shared standalone vault while an older CLI or Desktop build may still
+ * use its surface-specific item. The shared item records a non-secret snapshot
+ * of the legacy replica, allowing deletions as well as additions to be merged
+ * without letting a stale replica erase another surface's records.
+ */
+class LegacyCompatibleMcpStorage implements KeychainSecretStorage {
+  private readonly lockContext = new AsyncLocalStorage<boolean>();
+  private synchronizedValue: string | undefined;
+
+  constructor(
+    private readonly primary: KeychainSecretStorage,
+    private readonly legacy: KeychainSecretStorage,
+    private readonly replica: LegacyMcpCredentialReplica,
+  ) {
+    requiredText(replica.account, "legacyReplica.account");
+    requiredText(replica.tenantId, "legacyReplica.tenantId");
+  }
+
+  async get(): Promise<string | undefined> {
+    if (this.lockContext.getStore()) return await this.synchronizeLocked();
+    const fastValue = await this.readFastPath();
+    if (fastValue !== undefined) return fastValue;
+    return await this.withLocks(async () => await this.synchronizeLocked());
+  }
+
+  async store(value: string): Promise<void> {
+    await this.withLocks(async () => {
+      const state = parseState(value);
+      assertLegacyTenantCapacity(state, this.replica.tenantId);
+      const snapshot = state.legacyReplicas?.[this.replica.account];
+      if (snapshot?.present) {
+        await this.writeLegacyThenPrimary(state);
+      } else {
+        await this.primary.store(JSON.stringify(state));
+        this.synchronizedValue = JSON.stringify(state);
+      }
+    });
+  }
+
+  async delete(): Promise<void> {
+    await this.withLocks(async () => {
+      await this.legacy.delete();
+      let state: KeychainMcpCredentialState<AgentPrincipal>;
+      try {
+        state = parseState(await this.primary.get());
+      } catch (error) {
+        if (!isInvalidStoredState(error)) throw error;
+        await this.primary.delete();
+        this.synchronizedValue = undefined;
+        return;
+      }
+      removeTenant(state, this.replica.tenantId);
+      setReplicaSnapshot(state, this.replica.account, {
+        revision: await this.legacy.getRevision(),
+        present: false,
+        credentials: {},
+        authorizations: {},
+      });
+      const value = JSON.stringify(state);
+      await this.primary.store(value);
+      this.synchronizedValue = value;
+    });
+  }
+
+  async getRevision(): Promise<string | null> {
+    return await this.primary.getRevision();
+  }
+
+  async withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    return await this.withLocks(operation);
+  }
+
+  private async withLocks<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.lockContext.getStore()) return await operation();
+    return await this.primary.withMutationLock(
+      async () =>
+        await this.legacy.withMutationLock(
+          async () =>
+            await this.lockContext.run(true, async () => {
+              this.synchronizedValue = undefined;
+              try {
+                return await operation();
+              } finally {
+                this.synchronizedValue = undefined;
+              }
+            }),
+        ),
+    );
+  }
+
+  private async readFastPath(): Promise<string | undefined> {
+    const raw = await this.primary.get();
+    const state = parseState(raw);
+    const previous = state.legacyReplicas?.[this.replica.account];
+    if (!previous) return undefined;
+    if (previous.revision !== (await this.legacy.getRevision()))
+      return undefined;
+    return raw ?? JSON.stringify(state);
+  }
+
+  private async synchronizeLocked(): Promise<string | undefined> {
+    if (this.synchronizedValue !== undefined) return this.synchronizedValue;
+    const primary = parseState(await this.primary.get());
+    const revision = await this.legacy.getRevision();
+    const previous = primary.legacyReplicas?.[this.replica.account];
+    if (previous && previous.revision === revision) {
+      this.synchronizedValue = JSON.stringify(primary);
+      return this.synchronizedValue;
+    }
+
+    const legacyRaw = await this.legacy.get();
+    if (!legacyRaw) {
+      if (previous?.present) {
+        mergeLegacyTenant(
+          primary,
+          emptyState<AgentPrincipal>(),
+          previous,
+          this.replica.tenantId,
+        );
+      }
+      setReplicaSnapshot(primary, this.replica.account, {
+        revision,
+        present: false,
+        credentials: {},
+        authorizations: {},
+      });
+      const value = JSON.stringify(primary);
+      await this.primary.store(value);
+      this.synchronizedValue = value;
+      return value;
+    }
+
+    const legacy = parseState(legacyRaw);
+    mergeLegacyTenant(primary, legacy, previous, this.replica.tenantId);
+    assertLegacyTenantCapacity(primary, this.replica.tenantId);
+    await this.writeLegacyThenPrimary(primary);
+    return this.synchronizedValue;
+  }
+
+  private async writeLegacyThenPrimary(
+    state: KeychainMcpCredentialState<AgentPrincipal>,
+  ): Promise<void> {
+    setReplicaSnapshot(
+      state,
+      this.replica.account,
+      snapshotFor(state, this.replica.tenantId, null, true),
+    );
+    await this.legacy.store(
+      JSON.stringify(replicaStateFor(state, this.replica.tenantId)),
+    );
+    setReplicaSnapshot(
+      state,
+      this.replica.account,
+      snapshotFor(
+        state,
+        this.replica.tenantId,
+        await this.legacy.getRevision(),
+        true,
+      ),
+    );
+    const value = JSON.stringify(state);
+    await this.primary.store(value);
+    this.synchronizedValue = value;
+  }
 }
 
 function emptyState<
@@ -295,7 +533,18 @@ function parseState<TPrincipal extends AgentPrincipal>(
   }
   const credentials = parseCredentials<TPrincipal>(parsed.credentials);
   const authorizations = parseAuthorizations<TPrincipal>(parsed.authorizations);
-  return { schemaVersion: 1, credentials, authorizations };
+  const credentialGeneration = parseCredentialGeneration(
+    parsed.credentialGeneration,
+    credentials,
+  );
+  const legacyReplicas = parseLegacyReplicas(parsed.legacyReplicas);
+  return {
+    schemaVersion: 1,
+    credentials,
+    authorizations,
+    ...(credentialGeneration === undefined ? {} : { credentialGeneration }),
+    ...(legacyReplicas ? { legacyReplicas } : {}),
+  };
 }
 
 function parseCredentials<TPrincipal extends AgentPrincipal>(
@@ -358,6 +607,231 @@ function parseAuthorizations<TPrincipal extends AgentPrincipal>(
   return result;
 }
 
+function parseCredentialGeneration(
+  value: unknown,
+  credentials: Record<string, StoredCredential<AgentPrincipal>>,
+): number | undefined {
+  const storedMaximum = Math.max(
+    0,
+    ...Object.values(credentials).map(({ revision }) => revision),
+  );
+  if (value === undefined) return storedMaximum || undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < storedMaximum) {
+    throw new Error("agentlink_mcp_keychain_state_invalid");
+  }
+  return value as number;
+}
+
+function parseLegacyReplicas(
+  value: unknown,
+): Record<string, LegacyReplicaSnapshot> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).length > MAX_LEGACY_REPLICAS) {
+    throw new Error("agentlink_mcp_keychain_state_invalid");
+  }
+  const result: Record<string, LegacyReplicaSnapshot> = {};
+  for (const [account, candidate] of Object.entries(value)) {
+    if (
+      !account.trim() ||
+      !isRecord(candidate) ||
+      (candidate.revision !== null && typeof candidate.revision !== "string") ||
+      typeof candidate.present !== "boolean" ||
+      !isRecord(candidate.credentials) ||
+      !isRecord(candidate.authorizations)
+    ) {
+      throw new Error("agentlink_mcp_keychain_state_invalid");
+    }
+    const credentials: Record<string, string> = {};
+    for (const [key, signature] of Object.entries(candidate.credentials)) {
+      if (typeof signature !== "string") {
+        throw new Error("agentlink_mcp_keychain_state_invalid");
+      }
+      credentials[key] = signature;
+    }
+    const authorizations: Record<string, string> = {};
+    for (const [key, signature] of Object.entries(candidate.authorizations)) {
+      if (typeof signature !== "string") {
+        throw new Error("agentlink_mcp_keychain_state_invalid");
+      }
+      authorizations[key] = signature;
+    }
+    result[account] = {
+      revision: candidate.revision as string | null,
+      present: candidate.present,
+      credentials,
+      authorizations,
+    };
+  }
+  return result;
+}
+
+function mergeLegacyTenant(
+  primary: KeychainMcpCredentialState<AgentPrincipal>,
+  legacy: KeychainMcpCredentialState<AgentPrincipal>,
+  previous: LegacyReplicaSnapshot | undefined,
+  tenantId: string,
+): void {
+  const legacyCredentials = ownedCredentials(legacy, tenantId);
+  const legacyAuthorizations = ownedAuthorizations(legacy, tenantId);
+  assertLegacyTenantCapacity(legacy, tenantId);
+  if (previous) {
+    for (const key of Object.keys(previous.credentials)) {
+      if (!(key in legacyCredentials)) {
+        delete primary.credentials[key];
+      }
+    }
+    for (const key of Object.keys(previous.authorizations)) {
+      if (!(key in legacyAuthorizations)) delete primary.authorizations[key];
+    }
+  }
+  for (const [key, stored] of Object.entries(legacyCredentials)) {
+    if (
+      !previous ||
+      previous.credentials[key] !== credentialSignature(stored)
+    ) {
+      const replacement = clone(stored);
+      const generation = currentCredentialGeneration(primary);
+      if (previous && replacement.revision <= generation) {
+        replacement.revision = nextCredentialRevision(primary);
+      } else {
+        primary.credentialGeneration = Math.max(
+          generation,
+          replacement.revision,
+        );
+      }
+      primary.credentials[key] = replacement;
+    }
+  }
+  for (const [key, stored] of Object.entries(legacyAuthorizations)) {
+    if (
+      !previous ||
+      previous.authorizations[key] !== authorizationSignature(stored)
+    ) {
+      primary.authorizations[key] = clone(stored);
+    }
+  }
+  if (
+    Object.keys(primary.credentials).length > MAX_STORED_ENTRIES ||
+    Object.keys(primary.authorizations).length > MAX_STORED_ENTRIES
+  ) {
+    throw new Error("agentlink_mcp_keychain_state_full");
+  }
+}
+
+function assertLegacyTenantCapacity(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+): void {
+  if (
+    Object.keys(ownedCredentials(state, tenantId)).length >
+      MAX_LEGACY_STORED_ENTRIES ||
+    Object.keys(ownedAuthorizations(state, tenantId)).length >
+      MAX_LEGACY_STORED_ENTRIES
+  ) {
+    throw new Error("agentlink_mcp_keychain_state_full");
+  }
+}
+
+function replicaStateFor(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+): KeychainMcpCredentialState<AgentPrincipal> {
+  return {
+    schemaVersion: 1,
+    credentials: clone(ownedCredentials(state, tenantId)),
+    authorizations: clone(ownedAuthorizations(state, tenantId)),
+  };
+}
+
+function removeTenant(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+): void {
+  for (const key of Object.keys(ownedCredentials(state, tenantId))) {
+    delete state.credentials[key];
+  }
+  for (const key of Object.keys(ownedAuthorizations(state, tenantId))) {
+    delete state.authorizations[key];
+  }
+}
+
+function isInvalidStoredState(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "agentlink_mcp_keychain_state_invalid"
+  );
+}
+
+function snapshotFor(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+  revision: string | null,
+  present: boolean,
+): LegacyReplicaSnapshot {
+  return {
+    revision,
+    present,
+    credentials: Object.fromEntries(
+      Object.entries(ownedCredentials(state, tenantId)).map(([key, stored]) => [
+        key,
+        credentialSignature(stored),
+      ]),
+    ),
+    authorizations: Object.fromEntries(
+      Object.entries(ownedAuthorizations(state, tenantId)).map(
+        ([key, stored]) => [key, authorizationSignature(stored)],
+      ),
+    ),
+  };
+}
+
+function setReplicaSnapshot(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  account: string,
+  snapshot: LegacyReplicaSnapshot,
+): void {
+  state.legacyReplicas ??= {};
+  state.legacyReplicas[account] = snapshot;
+}
+
+function ownedCredentials(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+): Record<string, StoredCredential<AgentPrincipal>> {
+  return Object.fromEntries(
+    Object.entries(state.credentials).filter(
+      ([, stored]) => stored.record.principal.tenantId === tenantId,
+    ),
+  );
+}
+
+function ownedAuthorizations(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+  tenantId: string,
+): Record<string, StoredAuthorization<AgentPrincipal>> {
+  return Object.fromEntries(
+    Object.entries(state.authorizations).filter(
+      ([, stored]) => stored.authorization.principal.tenantId === tenantId,
+    ),
+  );
+}
+
+function credentialSignature(stored: StoredCredential<AgentPrincipal>): string {
+  return createHash("sha256")
+    .update(JSON.stringify([stored.revision, stored.record]))
+    .digest("hex");
+}
+
+function authorizationSignature(
+  stored: StoredAuthorization<AgentPrincipal>,
+): string {
+  return JSON.stringify([
+    stored.authorization.createdAt,
+    stored.authorization.expiresAt,
+    stored.consumed,
+  ]);
+}
+
 function validateCredential(record: McpCredentialRecord): void {
   if (!isRecord(record)) throw new Error("agentlink_mcp_credential_invalid");
   validateScope(record.principal, record.serverId);
@@ -399,6 +873,23 @@ function validateScope(principal: AgentPrincipal, serverId: string): void {
 
 function credentialKey(principal: AgentPrincipal, serverId: string): string {
   return JSON.stringify([principal.tenantId, principal.subjectId, serverId]);
+}
+
+function currentCredentialGeneration(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+): number {
+  return Math.max(
+    state.credentialGeneration ?? 0,
+    ...Object.values(state.credentials).map(({ revision }) => revision),
+  );
+}
+
+function nextCredentialRevision(
+  state: KeychainMcpCredentialState<AgentPrincipal>,
+): number {
+  const revision = currentCredentialGeneration(state) + 1;
+  state.credentialGeneration = revision;
+  return revision;
 }
 
 function authorizationKey(

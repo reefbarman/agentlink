@@ -53,9 +53,10 @@ Signed macOS builds now read and write shared credentials through one small prog
 - **AgentLink Credentials (CLI)**
 - **AgentLink Credentials (Desktop)**
 
-The prompt names the copy, so it says which surface is asking. The item it asks about is labelled with what it holds, for example "AgentLink: Codex sign-in (shared by VS Code, CLI and Desktop)". All copies share one signature, so choosing **Always Allow** once covers every surface, and later writes no longer reset access.
+The prompt names the copy, so it says which surface is asking. The item it asks about is labelled with what it holds, for example "AgentLink: Codex sign-in (shared by VS Code, CLI and Desktop)". All copies share one signature, so choosing **Always Allow** for a particular item lets every surface use that same item, and later writes no longer reset its access. macOS grants this per Keychain item, not once for every AgentLink credential.
 
 - Expect one more prompt per pre-helper credential the first time a helper uses it. Choose **Always Allow**. OpenAI-compatible providers read only the API-key item on the normal startup path; their non-secret migration state is read from a private local file, so it does not cause a second password prompt. A write-only Keychain mirror keeps older VS Code or Desktop versions compatible but is not opened during that startup path.
+- The CLI and Desktop Ask Agent now use one standalone MCP OAuth Keychain item while keeping separate logical records for each surface's principals, servers, OAuth client registrations, and callback URLs. An existing surface-specific MCP item is imported lazily and retained as a compatibility replica for older preview builds, so it can require one final prompt when that surface first migrates. VS Code's established MCP OAuth storage is unchanged.
 - The helper only serves VS Code and AgentLink's own signed CLI and Desktop. It accepts no code and does nothing but get, store and delete AgentLink's items.
 - Builds without the helper (unsigned previews, Linux, Windows, source runs) use the Keychain directly, as before, and can still prompt after another surface writes.
 - If prompts continue from **AgentLink Credentials** after **Always Allow**, check whether the copy was rebuilt with a different signing certificate.

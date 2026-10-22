@@ -46,6 +46,8 @@ export interface KeychainSecretStorage {
   get(): Promise<string | undefined>;
   store(value: string): Promise<void>;
   delete(): Promise<void>;
+  /** Non-secret revision used to detect writes from another host process. */
+  getRevision(): Promise<string | null>;
   withMutationLock<T>(operation: () => Promise<T>): Promise<T>;
 }
 
@@ -149,6 +151,9 @@ export async function createKeychainSecretStorage(
       cacheInitialized = true;
       cachedValue = undefined;
       cachedRevision = revision;
+    },
+    async getRevision() {
+      return await readRevision(revisionPath);
     },
     async withMutationLock(operation) {
       return await withDirectoryLock(lockPath, operation, options);

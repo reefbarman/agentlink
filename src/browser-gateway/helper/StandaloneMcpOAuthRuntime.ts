@@ -219,10 +219,8 @@ export class StandaloneMcpOAuthRuntime {
     this.repositoryPromise ??= this.options.createCredentialRepository
       ? this.options.createCredentialRepository()
       : import("@agentlink/node-host").then(
-          ({ createKeychainMcpCredentialRepository }) =>
-            createKeychainMcpCredentialRepository({
-              account: "agentlink-desktop-mcp-oauth-v1",
-            }),
+          ({ createStandaloneMcpCredentialRepository }) =>
+            createStandaloneMcpCredentialRepository({ surface: "desktop" }),
         );
     return await this.repositoryPromise;
   }

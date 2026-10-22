@@ -3,8 +3,8 @@ import type {
   McpPendingAuthorizationRepository,
 } from "@agentlink/core";
 import {
-  createKeychainMcpCredentialRepository,
   createNodeHostMcpOAuthProvider,
+  createStandaloneMcpCredentialRepository,
   type CreateNodeHostMcpOAuthProviderOptions,
   type NodeHostMcpOAuthAuthorizationRequest,
   type NodeHostMcpRemoteOAuthRequest,
@@ -109,9 +109,7 @@ export class CliMcpOAuthRuntime {
     const redirectUrl = `http://127.0.0.1:${this.port}/mcp/oauth/callback/${callbackId}`;
     this.repositoryPromise ??= this.options.createCredentialRepository
       ? this.options.createCredentialRepository()
-      : createKeychainMcpCredentialRepository({
-          account: "agentlink-cli-mcp-oauth-v1",
-        });
+      : createStandaloneMcpCredentialRepository({ surface: "cli" });
     const createOAuthProvider =
       this.options.createOAuthProvider ?? createNodeHostMcpOAuthProvider;
     return createOAuthProvider({

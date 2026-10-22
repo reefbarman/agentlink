@@ -194,6 +194,8 @@ export function describeSharedCredential(account: string): string {
       return "AgentLink: MCP server sign-ins (CLI)";
     case "agentlink-desktop-mcp-oauth-v1":
       return "AgentLink: MCP server sign-ins (Desktop)";
+    case "agentlink-standalone-mcp-oauth-v2":
+      return "AgentLink: MCP server sign-ins (shared by CLI and Desktop)";
     case "agentlink-mcp-oauth-v1":
       return "AgentLink: MCP server sign-ins";
   }
