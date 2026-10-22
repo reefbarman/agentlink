@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The CLI no longer exits when a background MCP reconnect fails. A scheduled retry for a server such as one waiting for sign-in could be refused by the CLI's connection policy, and nothing handled that rejection, so Node ended the process with "MCP server '...' connection denied by host policy". The failure is now logged like the hub's other background reconnects. VS Code uses the same hub and only gains the log line.
+
 ## 1.62.1
 
 - CLI and Assistant MCP tools whose input schemas declare JSON Schema draft-07 (the default output of zod-to-json-schema, used by many servers) no longer break the session. The strict host-tool schema check could not resolve the draft-07 `$schema` header, so one such server made `/condense` and automatic condensing fail with "Host tool ... input schema is invalid". workspace-host now drops the header, as VS Code and the browser Ask Agent already do, and leaves out any single tool whose schema still cannot be compiled, which stays reachable through `find_mcp_tools` and `call_mcp_tool`.

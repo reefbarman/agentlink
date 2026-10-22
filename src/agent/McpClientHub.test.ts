@@ -524,6 +524,44 @@ describe("McpClientHub protocol correctness", () => {
     }
   });
 
+  it("logs a failed scheduled reconnect instead of leaving the rejection unhandled", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    const onLog = vi.fn();
+    hub.onLog = onLog;
+
+    try {
+      await hub.connect(
+        [
+          {
+            name: "remote",
+            type: "stdio",
+            command: "mcp-remote",
+            args: ["https://mcp.example.test/service"],
+          },
+        ],
+        { interactiveServerNames: new Set(["remote"]) },
+      );
+      // The CLI crashed when a timer retry was denied by host policy.
+      vi.spyOn(
+        hub as unknown as { performConnectServer: () => Promise<void> },
+        "performConnectServer",
+      ).mockRejectedValueOnce(
+        new Error("MCP server 'remote' connection denied by host policy"),
+      );
+      mocks.stdioTransports[0]?.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() =>
+        expect(JSON.stringify(onLog.mock.calls)).toContain(
+          "scheduled reconnect failed",
+        ),
+      );
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["sse", "streamable-http"] as const)(
     "uses the long-poll fetch for %s transports",
     async (type) => {

@@ -2298,11 +2298,17 @@ export class McpClientHub {
       `[mcp:${cfg.name}] scheduling reconnect reason=${reason} attempt=${attempt} delayMs=${delay}`,
     );
     entry.retryTimer = setTimeout(() => {
+      // Nothing awaits a timer retry: an unhandled rejection (such as a
+      // host policy denial) would end a Node host like the CLI.
       this.connectServer(cfg, {
         retryCount: attempt,
         authMode: "noninteractive",
         trigger: "scheduled-retry",
         retryAfterConnected,
+      }).catch((error: unknown) => {
+        this.log(
+          `[mcp:${cfg.name}] scheduled reconnect failed: ${this.describeError(error)}`,
+        );
       });
     }, delay);
   }
