@@ -1,0 +1,36 @@
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 4949-4951,4966,5003,5076-5157,5332-5335,5351,5388
+  s_9ed0c747a1af09::t_a73994be202eb8 5158-5159
+src/agent/webview/App.test.ts
+  h_e08a86bb3a33a2 2690-2712
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 469-470,1899,2846-2847,2850-2852,2874-2877,2900
+  s_9ed0c747a1af09::t_0ee51ed1cb3ada 2878-2881
+src/shared/chatProjection.ts
+  h_e08a86bb3a33a2 3963-3965
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_e08a86bb3a33a2 1614-1683
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 1421-1422,10599-10602,10660-10669,10732,10778,11158,11336-11338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "13e8f7359127a0e64b62533092069e6b6e0b8611",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_9ed0c747a1af09": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ca6c092-390d-4679-82a2-bc30cefbf23a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
