@@ -47,13 +47,14 @@ afterEach(async () => {
   );
 });
 
-async function createStore() {
+async function createStore(stateRootOverride?: string) {
   const lockRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "agentlink-compatible-keychain-"),
   );
   roots.push(lockRoot);
   return createSharedOpenAiCompatibleCredentialStore({
     keychain: { lockRoot },
+    stateRoot: stateRootOverride ?? path.join(lockRoot, "state"),
   });
 }
 
@@ -76,6 +77,18 @@ describe("shared OpenAI-compatible credentials", () => {
         },
       ]),
     );
+  });
+
+  it("does not open a second Keychain item for non-secret state when the API key exists", async () => {
+    const account = openAiCompatibleApiKeyAccount("openrouter-main");
+    values.set(
+      `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:${account}`,
+      "existing-secret",
+    );
+    const store = await createStore();
+
+    await expect(store.get("openrouter-main")).resolves.toBe("existing-secret");
+    expect(entries.map((entry) => entry.account)).toEqual([account]);
   });
 
   it("accepts the full bounded config auth-key contract with safe hashed accounts", () => {
@@ -103,6 +116,89 @@ describe("shared OpenAI-compatible credentials", () => {
 
     await store.delete("shared");
     await expect(store.get("shared")).resolves.toBeUndefined();
+  });
+
+  it("copies an old Keychain state marker to local state only when the API key is absent", async () => {
+    const authKey = "shared";
+    const hash = openAiCompatibleApiKeyAccount(authKey).slice(
+      "openai-compatible-api-key:".length,
+    );
+    values.set(
+      `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:openai-compatible-api-key-state:${hash}`,
+      "deleted",
+    );
+    const store = await createStore();
+    const readLegacy = vi.fn(async () => "must-not-return");
+
+    await expect(
+      store.migrateLegacyIfAbsent(authKey, readLegacy),
+    ).resolves.toBe(false);
+    expect(readLegacy).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an unknown old Keychain marker", async () => {
+    const authKey = "shared";
+    const hash = openAiCompatibleApiKeyAccount(authKey).slice(
+      "openai-compatible-api-key:".length,
+    );
+    values.set(
+      `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:openai-compatible-api-key-state:${hash}`,
+      "future-state",
+    );
+    values.set(
+      `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:openai-compatible-api-key:shared`,
+      "must-not-import",
+    );
+    const store = await createStore();
+
+    await expect(store.get(authKey)).rejects.toThrow(
+      "agentlink_openai_compatible_credential_state_invalid",
+    );
+    expect(
+      values.get(
+        `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:${openAiCompatibleApiKeyAccount(authKey)}`,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps the API key when the deletion barrier cannot be persisted", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-compatible-blocked-state-"),
+    );
+    roots.push(root);
+    const blockedParent = path.join(root, "not-a-directory");
+    await fs.writeFile(blockedParent, "blocked");
+    const account = openAiCompatibleApiKeyAccount("shared");
+    const key = `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:${account}`;
+    values.set(key, "must-survive");
+    const store = await createStore(path.join(blockedParent, "state"));
+
+    await expect(store.delete("shared")).rejects.toThrow();
+    expect(values.get(key)).toBe("must-survive");
+  });
+
+  it("fails closed on an unknown local marker instead of importing legacy credentials", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-compatible-invalid-state-"),
+    );
+    roots.push(root);
+    const stateRoot = path.join(root, "state");
+    await fs.mkdir(stateRoot);
+    const account = openAiCompatibleApiKeyAccount("shared");
+    const hash = account.slice("openai-compatible-api-key:".length);
+    await fs.writeFile(path.join(stateRoot, `${hash}.state`), "future-state\n");
+    values.set(
+      `${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:openai-compatible-api-key:shared`,
+      "must-not-import",
+    );
+    const store = await createStore(stateRoot);
+
+    await expect(store.get("shared")).rejects.toThrow(
+      "agentlink_openai_compatible_credential_state_invalid",
+    );
+    expect(
+      values.get(`${AGENTLINK_SHARED_KEYCHAIN_SERVICE}:${account}`),
+    ).toBeUndefined();
   });
 
   it("copies a legacy value only when shared storage is absent and never deletes legacy", async () => {
