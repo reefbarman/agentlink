@@ -147,6 +147,35 @@ function detectABChoice(
   };
 }
 
+/**
+ * Select the assistant text that represents the turn's final message.
+ * A `set_task_status` summary is the final message when present; otherwise
+ * only the last narration block counts, so earlier mid-turn narration (which
+ * often quotes prompts while discussing them) cannot produce a choice card.
+ */
+export function getQuestionDetectionText(message: {
+  blocks?: ReadonlyArray<{ type: string; text?: string }>;
+  finalMarker?: { summary?: string };
+}): string {
+  const summary = message.finalMarker?.summary?.trim();
+  if (summary) return summary;
+  const blocks = message.blocks ?? [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    if (block.type !== "text") continue;
+    const text = block.text?.trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+/** A question mark directly followed by a closing quote is quoted text, not a prompt. */
+function isQuotedQuestion(tail: string): boolean {
+  const qIdx = tail.lastIndexOf("?");
+  if (qIdx < 0) return false;
+  return /^["'\u201d\u2019]/.test(tail.slice(qIdx + 1));
+}
+
 export function detectQuestionFromAssistantText(
   assistantText: string,
 ): DetectedQuestion | null {
@@ -159,6 +188,7 @@ export function detectQuestionFromAssistantText(
 
   if (!hasChooserSignal(lowerTail)) return null;
   if (hasOpenEndedSignal(lowerTail)) return null;
+  if (isQuotedQuestion(tail)) return null;
 
   const question = extractTailQuestion(tail);
   if (!question) return null;

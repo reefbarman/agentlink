@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest";
+import {
+  detectQuestionFromAssistantText,
+  getQuestionDetectionText,
+} from "./questionDetection";
 
-import { detectQuestionFromAssistantText } from "./questionDetection";
+describe("getQuestionDetectionText", () => {
+  it("prefers the final status summary over mid-turn narration", () => {
+    expect(
+      getQuestionDetectionText({
+        blocks: [{ type: "text", text: 'It renders "Continue?" twice.' }],
+        finalMarker: { summary: "Have you installed the new build?" },
+      }),
+    ).toBe("Have you installed the new build?");
+  });
+
+  it("uses only the last non-empty text block without a summary", () => {
+    expect(
+      getQuestionDetectionText({
+        blocks: [
+          { type: "text", text: "Should I proceed?" },
+          { type: "tool_call" },
+          { type: "text", text: "Done." },
+          { type: "text", text: "  " },
+        ],
+      }),
+    ).toBe("Done.");
+  });
+});
 
 describe("detectQuestionFromAssistantText", () => {
   it("detects explicit yes/no proceed prompts", () => {
@@ -57,6 +83,14 @@ describe("detectQuestionFromAssistantText", () => {
       "Update docs to include:\n```\nProceed? (yes/no)\n```",
     );
     expect(detected).toBeNull();
+  });
+
+  it("ignores quoted questions mentioned in prose", () => {
+    expect(
+      detectQuestionFromAssistantText(
+        'The transcript\'s own answer summary also renders "Continue?" below the card.',
+      ),
+    ).toBeNull();
   });
 
   it("detects short action confirmation prompts", () => {

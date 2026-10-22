@@ -115,6 +115,7 @@ import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-f
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
 import { useHostVoiceInput } from "./useHostVoiceInput";
+import { getQuestionDetectionText } from "./questionDetection";
 import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   resolveOpenFileRequest,
@@ -2868,11 +2869,7 @@ export function App({
       return;
     }
 
-    const assistantText = (lastMsg.blocks ?? [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    const assistantText = getQuestionDetectionText(lastMsg);
 
     if (!assistantText) {
       dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
