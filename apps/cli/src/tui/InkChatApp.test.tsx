@@ -456,12 +456,15 @@ describe("Ink chat app", () => {
 
     await nextInputDispatch();
     screen.stdin.write("\u001b");
-    // Ink waits 20ms before treating a lone ESC as the Escape key.
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Ink waits 20ms before treating a lone ESC as the Escape key. Leave
+    // generous headroom: on a loaded CI runner, typing before that timer fires
+    // makes Ink parse ESC plus the text as one Alt-key sequence and drop it.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     await nextInputDispatch();
     screen.stdin.write("still typing");
-    await vi.waitFor(() =>
-      expect(stripAnsi(screen.lastFrame())).toContain("still typing"),
+    await vi.waitFor(
+      () => expect(stripAnsi(screen.lastFrame())).toContain("still typing"),
+      { timeout: 5_000 },
     );
     screen.unmount();
   });
