@@ -29,6 +29,47 @@ afterEach(() => {
 });
 
 describe("QuestionCard progress publishing", () => {
+  it("mounts directly at remote progress without publishing an earlier step", () => {
+    const states: Array<{ questionId: string; focusComposer: boolean }> = [];
+    const onProgressChange = vi.fn();
+    const questions = [
+      {
+        id: "choice",
+        type: "multiple_choice" as const,
+        question: "Which option?",
+        options: ["A", "B"],
+      },
+      { id: "details", type: "text" as const, question: "What happens?" },
+    ];
+    const { container } = render(
+      <QuestionCard
+        id="request-1"
+        context="Choose."
+        questions={questions}
+        integratedComposer
+        onComposerStateChange={(state) =>
+          states.push({
+            questionId: state.questionId,
+            focusComposer: state.focusComposer,
+          })
+        }
+        remoteProgress={{
+          step: 1,
+          answers: { choice: "A", details: "So w" },
+          notes: {},
+        }}
+        onProgressChange={onProgressChange}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(states).toEqual([{ questionId: "details", focusComposer: false }]);
+    expect(
+      container.querySelector<HTMLTextAreaElement>("textarea")?.value,
+    ).toBe("So w");
+    expect(onProgressChange).not.toHaveBeenCalled();
+  });
+
   it("does not publish untouched mount state or echo remote progress", () => {
     const onSubmit = vi.fn();
     const onProgressChange = vi.fn();

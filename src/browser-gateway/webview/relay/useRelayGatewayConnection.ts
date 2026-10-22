@@ -392,11 +392,17 @@ export async function commitRelayCheckpoint(options: {
   }
   const detailIsUsable = detailMatchesCheckpoint(handle, options.checkpoint);
   const hydrated = options.hydratedInteractions.get(key);
+  // A question request is immutable for its request ID; only its progress
+  // (and so the detail handle) changes, e.g. on every keystroke in an answer.
+  // Keep showing the last hydrated question while the new detail loads:
+  // committing a question-less snapshot unmounted the card on every update and
+  // stole focus from the answer field. Other kinds still wait for the rotated
+  // detail so a stale approval is never actionable.
   const reusablePayload =
     detailIsUsable &&
     hydrated?.kind === interaction.kind &&
     hydrated.requestId === interaction.requestId &&
-    hydrated.handleId === handle.handleId
+    (hydrated.handleId === handle.handleId || interaction.kind === "question")
       ? hydrated.payload
       : null;
   current.commitSnapshot(

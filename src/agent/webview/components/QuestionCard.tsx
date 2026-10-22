@@ -142,14 +142,33 @@ export function QuestionCard({
   attachmentCounts = {},
   onOpenFile,
 }: QuestionCardProps) {
-  const [step, setStep] = useState(0);
+  // Start from remote progress when remounting mid-question, so the card never
+  // renders step 0 first (that briefly published the first question's composer
+  // state and could move focus out of the answer field).
+  const [initialRemote] = useState(() =>
+    remoteProgress &&
+    remoteProgress.step >= 0 &&
+    remoteProgress.step < questions.length
+      ? {
+          progress: remoteProgress,
+          serialized: serializeProgress(remoteProgress),
+        }
+      : null,
+  );
+  const [step, setStep] = useState(initialRemote?.progress.step ?? 0);
   const [answers, setAnswers] = useState<
     Record<string, string | string[] | number | boolean | undefined>
-  >({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  >(() => ({ ...initialRemote?.progress.answers }));
+  const [notes, setNotes] = useState<Record<string, string>>(() => ({
+    ...initialRemote?.progress.notes,
+  }));
   const notesRef = useRef(notes);
-  const lastAppliedRemoteRef = useRef<string | null>(null);
-  const lastPublishedRef = useRef<string | null>(null);
+  const lastAppliedRemoteRef = useRef<string | null>(
+    initialRemote?.serialized ?? null,
+  );
+  const lastPublishedRef = useRef<string | null>(
+    initialRemote?.serialized ?? null,
+  );
   const hasLocalProgressEditRef = useRef(false);
   const onProgressChangeRef = useRef(onProgressChange);
   onProgressChangeRef.current = onProgressChange;

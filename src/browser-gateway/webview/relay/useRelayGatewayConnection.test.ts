@@ -555,6 +555,85 @@ describe("commitRelayCheckpoint", () => {
     expect(next.commits[1]?.ui.approval).toEqual(nextPayload.approval);
   });
 
+  it("keeps a question mounted while its progress rotates the detail handle", async () => {
+    const question = {
+      id: "question-1",
+      context: "Tell me more",
+      questions: [{ id: "details", type: "text", question: "What happens?" }],
+    };
+    const progress = (answer: string) => ({
+      id: "question-1",
+      step: 0,
+      answers: { details: answer },
+      notes: {},
+      origin: "browser",
+    });
+    const payload = (answer: string) => ({
+      approval: null,
+      question,
+      questionProgress: progress(answer),
+      formElicitation: null,
+      urlElicitation: null,
+    });
+    const questionCheckpoint = (handle: BrowserGatewayDetailHandle) => {
+      const next = checkpoint(handle);
+      next.ui.interaction = {
+        ...next.ui.interaction!,
+        requestId: "question-1",
+        kind: "question",
+        summary: "Question pending",
+      };
+      return next;
+    };
+    const projectors = new Map<string, RelaySnapshotProjector>();
+    const interactionCache = new Map();
+    const hydratedInteractions = new Map();
+    const first = createHarness(payload("So w"));
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(first.content, { status: 200 }),
+    );
+    await commitRelayCheckpoint({
+      checkpoint: questionCheckpoint(first.handle),
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => true,
+      latest: first.latest,
+      catalog: first.catalog,
+    });
+    expect(first.commits.at(-1)?.ui.question).toEqual(question);
+
+    const second = createHarness(payload("So wh"));
+    second.handle.handleId = "interaction-2";
+    fetch.mockImplementation(
+      async (_input: RequestInfo | URL) =>
+        new Response(second.content, { status: 200 }),
+    );
+    await commitRelayCheckpoint({
+      checkpoint: questionCheckpoint(second.handle),
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => true,
+      latest: second.latest,
+      catalog: second.catalog,
+    });
+
+    expect(second.commits).toHaveLength(2);
+    // The interim commit keeps the question (and its previous progress)
+    // instead of briefly unmounting the card.
+    expect(second.commits[0]?.ui.question).toEqual(question);
+    expect(second.commits[0]?.session.foreground?.questionRequest).toEqual(
+      question,
+    );
+    expect(second.commits[1]?.ui.questionProgress).toEqual(progress("So wh"));
+  });
+
   it("shares pending interaction hydration across newer checkpoints", async () => {
     const payload = {
       approval: { id: "approval-1", kind: "command", command: "npm test" },
