@@ -1,4 +1,9 @@
 import {
+  CREDENTIALS_HELPER_IDENTIFIER,
+  buildCredentialsHelper,
+  credentialsHelperName,
+} from "../../scripts/build-credentials-helper.mjs";
+import {
   resolveSigningPolicy,
   verifyMacSignature,
 } from "../../scripts/macos-signing.mjs";
@@ -11,7 +16,7 @@ const APP_ID = "com.agentlink.desktop";
 
 // electron-builder's non-MAS selector does not include Apple Development. This
 // hook runs after all files are assembled and before zip/DMG archive creation.
-export default async function signDesktop({ appOutDir, packager }) {
+export default async function signDesktop({ appOutDir, packager, arch }) {
   const policy = resolveSigningPolicy();
   if (policy.mode !== "development") {
     throw new Error("Desktop signing hook must only run in development mode.");
@@ -19,7 +24,20 @@ export default async function signDesktop({ appOutDir, packager }) {
   const app = path.join(appOutDir, `${packager.appInfo.productFilename}.app`);
   const resources = path.join(app, "Contents", "Resources");
   const binaries = await nativeAddons(resources);
+  // The shared Keychain helper keeps its own identifier so all surfaces share
+  // one Keychain approval; osx-sign would re-sign it with a derived one.
+  const credentialsHelper = path.join(
+    resources,
+    credentialsHelperName("Desktop"),
+  );
+  await buildCredentialsHelper({
+    outputPath: credentialsHelper,
+    policy,
+    // electron-builder's Arch enum: 1 is x64, 3 is arm64.
+    arch: arch === 1 ? "x64" : "arm64",
+  });
   await sign({
+    ignore: (file) => file === credentialsHelper,
     app,
     platform: "darwin",
     type: "development",
@@ -37,6 +55,9 @@ export default async function signDesktop({ appOutDir, packager }) {
   });
   verifyMacSignature(app, { identifier: APP_ID, deep: true });
   for (const binary of binaries) verifyMacSignature(binary);
+  verifyMacSignature(credentialsHelper, {
+    identifier: CREDENTIALS_HELPER_IDENTIFIER,
+  });
 }
 
 async function nativeAddons(root) {

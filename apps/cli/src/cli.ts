@@ -2,6 +2,7 @@ import {
   createCodexOAuthRuntime,
   createResponsesWebSocketConnector,
   SessionPreferencesStore,
+  setCredentialsHelperPath,
   type CodexOAuthManager,
   type NodeHostMcpOAuthAuthorizationRequest,
   type NodeHostMcpFormElicitationRequest,
@@ -194,6 +195,15 @@ export async function runCli(
     io.output.write(`${__AGENTLINK_CLI_VERSION__}\n`);
     return 0;
   }
+  // The signed bundle ships its Keychain helper next to agentlink.js, named so
+  // macOS prompts say the CLI is asking. Source runs have none and use the
+  // Keychain directly.
+  setCredentialsHelperPath(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "AgentLink Credentials (CLI)",
+    ),
+  );
 
   const dataRoot = path.resolve(
     environment.AGENTLINK_HOME?.trim() || path.join(homedir(), ".agentlink"),

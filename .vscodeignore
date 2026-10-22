@@ -44,6 +44,8 @@
 !dist/codicon.ttf
 !dist/node_modules/**
 !dist/sandbox-runtime/**
+# Signed macOS Keychain helper; built by scripts/package-vsix.mjs when signing is available.
+!dist/AgentLink Credentials*
 !package.json
 !README.md
 !LICENSE

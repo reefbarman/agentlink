@@ -37,7 +37,7 @@ describe("CLI release installer verification", () => {
     try {
       const files = {
         "bin/agentlink": "launcher",
-        "node/bin/node": "node binary",
+        "node/bin/AgentLink CLI": "node binary",
         "dist/agentlink.js": "cli entry",
         "dist/new-runtime-module.js": "future runtime module",
       };
@@ -78,7 +78,7 @@ describe("CLI release installer verification", () => {
     try {
       for (const name of [
         "bin/agentlink",
-        "node/bin/node",
+        "node/bin/AgentLink CLI",
         "dist/agentlink.js",
       ]) {
         const filename = path.join(root, name);
@@ -86,10 +86,9 @@ describe("CLI release installer verification", () => {
         await writeFile(filename, name);
       }
       const files = Object.fromEntries(
-        ["bin/agentlink", "node/bin/node", "dist/agentlink.js"].map((name) => [
-          name,
-          createHash("sha256").update(name).digest("hex"),
-        ]),
+        ["bin/agentlink", "node/bin/AgentLink CLI", "dist/agentlink.js"].map(
+          (name) => [name, createHash("sha256").update(name).digest("hex")],
+        ),
       );
       const manifestPath = path.join(root, "bundle-manifest.json");
       const manifest = {
@@ -200,7 +199,7 @@ describe("CLI release installer verification", () => {
         const source = path.join(home, "source/agentlink-cli-darwin-arm64");
         const files = {
           "bin/agentlink": "#!/bin/sh\nprintf '1.2.3\\n'\n",
-          "node/bin/node": "new node",
+          "node/bin/AgentLink CLI": "new node",
           "dist/agentlink.js": "new cli",
         };
         for (const [name, contents] of Object.entries(files)) {

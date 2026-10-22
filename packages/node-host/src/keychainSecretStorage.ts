@@ -2,6 +2,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import {
+  CredentialsHelperUnavailableError,
+  createCredentialsHelperEntry,
+  describeSharedCredential,
+  resolveCredentialsHelperPath,
+} from "./credentialsHelperClient.js";
+
 import { randomUUID } from "node:crypto";
 
 export const AGENTLINK_SHARED_KEYCHAIN_SERVICE =
@@ -20,6 +27,15 @@ export interface KeychainSecretStorageOptions {
    * store fails instead of falling back. Ignored on other platforms.
    */
   linuxStore?: KeychainLinuxStore;
+  /**
+   * macOS: the "AgentLink Credentials" helper to use. Defaults to the
+   * process-wide path from `setCredentialsHelperPath` or the
+   * AGENTLINK_CREDENTIALS_HELPER environment variable. Null forces direct
+   * Keychain access.
+   */
+  credentialsHelperPath?: string | null;
+  /** Keychain label shown in macOS prompts; derived from the account if omitted. */
+  label?: string;
   lockRoot?: string;
   lockTimeoutMs?: number;
   staleLockMs?: number;
@@ -39,11 +55,26 @@ export async function createKeychainSecretStorage(
   const service = options.service ?? AGENTLINK_SHARED_KEYCHAIN_SERVICE;
   const account = requireSegment(options.account, "account");
   const { AsyncEntry } = await import("@napi-rs/keyring");
-  const entry = options.linuxStore
+  const nativeEntry = options.linuxStore
     ? new AsyncEntry(service, account, {
         linux: { store: options.linuxStore },
       })
     : new AsyncEntry(service, account);
+  const helperPath =
+    options.credentialsHelperPath === null
+      ? undefined
+      : (options.credentialsHelperPath ?? resolveCredentialsHelperPath());
+  const entry: KeychainEntry = helperPath
+    ? withDirectFallback(
+        createCredentialsHelperEntry({
+          helperPath,
+          service,
+          account,
+          label: options.label ?? describeSharedCredential(account),
+        }),
+        nativeEntry,
+      )
+    : nativeEntry;
   const lockRoot =
     options.lockRoot ??
     path.join(os.homedir(), ".agentlink", "credential-locks");
@@ -120,6 +151,45 @@ export async function createKeychainSecretStorage(
     },
   };
   return storage;
+}
+
+interface KeychainEntry {
+  getPassword(): Promise<string | null | undefined>;
+  setPassword(value: string): Promise<void>;
+  deletePassword(): Promise<unknown>;
+}
+
+/**
+ * Use the helper, but switch to direct Keychain access for good when it is
+ * unavailable (missing, unrunnable, or this program is not an allowed
+ * caller), which is the behaviour before the helper existed. Keychain errors
+ * such as a denied prompt are not retried directly, to avoid a second prompt.
+ */
+function withDirectFallback(
+  helper: KeychainEntry,
+  direct: KeychainEntry,
+): KeychainEntry {
+  let active = helper;
+  const run = async <T>(
+    operation: (entry: KeychainEntry) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await operation(active);
+    } catch (error) {
+      if (
+        active === direct ||
+        !(error instanceof CredentialsHelperUnavailableError)
+      )
+        throw error;
+      active = direct;
+      return await operation(direct);
+    }
+  };
+  return {
+    getPassword: () => run((entry) => entry.getPassword()),
+    setPassword: (value) => run((entry) => entry.setPassword(value)),
+    deletePassword: () => run((entry) => entry.deletePassword()),
+  };
 }
 
 async function readRevision(revisionPath: string): Promise<string | null> {

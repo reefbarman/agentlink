@@ -3,6 +3,10 @@ import {
   verifyCliBundle,
 } from "../../scripts/verify-cli-bundle.mjs";
 import {
+  buildCredentialsHelper,
+  credentialsHelperName,
+} from "../../scripts/build-credentials-helper.mjs";
+import {
   chmod,
   copyFile,
   mkdir,
@@ -35,8 +39,13 @@ const nodeVersion = "22.23.3";
 const nodeArchive = `node-v${nodeVersion}-darwin-arm64.tar.gz`;
 const nodeArchiveSha256 =
   "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53";
+// macOS names this file in Keychain prompts, so it says "AgentLink CLI"
+// rather than "node". The signing identifier stays com.agentlink.cli.node so
+// existing Keychain approvals keep working.
+export const CLI_RUNTIME_PATH = "node/bin/AgentLink CLI";
+export const CLI_CREDENTIALS_HELPER_PATH = `dist/${credentialsHelperName("CLI")}`;
 const assetPaths = {
-  node: "node/bin/node",
+  node: CLI_RUNTIME_PATH,
   addon:
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
   ripgrep: "dist/rg",
@@ -163,7 +172,7 @@ export async function bundleCli() {
     const launcher = path.join(staging, "bin/agentlink");
     await writeFile(
       launcher,
-      '#!/bin/sh\nset -eu\n# Resolve the entrypoint symlink without relying on PATH or changing the caller environment.\nentry=$0\nwhile [ -L "$entry" ]; do\n  base=$(cd -P "$(dirname "$entry")" && pwd)\n  entry=$(readlink "$entry")\n  case "$entry" in /*) ;; *) entry=$base/$entry ;; esac\ndone\nroot=$(cd -P "$(dirname "$entry")/.." && pwd)\nexec "$root/node/bin/node" "$root/dist/agentlink.js" "$@"\n',
+      `#!/bin/sh\nset -eu\n# Resolve the entrypoint symlink without relying on PATH or changing the caller environment.\nentry=$0\nwhile [ -L "$entry" ]; do\n  base=$(cd -P "$(dirname "$entry")" && pwd)\n  entry=$(readlink "$entry")\n  case "$entry" in /*) ;; *) entry=$base/$entry ;; esac\ndone\nroot=$(cd -P "$(dirname "$entry")/.." && pwd)\nexec "$root/${CLI_RUNTIME_PATH}" "$root/dist/agentlink.js" "$@"\n`,
       { mode: 0o755 },
     );
     await chmod(launcher, 0o755);
@@ -184,13 +193,20 @@ export async function bundleCli() {
         });
       }
     }
+    // The helper is compiled here rather than downloaded, so it has no
+    // upstream hash. Unsigned builds skip it and use direct Keychain access.
+    const helper = await buildCredentialsHelper({
+      outputPath: path.join(staging, CLI_CREDENTIALS_HELPER_PATH),
+      policy,
+    });
     const postSignSha256 = {};
     for (const [name, relative] of Object.entries(assetPaths))
       postSignSha256[name] = await sha256(path.join(staging, relative));
     const files = {};
     for (const relative of [
       "bin/agentlink",
-      "node/bin/node",
+      CLI_RUNTIME_PATH,
+      ...(helper ? [CLI_CREDENTIALS_HELPER_PATH] : []),
       "node/LICENSE",
       "dist/agentlink.js",
       "dist/rg",

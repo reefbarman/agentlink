@@ -26,7 +26,8 @@ import type {
 const execFile = promisify(execFileCallback);
 const requiredFiles = [
   "bin/agentlink",
-  "node/bin/node",
+  // Named for Keychain prompts; was node/bin/node before the credentials helper.
+  "node/bin/AgentLink CLI",
   "dist/agentlink.js",
 ] as const;
 

@@ -170,6 +170,12 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
               "app.asar.unpacked",
               "node_modules",
             ),
+            // Signed builds ship the shared Keychain helper, named so macOS
+            // prompts say Desktop is asking. Missing means direct access.
+            AGENTLINK_CREDENTIALS_HELPER: path.join(
+              process.resourcesPath,
+              "AgentLink Credentials (Desktop)",
+            ),
           }
         : {}),
     },

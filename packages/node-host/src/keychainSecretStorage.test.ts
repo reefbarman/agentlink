@@ -94,6 +94,117 @@ describe("createKeychainSecretStorage", () => {
     await expect(other.get()).resolves.toBe("changed");
   });
 
+  describe("with the AgentLink Credentials helper", () => {
+    // A stand-in helper speaking the same stdin/stdout protocol. Its state
+    // file lets the test see what the "Keychain" holds and which labels and
+    // operations it was given.
+    async function fakeHelper(mode: "ok" | "reject" | "error") {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-fake-helper-"),
+      );
+      temporaryRoots.push(root);
+      const statePath = path.join(root, "state.json");
+      const helperPath = path.join(root, "AgentLink Credentials (Test)");
+      await fs.writeFile(
+        helperPath,
+        `#!${process.execPath}
+const fs = require("node:fs");
+const state = fs.existsSync(${JSON.stringify(statePath)})
+  ? JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"))
+  : { values: {}, requests: [] };
+const request = JSON.parse(fs.readFileSync(0, "utf8"));
+state.requests.push({ op: request.op, account: request.account, label: request.label });
+let reply;
+if (${JSON.stringify(mode)} === "reject") reply = { ok: false, error: "caller_rejected" };
+else if (${JSON.stringify(mode)} === "error") reply = { ok: false, error: "keychain_error", status: -128, message: "User canceled" };
+else {
+  const key = request.service + ":" + request.account;
+  if (request.op === "store") state.values[key] = request.value;
+  if (request.op === "delete") delete state.values[key];
+  reply = { ok: true, value: request.op === "get" ? (state.values[key] ?? null) : null };
+}
+fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+process.stdout.write(JSON.stringify(reply));
+`,
+        { mode: 0o755 },
+      );
+      const readState = async () =>
+        JSON.parse(await fs.readFile(statePath, "utf8")) as {
+          values: Record<string, string>;
+          requests: Array<{ op: string; account: string; label: string }>;
+        };
+      const storage = async (account = "codex-oauth-credentials") => {
+        const lockRoot = await fs.mkdtemp(
+          path.join(os.tmpdir(), "agentlink-keychain-helper-"),
+        );
+        temporaryRoots.push(lockRoot);
+        return await createKeychainSecretStorage({
+          service: "test-service",
+          account,
+          lockRoot,
+          credentialsHelperPath: helperPath,
+        });
+      };
+      return { readState, storage };
+    }
+
+    it("reads and writes through the helper with a descriptive label", async () => {
+      const helper = await fakeHelper("ok");
+      const storage = await helper.storage();
+      await storage.store("token-state");
+      await expect(storage.get()).resolves.toBe("token-state");
+      await storage.delete();
+      const state = await helper.readState();
+      expect(state.values).toEqual({});
+      expect(state.requests.map((request) => request.op)).toEqual([
+        "get",
+        "store",
+        "delete",
+      ]);
+      expect(state.requests[0]?.label).toBe(
+        "AgentLink: Codex sign-in (shared by VS Code, CLI and Desktop)",
+      );
+      // The native module was never asked: every access went to the helper.
+      expect(getPasswordCalls).toBe(0);
+      expect(setPasswordCalls).toBe(0);
+    });
+
+    it("falls back to direct Keychain access when the caller is not allowed", async () => {
+      const helper = await fakeHelper("reject");
+      const storage = await helper.storage("test-account");
+      await storage.store("direct-value");
+      await expect(storage.get()).resolves.toBe("direct-value");
+      expect(values.get("test-service:test-account")).toBe("direct-value");
+      // One rejected attempt, then direct access for the rest of the process.
+      expect((await helper.readState()).requests).toHaveLength(1);
+    });
+
+    it("reports a Keychain error without retrying directly and prompting twice", async () => {
+      const helper = await fakeHelper("error");
+      const storage = await helper.storage("test-account");
+      await expect(storage.store("value")).rejects.toThrow(
+        "agentlink_credentials_helper_keychain_error: User canceled (-128)",
+      );
+      expect(getPasswordCalls).toBe(0);
+      expect(setPasswordCalls).toBe(0);
+    });
+
+    it("uses direct access when the configured helper is missing", async () => {
+      const lockRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-keychain-missing-"),
+      );
+      temporaryRoots.push(lockRoot);
+      const storage = await createKeychainSecretStorage({
+        service: "test-service",
+        account: "test-account",
+        lockRoot,
+        credentialsHelperPath: path.join(lockRoot, "missing-helper"),
+      });
+      await storage.store("value");
+      expect(values.get("test-service:test-account")).toBe("value");
+    });
+  });
+
   it("keeps the native default store selection when no Linux store is requested", async () => {
     await createStorage();
     expect(constructorCalls).toEqual([["test-service", "test-account"]]);

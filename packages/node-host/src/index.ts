@@ -11,6 +11,12 @@ export * from "./fileSystem.js";
 export * from "./instructionCatalog.js";
 export * from "./instructionDiscovery.js";
 export * from "./keychainSecretStorage.js";
+export {
+  CREDENTIALS_HELPER_ENV,
+  describeSharedCredential,
+  resolveCredentialsHelperPath,
+  setCredentialsHelperPath,
+} from "./credentialsHelperClient.js";
 export * from "./keychainMcpCredentialRepository.js";
 export * from "./mcpConfig.js";
 export * from "./mcpAuthCoordinator.js";

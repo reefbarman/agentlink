@@ -43,6 +43,23 @@ AgentLink now uses a shared macOS Keychain account pool for VS Code, AgentLink D
 
 If Keychain is locked or unavailable, AgentLink fails closed and keeps the stored account data intact. Unlock Keychain and retry rather than repeatedly adding the account. macOS may ask once for each distinct AgentLink host executable (for example VS Code and AgentLink Desktop). AgentLink caches successful reads within each host and uses a non-secret local revision marker to notice account changes from another surface, so reopening account menus should not repeatedly access Keychain; continued prompts from the same host after choosing **Always Allow** indicate a Keychain access-control problem rather than a missing login.
 
+## macOS keeps asking for Keychain access to AgentLink credentials
+
+On macOS, each time a program signed by one developer writes a Keychain item, macOS resets the item so only that developer's programs are trusted. VS Code is signed by Microsoft and the CLI and Desktop by AgentLink, so a sign-in refresh in one surface used to make the others ask again ("Code Helper (Plugin)" or "node" wants to use your confidential information), even after **Always Allow**.
+
+Signed macOS builds now read and write shared credentials through one small program, **AgentLink Credentials**. Each surface ships its own copy, named for it:
+
+- **AgentLink Credentials (VS Code)**
+- **AgentLink Credentials (CLI)**
+- **AgentLink Credentials (Desktop)**
+
+The prompt names the copy, so it says which surface is asking. The item it asks about is labelled with what it holds, for example "AgentLink: Codex sign-in (shared by VS Code, CLI and Desktop)". All copies share one signature, so choosing **Always Allow** once covers every surface, and later writes no longer reset access.
+
+- Expect one more prompt per credential the first time a helper uses it. Choose **Always Allow**.
+- The helper only serves VS Code and AgentLink's own signed CLI and Desktop. It accepts no code and does nothing but get, store and delete AgentLink's items.
+- Builds without the helper (unsigned previews, Linux, Windows, source runs) use the Keychain directly, as before, and can still prompt after another surface writes.
+- If prompts continue from **AgentLink Credentials** after **Always Allow**, check whether the copy was rebuilt with a different signing certificate.
+
 ## A GPT-6 model is selected but the request fails
 
 AgentLink lists GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves the selected model unchanged and shows the provider's normal error instead of silently changing models or credentials.

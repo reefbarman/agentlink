@@ -6,8 +6,13 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { verifyMacSignature } from "./macos-signing.mjs";
 
+const runtimePath = "node/bin/AgentLink CLI";
+// Built and signed only in development signing mode; see
+// scripts/build-credentials-helper.mjs.
+const credentialsHelperPath = "dist/AgentLink Credentials (CLI)";
+const credentialsHelperIdentifier = "com.agentlink.credentials";
 const nativePaths = {
-  node: "node/bin/node",
+  node: runtimePath,
   addon:
     "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
   ripgrep: "dist/rg",
@@ -19,7 +24,7 @@ const identifiers = {
 };
 const required = [
   "bin/agentlink",
-  "node/bin/node",
+  runtimePath,
   "node/LICENSE",
   "dist/agentlink.js",
   "dist/rg",
@@ -76,8 +81,11 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
     }
   }
   await walk();
+  const signed = manifest.signing === "development";
+  const hasHelper = Object.hasOwn(files, credentialsHelperPath);
   if (
     required.some((name) => !(name in files)) ||
+    signed !== hasHelper ||
     Object.keys(files).sort().join("\n") !==
       Object.keys(manifest.files ?? {})
         .sort()
@@ -154,24 +162,32 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   ) {
     throw new Error("Unexpected Keychain runtime package versions.");
   }
-  for (const name of ["bin/agentlink", nativePaths.node, nativePaths.ripgrep]) {
+  for (const name of [
+    "bin/agentlink",
+    nativePaths.node,
+    nativePaths.ripgrep,
+    ...(signed ? [credentialsHelperPath] : []),
+  ]) {
     if (!((await lstat(path.join(root, name))).mode & 0o111))
       throw new Error(`Not executable: ${name}`);
   }
   const launcher = await readFile(path.join(root, "bin/agentlink"), "utf8");
   if (
     !launcher.includes(
-      'exec "$root/node/bin/node" "$root/dist/agentlink.js" "$@"',
+      `exec "$root/${runtimePath}" "$root/dist/agentlink.js" "$@"`,
     ) ||
     !launcher.includes('while [ -L "$entry" ]')
   )
     throw new Error("Invalid bundle-relative CLI launcher.");
-  if (manifest.signing === "development") {
+  if (signed) {
     for (const [name, relative] of Object.entries(nativePaths)) {
       verifyMacSignature(path.join(root, relative), {
         identifier: identifiers[name],
       });
     }
+    verifyMacSignature(path.join(root, credentialsHelperPath), {
+      identifier: credentialsHelperIdentifier,
+    });
   }
   return manifest;
 }

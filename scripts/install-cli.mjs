@@ -92,7 +92,9 @@ export async function installCli({
       .split("\n")
       .some(
         (command) =>
-          command.includes(`${lib}/`) && command.includes("/node/bin/node"),
+          command.includes(`${lib}/`) &&
+          (command.includes("/node/bin/AgentLink CLI") ||
+            command.includes("/node/bin/node")),
       )
   ) {
     throw new Error(

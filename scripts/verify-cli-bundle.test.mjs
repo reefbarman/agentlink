@@ -21,12 +21,12 @@ import test from "node:test";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const launcher =
-  '#!/bin/sh\nset -eu\nentry=$0\nwhile [ -L "$entry" ]; do\n  base=$(cd -P "$(dirname "$entry")" && pwd)\n  entry=$(readlink "$entry")\n  case "$entry" in /*) ;; *) entry=$base/$entry ;; esac\ndone\nroot=$(cd -P "$(dirname "$entry")/.." && pwd)\nexec "$root/node/bin/node" "$root/dist/agentlink.js" "$@"\n';
+  '#!/bin/sh\nset -eu\nentry=$0\nwhile [ -L "$entry" ]; do\n  base=$(cd -P "$(dirname "$entry")" && pwd)\n  entry=$(readlink "$entry")\n  case "$entry" in /*) ;; *) entry=$base/$entry ;; esac\ndone\nroot=$(cd -P "$(dirname "$entry")/.." && pwd)\nexec "$root/node/bin/AgentLink CLI" "$root/dist/agentlink.js" "$@"\n';
 
 async function fixture(root) {
   const contents = {
     "bin/agentlink": launcher,
-    "node/bin/node":
+    "node/bin/AgentLink CLI":
       '#!/bin/sh\nprintf "node=%s\\nscript=%s\\narg=%s\\nPATH=%s\\n" "$0" "$1" "$2" "$PATH"\n',
     "node/LICENSE": "node license",
     "dist/agentlink.js": "script",
@@ -65,10 +65,10 @@ async function fixture(root) {
     await writeFile(target, contentsValue);
     files[name] = digest(contentsValue);
   }
-  for (const name of ["bin/agentlink", "node/bin/node", "dist/rg"])
+  for (const name of ["bin/agentlink", "node/bin/AgentLink CLI", "dist/rg"])
     await chmod(path.join(root, name), 0o755);
   const upstreamSha256 = {
-    node: files["node/bin/node"],
+    node: files["node/bin/AgentLink CLI"],
     addon:
       files[
         "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
@@ -124,6 +124,23 @@ test("unsigned preview requires explicit verification opt-in; inventory and hash
   );
 });
 
+test("unsigned bundles must not carry the credentials helper", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentlink-cli-helper-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manifest = await fixture(root);
+  const helper = "dist/AgentLink Credentials (CLI)";
+  await writeFile(path.join(root, helper), "helper");
+  manifest.files[helper] = digest("helper");
+  await writeFile(
+    path.join(root, "bundle-manifest.json"),
+    JSON.stringify(manifest),
+  );
+  await assert.rejects(
+    verifyCliBundle(root, { allowUnsigned: true }),
+    /inventory/u,
+  );
+});
+
 test("installed symlink launcher resolves its own runtime and leaves user PATH unchanged", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agentlink-cli-launcher-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -143,7 +160,10 @@ test("installed symlink launcher resolves its own runtime and leaves user PATH u
   assert.match(output, /script=.*\/lib\/agentlink\/cli\/dist\/agentlink\.js/u);
   assert.match(output, /arg=one/u);
   assert.match(output, /PATH=\/usr\/bin:\/bin/u);
-  assert.match(output, /node=.*\/lib\/agentlink\/cli\/node\/bin\/node/u);
+  assert.match(
+    output,
+    /node=.*\/lib\/agentlink\/cli\/node\/bin\/AgentLink CLI/u,
+  );
   assert.equal(
     await readFile(path.join(bundle, "bin/agentlink"), "utf8"),
     launcher,

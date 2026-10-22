@@ -134,6 +134,7 @@ import {
 import {
   createSharedOpenAiCompatibleCredentialStore,
   SessionPreferencesStore,
+  setCredentialsHelperPath,
   SharedOpenAiCompatibleConfigStore,
 } from "@agentlink/node-host";
 
@@ -512,10 +513,21 @@ async function consumeWorktreeStartupIntent(
   }
 }
 
+function vscodeCredentialsHelperPath(context: vscode.ExtensionContext): string {
+  return path.join(
+    context.extensionUri.fsPath,
+    "dist",
+    "AgentLink Credentials (VS Code)",
+  );
+}
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   installAgentLinkHttpDispatcher();
+  // Signed macOS VSIXs ship the shared Keychain helper, named so macOS prompts
+  // say VS Code is asking. Without it, the Keychain is used directly.
+  setCredentialsHelperPath(vscodeCredentialsHelperPath(context));
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
@@ -2755,6 +2767,9 @@ export async function activate(
         lanAccess: desired.lanAccess,
         mdnsName: desired.mdnsName,
         secureLanAccess: desired.secureLanAccess,
+        spawnEnv: {
+          AGENTLINK_CREDENTIALS_HELPER: vscodeCredentialsHelperPath(context),
+        },
         log,
       });
 

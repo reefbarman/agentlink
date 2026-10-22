@@ -1,4 +1,9 @@
+import {
+  buildCredentialsHelper,
+  credentialsHelperName,
+} from "./build-credentials-helper.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync, rmSync } from "node:fs";
 import {
   verifyVsixExcludesDesktop,
   verifyVsixManifestExcludesDesktop,
@@ -8,8 +13,8 @@ import { fileURLToPath } from "node:url";
 import { filterVsceFileCountWarning } from "./package-vsix-output.mjs";
 import path from "node:path";
 import process from "node:process";
-import { readFileSync } from "node:fs";
 import { resolveRetrievalRuntimeTarget } from "./package-retrieval-runtime.mjs";
+import { resolveSigningPolicy } from "./macos-signing.mjs";
 import { verifyRetrievalPackageFiles } from "./verify-retrieval-package.mjs";
 
 const repoRoot = path.resolve(
@@ -41,6 +46,37 @@ function run(command, args, options = {}) {
 }
 
 run(process.execPath, [npmCli, "run", "build"]);
+await packageCredentialsHelper();
+
+/**
+ * Ship the signed Keychain helper in macOS VSIXs built where an Apple
+ * Development identity is available. Other builds leave it out and VS Code
+ * uses the Keychain directly, as before.
+ */
+async function packageCredentialsHelper() {
+  const helperPath = path.join(
+    repoRoot,
+    "dist",
+    credentialsHelperName("VS Code"),
+  );
+  rmSync(helperPath, { force: true });
+  if (process.platform !== "darwin" || !target.startsWith("darwin-")) return;
+  if (process.env.AGENTLINK_MAC_SIGNING === "unsigned") return;
+  let policy;
+  try {
+    policy = resolveSigningPolicy();
+  } catch (error) {
+    process.stderr.write(
+      `Skipping the AgentLink Credentials helper: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return;
+  }
+  await buildCredentialsHelper({
+    outputPath: helperPath,
+    policy,
+    arch: target === "darwin-x64" ? "x64" : "arm64",
+  });
+}
 const packaging = spawnSync(
   process.execPath,
   [
