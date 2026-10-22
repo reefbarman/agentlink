@@ -176,8 +176,43 @@ function isQuotedQuestion(tail: string): boolean {
   return /^["'\u201d\u2019]/.test(tail.slice(qIdx + 1));
 }
 
+export interface QuestionDetectionOptions {
+  /**
+   * The turn ended with `set_task_status` status `waiting_for_user`. Only then
+   * do direct yes/no questions ("Have you…?", "Is it…?") produce a card, since
+   * the agent has explicitly said it is waiting on the user.
+   */
+  waitingForUser?: boolean;
+}
+
+const DIRECT_YES_NO_START =
+  /^(?:have|has|had|did|do|does|is|are|am|was|were|can|could|will|would|should|shall|may|might)\s/i;
+
+/**
+ * Detect a direct yes/no question that ends the final message, such as
+ * "Have you installed the new build?". Alternative questions ("Do you want
+ * A or B?") are not yes/no and are left alone.
+ */
+function detectDirectYesNo(tail: string): DetectedQuestion | null {
+  if (!tail.endsWith("?")) return null;
+  const question = extractTailQuestion(tail);
+  if (!question) return null;
+  const bare = question.replace(/^[^A-Za-z]+/, "");
+  if (!DIRECT_YES_NO_START.test(bare)) return null;
+  if (/\bor\b(?!\s+not\b)/i.test(bare)) return null;
+  return {
+    kind: "yes_no",
+    prompt: question,
+    options: [
+      { label: "Yes", payload: "Yes" },
+      { label: "No", payload: "No" },
+    ],
+  };
+}
+
 export function detectQuestionFromAssistantText(
   assistantText: string,
+  options: QuestionDetectionOptions = {},
 ): DetectedQuestion | null {
   const noCode = stripInlineCode(stripCodeBlocks(assistantText));
   const normalized = normalize(noCode);
@@ -186,15 +221,17 @@ export function detectQuestionFromAssistantText(
   const tail = getTailSentences(normalized);
   const lowerTail = tail.toLowerCase();
 
-  if (!hasChooserSignal(lowerTail)) return null;
   if (hasOpenEndedSignal(lowerTail)) return null;
   if (isQuotedQuestion(tail)) return null;
 
-  const question = extractTailQuestion(tail);
-  if (!question) return null;
+  if (hasChooserSignal(lowerTail)) {
+    const question = extractTailQuestion(tail);
+    if (question) {
+      const detected =
+        detectABChoice(tail, question) ?? detectYesNo(question, tail);
+      if (detected) return detected;
+    }
+  }
 
-  const ab = detectABChoice(tail, question);
-  if (ab) return ab;
-
-  return detectYesNo(question, tail);
+  return options.waitingForUser ? detectDirectYesNo(tail) : null;
 }

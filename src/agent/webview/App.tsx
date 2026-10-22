@@ -2887,6 +2887,7 @@ export function App({
       requestId,
       messageId: lastMsg.id,
       text: assistantText,
+      waitingForUser: lastMsg.finalMarker?.status === "waiting_for_user",
     });
   }, [
     state.streaming,

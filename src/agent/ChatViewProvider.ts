@@ -250,7 +250,11 @@ import type {
   VoiceInputService,
 } from "./voice/VoiceInputService.js";
 import type { VoiceInputLiveEvent } from "../shared/voiceInputProtocol.js";
-import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
+import {
+  detectQuestionFromAssistantText,
+  getQuestionDetectionText,
+  type QuestionDetectionOptions,
+} from "./webview/questionDetection.js";
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
   agentMessagesToChatMessages,
@@ -10272,6 +10276,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const requestId = msg.requestId as string;
         const messageId = msg.messageId as string;
         const text = msg.text as string;
+        const waitingForUser = msg.waitingForUser === true;
         if (!requestId || !messageId || typeof text !== "string") break;
 
         if (this.projectedDetectRequest) {
@@ -10285,10 +10290,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           assistantText: text,
         };
         this.detectRequestInputs.set(requestId, {
-          detectKey: `${messageId}:${text}`,
+          detectKey: `${messageId}:${waitingForUser}:${text}`,
         });
 
-        this.detectQuestionForWebview(requestId, messageId, text);
+        this.detectQuestionForWebview(requestId, messageId, text, {
+          waitingForUser,
+        });
         break;
       }
 
@@ -10626,11 +10633,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const assistantText = (lastMsg.blocks ?? [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    const assistantText = getQuestionDetectionText(lastMsg);
+    const waitingForUser = lastMsg.finalMarker?.status === "waiting_for_user";
 
     if (!assistantText) {
       this.projectedDetectRequest = null;
@@ -10642,7 +10646,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const detectKey = `${lastMsg.id}:${assistantText}`;
+    const detectKey = `${lastMsg.id}:${waitingForUser}:${assistantText}`;
     if (this.projectedLastDetectKey === detectKey) {
       return;
     }
@@ -10667,7 +10671,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       assistantText,
     };
     this.detectRequestInputs.set(requestId, { detectKey });
-    this.detectQuestionForWebview(requestId, lastMsg.id, assistantText);
+    this.detectQuestionForWebview(requestId, lastMsg.id, assistantText, {
+      waitingForUser,
+    });
   }
 
   private applyProjectedDetectedQuestionResult(
@@ -13582,12 +13588,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     requestId: string,
     messageId: string,
     text: string,
+    options: QuestionDetectionOptions,
   ): void {
     this.postMessage({
       type: "agentDetectQuestionResult",
       requestId,
       messageId,
-      detected: detectQuestionFromAssistantText(text),
+      detected: detectQuestionFromAssistantText(text, options),
     });
   }
 

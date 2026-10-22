@@ -97,4 +97,83 @@ describe("detectQuestionFromAssistantText", () => {
     const detected = detectQuestionFromAssistantText("Apply this?");
     expect(detected?.kind).toBe("yes_no");
   });
+
+  describe("direct yes/no questions", () => {
+    const summary =
+      "Committed and pushed to main.\n\nHave you installed the new build and reloaded VS Code?";
+
+    it("detects a final direct question when waiting for the user", () => {
+      expect(
+        detectQuestionFromAssistantText(summary, { waitingForUser: true }),
+      ).toEqual({
+        kind: "yes_no",
+        prompt: "Have you installed the new build and reloaded VS Code?",
+        options: [
+          { label: "Yes", payload: "Yes" },
+          { label: "No", payload: "No" },
+        ],
+      });
+    });
+
+    it.each([
+      "Did you see the error again?",
+      "Is it still failing on your machine?",
+      "Can you try it once more?",
+      "Are both windows reloaded?",
+      "Is it installed or not?",
+    ])("detects %j when waiting for the user", (question) => {
+      expect(
+        detectQuestionFromAssistantText(`Done. ${question}`, {
+          waitingForUser: true,
+        })?.kind,
+      ).toBe("yes_no");
+    });
+
+    it("ignores direct questions unless the turn is waiting for the user", () => {
+      expect(detectQuestionFromAssistantText(summary)).toBeNull();
+      expect(
+        detectQuestionFromAssistantText(summary, { waitingForUser: false }),
+      ).toBeNull();
+    });
+
+    it("ignores direct questions that are not the final sentence", () => {
+      expect(
+        detectQuestionFromAssistantText(
+          "Have you reloaded? If so, the card should be gone.",
+          { waitingForUser: true },
+        ),
+      ).toBeNull();
+    });
+
+    it("ignores alternative questions that are not yes/no", () => {
+      expect(
+        detectQuestionFromAssistantText(
+          "Do you want the browser fix or the VS Code fix first?",
+          { waitingForUser: true },
+        ),
+      ).toBeNull();
+    });
+
+    it("ignores open-ended and wh- questions", () => {
+      expect(
+        detectQuestionFromAssistantText("Which file should hold this helper?", {
+          waitingForUser: true,
+        }),
+      ).toBeNull();
+      expect(
+        detectQuestionFromAssistantText(
+          "Is this the right shape? What do you think?",
+          { waitingForUser: true },
+        ),
+      ).toBeNull();
+    });
+
+    it("still ignores quoted questions", () => {
+      expect(
+        detectQuestionFromAssistantText('The card renders "Is it done?"', {
+          waitingForUser: true,
+        }),
+      ).toBeNull();
+    });
+  });
 });
