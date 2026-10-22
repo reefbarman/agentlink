@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.63.0
+
 - CLI and Assistant turns now preserve request-scoped model state and controls through the shared SDK engine, including Codex conversation recovery state, temperature, retry/output controls and provider-attempt callbacks. These options were composed by workspace-host but dropped before the turn kernel, so Codex conversation-level fallback could not carry across standalone turns or resumed approvals. VS Code behavior is unchanged.
 - The CLI and Desktop Ask Agent now keep MCP OAuth records in one shared standalone Keychain item instead of one item per surface. Their principals, servers, OAuth client registrations, and callback URLs remain logically separate inside the vault. Each surface lazily imports its existing item and keeps it as a compatibility replica for older preview builds, including updates and deletions, so existing users may see one final migration prompt while new installations use only the shared item. VS Code's mature MCP OAuth storage is unchanged.
 - OpenAI-compatible provider startup now reads one Keychain item instead of two. The second item only held a non-secret `managed`/`deleted` migration marker, but macOS treated it like another password and asked for a second **Always Allow**. New builds read markers from a private local state file under `~/.agentlink/credential-state/openai-compatible`; the old Keychain marker remains a write-only compatibility mirror for older Desktop or VS Code versions and is read only when both the API key and local marker are absent. This preserves deletion and legacy-migration behavior without adding a prompt to the normal existing-key path.

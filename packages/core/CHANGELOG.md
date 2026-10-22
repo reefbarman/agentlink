@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.27.0 — 2026-10-22
+
+- Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.
+- Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.
+- Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.
+- Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.
+- OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.
+- The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.
+- The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.
+
 ## 0.26.1 — 2026-10-22
 
 - Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.

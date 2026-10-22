@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-  "createdAt": "2026-10-22T02:07:43.345Z",
+  "sourceSha": "1c948760ddbcc2f144fe5444aa6742a5c08fe5c3",
+  "createdAt": "2026-10-22T05:39:12.459Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,131 +10,428 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.62.0",
-      "baselineRef": "v1.62.0",
-      "reserved": "1.62.0",
-      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "published": "1.62.1",
+      "baselineRef": "v1.62.1",
+      "reserved": "1.62.5",
+      "commits": [
+        "22e411606299d7f51a9bffd5ab16687a10d1a009",
+        "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+        "3d2e16e103c36585efe1193662047e1c93b39df0",
+        "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+        "4b299caab92edba39801d512aee9b552d68dd884",
+        "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+        "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+        "527b0ff8b6f6b45f8657a5be7137669a1699d3b6"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.62.1",
-      "effectiveBump": "patch",
+      "version": "1.63.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.62.1",
+      "tag": "v1.63.0",
       "notes": [
         {
-          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
-          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "sha": "22e411606299d7f51a9bffd5ab16687a10d1a009",
+          "subject": "fix(node-host): stop failed MCP timer reconnects crashing the CLI",
+          "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+          "breaking": false
+        },
+        {
+          "sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+          "subject": "fix(node-host): skip unchanged shared Keychain writes",
+          "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+          "breaking": false
+        },
+        {
+          "sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+          "subject": "feat(credentials): share macOS Keychain items through a signed AgentLink Credentials helper",
+          "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+          "breaking": false
+        },
+        {
+          "sha": "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+          "subject": "fix(credentials): serialize macOS helper prompts",
+          "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+          "breaking": false
+        },
+        {
+          "sha": "4b299caab92edba39801d512aee9b552d68dd884",
+          "subject": "fix(credentials): avoid a second provider Keychain prompt",
+          "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+          "breaking": false
+        },
+        {
+          "sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+          "subject": "fix(credentials): share standalone MCP Keychain vault",
+          "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+          "breaking": false
+        },
+        {
+          "sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+          "subject": "fix(core): forward standalone model request controls",
+          "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
+          "breaking": false
+        },
+        {
+          "sha": "527b0ff8b6f6b45f8657a5be7137669a1699d3b6",
+          "subject": "fix(browser-gateway): pin streaming status row on desktop like VS Code",
+          "summary": "The streaming status bar is now pinned on Desktop and browser gateway during long turns, matching VS Code, so it no longer scrolls out of view.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.48.0",
-      "baselineRef": "desktop-v0.48.0",
-      "reserved": "0.48.0",
-      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "published": "0.48.1",
+      "baselineRef": "desktop-v0.48.1",
+      "reserved": "0.48.1",
+      "commits": [
+        "22e411606299d7f51a9bffd5ab16687a10d1a009",
+        "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+        "3d2e16e103c36585efe1193662047e1c93b39df0",
+        "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+        "4b299caab92edba39801d512aee9b552d68dd884",
+        "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+        "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+        "527b0ff8b6f6b45f8657a5be7137669a1699d3b6"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.48.1",
-      "effectiveBump": "patch",
+      "version": "0.49.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.48.1",
+      "tag": "desktop-v0.49.0",
       "notes": [
         {
-          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
-          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "sha": "22e411606299d7f51a9bffd5ab16687a10d1a009",
+          "subject": "fix(node-host): stop failed MCP timer reconnects crashing the CLI",
+          "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+          "breaking": false
+        },
+        {
+          "sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+          "subject": "fix(node-host): skip unchanged shared Keychain writes",
+          "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+          "breaking": false
+        },
+        {
+          "sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+          "subject": "feat(credentials): share macOS Keychain items through a signed AgentLink Credentials helper",
+          "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+          "breaking": false
+        },
+        {
+          "sha": "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+          "subject": "fix(credentials): serialize macOS helper prompts",
+          "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+          "breaking": false
+        },
+        {
+          "sha": "4b299caab92edba39801d512aee9b552d68dd884",
+          "subject": "fix(credentials): avoid a second provider Keychain prompt",
+          "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+          "breaking": false
+        },
+        {
+          "sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+          "subject": "fix(credentials): share standalone MCP Keychain vault",
+          "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+          "breaking": false
+        },
+        {
+          "sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+          "subject": "fix(core): forward standalone model request controls",
+          "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
+          "breaking": false
+        },
+        {
+          "sha": "527b0ff8b6f6b45f8657a5be7137669a1699d3b6",
+          "subject": "fix(browser-gateway): pin streaming status row on desktop like VS Code",
+          "summary": "The streaming status bar is now pinned on Desktop and browser gateway during long turns, matching VS Code, so it no longer scrolls out of view.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.35.0",
-      "baselineRef": "cli-v0.35.0",
-      "reserved": "0.35.0",
-      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "published": "0.35.1",
+      "baselineRef": "cli-v0.35.1",
+      "reserved": "0.35.1",
+      "commits": [
+        "22e411606299d7f51a9bffd5ab16687a10d1a009",
+        "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+        "3d2e16e103c36585efe1193662047e1c93b39df0",
+        "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+        "4b299caab92edba39801d512aee9b552d68dd884",
+        "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+        "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.35.1",
-      "effectiveBump": "patch",
+      "version": "0.36.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.35.1",
+      "tag": "cli-v0.36.0",
       "notes": [
         {
-          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
-          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "sha": "22e411606299d7f51a9bffd5ab16687a10d1a009",
+          "subject": "fix(node-host): stop failed MCP timer reconnects crashing the CLI",
+          "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+          "breaking": false
+        },
+        {
+          "sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+          "subject": "fix(node-host): skip unchanged shared Keychain writes",
+          "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+          "breaking": false
+        },
+        {
+          "sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+          "subject": "feat(credentials): share macOS Keychain items through a signed AgentLink Credentials helper",
+          "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+          "breaking": false
+        },
+        {
+          "sha": "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+          "subject": "fix(credentials): serialize macOS helper prompts",
+          "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+          "breaking": false
+        },
+        {
+          "sha": "4b299caab92edba39801d512aee9b552d68dd884",
+          "subject": "fix(credentials): avoid a second provider Keychain prompt",
+          "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+          "breaking": false
+        },
+        {
+          "sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+          "subject": "fix(credentials): share standalone MCP Keychain vault",
+          "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+          "breaking": false
+        },
+        {
+          "sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+          "subject": "fix(core): forward standalone model request controls",
+          "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.26.0",
-      "baselineRef": "sdk-v0.26.0",
-      "reserved": "0.26.0",
-      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "published": "0.26.1",
+      "baselineRef": "sdk-v0.26.1",
+      "reserved": "0.26.1",
+      "commits": [
+        "22e411606299d7f51a9bffd5ab16687a10d1a009",
+        "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+        "3d2e16e103c36585efe1193662047e1c93b39df0",
+        "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+        "4b299caab92edba39801d512aee9b552d68dd884",
+        "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+        "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.26.1",
-      "effectiveBump": "patch",
+      "version": "0.27.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.26.1",
+      "tag": "sdk-v0.27.0",
       "notes": [
         {
-          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
-          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "sha": "22e411606299d7f51a9bffd5ab16687a10d1a009",
+          "subject": "fix(node-host): stop failed MCP timer reconnects crashing the CLI",
+          "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+          "breaking": false
+        },
+        {
+          "sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+          "subject": "fix(node-host): skip unchanged shared Keychain writes",
+          "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+          "breaking": false
+        },
+        {
+          "sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+          "subject": "feat(credentials): share macOS Keychain items through a signed AgentLink Credentials helper",
+          "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+          "breaking": false
+        },
+        {
+          "sha": "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+          "subject": "fix(credentials): serialize macOS helper prompts",
+          "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+          "breaking": false
+        },
+        {
+          "sha": "4b299caab92edba39801d512aee9b552d68dd884",
+          "subject": "fix(credentials): avoid a second provider Keychain prompt",
+          "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+          "breaking": false
+        },
+        {
+          "sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+          "subject": "fix(credentials): share standalone MCP Keychain vault",
+          "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+          "breaking": false
+        },
+        {
+          "sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+          "subject": "fix(core): forward standalone model request controls",
+          "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
           "breaking": false
         }
       ]
     },
     "assistant": {
-      "published": "0.20.0",
-      "baselineRef": "assistant-v0.20.0",
-      "reserved": "0.20.0",
-      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "published": "0.20.1",
+      "baselineRef": "assistant-v0.20.1",
+      "reserved": "0.20.1",
+      "commits": [
+        "22e411606299d7f51a9bffd5ab16687a10d1a009",
+        "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+        "3d2e16e103c36585efe1193662047e1c93b39df0",
+        "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+        "4b299caab92edba39801d512aee9b552d68dd884",
+        "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+        "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+        "527b0ff8b6f6b45f8657a5be7137669a1699d3b6"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.20.1",
-      "effectiveBump": "patch",
+      "version": "0.21.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.20.1",
+      "tag": "assistant-v0.21.0",
       "notes": [
         {
-          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
-          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
-          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "sha": "22e411606299d7f51a9bffd5ab16687a10d1a009",
+          "subject": "fix(node-host): stop failed MCP timer reconnects crashing the CLI",
+          "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+          "breaking": false
+        },
+        {
+          "sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+          "subject": "fix(node-host): skip unchanged shared Keychain writes",
+          "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+          "breaking": false
+        },
+        {
+          "sha": "3d2e16e103c36585efe1193662047e1c93b39df0",
+          "subject": "feat(credentials): share macOS Keychain items through a signed AgentLink Credentials helper",
+          "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+          "breaking": false
+        },
+        {
+          "sha": "a1c2e41ce3e2292560e0c5431d05fadc104b8432",
+          "subject": "fix(credentials): serialize macOS helper prompts",
+          "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+          "breaking": false
+        },
+        {
+          "sha": "4b299caab92edba39801d512aee9b552d68dd884",
+          "subject": "fix(credentials): avoid a second provider Keychain prompt",
+          "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+          "breaking": false
+        },
+        {
+          "sha": "3dedeb6e85bbe6c634c01d9fae169ae8650351ea",
+          "subject": "fix(credentials): share standalone MCP Keychain vault",
+          "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+          "breaking": false
+        },
+        {
+          "sha": "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba",
+          "subject": "fix(core): forward standalone model request controls",
+          "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
+          "breaking": false
+        },
+        {
+          "sha": "527b0ff8b6f6b45f8657a5be7137669a1699d3b6",
+          "subject": "fix(browser-gateway): pin streaming status row on desktop like VS Code",
+          "summary": "The streaming status bar is now pinned on Desktop and browser gateway during long turns, matching VS Code, so it no longer scrolls out of view.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "2f54f6303ed2733dda4decdc89563877f91b2f64": {
+    "22e411606299d7f51a9bffd5ab16687a10d1a009": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+      "summary": "Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Shared Keychain writes are skipped when the value is unchanged, so VS Code, CLI and Desktop stop re-prompting for Keychain access after another surface rewrites the item.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3d2e16e103c36585efe1193662047e1c93b39df0": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Signed macOS builds route shared Keychain access through an AgentLink Credentials helper so one Always Allow covers VS Code, CLI and Desktop; the CLI runtime is renamed to AgentLink CLI and the node-host SDK exports helper configuration functions.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a1c2e41ce3e2292560e0c5431d05fadc104b8432": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Credentials helper requests are queued across consumers and processes so macOS does not show a stack of Keychain prompts, and the queue is held until a timed-out helper exits.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4b299caab92edba39801d512aee9b552d68dd884": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "OpenAI-compatible provider migration state is read from a private local file so startup needs only one Keychain prompt, with deletion tombstones preventing legacy keys from being resurrected.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "3dedeb6e85bbe6c634c01d9fae169ae8650351ea": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI and Desktop now share one standalone MCP OAuth Keychain vault, lazily importing their older items and keeping them as compatibility replicas, and node-host exports a new createStandaloneMcpCredentialRepository.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1bdd6cce2850302ab7d046d0e58cf0630d4b4fba": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The core agent engine now forwards all standalone run options (model request controls) to turn preparation instead of only a selected few.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "527b0ff8b6f6b45f8657a5be7137669a1699d3b6": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The streaming status bar is now pinned on Desktop and browser gateway during long turns, matching VS Code, so it no longer scrolls out of view.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
