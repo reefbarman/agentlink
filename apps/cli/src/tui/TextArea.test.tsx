@@ -64,6 +64,16 @@ async function input(
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+describe("TextArea newlines", () => {
+  it("turns a carriage return inside a typed chunk into a newline", async () => {
+    const screen = render(<Editor initialValue="" />);
+    await input(screen, "one\rtwo\r\nend");
+    const frame = stripAnsi(screen.lastFrame()!);
+    expect(frame).toContain("one\ntwo\nend");
+    expect(frame).not.toContain("\r");
+  });
+});
+
 describe("TextArea rendering", () => {
   it("renders exactly one cursor across multiline end and character positions", async () => {
     const screen = render(<Editor initialValue={"first\nsecond\nlast"} />);

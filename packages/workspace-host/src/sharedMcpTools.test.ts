@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   })),
   hub: vi.fn(),
   instance: undefined as unknown,
+  toolDefs: undefined as
+    | undefined
+    | Array<{ name: string; description: string; input_schema: unknown }>,
 }));
 
 vi.mock("@agentlink/node-host", async (importOriginal) => {
@@ -39,13 +42,14 @@ vi.mock("@agentlink/node-host", async (importOriginal) => {
       connect = mocks.connect;
       getPendingServerNames = () => [];
       activatePendingServer = mocks.activatePendingServer;
-      getToolDefs = () => [
-        {
-          name: "records__lookup",
-          description: "Look up a record",
-          input_schema: { type: "object", properties: {} },
-        },
-      ];
+      getToolDefs = () =>
+        mocks.toolDefs ?? [
+          {
+            name: "records__lookup",
+            description: "Look up a record",
+            input_schema: { type: "object", properties: {} },
+          },
+        ];
       callTool = mocks.callTool;
       readResource = mocks.readResource;
       getPrompt = mocks.getPrompt;
@@ -105,6 +109,43 @@ function fixture(resolveConfigs = async () => [config]) {
 }
 
 describe("shared MCP workspace tools", () => {
+  it("accepts draft-07 MCP schemas and skips a tool whose schema cannot compile", async () => {
+    vi.clearAllMocks();
+    mocks.toolDefs = [
+      {
+        // zod-to-json-schema's default output, as the computer-use server sends.
+        name: "records__lookup",
+        description: "Look up a record",
+        input_schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: { id: { type: "number" } },
+        },
+      },
+      {
+        name: "records__broken",
+        description: "Broken schema",
+        input_schema: { type: "not-a-json-type" },
+      },
+    ];
+    try {
+      const { tools } = fixture();
+      const resolved = await tools.resolveTools(request);
+      if (Array.isArray(resolved))
+        throw new Error("Missing lifecycle disposer");
+      const names = resolved.tools.map((tool) => tool.definition.name);
+      expect(names).toContain("records__lookup");
+      expect(names).not.toContain("records__broken");
+      expect(names).toContain("call_mcp_tool");
+      const lookup = resolved.tools.find(
+        (tool) => tool.definition.name === "records__lookup",
+      )!;
+      expect(lookup.definition.input_schema).not.toHaveProperty("$schema");
+    } finally {
+      mocks.toolDefs = undefined;
+    }
+  });
+
   it("connects a pending server only when targeted for discovery", async () => {
     vi.clearAllMocks();
     const { tools } = fixture();

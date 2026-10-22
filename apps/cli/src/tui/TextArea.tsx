@@ -138,17 +138,21 @@ export function TextArea({
         return;
       }
       if (input && !key.ctrl && !key.meta) {
+        // Ink reports Enter only as a lone "\r"; one arriving in the same
+        // chunk as text (a fast or unbracketed paste) is a newline.
+        const text = normalizeNewlines(input);
         change(
-          `${value.slice(0, cursor.current)}${input}${value.slice(cursor.current)}`,
-          cursor.current + input.length,
+          `${value.slice(0, cursor.current)}${text}${value.slice(cursor.current)}`,
+          cursor.current + text.length,
         );
       }
     },
     { isActive: isFocused },
   );
   usePaste(
-    (text) => {
+    (pasted) => {
       if (!isFocused) return;
+      const text = normalizeNewlines(pasted);
       change(
         `${value.slice(0, cursor.current)}${text}${value.slice(cursor.current)}`,
         cursor.current + text.length,
@@ -291,6 +295,11 @@ function lineViewport(
     start: cells[start]?.start ?? line.length,
     end: cells[end - 1]?.end ?? 0,
   };
+}
+
+/** Terminals send "\r" (or "\r\n") for newlines in unbracketed pastes. */
+export function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n?/gu, "\n");
 }
 
 function previousCodePointOffset(value: string, offset: number): number {

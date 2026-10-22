@@ -53,4 +53,23 @@ describe("CLI condense thresholds", () => {
     );
     expect(read).toHaveBeenCalledTimes(1);
   });
+
+  it("refresh shows another writer's change straight away", async () => {
+    const read = vi.fn(async () => ({
+      modeModels: {},
+      modeReasoningEfforts: {},
+      modelCondenseThresholds: { "gpt-test": 0.45 },
+    }));
+    const thresholds = createCliCondenseThresholds(
+      { read, update: vi.fn() },
+      {
+        modeModels: {},
+        modeReasoningEfforts: {},
+        modelCondenseThresholds: { "gpt-test": 0.3 },
+      },
+      () => 0,
+    );
+    await expect(thresholds.refresh()).resolves.toEqual({ "gpt-test": 0.45 });
+    expect(thresholds.read()).toEqual({ "gpt-test": 0.45 });
+  });
 });

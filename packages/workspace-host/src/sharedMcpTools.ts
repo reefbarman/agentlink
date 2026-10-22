@@ -114,6 +114,22 @@ export interface CreateWorkspaceSharedMcpToolsOptions {
 
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
+/**
+ * An MCP tool's input schema without its dialect header. Many servers
+ * declare draft-07 (zod-to-json-schema's default), which the strict
+ * 2020-12 host-tool compiler cannot resolve; providers ignore `$schema`
+ * anyway, and VS Code and the browser Ask Agent drop it too.
+ */
+export function portableMcpInputSchema(
+  schema: unknown,
+): CoreModelJsonSchema | undefined {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return undefined;
+  }
+  const { $schema: _dialect, ...portable } = schema as Record<string, unknown>;
+  return portable as CoreModelJsonSchema;
+}
+
 function isUserConfigured(config: Readonly<McpServerConfig>): boolean {
   return (config.sourceProjectRoots?.length ?? 0) === 0;
 }
@@ -611,70 +627,89 @@ export function createWorkspaceSharedMcpTools(
       const tools: HostTool<AgentPrincipal>[] = hub
         .getToolDefs()
         .filter((definition) => TOOL_NAME.test(definition.name))
-        .map((definition) => {
+        .flatMap((definition) => {
           const [serverId, ...parts] = definition.name.split("__");
           const bareName = parts.join("__");
-          return defineTool({
-            name: definition.name,
-            description: definition.description,
-            inputSchema: definition.input_schema as CoreModelJsonSchema,
-            effect: "external",
-            authorization: "required",
-            displayInput: () => ({ server: serverId, tool: bareName }),
-            handler: async (input, context) => {
-              const serverConfig = configs.find(
-                (config) => config.name === serverId,
-              );
-              if (
-                context.sessionId !== request.sessionId ||
-                context.turnId !== request.turnId ||
-                context.principal.tenantId !== request.principal.tenantId ||
-                context.principal.subjectId !== request.principal.subjectId ||
-                activeContext()?.turnId !== request.turnId ||
-                !serverConfig ||
-                !(await current(serverConfig))
-              ) {
-                return {
-                  modelContent: "MCP tool context or configuration changed",
-                  isError: true,
-                };
-              }
-              if (!(await activate(serverId, context.signal))) {
-                return {
-                  modelContent: `MCP server '${serverId}' is not connected`,
-                  isError: true,
-                };
-              }
-              const result = await pending.run(
-                serverId,
-                request,
-                context.signal,
-                () =>
-                  operations.run(request, () =>
-                    hub.callTool(definition.name, input, {
-                      signal: context.signal,
-                      authorizedByCaller: true,
-                      requestContext: request,
-                    }),
-                  ),
-              );
-              const text = result.content
-                .map((item) =>
-                  item.type === "text" ? item.text : `[${item.type}]`,
-                )
-                .join("\n");
-              return {
-                modelContent: text.slice(0, MAX_RESULT_CHARS),
-                displayContent: {
-                  server: serverId,
-                  tool: bareName,
-                  isError: result.isError,
-                },
-                isError: result.isError,
-              };
-            },
-          });
+          const inputSchema = portableMcpInputSchema(definition.input_schema);
+          // One server's odd schema must not fail every turn and condense.
+          // A skipped tool stays reachable through find_mcp_tools and
+          // call_mcp_tool, as VS Code's deferred MCP tools are.
+          if (!inputSchema) return [];
+          try {
+            return [
+              defineMcpTool(definition, serverId!, bareName, inputSchema),
+            ];
+          } catch {
+            return [];
+          }
         });
+      function defineMcpTool(
+        definition: { name: string; description: string },
+        serverId: string,
+        bareName: string,
+        inputSchema: CoreModelJsonSchema,
+      ): HostTool<AgentPrincipal> {
+        return defineTool({
+          name: definition.name,
+          description: definition.description,
+          inputSchema,
+          effect: "external",
+          authorization: "required",
+          displayInput: () => ({ server: serverId, tool: bareName }),
+          handler: async (input, context) => {
+            const serverConfig = configs.find(
+              (config) => config.name === serverId,
+            );
+            if (
+              context.sessionId !== request.sessionId ||
+              context.turnId !== request.turnId ||
+              context.principal.tenantId !== request.principal.tenantId ||
+              context.principal.subjectId !== request.principal.subjectId ||
+              activeContext()?.turnId !== request.turnId ||
+              !serverConfig ||
+              !(await current(serverConfig))
+            ) {
+              return {
+                modelContent: "MCP tool context or configuration changed",
+                isError: true,
+              };
+            }
+            if (!(await activate(serverId, context.signal))) {
+              return {
+                modelContent: `MCP server '${serverId}' is not connected`,
+                isError: true,
+              };
+            }
+            const result = await pending.run(
+              serverId,
+              request,
+              context.signal,
+              () =>
+                operations.run(request, () =>
+                  hub.callTool(definition.name, input, {
+                    signal: context.signal,
+                    authorizedByCaller: true,
+                    requestContext: request,
+                  }),
+                ),
+            );
+            const text = result.content
+              .map((item) =>
+                item.type === "text" ? item.text : `[${item.type}]`,
+              )
+              .join("\n");
+            return {
+              modelContent: text.slice(0, MAX_RESULT_CHARS),
+              displayContent: {
+                server: serverId,
+                tool: bareName,
+                isError: result.isError,
+              },
+              isError: result.isError,
+            };
+          },
+        });
+      }
       const catalog = (
         name: string,
         description: string,

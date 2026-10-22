@@ -1572,7 +1572,8 @@ async function runInkInteractiveChat(
     if (requested !== undefined) {
       await updateContext.condenseThresholds.set(modelId, requested);
     }
-    const saved = updateContext.condenseThresholds.read()[modelId];
+    // Re-read so a change just made in VS Code shows immediately.
+    const saved = (await updateContext.condenseThresholds.refresh())[modelId];
     const models = await controller.listModels().catch(() => []);
     const capabilities = models.find(
       (candidate) =>

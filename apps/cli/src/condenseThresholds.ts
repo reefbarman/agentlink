@@ -14,6 +14,8 @@ const REFRESH_INTERVAL_MS = 5_000;
  */
 export interface CliCondenseThresholds {
   read(): Readonly<Record<string, number>>;
+  /** Re-read the file now, for showing the current values. */
+  refresh(): Promise<Readonly<Record<string, number>>>;
   /** Save a threshold for a model ID (0.1 to 1, as VS Code clamps it), or remove it with null. */
   set(modelId: string, threshold: number | null): Promise<number | undefined>;
 }
@@ -45,6 +47,15 @@ export function createCliCondenseThresholds(
   return {
     read() {
       refresh();
+      return current;
+    },
+    async refresh() {
+      try {
+        current = (await store.read()).modelCondenseThresholds;
+        readAt = now();
+      } catch {
+        // A broken preferences file keeps the last good values.
+      }
       return current;
     },
     async set(modelId, threshold) {
