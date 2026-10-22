@@ -1,0 +1,31 @@
+packages/node-host/src/keychainSecretStorage.ts
+  h_e08a86bb3a33a2 61,86-90,122
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 16,35,50,82-94,181-182
+  s_ae9c26936e7bc6::t_bda66608507bc1 95-96
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4237e26c8b83768dea49cc0803ae9f5cd8ad4a9e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ae9c26936e7bc6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9389c81f-8be2-4223-9665-7e5d56d7abf5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
