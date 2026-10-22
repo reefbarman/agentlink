@@ -1,0 +1,31 @@
+src/browser-gateway/webview/relay/useRelayGatewayConnection.ts
+  h_e08a86bb3a33a2 395-400,405
+src/agent/webview/components/QuestionCard.tsx
+  h_e08a86bb3a33a2 145-158,161-164,167,170
+  s_0d5860c79a5c96::t_3c8a8229bd6201 166,168-169,171
+src/agent/webview/components/QuestionCard.test.tsx
+  h_e08a86bb3a33a2 32-72
+src/browser-gateway/webview/relay/useRelayGatewayConnection.test.ts
+  h_e08a86bb3a33a2 558-636
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "045274ac1dd47f497bdc27f2d9a09e79b8889758",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0d5860c79a5c96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddf7cef1-ff4d-4a8d-a243-3284c114879f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
