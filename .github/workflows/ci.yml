@@ -28,7 +28,7 @@ jobs:
       - name: Verify packaged CLI launch
         run: |
           cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --help
-          cli-releases/agentlink-cli-darwin-arm64/node/bin/node --input-type=module -e 'await import("./cli-releases/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js")'
+          "cli-releases/agentlink-cli-darwin-arm64/node/bin/AgentLink CLI" --input-type=module -e 'await import("./cli-releases/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js")'
           node apps/cli/smoke-tui.mjs cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --executable --no-color
       - uses: actions/upload-artifact@v7
         with:

@@ -76,7 +76,7 @@ jobs:
           tar -xzf "$ARCHIVE" -C "$STAGING"
           node scripts/verify-cli-bundle.mjs "$STAGING/agentlink-cli-darwin-arm64" --allow-unsigned
           "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --help
-          "$STAGING/agentlink-cli-darwin-arm64/node/bin/node" --input-type=module -e 'await import(process.argv[1])' "$STAGING/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js"
+          "$STAGING/agentlink-cli-darwin-arm64/node/bin/AgentLink CLI" --input-type=module -e 'await import(process.argv[1])' "$STAGING/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js"
           node apps/cli/smoke-tui.mjs "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --executable --no-color
           (cd cli-releases && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256")
       - uses: actions/upload-artifact@v7
