@@ -1,0 +1,43 @@
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 1575-1576
+packages/workspace-host/src/sharedMcpTools.ts
+  h_e08a86bb3a33a2 117-132,630,633-651,673-674,677,688-689,701-702,709-710,712
+  s_f168633a172878::t_2910cffaa86571 652-671,676,678-687,690-700,703-708
+apps/cli/src/tui/TextArea.test.tsx
+  h_e08a86bb3a33a2 67-76
+packages/workspace-host/src/sharedMcpTools.test.ts
+  h_e08a86bb3a33a2 28-30,46,112-148
+  s_f168633a172878::t_29ca69be7fd134 45,47-52
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+apps/cli/src/condenseThresholds.ts
+  h_e08a86bb3a33a2 17-18,52-58
+  s_f168633a172878::t_fffd798d2dd792 59-60
+apps/cli/src/condenseThresholds.test.ts
+  h_e08a86bb3a33a2 56-74
+apps/cli/src/tui/TextArea.tsx
+  h_e08a86bb3a33a2 141-143,145-146,153,155,300-304
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f168633a172878": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "abe557cb-05cc-4baa-ae17-32978f0b423b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
