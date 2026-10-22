@@ -10923,10 +10923,9 @@ export function BrowserGatewayApp({
                       </button>
                     </div>
                   )}
-                {!consumerShell &&
-                streaming &&
-                !visibleQuestion &&
-                !mobileReviewOpen ? (
+                {/* Pinned like VS Code: the inline transcript indicator can
+                    scroll out of view during long tool-heavy turns. */}
+                {streaming && !visibleQuestion && !mobileReviewOpen ? (
                   <StreamingStatusBar
                     messages={messages}
                     statusOverride={statusOverride}

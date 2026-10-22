@@ -5093,7 +5093,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBeNull();
   });
 
-  it("omits the duplicate streaming status row on desktop but keeps approvals", async () => {
+  it("pins the streaming status row on desktop like VS Code, alongside approvals", async () => {
     render(
       h(BrowserGatewayApp, {
         authToken: "test-token",
@@ -5122,7 +5122,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       MockEventSource.instances.at(-1)?.emit("snapshot", response.snapshot);
     });
     await screen.findByRole("button", { name: "Open browser" });
-    expect(document.querySelector(".browser-streaming-row")).toBeNull();
+    const statusRow = document.querySelector(".browser-streaming-row");
+    expect(statusRow).toBeTruthy();
+    expect(statusRow?.textContent).toContain("Preparing response");
   });
 
   it("keeps the current instance selected instead of jumping to an active one", async () => {
