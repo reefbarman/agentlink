@@ -1,7 +1,7 @@
 src/agent/McpClientHub.test.ts
   h_e08a86bb3a33a2 527-564
 CHANGELOG.md
-  h_e08a86bb3a33a2 5
+  h_e08a86bb3a33a2 5-6
 packages/node-host/src/McpClientHub.ts
   h_e08a86bb3a33a2 2301,2308-2310
   s_93cdd3bf5e991f::t_2f817e203b44ac 2302,2311
