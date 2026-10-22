@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "e16676ed8f8ce129c61aed619f5b9e5a3448b7b8",
-  "createdAt": "2026-10-22T00:34:54.406Z",
+  "sourceSha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+  "createdAt": "2026-10-22T02:07:43.345Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -13,43 +13,46 @@
       "published": "1.62.0",
       "baselineRef": "v1.62.0",
       "reserved": "1.62.0",
-      "commits": [],
+      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "desktop": {
-      "published": "0.47.0",
-      "baselineRef": "desktop-v0.47.0",
-      "reserved": "0.48.0",
-      "commits": [
-        "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
-        "d29fad305b68290f2c9a5cd0f6f5e798eae0d102"
-      ],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.48.0",
-      "effectiveBump": "minor",
+      "version": "1.62.1",
+      "effectiveBump": "patch",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.48.0",
+      "tag": "v1.62.1",
       "notes": [
         {
-          "sha": "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da",
-          "subject": "fix(desktop): bring the Assistant forward when its notification is clicked",
-          "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
+          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
+          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
           "breaking": false
-        },
+        }
+      ]
+    },
+    "desktop": {
+      "published": "0.48.0",
+      "baselineRef": "desktop-v0.48.0",
+      "reserved": "0.48.0",
+      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "patch",
+      "status": "release",
+      "version": "0.48.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.48.1",
+      "notes": [
         {
-          "sha": "d29fad305b68290f2c9a5cd0f6f5e798eae0d102",
-          "subject": "feat(agent): search and read earlier sessions in the same workspace",
-          "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
+          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
+          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
           "breaking": false
         }
       ]
@@ -58,52 +61,80 @@
       "published": "0.35.0",
       "baselineRef": "cli-v0.35.0",
       "reserved": "0.35.0",
-      "commits": [],
+      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.35.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.35.1",
+      "notes": [
+        {
+          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
+          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.26.0",
       "baselineRef": "sdk-v0.26.0",
       "reserved": "0.26.0",
-      "commits": [],
+      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.26.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.26.1",
+      "notes": [
+        {
+          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
+          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.20.0",
       "baselineRef": "assistant-v0.20.0",
       "reserved": "0.20.0",
-      "commits": [],
+      "commits": ["2f54f6303ed2733dda4decdc89563877f91b2f64"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.20.1",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.20.1",
+      "notes": [
+        {
+          "sha": "2f54f6303ed2733dda4decdc89563877f91b2f64",
+          "subject": "fix(cli): keep condense working with draft-07 MCP schemas",
+          "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
-    "51acdcde7cf63aa2bbd7fc6b74518bbc919d81da": {
+    "2f54f6303ed2733dda4decdc89563877f91b2f64": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Clicking an Assistant notification in the desktop app now reveals the window and switches to the Assistant view; older desktop builds without the bridge method are unaffected.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d29fad305b68290f2c9a5cd0f6f5e798eae0d102": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.",
+      "summary": "Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

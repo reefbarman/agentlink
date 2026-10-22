@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.26.1 — 2026-10-22
+
+- Condensing no longer fails with MCP servers that declare draft-07 input schemas, the CLI /condense threshold shows current values after a VS Code change, and the CLI composer converts carriage returns to newlines.
+
 ## 0.26.0 — 2026-10-21
 
 - The VS Code agent can now search and read earlier sessions in the same project through new tools backed by a local index, and the shared service ships as @agentlink/core/workspace-session-history. Continue prompts now wrap commands in backticks.
