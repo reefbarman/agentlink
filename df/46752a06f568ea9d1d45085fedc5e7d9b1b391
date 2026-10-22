@@ -1,0 +1,16 @@
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 31
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df46752a06f568ea9d1d45085fedc5e7d9b1b391",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
