@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.63.1
+
+- Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.
+- Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.
+
 ## 1.63.0
 
 - CLI and Assistant turns now preserve request-scoped model state and controls through the shared SDK engine, including Codex conversation recovery state, temperature, retry/output controls and provider-attempt callbacks. These options were composed by workspace-host but dropped before the turn kernel, so Codex conversation-level fallback could not carry across standalone turns or resumed approvals. VS Code behavior is unchanged.
