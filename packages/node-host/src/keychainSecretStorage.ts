@@ -58,7 +58,7 @@ export async function createKeychainSecretStorage(
   const readPassword = async (): Promise<string | undefined> =>
     (await entry.getPassword()) ?? undefined;
 
-  return {
+  const storage: KeychainSecretStorage = {
     async get() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const revisionBefore = await readRevision(revisionPath);
@@ -83,6 +83,11 @@ export async function createKeychainSecretStorage(
       return await readPassword();
     },
     async store(value) {
+      // On macOS a rewrite resets the item's trusted-team list to the
+      // writer's team, so the other surfaces (VS Code is signed by Microsoft,
+      // the CLI and Desktop by AgentLink) must ask for Keychain access again.
+      // Skip writes that would not change the stored value.
+      if ((await storage.get()) === value) return;
       const revision = randomUUID();
       await writeRevision(revisionPath, `${revision}:pending`);
       try {
@@ -114,6 +119,7 @@ export async function createKeychainSecretStorage(
       return await withDirectoryLock(lockPath, operation, options);
     },
   };
+  return storage;
 }
 
 async function readRevision(revisionPath: string): Promise<string | null> {

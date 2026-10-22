@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- AgentLink no longer rewrites a shared Keychain credential when the value has not changed. On macOS every rewrite resets the item's list of trusted signing teams to the writer's, so a needless save by the CLI or Desktop made VS Code ("Code Helper (Plugin)") ask for Keychain access again even after "Always Allow". Real changes, such as a refreshed sign-in token, can still cause one prompt on the other surfaces until shared credentials move to a single signed helper.
 - The CLI no longer exits when a background MCP reconnect fails. A scheduled retry for a server such as one waiting for sign-in could be refused by the CLI's connection policy, and nothing handled that rejection, so Node ended the process with "MCP server '...' connection denied by host policy". The failure is now logged like the hub's other background reconnects. VS Code uses the same hub and only gains the log line.
 
 ## 1.62.1

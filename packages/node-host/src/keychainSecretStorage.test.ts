@@ -13,6 +13,7 @@ import { createKeychainSecretStorage } from "./keychainSecretStorage.js";
 
 const values = new Map<string, string>();
 let getPasswordCalls = 0;
+let setPasswordCalls = 0;
 const constructorCalls: unknown[][] = [];
 
 vi.mock("@napi-rs/keyring", () => ({
@@ -31,6 +32,7 @@ vi.mock("@napi-rs/keyring", () => ({
     }
 
     async setPassword(value: string): Promise<void> {
+      setPasswordCalls += 1;
       values.set(`${this.service}:${this.account}`, value);
     }
 
@@ -45,6 +47,7 @@ const temporaryRoots: string[] = [];
 afterEach(async () => {
   values.clear();
   getPasswordCalls = 0;
+  setPasswordCalls = 0;
   constructorCalls.length = 0;
   await Promise.all(
     temporaryRoots
@@ -74,6 +77,21 @@ describe("createKeychainSecretStorage", () => {
         "agentlink-mcp-oauth-v1",
       ]).size,
     ).toBe(3);
+  });
+
+  it("does not rewrite an unchanged value, which would reset macOS access for other surfaces", async () => {
+    const storage = await createStorage();
+    await storage.store("same");
+    await storage.store("same");
+    expect(setPasswordCalls).toBe(1);
+    // A value written by another surface is compared, not the stale cache.
+    values.set("test-service:test-account", "external");
+    const other = await createStorage();
+    await other.store("external");
+    expect(setPasswordCalls).toBe(1);
+    await other.store("changed");
+    expect(setPasswordCalls).toBe(2);
+    await expect(other.get()).resolves.toBe("changed");
   });
 
   it("keeps the native default store selection when no Linux store is requested", async () => {
@@ -160,7 +178,8 @@ describe("createKeychainSecretStorage", () => {
     await second.store("second-state");
     await expect(first.get()).resolves.toBe("second-state");
     await expect(first.get()).resolves.toBe("second-state");
-    expect(getPasswordCalls).toBe(2);
+    // first's two reads, plus second's check for an unchanged value.
+    expect(getPasswordCalls).toBe(3);
   });
 
   it("does not reclaim an old mutation lock owned by a live process", async () => {
