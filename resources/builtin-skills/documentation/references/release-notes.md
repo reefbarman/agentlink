@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.64.0
+
+- When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; "A or B" questions are excluded.
+
 ## 1.63.1
 
 - Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.

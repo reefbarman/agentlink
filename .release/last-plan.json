@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "990ccb71cd3fb52137b5822494781f7a8480d128",
-  "createdAt": "2026-10-22T06:22:54.059Z",
+  "sourceSha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
+  "createdAt": "2026-10-22T06:34:52.401Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.63.0",
-      "baselineRef": "v1.63.0",
-      "reserved": "1.63.0",
-      "commits": [
-        "1375d07f4d54533a1126115a8d58620ab0831636",
-        "990ccb71cd3fb52137b5822494781f7a8480d128"
-      ],
+      "published": "1.63.1",
+      "baselineRef": "v1.63.1",
+      "reserved": "1.63.1",
+      "commits": ["9d7bcacf33737f581333bd0a96854bf40ffbcb09"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.63.1",
-      "effectiveBump": "patch",
+      "version": "1.64.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.63.1",
+      "tag": "v1.64.0",
       "notes": [
         {
-          "sha": "1375d07f4d54533a1126115a8d58620ab0831636",
-          "subject": "fix(browser-gateway): drop question cards answered on another surface",
-          "summary": "Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.",
-          "breaking": false
-        },
-        {
-          "sha": "990ccb71cd3fb52137b5822494781f7a8480d128",
-          "subject": "fix(agent): detect choice prompts from the final message only",
-          "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
+          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
+          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
+          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.49.0",
-      "baselineRef": "desktop-v0.49.0",
-      "reserved": "0.49.0",
-      "commits": [
-        "1375d07f4d54533a1126115a8d58620ab0831636",
-        "990ccb71cd3fb52137b5822494781f7a8480d128"
-      ],
+      "published": "0.49.1",
+      "baselineRef": "desktop-v0.49.1",
+      "reserved": "0.49.1",
+      "commits": ["9d7bcacf33737f581333bd0a96854bf40ffbcb09"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.49.1",
-      "effectiveBump": "patch",
+      "version": "0.50.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.49.1",
+      "tag": "desktop-v0.50.0",
       "notes": [
         {
-          "sha": "1375d07f4d54533a1126115a8d58620ab0831636",
-          "subject": "fix(browser-gateway): drop question cards answered on another surface",
-          "summary": "Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.",
-          "breaking": false
-        },
-        {
-          "sha": "990ccb71cd3fb52137b5822494781f7a8480d128",
-          "subject": "fix(agent): detect choice prompts from the final message only",
-          "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
+          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
+          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
+          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
           "breaking": false
         }
       ]
@@ -102,21 +84,22 @@
     "assistant": {
       "published": "0.21.0",
       "baselineRef": "assistant-v0.21.0",
-      "reserved": "0.21.0",
+      "reserved": "0.21.1",
       "commits": [
         "1375d07f4d54533a1126115a8d58620ab0831636",
-        "990ccb71cd3fb52137b5822494781f7a8480d128"
+        "990ccb71cd3fb52137b5822494781f7a8480d128",
+        "9d7bcacf33737f581333bd0a96854bf40ffbcb09"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.21.1",
-      "effectiveBump": "patch",
+      "version": "0.22.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.21.1",
+      "tag": "assistant-v0.22.0",
       "notes": [
         {
           "sha": "1375d07f4d54533a1126115a8d58620ab0831636",
@@ -128,6 +111,12 @@
           "sha": "990ccb71cd3fb52137b5822494781f7a8480d128",
           "subject": "fix(agent): detect choice prompts from the final message only",
           "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
+          "breaking": false
+        },
+        {
+          "sha": "9d7bcacf33737f581333bd0a96854bf40ffbcb09",
+          "subject": "feat(agent): offer yes/no cards for direct questions when waiting for user",
+          "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
           "breaking": false
         }
       ]
@@ -146,6 +135,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9d7bcacf33737f581333bd0a96854bf40ffbcb09": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
