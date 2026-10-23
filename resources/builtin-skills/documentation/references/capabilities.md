@@ -199,6 +199,8 @@ In multi-project VS Code workspaces, creating a user terminal opens a directory 
 
 Sandbox-backed terminals on supported local macOS hosts (`agentlink.terminal.enabled`, `agentlink.terminal.nodePath`). When an agent command starts, AgentLink selects its terminal immediately if that VS Code window is focused; otherwise it waits until the window regains focus, avoiding an unsolicited OS-level window activation. Explicit terminal-open actions remain immediate. Foreground sandbox commands that end in a high-confidence interactive prompt are terminated after a short inactivity grace and return structured `interactive_prompt` termination evidence without native retry. Background commands remain observation-only and expose prompt hints through `get_terminal_output`. Requirements: [AgentLink Terminal](complete-reference.md#agentlink-terminal).
 
+On Linux, Windows and remote extension hosts (Remote-SSH, WSL, dev containers), the AgentLink Terminal and the command sandbox are not available yet. Approved agent commands run unsandboxed in an ordinary VS Code terminal instead, and the command result reports `executionSurface: "vscode-compatibility"` with `routeReason` `unsupported-host` or `remote-host`. With Approve for Me on, each such command needs a one-shot native approval because no sandbox can run it. Requests that require the sandbox (`require_managed_network`, `with_additional_permissions`, `temporary_home`, or a read-only command policy) stay blocked on these hosts.
+
 ## Editor entry points
 
 **Add File to Chat**, **Add Selection to Chat**, **Explain with AgentLink**, **Fix with AgentLink** push editor context into the chat without copy/paste.

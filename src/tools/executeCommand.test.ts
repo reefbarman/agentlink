@@ -7916,6 +7916,204 @@ describe("handleExecuteCommand", () => {
     }
   });
 
+  describe("hosts without the AgentLink terminal", () => {
+    const hosts = [
+      {
+        platform: "linux" as const,
+        remoteName: undefined,
+        routeReason: "unsupported-host",
+      },
+      {
+        platform: "darwin" as const,
+        remoteName: "ssh-remote",
+        routeReason: "remote-host",
+      },
+      {
+        platform: "linux" as const,
+        remoteName: "wsl",
+        routeReason: "remote-host",
+      },
+    ];
+
+    function compatibilityRouter(
+      platform: NodeJS.Platform,
+      remoteName: string | undefined,
+    ) {
+      const vscodeExecute = vi.fn(async () => ({
+        exit_code: 0,
+        output: "vscode terminal ran",
+        output_captured: true,
+        terminal_id: "vscode-1",
+        command_sent: true,
+        process_launched: true,
+      }));
+      const vscodeProvider = {
+        executeCommand: vscodeExecute,
+        getBackgroundState: vi.fn(),
+        interruptTerminal: vi.fn(() => false),
+        getRecentlyClosedTerminals: vi.fn(() => []),
+        listTerminals: vi.fn(() => []),
+        closeTerminals: vi.fn(() => ({ closed: 0 })),
+        dispose: vi.fn(),
+      };
+      const createNativeAgentProvider = vi.fn(() => {
+        throw new Error("Native Agent terminal is macOS-only");
+      });
+      const createSandboxProvider = vi.fn(() => {
+        throw new Error("Sandbox is macOS-only");
+      });
+      const router = new AgentTerminalProviderRouter({
+        isEnabled: () => true,
+        getHost: () => ({
+          platform,
+          architecture: "x64",
+          remoteName,
+          workspaceTrusted: true,
+        }),
+        createNativeProvider: () => vscodeProvider as never,
+        createNativeAgentProvider,
+        createSandboxProvider,
+        getSandboxAvailability: vi.fn(() => {
+          throw new Error("Host cannot attest sandbox");
+        }),
+      });
+      return {
+        router,
+        vscodeExecute,
+        createNativeAgentProvider,
+        createSandboxProvider,
+      };
+    }
+
+    it.each(hosts)(
+      "runs manually approved commands in the VS Code terminal on $platform/$remoteName",
+      async ({ platform, remoteName, routeReason }) => {
+        getConfiguration.mockReturnValue({
+          get: vi.fn((key: string, fallback?: unknown) =>
+            key === "masterBypass" ? false : fallback,
+          ),
+        });
+        const test = compatibilityRouter(platform, remoteName);
+        const { handleExecuteCommand } = await import("./executeCommand.js");
+        try {
+          const result = await handleExecuteCommand(
+            { command: "echo hello" },
+            { isCommandApproved: () => true } as never,
+            { enqueueCommandApproval: vi.fn() } as never,
+            `session-compat-manual-${platform}-${remoteName ?? "local"}`,
+            undefined,
+            {
+              terminalProvider: test.router,
+              getCommandApprovalPolicy: () => "manual",
+            },
+          );
+
+          expect(test.vscodeExecute).toHaveBeenCalledOnce();
+          expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
+          expect(test.createSandboxProvider).not.toHaveBeenCalled();
+          expect(textPayload(result)).toMatchObject({
+            exit_code: 0,
+            output: "vscode terminal ran",
+            security: {
+              route: "native",
+              executionSurface: "vscode-compatibility",
+              confinement: "native-unsandboxed",
+              routeReason,
+              requiredAuthority: "native-agent",
+            },
+          });
+        } finally {
+          test.router.dispose();
+        }
+      },
+    );
+
+    it.each(hosts)(
+      "recovers Approve for Me commands through one-shot native approval on $platform/$remoteName",
+      async ({ platform, remoteName, routeReason }) => {
+        getConfiguration.mockReturnValue({
+          get: vi.fn((key: string, fallback?: unknown) =>
+            key === "masterBypass" ? false : fallback,
+          ),
+        });
+        const test = compatibilityRouter(platform, remoteName);
+        const enqueueCommandApproval = vi.fn(() => ({
+          promise: Promise.resolve({ decision: "accept" }),
+        }));
+        const { handleExecuteCommand } = await import("./executeCommand.js");
+        try {
+          const result = await handleExecuteCommand(
+            { command: "ls" },
+            {
+              isCommandApproved: () => false,
+              findMatchingCommandRule: vi.fn(),
+            } as never,
+            {
+              isRecentlyApproved: () => false,
+              enqueueCommandApproval,
+            } as never,
+            `session-compat-afm-${platform}-${remoteName ?? "local"}`,
+            undefined,
+            {
+              terminalProvider: test.router,
+              getCommandApprovalPolicy: () => "approve-for-me",
+              isSessionActive: () => true,
+            },
+          );
+
+          expect(textPayload(result)).toMatchObject({
+            exit_code: 0,
+            output: "vscode terminal ran",
+            security: {
+              route: "native",
+              executionSurface: "vscode-compatibility",
+              routeReason,
+              permissionIntent: "native-escalation",
+            },
+          });
+          expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+          expect(test.vscodeExecute).toHaveBeenCalledOnce();
+          expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
+          expect(test.createSandboxProvider).not.toHaveBeenCalled();
+        } finally {
+          test.router.dispose();
+        }
+      },
+    );
+
+    it.each(hosts)(
+      "keeps explicit sandbox requests blocked on $platform/$remoteName",
+      async ({ platform, remoteName }) => {
+        const test = compatibilityRouter(platform, remoteName);
+        const { handleExecuteCommand } = await import("./executeCommand.js");
+        try {
+          const result = await handleExecuteCommand(
+            {
+              command: "npm test",
+              sandbox_permissions: "require_managed_network",
+              reason: "Run isolated tests",
+            },
+            { isCommandApproved: () => true } as never,
+            { enqueueCommandApproval: vi.fn() } as never,
+            `session-compat-sandbox-${platform}-${remoteName ?? "local"}`,
+            undefined,
+            {
+              terminalProvider: test.router,
+              getCommandApprovalPolicy: () => "approve-for-me",
+            },
+          );
+
+          expect(test.vscodeExecute).not.toHaveBeenCalled();
+          expect(textPayload(result)).toMatchObject({
+            process_launched: false,
+          });
+        } finally {
+          test.router.dispose();
+        }
+      },
+    );
+  });
+
   it("opens the exact inline file from a double-quoted placeholder", async () => {
     vi.mocked(terminalProvider.executeCommand).mockImplementationOnce(
       async (options) => {

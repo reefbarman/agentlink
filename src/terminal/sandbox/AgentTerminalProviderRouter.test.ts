@@ -367,6 +367,75 @@ describe("AgentTerminalProviderRouter", () => {
     },
   );
 
+  it.each([
+    ["linux", undefined, "unsupported-host"],
+    ["win32", undefined, "unsupported-host"],
+    ["darwin", "ssh-remote", "remote-host"],
+    ["linux", "wsl", "remote-host"],
+  ] as const)(
+    "routes required native authority on %s/%s to the VS Code terminal",
+    async (platform, remoteName, routeReason) => {
+      const test = harness();
+      test.setEnabled(true);
+      test.setHost({ platform, remoteName });
+
+      const prepared = await test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      );
+
+      expect(prepared.security).toMatchObject({
+        route: "native",
+        executionSurface: "vscode-compatibility",
+        confinement: "native-unsandboxed",
+        routeReason,
+        requiredAuthority: "native-agent",
+      });
+      expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
+      expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
+      expect(test.createSandboxProvider).not.toHaveBeenCalled();
+      expect(test.getSandboxAvailability).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["linux", undefined, "unsupported_host"],
+    ["darwin", "ssh-remote", "remote_host"],
+  ] as const)(
+    "keeps required sandbox authority on %s/%s unavailable",
+    async (platform, remoteName, category) => {
+      const test = harness();
+      test.setEnabled(true);
+      test.setHost({ platform, remoteName });
+
+      await expect(
+        test.router.prepareExecution(
+          { owner: undefined, command: "pwd", cwd: "/workspace" },
+          sandboxRoute,
+        ),
+      ).rejects.toMatchObject({
+        reason: "runtime-unavailable",
+        diagnostic: { category },
+      });
+      expect(test.createNativeProvider).not.toHaveBeenCalled();
+      expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still rejects required native authority on untrusted Linux workspaces", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setHost({ platform: "linux", workspaceTrusted: false });
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      ),
+    ).rejects.toThrow("until the workspace is trusted");
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+  });
+
   it("snapshots route context before asynchronous availability checks", async () => {
     let resolveAvailability!: (
       value: Awaited<

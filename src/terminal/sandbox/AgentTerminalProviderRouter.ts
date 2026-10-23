@@ -806,10 +806,25 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       if (!host.workspaceTrusted) {
         return { route: "unavailable", reason: "untrusted" };
       }
+      // The AgentLink terminal only exists on local macOS. Elsewhere the
+      // VS Code terminal has the same unsandboxed confinement, and approval
+      // has already been decided by the caller, so run there and say why.
+      if (host.remoteName) {
+        return {
+          route: "native",
+          reason: "remote-host",
+          executionSurface: "vscode-compatibility",
+        };
+      }
+      if (host.platform !== "darwin") {
+        return {
+          route: "native",
+          reason: "unsupported-host",
+          executionSurface: "vscode-compatibility",
+        };
+      }
       if (
         !this.options.isEnabled() ||
-        host.remoteName ||
-        host.platform !== "darwin" ||
         !this.options.createNativeAgentProvider
       ) {
         return { route: "unavailable", reason: "native-runtime-unavailable" };

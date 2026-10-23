@@ -2252,7 +2252,7 @@ All core features work on Windows: diff views, integrated terminal, diagnostics,
 
 ### macOS / Linux
 
-Fully supported. Browser remote control, integrated terminals, diff review, and semantic indexing use the same extension workflows as Windows. GitHub releases publish separate LanceDB-enabled VSIX artifacts for Darwin, GNU/Linux, Alpine/musl, and Windows on both ARM64 and x64; the install script selects the current host target instead of downloading an arbitrary asset.
+macOS is the reference platform. On Linux, browser remote control, diff review, and semantic indexing use the same extension workflows as Windows. The AgentLink Terminal and the command sandbox currently need a local macOS extension host, so on Linux and remote hosts approved agent commands run unsandboxed in a VS Code terminal and sandbox-only requests are blocked (see [Capabilities: AgentLink Terminal](capabilities.md#agentlink-terminal)). The standalone CLI and Desktop previews are macOS Apple Silicon only. GitHub releases publish separate LanceDB-enabled VSIX artifacts for Darwin, GNU/Linux, Alpine/musl, and Windows on both ARM64 and x64; the install script selects the current host target instead of downloading an arbitrary asset.
 
 ## Troubleshooting
 
