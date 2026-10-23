@@ -1,0 +1,72 @@
+packages/workspace-host/src/index.ts
+  h_e08a86bb3a33a2 23
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 157
+CHANGELOG.md
+  h_e08a86bb3a33a2 7-8
+packages/workspace-host/src/workspaceReadFileContext.ts
+  h_e08a86bb3a33a2 1-630
+packages/node-host/src/structuredConfigRedaction.ts
+  h_e08a86bb3a33a2 1-383
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 59,882-883,889,897-899,907,909,911-912,914,1217
+  s_31ba01c1d83fdc::t_82f4e724a42638 900-906,910
+packages/node-host/src/readTools.ts
+  h_e08a86bb3a33a2 12,123,400,402
+  s_31ba01c1d83fdc::t_cf31bc88e8cfc3 401,403
+packages/node-host/src/structuredConfigRedaction.test.ts
+  h_e08a86bb3a33a2 1-72
+packages/workspace-host/src/fileTools.test.ts
+  h_e08a86bb3a33a2 11,60,86-101,113-114,116-117,124,126,132-134,141-166,177-184,187-188,191-205,207-272,285,290-314,774-775,847-848,853-855
+  s_31ba01c1d83fdc::t_5cb8dfb5156666 135-140,206,315-316
+packages/workspace-host/src/workspaceReadFileContext.test.ts
+  h_e08a86bb3a33a2 1-128
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 22,24,26,106
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 554,584,625-626,630-633
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 849
+packages/workspace-host/src/workspaceExecutionBackend.ts
+  h_e08a86bb3a33a2 14
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 7,11
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 14,28-33,113,119-125,127-128,177,215-217,222-224,226-228,232-234,236,718,720,724-726,729,731,737-741,746-753,759-761,787-825,833-834,837-838,840,842-848,850,858,860,862-872,874-886,888-893,924,1541,1570,1583-1607
+  s_31ba01c1d83fdc::t_9355c8259d86a8 126,214,218-221,225,229-231,235,735-736,743-745,769,835,849,859,1568-1569,1571,1608-1609
+packages/node-host/README.md
+  h_e08a86bb3a33a2 57
+packages/node-host/src/index.ts
+  h_e08a86bb3a33a2 37
+resources/builtin-skills/documentation/references/release-notes.md
+  s_10fde3898729b1::t_91f7ac6dcaf67f 7-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4e06077d119f8235536cf4295393cf6d2627724",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_10fde3898729b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b583d1ec-25ce-496d-a290-f9477349fd60",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_31ba01c1d83fdc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06a20bae-8d59-4f2a-a40b-473f39a60f91",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
