@@ -1,0 +1,84 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 199-211
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 484,2361,4830,4833-4835,4845,4850,4855,4861,4863-4865,4903,10033,10038,10040-10045,10070-10078,10080,10088-10090,10101-10103
+  s_1a389efd0581c8::t_0d9c32b1660996 4832,4836,4854,4856,4862,4866,10079,10081,10100,10104
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 110
+src/browser-gateway/dataPlane/interactionPayload.test.ts
+  h_e08a86bb3a33a2 1-37
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 1516-1525
+src/browser-gateway/helper/askAgentSandboxWorkspace.test.ts
+  h_e08a86bb3a33a2 8-11,13,35-36,41-42,49,52-53,57-58,269-518
+  s_1a389efd0581c8::t_0a0369f51a9d9e 34,37,39-40,43,50-51,54-56,59,519-520
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 32-37,48-53,104,165-249,290-299,304,308-310,314,316,319-341,344,349-363,435-437,440,588,604-632,829-848,852,871,873-874,876-886,888,890-893,917,920,925-926,928-950,952-957,959,1002,1004-1005,1023-1063,1066-1067,1071,1075-1077,1088-1264,1266-1289,1291-1309,1313
+  s_e57ecb6ab6ff71::t_840eafaa40a3db 289,311-312,342-343,345-348,587,589,633-634,849-851,853,887,900,906,908,921-924,927,951,1265,1290,1310-1312,1314-1318
+CHANGELOG.md
+  h_e08a86bb3a33a2 7
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_e08a86bb3a33a2 126-132
+src/approvals/webview/components/CommandCard.tsx
+  h_e08a86bb3a33a2 452,459
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 158-162
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 502,7920,7924,7941,7943,7950-7951,7953,7990,8009-8014,8017,8019-8036
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 41-42,69-74,143,218,265,270-271,337-338,764
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 300-303,5506-5520,5524,5528-5537,5553-5570,5574-5604,5611,5613-5615,5617-5619,5626,5645-5647,5652-5654,6319-6321,8714-8718,8742-8822
+  s_1a389efd0581c8::t_f9ecb70d033e9d 5571-5572,8823-8825
+packages/protocol/src/approvalTransport.ts
+  h_e08a86bb3a33a2 99-111
+packages/workspace-host/src/commandTools.test.ts
+  h_e08a86bb3a33a2 20,50,108-147
+  s_9200a490577df5::t_6bbad12497ec6a 148-153
+src/approvals/webview/components/CommandExecutionContext.tsx
+  h_e08a86bb3a33a2 2,11-12,24,33-36,42-44,58-62,71-77
+  s_1a389efd0581c8::t_a7b1b1bc834a0f 45-46,63-66,78-81
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 7474-7491,11332-11559
+src/approvals/webview/components/CommandCard.test.tsx
+  h_e08a86bb3a33a2 87-123
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd9ab4f1d1b648a48110b8f369f811890843231b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1a389efd0581c8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5d1f4e9-e166-4c3f-8e5e-e03efe58a10a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_9200a490577df5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a70f4b1-d5f2-4eb1-b811-9fc82dfd5f4c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_e57ecb6ab6ff71": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d19dfac-25a3-4a5e-87be-948c5bd4614f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
