@@ -1856,6 +1856,51 @@ describe("Ask Agent bridge", () => {
     expect(chatNeedsYou).toHaveBeenCalledTimes(2);
   });
 
+  it("tells the server when a chat's background agent waits for an approval", async () => {
+    const chatNeedsYou = vi.fn();
+    const { fake, call } = await startBridge(undefined, { chatNeedsYou });
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, { type: "turn.completed", result: { text: "ok" } });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "completed",
+      });
+    });
+    await expect(
+      call("/api/ask-agent/send", { text: "start a helper" }),
+    ).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(() =>
+      expect(chatNeedsYou).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "replied" }),
+      ),
+    );
+    const { workspaceSessionId } = chatNeedsYou.mock.calls[0]![0] as {
+      workspaceSessionId: string;
+    };
+    chatNeedsYou.mockClear();
+
+    fake.publish(workspaceSessionId, {
+      kind: "agent",
+      state: "approval_required",
+      childSessionId: "child-1",
+    });
+    expect(chatNeedsYou).toHaveBeenCalledWith({
+      projectId: "home",
+      workspaceSessionId,
+      reason: "approval",
+      title: expect.any(String),
+    });
+    // Answering it is not another notice.
+    fake.publish(workspaceSessionId, {
+      kind: "agent",
+      state: "approval_answered",
+      childSessionId: "child-1",
+    });
+    expect(chatNeedsYou).toHaveBeenCalledTimes(1);
+  });
+
   it("starts a new chat while another waits for an approval, whose card stays in its own chat", async () => {
     const { fake, call } = await startBridge();
     const activityOf = async () => {

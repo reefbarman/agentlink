@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- AgentLink Assistant: a background agent in a chat that is waiting for your approval now raises "needs your approval" in the Inbox too, so the Assistant tab badge, desktop notifications and phone pushes tell you.
+
 ## 1.67.0
 
 - Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.

@@ -240,8 +240,9 @@ export interface AskAgentBridgeOptions {
   }) => void;
   /**
    * An ordinary chat (not a task's or a scheduled run's, which report
-   * their own outcomes) stopped for the owner: it shows an approval card,
-   * or finished its reply and is not carrying on by itself. The server
+   * their own outcomes) stopped for the owner: it or one of its background
+   * agents shows an approval card, or it finished its reply and is not
+   * carrying on by itself. The server
    * raises it in the Inbox, so the Assistant's badge and notifications
    * tell the owner; `chatViewed` clears it. Fired whether or not a window
    * shows the chat: an open page may be hidden or in the background.
@@ -956,7 +957,16 @@ export async function createAskAgentBridge(
         key,
         options.events.latestSequence(key),
         ({ event }) => {
-          if (event.kind === "agent") void checkParent(workspaceSessionId);
+          if (event.kind !== "agent") return;
+          // A background agent of this chat waits for the owner's answer.
+          if (event.state === "approval_required") {
+            tellNeedsYou(
+              storeSessionFor(workspaceSessionId) ?? "",
+              workspaceSessionId,
+              "approval",
+            );
+          }
+          void checkParent(workspaceSessionId);
         },
       ),
     );
