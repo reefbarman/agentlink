@@ -1,0 +1,25 @@
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 59,61-66,69,99,620,626,755
+  s_93fc003941b9b0::t_e67168c571e2d7 60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "909a501a768ad86755646368efe23f1722336817",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_93fc003941b9b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dfac6a9b-2d63-43ca-b0d9-b6e79648f78f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
