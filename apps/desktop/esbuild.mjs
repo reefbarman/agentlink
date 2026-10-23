@@ -72,6 +72,7 @@ await Promise.all([
 for (const asset of ["setup.html", "setup.css"]) {
   copyFileSync(path.join(root, "src", asset), path.join(outdir, asset));
 }
-for (const asset of ["trayTemplate.png", "trayTemplate@2x.png"]) {
+// icon.png is the Linux tray and window icon.
+for (const asset of ["trayTemplate.png", "trayTemplate@2x.png", "icon.png"]) {
   copyFileSync(path.join(root, "assets", asset), path.join(outdir, asset));
 }

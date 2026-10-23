@@ -11,10 +11,34 @@ export interface SharedCredentialStore {
 }
 
 export class KeychainSharedCredentialStore implements SharedCredentialStore {
-  private readonly openAiApiKey = new Entry(
-    KEYCHAIN_SERVICE,
-    OPENAI_API_KEY_ACCOUNT,
-  );
+  private entry: Entry | undefined;
+
+  constructor(
+    private readonly platform: NodeJS.Platform = process.platform,
+    private readonly createEntry: (
+      service: string,
+      account: string,
+      options?: ConstructorParameters<typeof Entry>[2],
+    ) => Entry = (service, account, options) =>
+      new Entry(service, account, options),
+  ) {}
+
+  /**
+   * Created on first use: on Linux the constructor connects to D-Bus, and a
+   * missing keyring should fail the credential call, not app startup. Linux
+   * pins Secret Service so the key never lands in the non-persistent kernel
+   * keyring, matching the rest of AgentLink's OS credential storage.
+   */
+  private get openAiApiKey(): Entry {
+    this.entry ??= this.createEntry(
+      KEYCHAIN_SERVICE,
+      OPENAI_API_KEY_ACCOUNT,
+      this.platform === "linux"
+        ? { linux: { store: "secret-service" } }
+        : undefined,
+    );
+    return this.entry;
+  }
 
   hasOpenAiApiKey(): boolean {
     return this.getOpenAiApiKey() !== null;

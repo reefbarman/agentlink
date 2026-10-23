@@ -34,6 +34,8 @@ export function isDesktopMcpOperationId(value: unknown): value is string {
 export interface DesktopMcpWindowOptions {
   getDiscovery(): BrowserGatewayHelperDiscoveryRecord | null;
   getPreloadPath(): string;
+  /** Title bar options; defaults to macOS's inset title bar. */
+  getWindowChrome?(): Electron.BrowserWindowConstructorOptions;
   onVisibilityChange(): void;
   log(message: string): void;
 }
@@ -108,7 +110,9 @@ export class DesktopMcpWindow {
       minHeight: 460,
       resizable: true,
       backgroundColor: "#111719",
-      titleBarStyle: "hiddenInset",
+      ...(this.options.getWindowChrome?.() ?? {
+        titleBarStyle: "hiddenInset",
+      }),
       webPreferences: {
         preload: this.options.getPreloadPath(),
         contextIsolation: true,

@@ -32,6 +32,11 @@ import {
   setOpenAtLogin,
   wasOpenedAtLogin,
 } from "./desktopLoginItem.js";
+import {
+  desktopTrayIcon,
+  desktopWindowChrome,
+  isSupportedDesktopPlatform,
+} from "./desktopPlatform.js";
 import { refreshDesktopOwner } from "./desktopOwnerRouting.js";
 import {
   DesktopQuickAsk,
@@ -98,6 +103,7 @@ const preferencesPath = path.join(
 const mcpManagerWindow = new DesktopMcpWindow({
   getDiscovery: () => discovery,
   getPreloadPath: () => getDesktopAssetPath("chat-preload.cjs"),
+  getWindowChrome: windowChrome,
   onVisibilityChange: syncDockVisibility,
   log,
 });
@@ -134,6 +140,10 @@ function getResourceRoot(): string {
 
 function getDesktopAssetPath(fileName: string): string {
   return path.join(__dirname, fileName);
+}
+
+function windowChrome(): ReturnType<typeof desktopWindowChrome> {
+  return desktopWindowChrome(process.platform, getDesktopAssetPath("icon.png"));
 }
 
 async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord> {
@@ -399,7 +409,7 @@ async function showChatWindow(): Promise<void> {
     minWidth: 720,
     minHeight: 560,
     backgroundColor: "#181a1b",
-    titleBarStyle: "hiddenInset",
+    ...windowChrome(),
     webPreferences: {
       preload: getDesktopAssetPath("chat-preload.cjs"),
       additionalArguments: [
@@ -527,7 +537,7 @@ async function showSetupWindow(): Promise<void> {
     minHeight: 560,
     resizable: true,
     backgroundColor: "#16191a",
-    titleBarStyle: "hiddenInset",
+    ...windowChrome(),
     webPreferences: {
       preload: getDesktopAssetPath("preload.cjs"),
       contextIsolation: true,
@@ -713,10 +723,13 @@ function updateTrayMenu(): void {
 }
 
 function installTray(): void {
-  const image = nativeImage.createFromPath(
-    getDesktopAssetPath("trayTemplate.png"),
-  );
-  image.setTemplateImage(true);
+  const icon = desktopTrayIcon(process.platform, getDesktopAssetPath);
+  let image = nativeImage.createFromPath(icon.path);
+  if (icon.size) image = image.resize({ width: icon.size, height: icon.size });
+  image.setTemplateImage(icon.template);
+  // Linux panels without a StatusNotifier host (GNOME without the
+  // AppIndicator extension) show nothing; the app menu and relaunching from
+  // the launcher still reach every action.
   tray = new Tray(image);
   tray.setToolTip("AgentLink");
   updateTrayMenu();
@@ -927,7 +940,7 @@ function installApplicationMenu(): void {
           },
           {
             label: "Settings…",
-            accelerator: "Command+,",
+            accelerator: "CommandOrControl+,",
             click: openSettings,
           },
           {
@@ -937,10 +950,15 @@ function installApplicationMenu(): void {
           { type: "separator" },
           quickAskMenuItem(),
           { type: "separator" },
-          { role: "hide" },
-          { role: "hideOthers" },
-          { role: "unhide" },
-          { type: "separator" },
+          // Hide/Show All are macOS app roles.
+          ...(process.platform === "darwin"
+            ? ([
+                { role: "hide" },
+                { role: "hideOthers" },
+                { role: "unhide" },
+                { type: "separator" },
+              ] satisfies MenuItemConstructorOptions[])
+            : []),
           { role: "quit" },
         ],
       },
@@ -993,11 +1011,11 @@ async function shutdown(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.platform !== "darwin") {
+  if (!isSupportedDesktopPlatform(process.platform)) {
     await dialog.showMessageBox({
       type: "error",
       title: "AgentLink Desktop",
-      message: "This first desktop preview currently supports macOS only.",
+      message: "This desktop preview supports macOS and Linux only.",
     });
     app.quit();
     return;

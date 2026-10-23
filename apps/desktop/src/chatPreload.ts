@@ -21,6 +21,7 @@ if (process.isMainFrame) {
       .trim() || AGENTLINK_DESKTOP_OWNER_ID;
   const bridge: DesktopBridge = {
     askAgentOwnerId,
+    platform: process.platform,
     onAskAgentOwnerIdChanged: (listener) => {
       const handler = (
         _event: Electron.IpcRendererEvent,

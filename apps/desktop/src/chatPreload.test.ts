@@ -62,6 +62,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "openMcpConfig",
     "openMcpManager",
     "openSettings",
+    "platform",
     "restartForReleaseUpdate",
     "retryAssistant",
     "retryRemote",
@@ -71,6 +72,7 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "submitQuickAsk",
   ]);
   expect(bridge.askAgentOwnerId).toBe("agentlink-desktop~generation");
+  expect(bridge.platform).toBe(process.platform);
   const ownerListener = vi.fn();
   const unsubscribeOwner = bridge.onAskAgentOwnerIdChanged(ownerListener);
   const ownerHandler = electron.on.mock.calls.find(

@@ -104,6 +104,7 @@ describe("AskAgentSandboxWorkspace", () => {
       const host = await import("@agentlink/workspace-host");
       const checks: unknown[] = [];
       const launches: Array<readonly string[]> = [];
+      const trusted: Array<readonly string[]> = [];
       const workspace = new AskAgentSandboxWorkspace({
         rootDirectory: root,
         extensionRoot: root,
@@ -114,13 +115,14 @@ describe("AskAgentSandboxWorkspace", () => {
           checks.push(options);
           return result;
         },
-        createProcessLauncher: ({ deniedReadRoots }) => {
+        createProcessLauncher: ({ deniedReadRoots, trustedRuntimeRoots }) => {
           launches.push(deniedReadRoots);
+          trusted.push(trustedRuntimeRoots);
           return host.createLocalWorkspaceExecutionBackend();
         },
       });
       cleanups.push(() => workspace.dispose());
-      return { workspace, checks, launches, root };
+      return { workspace, checks, launches, trusted, root };
     }
 
     it("is available only when the bubblewrap check passes, checking once", async () => {
@@ -164,6 +166,20 @@ describe("AskAgentSandboxWorkspace", () => {
         input: { command: "true" },
       });
       expect(test.launches).toEqual([["/home/example", "/home"]]);
+      // Only apply-seccomp's directory stays readable, so a runtime under
+      // /home (an extracted AppImage) still works.
+      expect(test.trusted).toEqual([
+        [
+          path.join(
+            test.root,
+            "dist",
+            "sandbox-runtime",
+            "vendor",
+            "seccomp",
+            process.arch,
+          ),
+        ],
+      ]);
     });
   });
 

@@ -1,11 +1,14 @@
 import {
+  desktopResourcesPath,
+  verifyDesktopRuntimeFiles,
+} from "./verify-desktop-package.mjs";
+import {
   verifyVsixExcludesDesktop,
   verifyVsixManifestExcludesDesktop,
 } from "./verify-vsix-boundary.mjs";
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { verifyDesktopRuntimeFiles } from "./verify-desktop-package.mjs";
 
 function desktopInventory(...extra) {
   return [
@@ -46,6 +49,50 @@ test("accepts a complete standalone macOS desktop runtime", () => {
   assert.equal(result.target, "darwin-arm64");
   assert.equal(result.nativePackage, "@lancedb/lancedb-darwin-arm64");
   assert.equal(result.keychainPackage, "@napi-rs/keyring-darwin-arm64");
+});
+
+function linuxInventory(...extra) {
+  return desktopInventory(
+    "dist/sandbox-runtime/vendor/seccomp/x64/apply-seccomp",
+    ...extra,
+  )
+    .replaceAll("lancedb-darwin-arm64", "lancedb-linux-x64-gnu")
+    .replaceAll("lancedb.darwin-arm64.node", "lancedb.linux-x64-gnu.node")
+    .replaceAll("keyring-darwin-arm64", "keyring-linux-x64-gnu")
+    .replaceAll("keyring.darwin-arm64.node", "keyring.linux-x64-gnu.node");
+}
+
+test("accepts a Linux desktop runtime with apply-seccomp", () => {
+  const result = verifyDesktopRuntimeFiles(linuxInventory(), "linux-x64");
+
+  assert.equal(result.nativePackage, "@lancedb/lancedb-linux-x64-gnu");
+  assert.equal(result.keychainPackage, "@napi-rs/keyring-linux-x64-gnu");
+  assert.equal(
+    desktopResourcesPath("/out/linux-unpacked", "linux-x64"),
+    "/out/linux-unpacked/resources",
+  );
+  assert.equal(
+    desktopResourcesPath("/out/AgentLink.app", "darwin-arm64"),
+    "/out/AgentLink.app/Contents/Resources",
+  );
+});
+
+test("rejects a Linux desktop runtime without apply-seccomp", () => {
+  assert.throws(
+    () =>
+      verifyDesktopRuntimeFiles(
+        linuxInventory().replace(
+          "dist/sandbox-runtime/vendor/seccomp/x64/apply-seccomp",
+          "",
+        ),
+        "linux-x64",
+      ),
+    /missing dist\/sandbox-runtime\/vendor\/seccomp\/x64\/apply-seccomp/u,
+  );
+  assert.throws(
+    () => verifyDesktopRuntimeFiles(linuxInventory(), "alpine-x64"),
+    /Unsupported desktop target: alpine-x64/u,
+  );
 });
 
 test("rejects a desktop runtime without the Keychain JavaScript wrapper", () => {

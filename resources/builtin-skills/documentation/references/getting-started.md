@@ -1,6 +1,6 @@
 # Getting Started with AgentLink
 
-AgentLink is a coding-agent harness built into VS Code, with standalone Desktop and CLI previews for macOS. The extension gives an agent the editor's language intelligence, reviewable diffs, visible terminal work, and approvals you can tune to the task; the standalone surfaces have narrower capabilities.
+AgentLink is a coding-agent harness built into VS Code, with standalone Desktop and CLI previews for macOS and Linux (Desktop on Linux is a source-built AppImage for now). The extension gives an agent the editor's language intelligence, reviewable diffs, visible terminal work, and approvals you can tune to the task; the standalone surfaces have narrower capabilities.
 
 ## Install
 
@@ -83,6 +83,22 @@ Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. With multiple s
 `AGENTLINK_MAC_SIGNING=unsigned npm run desktop:package -- --target darwin-arm64` explicitly creates a preview without certificate signing; the signed local installer refuses it. CI desktop releases are signed with the maintainer's Apple Development certificate from the protected `desktop-signing` GitHub environment, using a temporary keychain that is deleted after packaging. The release job fails rather than publishing unsigned output, and verifies the Team ID the in-app updater requires. Local builds signed with that same certificate update to releases without losing permissions. Development signing does not confer Developer ID distribution trust: a future notarised release requires Apple Developer Program membership, a Developer ID Application identity, and notary credentials.
 
 For the equivalent signed CLI task and dedicated Node runtime, see [Signed local installation](standalone-cli.md#signed-local-installation).
+
+### Desktop on Linux (AppImage, source build)
+
+Desktop also runs on Linux x64 and arm64 (glibc distributions) as an AppImage. No Linux release is published yet: build it on a Linux machine of the same architecture with `npm ci`, `node scripts/build-apply-seccomp.mjs --target linux-x64` (or `linux-arm64`), then `npm run desktop:package -- --target linux-x64`. The AppImage lands in `desktop-releases/` as `AgentLink-Desktop-<version>-linux-<arch>.AppImage`. Building a Linux AppImage on macOS, or for the other architecture, is refused because the native LanceDB and keyring packages come from the build machine's `node_modules`. The AppImage uses the static AppImage runtime, so it needs no `libfuse2`.
+
+On Linux, Desktop differs from macOS:
+
+- Windows keep the window manager's title bar, and the menu bar appears when you press **Alt**. **Settings…** is **Ctrl+,**.
+- The tray icon needs a StatusNotifier host. KDE and Ubuntu's GNOME show it; GNOME without the AppIndicator extension does not, so use the app menu or reopen AgentLink from your launcher instead. Closing the chat window still hides it, and **Quit** (**Ctrl+Q**) quits.
+- **Open at login** is not available (Electron has no Linux login items). Add the AppImage to your desktop's autostart settings if you want it.
+- Accounts and API keys are stored in Secret Service (GNOME Keyring or KWallet). Without a running keyring, signing in or saving a key fails with an error and nothing is stored in plain text. ChatGPT/Codex accounts are not shared with VS Code on Linux.
+- The Quick Ask shortcut uses Electron's global shortcuts, which work on X11. Most Wayland sessions do not allow them, so Settings warns that the shortcut could not be registered.
+- MCP servers that need OAuth sign-in cannot be connected from Desktop on Linux yet; servers without sign-in work.
+- The Ask Agent scratch folder runs commands under bubblewrap when the host passes the [Linux command sandbox](capabilities.md#linux-command-sandbox) check, and is not offered otherwise.
+- In-app updates are macOS only. Replace the AppImage to update.
+- On Ubuntu 23.10 and later, where AppArmor restricts unprivileged user namespaces, the AppImage starts with Chromium's renderer sandbox turned off (`--no-sandbox`), because Chromium cannot create its sandbox there. Desktop's windows only load its own local service and the Assistant address you configure. Allowing unprivileged user namespaces (the same host-wide change the command sandbox needs) turns the renderer sandbox back on.
 
 ## Update notifications
 

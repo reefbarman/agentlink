@@ -16,9 +16,14 @@ export async function resolveDesktopMcpPath(
   ) => Promise<{ stdout: string }> = execFileAsync,
   platform: NodeJS.Platform = process.platform,
 ): Promise<string | undefined> {
-  if (platform !== "darwin") return environment.PATH;
+  if (platform !== "darwin" && platform !== "linux") return environment.PATH;
   const shell = environment.SHELL;
-  const executable = shell && path.isAbsolute(shell) ? shell : "/bin/zsh";
+  const executable =
+    shell && path.isAbsolute(shell)
+      ? shell
+      : platform === "darwin"
+        ? "/bin/zsh"
+        : "/bin/bash";
   try {
     const { stdout } = await runShell(
       executable,

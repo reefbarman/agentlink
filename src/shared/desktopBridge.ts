@@ -95,6 +95,11 @@ export interface DesktopMcpManagerOpenRequest {
 /** Narrow shell-only API. The remote workspace renderer never receives this bridge. */
 export interface DesktopBridge {
   readonly askAgentOwnerId: string;
+  /**
+   * The Desktop host's `process.platform`. On macOS the page leaves room for
+   * the traffic lights in its hidden title bar; Linux windows keep a frame.
+   */
+  readonly platform?: string;
   onAskAgentOwnerIdChanged(listener: (ownerId: string) => void): () => void;
   setRemoteLayout(layout: DesktopRemoteLayout): void;
   retryRemote(): void;

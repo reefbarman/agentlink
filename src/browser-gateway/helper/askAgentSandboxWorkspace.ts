@@ -10,6 +10,7 @@ import {
   SandboxHelperClient,
   checkLinuxSandboxPrerequisites,
   createNodeSandboxHelperTransportFactory,
+  linuxSandboxApplySeccompPath,
   type CheckLinuxSandboxPrerequisitesOptions,
   type LinuxSandboxPrerequisites,
   type SandboxRuntimeProvider,
@@ -192,6 +193,7 @@ export interface AskAgentSandboxWorkspaceOptions {
   readonly createProcessLauncher?: (options: {
     readonly workDirectory: string;
     readonly deniedReadRoots: readonly string[];
+    readonly trustedRuntimeRoots: readonly string[];
   }) => WorkspaceProcessLauncher | Promise<WorkspaceProcessLauncher>;
 }
 
@@ -750,16 +752,37 @@ export class AskAgentSandboxWorkspace {
     this.workspaceHost ??= import("@agentlink/workspace-host");
     const host = await this.workspaceHost;
     const deniedReadRoots = this.deniedReadRoots();
+    // On Linux the sandboxed shell runs AgentLink's apply-seccomp helper, so
+    // its directory must stay readable when the runtime sits inside a hidden
+    // root (an extracted AppImage or a source checkout under /home). Only that
+    // directory is re-allowed, not the rest of the install.
+    const trustedRuntimeRoots =
+      this.platform === "linux"
+        ? [
+            path.dirname(
+              linuxSandboxApplySeccompPath(
+                path.join(
+                  this.options.extensionRoot,
+                  "dist",
+                  "sandbox-runtime",
+                ),
+                process.arch,
+              ),
+            ),
+          ]
+        : [];
     const launcher = this.options.createProcessLauncher
       ? await this.options.createProcessLauncher({
           workDirectory,
           deniedReadRoots,
+          trustedRuntimeRoots,
         })
       : host.createSandboxedWorkspaceProcessLauncher({
           runtime: this.sandboxRuntime(ripgrepPath),
           platform: this.platform,
           writableRoots: [workDirectory],
           deniedReadRoots,
+          trustedRuntimeRoots,
           temporaryHome: true,
           shareHostTemporaryDirectories: false,
           homeDirectory: this.homeDirectory,

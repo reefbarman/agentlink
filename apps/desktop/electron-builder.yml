@@ -5,7 +5,8 @@ asarUnpack:
   - "**/*.node"
 npmRebuild: false
 compression: maximum
-artifactName: AgentLink-Desktop-${version}-mac-${arch}.${ext}
+# ${os} is "mac" or "linux", so mac names are unchanged.
+artifactName: AgentLink-Desktop-${version}-${os}-${arch}.${ext}
 directories:
   app: .
   output: ../../../desktop-releases
@@ -32,3 +33,21 @@ mac:
     - zip
 dmg:
   sign: false
+toolsets:
+  # The static AppImage runtime. The legacy one (0.0.0) needs libfuse2 and the
+  # unversioned libz.so, which Ubuntu 24.04 and other current distros do not
+  # install, and its launcher entry silently adds --no-sandbox.
+  appimage: "1.0.3"
+linux:
+  executableName: agentlink
+  # Window association: Electron uses package.json desktopName (set by
+  # package.mjs) as the Wayland app_id and X11 WM_CLASS.
+  syncDesktopName: true
+  icon: ../assets/icon.png
+  category: Utility
+  synopsis: AgentLink Desktop chat
+  desktop:
+    entry:
+      Name: AgentLink
+  target:
+    - AppImage

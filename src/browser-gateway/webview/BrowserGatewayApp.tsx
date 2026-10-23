@@ -8859,9 +8859,15 @@ export function BrowserGatewayApp({
     );
   }
 
+  // Linux Desktop windows keep the window manager's title bar, so the header
+  // needs no room for macOS traffic lights.
+  const desktopPlatform = window.agentlinkDesktopShell?.platform;
+  const desktopFramed =
+    consumerShell && !!desktopPlatform && desktopPlatform !== "darwin";
+
   return (
     <div
-      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}`}
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}${product === "assistant" || desktopAssistantSelected ? " assistant-product" : ""}${assistantDrawsSidebar ? " desktop-assistant-embedded" : ""}${desktopEmbed ? " desktop-embedded" : ""}${desktopFramed ? " desktop-framed" : ""}`}
       style={
         desktopEmbed &&
         (embedSidebarWidth !== undefined || embedOffsetTop !== undefined)

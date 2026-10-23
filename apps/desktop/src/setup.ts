@@ -498,13 +498,13 @@ function renderStatus(next: DesktopAuthStatus): void {
   if (next.hasOpenAiApiKey) {
     const key = document.createElement("p");
     key.className = "stored-key";
-    key.textContent = "OpenAI API key stored in Keychain";
+    key.textContent = "OpenAI API key stored in your system keychain";
     accountList.append(key);
   }
   if (compatibleCredentialCount > 0) {
     const compatible = document.createElement("p");
     compatible.className = "stored-key";
-    compatible.textContent = `${compatibleCredentialCount} OpenAI-compatible API key${compatibleCredentialCount === 1 ? "" : "s"} stored in Keychain`;
+    compatible.textContent = `${compatibleCredentialCount} OpenAI-compatible API key${compatibleCredentialCount === 1 ? "" : "s"} stored in your system keychain`;
     accountList.append(compatible);
   }
 }
@@ -552,7 +552,7 @@ function readError(error: unknown): string {
   if (message.includes("model_credentials_missing")) {
     return "Sign in or add an API key before opening chat.";
   }
-  return "AgentLink could not update the shared account. Check Keychain access and try again.";
+  return "AgentLink could not update the shared account. Check that your system keychain is unlocked and try again.";
 }
 
 void window.agentlinkDesktop

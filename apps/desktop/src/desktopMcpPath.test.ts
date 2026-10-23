@@ -41,11 +41,26 @@ describe("resolveDesktopMcpPath", () => {
     ).toBe(environment.PATH);
   });
 
+  it("uses bash for the login shell PATH on Linux without SHELL", async () => {
+    const runShell = vi.fn(async () => ({
+      stdout: "__AGENTLINK_DESKTOP_SHELL_PATH__/home/test/.nvm/bin:/usr/bin\n",
+      stderr: "",
+    }));
+    expect(
+      await resolveDesktopMcpPath({ PATH: "/usr/bin" }, runShell, "linux"),
+    ).toBe("/home/test/.nvm/bin:/usr/bin");
+    expect(runShell).toHaveBeenCalledWith(
+      "/bin/bash",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
   it("does not run a shell on other platforms", async () => {
     const runShell = vi.fn();
     expect(
-      await resolveDesktopMcpPath({ PATH: "/usr/bin" }, runShell, "linux"),
-    ).toBe("/usr/bin");
+      await resolveDesktopMcpPath({ PATH: "C:\\bin" }, runShell, "win32"),
+    ).toBe("C:\\bin");
     expect(runShell).not.toHaveBeenCalled();
   });
 });

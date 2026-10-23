@@ -2,9 +2,10 @@ import {
   getRetrievalNativePackage,
   resolveRetrievalRuntimeTarget,
 } from "./package-retrieval-runtime.mjs";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 
-import { KEYCHAIN_NATIVE_PACKAGES } from "./package-keychain-runtime.mjs";
+import { DESKTOP_KEYCHAIN_NATIVE_PACKAGES } from "./package-keychain-runtime.mjs";
+import { applySeccompStagePath } from "./package-sandbox-runtime.mjs";
 import { extractAll } from "@electron/asar";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -37,21 +38,27 @@ function normalizePath(value) {
     .replace(/^extension\//u, "");
 }
 
+/** Desktop targets: macOS app bundles and Linux AppImages (glibc). */
+export const DESKTOP_TARGETS = Object.freeze(
+  Object.keys(DESKTOP_KEYCHAIN_NATIVE_PACKAGES),
+);
+
 export function verifyDesktopRuntimeFiles(fileList, target) {
   const resolvedTarget = resolveRetrievalRuntimeTarget({ target });
-  if (!resolvedTarget.startsWith("darwin-")) {
+  if (!DESKTOP_TARGETS.includes(resolvedTarget)) {
     throw new Error(`Unsupported desktop target: ${resolvedTarget}`);
   }
   const files = new Set(
     fileList.split(/\r?\n/u).map(normalizePath).filter(Boolean),
   );
   const nativePackage = getRetrievalNativePackage(resolvedTarget);
-  const keychainPackage = KEYCHAIN_NATIVE_PACKAGES[resolvedTarget];
-  if (!keychainPackage) {
-    throw new Error(`Unsupported desktop Keychain target: ${resolvedTarget}`);
-  }
+  const keychainPackage = DESKTOP_KEYCHAIN_NATIVE_PACKAGES[resolvedTarget];
+  // The Ask Agent sandbox refuses on Linux without apply-seccomp, so a Linux
+  // package must ship it.
+  const applySeccomp = applySeccompStagePath(resolvedTarget);
   const required = [
     ...REQUIRED_RUNTIME_PATHS,
+    ...(applySeccomp ? [`dist/sandbox-runtime/${applySeccomp}`] : []),
     "dist/node_modules/@lancedb/lancedb/package.json",
     "dist/node_modules/apache-arrow/package.json",
     `dist/node_modules/${nativePackage}/package.json`,
@@ -123,8 +130,15 @@ async function listFiles(root) {
   return files.sort().join("\n");
 }
 
+/** `Contents/Resources` in a macOS bundle, `resources` in a Linux unpacked app. */
+export function desktopResourcesPath(appPath, target) {
+  return target.startsWith("linux-")
+    ? path.join(appPath, "resources")
+    : path.join(appPath, "Contents", "Resources");
+}
+
 async function verifyPackagedApp(appPath, target) {
-  const resourcesPath = path.join(appPath, "Contents", "Resources");
+  const resourcesPath = desktopResourcesPath(appPath, target);
   const runtimePath = path.join(resourcesPath, "runtime");
   const appAsar = path.join(resourcesPath, "app.asar");
   const appAsarStat = await stat(appAsar);

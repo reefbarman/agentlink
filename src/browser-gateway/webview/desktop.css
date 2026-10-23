@@ -418,6 +418,11 @@
   backdrop-filter: none;
 }
 
+/* Linux Desktop keeps the window manager's title bar: no traffic-light gap. */
+.browser-shell.browser-shell-desktop.desktop-framed .browser-header {
+  padding-left: 22px;
+}
+
 .browser-shell.browser-shell-desktop.desktop-sidebar-open .browser-header {
   background: linear-gradient(
     to right,

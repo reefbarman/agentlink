@@ -186,7 +186,7 @@ Output-filter checks distinguish balanced `$()` command substitutions used to co
 
 Exact command-tool parameters: [terminal tools](complete-reference.md#execute_command).
 
-### Ask Agent scratch folder (Desktop on macOS)
+### Ask Agent scratch folder (Desktop and Browser Ask Agent)
 
 Each Ask Agent chat in Desktop (and the Browser Ask Agent served by the same helper) has a private scratch folder at `~/.agentlink/ask-agent-sandboxes/<chat>/work`. It lets the agent analyse data, convert files and make charts without a project:
 
@@ -196,7 +196,7 @@ Each Ask Agent chat in Desktop (and the Browser Ask Agent served by the same hel
 - `present_files` gives you files from the scratch folder: PNG, JPEG, GIF and WebP images show inline, and other files (CSV, PDF, Markdown and so on) appear as file chips with a download button. Up to 10 files, 8 MiB each and 20 MiB per call.
 - `read_file`, `list_files` and `search_files` also read the scratch folder; relative paths resolve inside it.
 
-Files you attach to the chat are copied into `inputs/`. Deleting the chat deletes its folder. On Linux (the Browser Ask Agent; Desktop is macOS only) the tools are offered only when the host passes the same bubblewrap check as the VS Code sandbox (see [Linux command sandbox](capabilities.md#linux-command-sandbox)). The check runs once per browser gateway helper process, so after fixing the host restart the helper (for example by quitting every VS Code window). Ripgrep defaults to `/usr/bin/rg`; set `AGENTLINK_SANDBOX_RIPGREP_PATH` to use another one. The tools are not offered on Windows, or when the packaged sandbox helper is missing. This is not a local shell: it cannot touch your projects or run with your normal permissions.
+Files you attach to the chat are copied into `inputs/`. Deleting the chat deletes its folder. On Linux (Desktop and the Browser Ask Agent) the tools are offered only when the host passes the same bubblewrap check as the VS Code sandbox (see [Linux command sandbox](capabilities.md#linux-command-sandbox)). The check runs once per browser gateway helper process, so after fixing the host restart the helper (for example by quitting every VS Code window). Ripgrep defaults to `/usr/bin/rg`; set `AGENTLINK_SANDBOX_RIPGREP_PATH` to use another one. The tools are not offered on Windows, or when the packaged sandbox helper is missing. This is not a local shell: it cannot touch your projects or run with your normal permissions.
 
 ## Work with people and the session
 

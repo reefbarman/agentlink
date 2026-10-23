@@ -43,7 +43,7 @@ describe("desktop login item", () => {
   it("opens at login by default on first run only", async () => {
     const app = fakeApp();
     const prefs = await preferencesPath();
-    await initializeOpenAtLogin(app as never, prefs);
+    await initializeOpenAtLogin(app as never, prefs, "darwin");
     expect(app.state.openAtLogin).toBe(true);
     expect(await readDesktopPreferences(prefs)).toMatchObject({
       openAtLoginInitialized: true,
@@ -51,21 +51,35 @@ describe("desktop login item", () => {
 
     // The user removes it in System Settings; later launches respect that.
     app.state.openAtLogin = false;
-    await initializeOpenAtLogin(app as never, prefs);
+    await initializeOpenAtLogin(app as never, prefs, "darwin");
     expect(app.setLoginItemSettings).toHaveBeenCalledTimes(1);
-    expect(getOpenAtLoginStatus(app as never).enabled).toBe(false);
+    expect(getOpenAtLoginStatus(app as never, "darwin").enabled).toBe(false);
   });
 
   it("toggles the login item from settings", async () => {
     const app = fakeApp();
     const prefs = await preferencesPath();
-    await expect(setOpenAtLogin(app as never, prefs, true)).resolves.toEqual({
+    await expect(
+      setOpenAtLogin(app as never, prefs, true, "darwin"),
+    ).resolves.toEqual({
       available: true,
       enabled: true,
       requiresApproval: false,
     });
-    await setOpenAtLogin(app as never, prefs, false);
+    await setOpenAtLogin(app as never, prefs, false, "darwin");
     expect(app.state.openAtLogin).toBe(false);
+  });
+
+  it("is unavailable on Linux, where Electron has no login items", async () => {
+    const app = fakeApp();
+    const prefs = await preferencesPath();
+    await initializeOpenAtLogin(app as never, prefs, "linux");
+    expect(app.setLoginItemSettings).not.toHaveBeenCalled();
+    expect(getOpenAtLoginStatus(app as never, "linux").available).toBe(false);
+    expect(wasOpenedAtLogin(app as never, "linux")).toBe(false);
+    await expect(
+      setOpenAtLogin(app as never, prefs, true, "linux"),
+    ).rejects.toThrow("open_at_login_unavailable");
   });
 
   it("never registers development builds", async () => {
