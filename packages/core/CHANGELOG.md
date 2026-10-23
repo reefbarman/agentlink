@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.32.0 — 2026-10-23
+
+- Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.
+
 ## 0.31.0 — 2026-10-23
 
 - Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.

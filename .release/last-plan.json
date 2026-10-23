@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "28f97e60028f59290d0bfebcd6deecde95c81d7c",
-  "createdAt": "2026-10-23T12:26:32.122Z",
+  "sourceSha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+  "createdAt": "2026-10-23T13:02:16.577Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -25,7 +25,8 @@
         "df4323df696226e27c83b54907c7ed00bce19204",
         "63cf98267343e364c809f115aef9043669b6191a",
         "8af7d872945de93e27155f573663a4b457e96cd8",
-        "b386d4524530c407a9e95b5d13cf16b591ce4264"
+        "b386d4524530c407a9e95b5d13cf16b591ce4264",
+        "0f866355725b5bd93d2c82db3c6e6ea26f739e58"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -109,53 +110,59 @@
           "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
           "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
           "breaking": false
+        },
+        {
+          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
+          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.55.0",
-      "baselineRef": "desktop-v0.55.0",
-      "reserved": "0.55.0",
-      "commits": ["b386d4524530c407a9e95b5d13cf16b591ce4264"],
+      "published": "0.56.0",
+      "baselineRef": "desktop-v0.56.0",
+      "reserved": "0.56.0",
+      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.56.0",
+      "version": "0.57.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.56.0",
+      "tag": "desktop-v0.57.0",
       "notes": [
         {
-          "sha": "b386d4524530c407a9e95b5d13cf16b591ce4264",
-          "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
-          "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
+          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
+          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.39.0",
-      "baselineRef": "cli-v0.39.0",
+      "published": "0.40.0",
+      "baselineRef": "cli-v0.40.0",
       "reserved": "0.40.0",
-      "commits": ["8af7d872945de93e27155f573663a4b457e96cd8"],
+      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.40.0",
+      "version": "0.41.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.40.0",
+      "tag": "cli-v0.41.0",
       "notes": [
         {
-          "sha": "8af7d872945de93e27155f573663a4b457e96cd8",
-          "subject": "feat(ask-agent): run sandboxed commands in granted folders with approval",
-          "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
+          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
+          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
           "breaking": false
         }
       ]
@@ -164,34 +171,46 @@
       "published": "0.31.0",
       "baselineRef": "sdk-v0.31.0",
       "reserved": "0.31.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.27.0",
-      "baselineRef": "assistant-v0.27.0",
-      "reserved": "0.27.0",
-      "commits": ["b386d4524530c407a9e95b5d13cf16b591ce4264"],
+      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.28.0",
+      "version": "0.32.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.28.0",
+      "tag": "sdk-v0.32.0",
       "notes": [
         {
-          "sha": "b386d4524530c407a9e95b5d13cf16b591ce4264",
-          "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
-          "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
+          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
+          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.28.0",
+      "baselineRef": "assistant-v0.28.0",
+      "reserved": "0.28.0",
+      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.29.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.29.0",
+      "notes": [
+        {
+          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
+          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
           "breaking": false
         }
       ]
@@ -298,6 +317,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "0f866355725b5bd93d2c82db3c6e6ea26f739e58": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
