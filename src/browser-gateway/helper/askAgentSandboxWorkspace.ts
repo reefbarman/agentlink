@@ -67,10 +67,16 @@ type WorkspaceProcessLaunchRequest = WorkspaceProcessLaunch["request"];
 export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
   "execute_command",
   "get_command_output",
+  "list_commands",
+  "stop_command",
   "write_file",
   "apply_diff",
   "present_files",
 ] as const;
+
+/** Tools only useful once a folder is granted for commands. */
+export const ASK_AGENT_GRANTED_FOLDER_TOOL_NAMES: readonly AskAgentSandboxToolName[] =
+  ["apply_diff", "list_commands", "stop_command"];
 export type AskAgentSandboxToolName =
   (typeof ASK_AGENT_SANDBOX_TOOL_NAMES)[number];
 
@@ -90,6 +96,11 @@ export type AskAgentSandboxPermission =
 const ASK_AGENT_SANDBOX_MAX_REASON_LENGTH = 1_000;
 export const ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS = 120_000;
 export const ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS = 600_000;
+/** Background commands in granted folders: default and longest run. */
+export const ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS = 60 * 60 * 1_000;
+export const ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS = 8 * 60 * 60 * 1_000;
+/** Background commands running at once in one chat. */
+export const ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS = 5;
 export const ASK_AGENT_SANDBOX_MAX_WORKSPACE_BYTES = 1024 * 1024 * 1024;
 export const ASK_AGENT_SANDBOX_MAX_WRITE_BYTES = 5 * 1024 * 1024;
 export const ASK_AGENT_SANDBOX_MAX_PRESENTED_FILE_BYTES = 8 * 1024 * 1024;
@@ -113,7 +124,7 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
     {
       name: "execute_command",
       description:
-        "Run an exact non-interactive command with /bin/zsh -c in this chat's sandboxed scratch folder. There is no PTY, stdin, or persistent shell state. The sandbox allows writes only inside the scratch folder, hides the user's home folder, and has no internet access. Returns retained stdout/stderr and the exit state; use get_command_output with the commandId to page longer output.",
+        "Run an exact non-interactive command with /bin/zsh -c in this chat's sandboxed scratch folder. There is no PTY, stdin, or persistent shell state. The sandbox allows writes only inside the scratch folder, hides the user's home folder, and has no internet access. Returns retained stdout/stderr and the exit state; use get_command_output with the commandId to page longer output. In a folder granted for commands, background: true starts a long-running command (for example a dev server or watcher) and returns as soon as it starts.",
       input_schema: {
         type: "object",
         properties: {
@@ -126,8 +137,12 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
           timeoutMs: {
             type: "integer",
             minimum: 1,
-            maximum: ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS,
-            description: `Defaults to ${ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS} ms.`,
+            maximum: ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS,
+            description: `Defaults to ${ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS} ms (at most ${ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS}). Background commands default to ${ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS} ms (at most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS}) and are stopped when it runs out.`,
+          },
+          background: {
+            type: "boolean",
+            description: `Only in a folder granted for commands, and not with require_managed_network. Starts the command and returns its commandId straight away; it keeps running after your reply until it exits, times out, you call stop_command, or the user revokes the folder or deletes the chat. Read its output with get_command_output. At most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS} at once per chat.`,
           },
           sandbox_permissions: {
             type: "string",
@@ -157,6 +172,27 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
           offset: { type: "integer", minimum: 0 },
           limitBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
         },
+        required: ["commandId"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "list_commands",
+      description:
+        "List this chat's commands with their commandId, command, folder and state (running, completed, failed, cancelled or timed_out), newest first.",
+      input_schema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "stop_command",
+      description:
+        "Stop a running command this chat started (TERM, then KILL), for example a background dev server you no longer need.",
+      input_schema: {
+        type: "object",
+        properties: { commandId: { type: "string", minLength: 1 } },
         required: ["commandId"],
         additionalProperties: false,
       },
@@ -236,7 +272,9 @@ export function askAgentCommandFoldersPrompt(
     "",
     "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. present_files still only works in the scratch folder.",
     "",
-    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path and that contentHash, or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed.",
+    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path and that contentHash, or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed. Edits wait until no command is running in that folder, including background commands, so stop a background command with stop_command before editing files it is in.",
+    "",
+    "For a long-running command such as a dev server, test watcher or build in watch mode, pass background: true. The call returns once it starts; check on it with get_command_output, find it again with list_commands, and stop it with stop_command when you are done. Background commands cannot use require_managed_network.",
     "",
     'When a command in a granted folder needs the internet (installing packages, downloading, git fetch), pass sandbox_permissions: "require_managed_network" with a reason; each new destination then waits for the user\'s approval. Only when the sandbox blocks something essential, pass sandbox_permissions: "require_escalated" with a reason to run it outside the sandbox with the user\'s full permissions. The user must approve that on their computer, so they may not be able to from a phone.',
   ].join("\n");
@@ -251,6 +289,8 @@ export interface AskAgentCommandApprovalProposal {
   /** The granted folder the command can write to. */
   readonly root: string;
   readonly timeoutMs: number;
+  /** Keeps running after the tool call returns, until it exits or is stopped. */
+  readonly background: boolean;
   /**
    * `loopback` on macOS, where the sandbox still allows connections to
    * services on this computer; `none` on Linux, where each command has a
@@ -604,6 +644,11 @@ function mimeTypeFor(filePath: string): string {
   );
 }
 
+/** One folder is the other or contains it. */
+function overlaps(left: string, right: string): boolean {
+  return isInside(left, right) || isInside(right, left);
+}
+
 function isInside(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
   return (
@@ -647,6 +692,17 @@ export class AskAgentSandboxWorkspace {
   private readonly pendingEdits = new Map<string, Set<AbortController>>();
   /** Edits being written per granted folder; revoking waits for them. */
   private readonly editCommits = new Map<string, Set<Promise<unknown>>>();
+  /**
+   * Granted folders with an edit between its last check and its write.
+   * Commands that can write there are refused until it finishes.
+   */
+  private readonly editReservations = new Map<symbol, string>();
+  /** Granted folders of commands being launched, until the launch returns. */
+  private readonly launchingCommands = new Map<symbol, string>();
+  /** The granted folder each launched command can write to, by chat and ID. */
+  private readonly commandWritableRoots = new Map<string, string>();
+  /** Deleted chats; a late tool call must not recreate their sandbox. */
+  private readonly deletedChats = new Set<string>();
   private runtime: SandboxRuntimeProvider | undefined;
   private workspaceHost: Promise<WorkspaceHostModule> | undefined;
   private digestSecrets: Map<string, string> | undefined;
@@ -799,6 +855,9 @@ export class AskAgentSandboxWorkspace {
   async execute(
     request: SandboxToolRequest,
   ): Promise<AskAgentSandboxToolResult> {
+    if (this.deletedChats.has(request.sessionId)) {
+      return errorResult("chat_deleted");
+    }
     try {
       switch (request.toolName) {
         case "write_file":
@@ -866,6 +925,11 @@ export class AskAgentSandboxWorkspace {
   }
 
   async deleteChat(sessionId: string): Promise<void> {
+    this.deletedChats.add(sessionId);
+    for (const key of this.commandWritableRoots.keys()) {
+      if (key.startsWith(`${sessionId}\0`))
+        this.commandWritableRoots.delete(key);
+    }
     const chat = this.chats.get(sessionId);
     this.chats.delete(sessionId);
     if (chat) {
@@ -1084,20 +1148,26 @@ export class AskAgentSandboxWorkspace {
   private async runCommandTool(
     request: SandboxToolRequest,
   ): Promise<AskAgentSandboxToolResult> {
+    const background =
+      request.toolName === "execute_command" &&
+      request.input.background === true;
     if (request.toolName === "execute_command") {
-      if (request.input.background === true) {
-        return errorResult(
-          "background commands are not available in the Ask Agent sandbox",
-        );
+      if (
+        request.input.background !== undefined &&
+        typeof request.input.background !== "boolean"
+      ) {
+        return errorResult("background must be a boolean");
       }
+      const maxTimeoutMs = background
+        ? ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS
+        : ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS;
       const timeoutMs = request.input.timeoutMs;
       if (
         timeoutMs !== undefined &&
-        (typeof timeoutMs !== "number" ||
-          timeoutMs > ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS)
+        (typeof timeoutMs !== "number" || timeoutMs > maxTimeoutMs)
       ) {
         return errorResult(
-          `timeoutMs must be at most ${ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS}`,
+          `timeoutMs must be at most ${maxTimeoutMs}${background ? " for a background command" : ""}`,
         );
       }
     }
@@ -1146,6 +1216,33 @@ export class AskAgentSandboxWorkspace {
       );
       if (granted.error) return errorResult(granted.error);
       grantedRoot = granted.root;
+      if (background) {
+        if (!grantedRoot) {
+          return errorResult(
+            "background_needs_granted_folder: background commands only run in a folder the user granted for commands",
+          );
+        }
+        if (permission === "require_managed_network") {
+          return errorResult(
+            "background_network_unavailable: a background command cannot ask for internet destinations; run the network step in the foreground first",
+          );
+        }
+        if (!request.requestApproval) {
+          return errorResult("command_requires_approval");
+        }
+        const running = sandbox.supervisor
+          .list({ ownerId: OWNER_ID, sessionId: request.sessionId })
+          .filter(
+            (record) =>
+              record.mode === "background" &&
+              (record.state === "running" || record.state === "interrupted"),
+          ).length;
+        if (running >= ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS) {
+          return errorResult(
+            `too_many_background_commands: this chat already has ${running} background commands running; stop one with stop_command first`,
+          );
+        }
+      }
       if (grantedRoot) {
         // Workspace command tools take a cwd relative to their project.
         input = { ...input, cwd: granted.relativeCwd };
@@ -1186,7 +1283,11 @@ export class AskAgentSandboxWorkspace {
       ...input,
       ...(request.toolName === "execute_command" &&
       input.timeoutMs === undefined
-        ? { timeoutMs: ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS }
+        ? {
+            timeoutMs: background
+              ? ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS
+              : ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS,
+          }
         : {}),
     });
     if (!validation.valid) {
@@ -1275,6 +1376,48 @@ export class AskAgentSandboxWorkspace {
         );
       }
     }
+    // A background launch is what the user approved (or a rule or Approve
+    // for Me allowed), so acknowledge it to the workspace command tools.
+    const launch = executable.launch as
+      | { readonly commandId?: unknown; readonly mode?: unknown }
+      | undefined;
+    const launchingBackground =
+      request.toolName === "execute_command" && launch?.mode === "background";
+    if (launchingBackground) {
+      if (!background || !grantedRoot || typeof launch.commandId !== "string") {
+        if (launchId) endLaunch(sandbox, launchId);
+        return errorResult("command_requires_approval");
+      }
+      if (request.signal?.aborted) {
+        if (launchId) endLaunch(sandbox, launchId);
+        return errorResult("command_cancelled_before_launch");
+      }
+    }
+    // Pairs with the edit reservation. The check and the registration run
+    // without awaiting in between, and the registration lasts until the
+    // launch returns (by then the supervisor lists the command), so an edit
+    // either sees this launch or this launch sees the edit.
+    let launching: symbol | undefined;
+    if (request.toolName === "execute_command" && grantedRoot) {
+      const root = grantedRoot;
+      if ([...this.editReservations.values()].some((r) => overlaps(r, root))) {
+        if (launchId) endLaunch(sandbox, launchId);
+        return errorResult(
+          "edit_in_progress: a file edit is being written in this folder; retry the command",
+        );
+      }
+      launching = Symbol("launch");
+      this.launchingCommands.set(launching, root);
+      if (typeof launch?.commandId === "string") {
+        this.commandWritableRoots.set(
+          `${request.sessionId}\0${launch.commandId}`,
+          root,
+        );
+      }
+    }
+    if (launchingBackground && typeof launch?.commandId === "string") {
+      commandTools.acknowledgeBackgroundLaunch(launch.commandId);
+    }
     let result: Awaited<ReturnType<typeof tool.executeValidated>>;
     try {
       result = await tool.executeValidated(executable, {
@@ -1282,9 +1425,14 @@ export class AskAgentSandboxWorkspace {
         sessionId: request.sessionId,
         turnId: request.turnId,
         model,
-        signal: request.signal,
+        // The supervisor stops a command when this signal aborts, so a
+        // background command must not be tied to the turn that started it.
+        signal: launchingBackground
+          ? new AbortController().signal
+          : request.signal,
       });
     } finally {
+      if (launching) this.launchingCommands.delete(launching);
       // Later network requests from a command still running after this
       // call returned are refused, and open ones are withdrawn.
       if (launchId) endLaunch(sandbox, launchId);
@@ -1299,6 +1447,9 @@ export class AskAgentSandboxWorkspace {
   }
 
   private chatSandbox(sessionId: string): Promise<ChatSandbox> {
+    if (this.deletedChats.has(sessionId)) {
+      return Promise.reject(new Error("chat_deleted"));
+    }
     let chat = this.chats.get(sessionId);
     if (!chat) {
       chat = this.createChatSandbox(sessionId);
@@ -1614,6 +1765,7 @@ export class AskAgentSandboxWorkspace {
         cwd: display.cwd,
         root,
         timeoutMs: display.timeoutMs,
+        background: display.mode === "background",
         network:
           options.permission === "require_escalated"
             ? "full"
@@ -1832,44 +1984,52 @@ export class AskAgentSandboxWorkspace {
     }
     // The file tools resolve the path once and then write through it, so a
     // command swapping a folder for a link mid-write could redirect the
-    // write outside the grant. Edits wait until no command runs there, and
-    // the path must still resolve to the same place.
-    if (await this.commandRunningIn(root)) {
-      return errorResult(
-        "command_running: a command is still running in this folder; wait for it to finish, then retry the edit",
-      );
-    }
-    if ((await canonicalTarget(request.input.path)) !== target) {
-      return errorResult(
-        "path_changed: the file's location changed while the edit was pending; read it again and retry",
-      );
-    }
-    if (
-      request.signal?.aborted ||
-      (this.commandRootRevocations.get(root) ?? 0) > startedAt
-    ) {
-      return errorResult(
-        "path_not_granted: the edit was stopped or this folder's command grant was revoked",
-      );
-    }
-    // Registered synchronously after the last check, so a revoke either
-    // refuses this edit above or waits for the write to finish.
-    const commit = tool.executeValidated(validation.input, {
-      principal: PRINCIPAL,
-      sessionId: request.sessionId,
-      turnId: request.turnId,
-      model: MODEL,
-      signal: request.signal,
-    });
-    const commits = this.editCommits.get(root) ?? new Set();
-    commits.add(commit);
-    this.editCommits.set(root, commits);
-    let result: Awaited<typeof commit>;
+    // write outside the grant. Edits wait until no command that can write
+    // here runs (including ones from an enclosing grant), and the path must
+    // still resolve to the same place. The reservation is taken before the
+    // check, so a command launched after it is refused until the write ends.
+    const reservation = Symbol("edit");
+    this.editReservations.set(reservation, root);
+    let result: Awaited<ReturnType<typeof tool.executeValidated>>;
     try {
-      result = await commit;
+      if (await this.commandRunningIn(root)) {
+        return errorResult(
+          "command_running: a command that can write in this folder is still running; wait for it to finish, or stop a background command with stop_command (list_commands shows them), then retry the edit",
+        );
+      }
+      if ((await canonicalTarget(request.input.path)) !== target) {
+        return errorResult(
+          "path_changed: the file's location changed while the edit was pending; read it again and retry",
+        );
+      }
+      if (
+        request.signal?.aborted ||
+        (this.commandRootRevocations.get(root) ?? 0) > startedAt
+      ) {
+        return errorResult(
+          "path_not_granted: the edit was stopped or this folder's command grant was revoked",
+        );
+      }
+      // Registered synchronously after the last check, so a revoke either
+      // refuses this edit above or waits for the write to finish.
+      const commit = tool.executeValidated(validation.input, {
+        principal: PRINCIPAL,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        model: MODEL,
+        signal: request.signal,
+      });
+      const commits = this.editCommits.get(root) ?? new Set();
+      commits.add(commit);
+      this.editCommits.set(root, commits);
+      try {
+        result = await commit;
+      } finally {
+        commits.delete(commit);
+        if (commits.size === 0) this.editCommits.delete(root);
+      }
     } finally {
-      commits.delete(commit);
-      if (commits.size === 0) this.editCommits.delete(root);
+      this.editReservations.delete(reservation);
     }
     return {
       content:
@@ -1880,23 +2040,34 @@ export class AskAgentSandboxWorkspace {
     };
   }
 
-  /** Whether any chat still has a command running inside `root`. */
+  /**
+   * Whether any chat has a command, running or still launching, that can
+   * write inside `root`: its granted folder is `root`, inside it, or
+   * encloses it.
+   */
   private async commandRunningIn(root: string): Promise<boolean> {
+    if ([...this.launchingCommands.values()].some((r) => overlaps(r, root))) {
+      return true;
+    }
     for (const pending of this.chats.values()) {
       const chat = await pending.catch(() => undefined);
       if (
-        chat?.supervisor
-          .list({ ownerId: OWNER_ID })
-          .some(
-            (record) =>
-              (record.state === "running" || record.state === "interrupted") &&
-              isInside(record.cwd, root),
-          )
+        chat?.supervisor.list({ ownerId: OWNER_ID }).some((record) => {
+          if (record.state !== "running" && record.state !== "interrupted") {
+            return false;
+          }
+          const writable = this.commandWritableRoots.get(
+            `${chat.sessionId}\0${record.commandId}`,
+          );
+          return writable
+            ? overlaps(writable, root)
+            : isInside(record.cwd, root);
+        })
       ) {
         return true;
       }
     }
-    return false;
+    return [...this.launchingCommands.values()].some((r) => overlaps(r, root));
   }
 
   private fileToolsFor(root: string): Promise<WorkspaceFileTools> {

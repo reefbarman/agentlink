@@ -11306,9 +11306,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
         };
       };
       expect(send.ok).toBe(true);
-      expect(completionParams[0]?.tools?.map((tool) => tool.name)).toEqual(
+      const scratchToolNames =
+        completionParams[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(scratchToolNames).toEqual(
         expect.arrayContaining(["execute_command", "write_file"]),
       );
+      // Edits and background command control need a granted folder.
+      for (const name of ["apply_diff", "list_commands", "stop_command"]) {
+        expect(scratchToolNames).not.toContain(name);
+      }
       expect(completionParams[0]?.additionalInstructions).toContain(
         "Sandboxed scratch folder",
       );
@@ -12006,6 +12012,110 @@ describe("BrowserGatewayHelper proxy routing", () => {
         fs.stat(path.join(project, "fetched.txt")),
       ).resolves.toBeTruthy();
     } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("shows a background command's card with its time limit and offers stop_command", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: () =>
+        workspaceHost.createLocalWorkspaceExecutionBackend(),
+    });
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const toolResults: string[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length) {
+        toolResults.push(JSON.stringify(params.toolMessages));
+        return { text: "Started.", toolCalls: [] };
+      }
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "bg-1",
+            name: "execute_command",
+            input: {
+              command: "sleep 30",
+              cwd: project,
+              background: true,
+              timeoutMs: 5_400_000,
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+
+    try {
+      expect(
+        (
+          await post("/api/ask-agent/read-grants", {
+            path: project,
+            confirm: true,
+            access: "commands",
+          })
+        ).ok,
+      ).toBe(true);
+      const sent = post("/api/ask-agent/send", { text: "Start the server" });
+      let card: Record<string, unknown> | null = null;
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval?.kind).toBe("command");
+        card = body.snapshot.ui.approval;
+      });
+      expect(card!.commandSandbox).toMatchObject({
+        writableRoot: project,
+        background: true,
+        timeoutMs: 5_400_000,
+      });
+      const toolNames =
+        completionParams[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(toolNames).toEqual(
+        expect.arrayContaining(["list_commands", "stop_command"]),
+      );
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: card!.id,
+            decision: "run-once",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await sent).ok).toBe(true);
+      expect(toolResults[0]).toContain("background");
+      expect(toolResults[0]).toContain("running");
+    } finally {
+      await sandbox.dispose();
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(project, { recursive: true, force: true });
     }

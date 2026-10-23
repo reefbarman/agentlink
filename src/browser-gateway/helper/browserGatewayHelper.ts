@@ -296,6 +296,7 @@ import {
 } from "../../shared/toolSchemas.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import {
+  ASK_AGENT_GRANTED_FOLDER_TOOL_NAMES,
   ASK_AGENT_SANDBOX_PROMPT,
   ASK_AGENT_SANDBOX_TOOLS,
   AskAgentSandboxWorkspace,
@@ -6545,10 +6546,14 @@ export class BrowserGatewayHelper {
       }
       const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
         ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
-        // apply_diff only edits granted folders, so it needs one.
+        // apply_diff and background command control need a granted folder.
         ...(sandboxTools
           ? ASK_AGENT_SANDBOX_TOOLS.filter(
-              (tool) => tool.name !== "apply_diff" || commandRoots.length > 0,
+              (tool) =>
+                commandRoots.length > 0 ||
+                !(
+                  ASK_AGENT_GRANTED_FOLDER_TOOL_NAMES as readonly string[]
+                ).includes(tool.name),
             )
           : []),
         ...(instructionSnapshot
@@ -9035,6 +9040,7 @@ export class BrowserGatewayHelper {
         decision: "allow",
         by: policy.by,
         network: proposal.network,
+        background: proposal.background,
       });
       return { decision: "run" };
     }
@@ -9058,6 +9064,9 @@ export class BrowserGatewayHelper {
         writableRoot: proposal.root,
         network: proposal.network,
         ...(unsandboxed ? { unsandboxed: true } : {}),
+        ...(proposal.background
+          ? { background: true, timeoutMs: proposal.timeoutMs }
+          : {}),
       },
     };
     const decision = this.askAgentController.requestApproval(request, signal);

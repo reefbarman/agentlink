@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS,
+  ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS,
   ASK_AGENT_SANDBOX_TOOLS,
+  type AskAgentSandboxToolName,
   AskAgentSandboxWorkspace,
   askAgentCommandFoldersPrompt,
   findNestedRepository,
@@ -101,10 +104,12 @@ function parse(content: string): Record<string, unknown> {
 }
 
 describe("AskAgentSandboxWorkspace", () => {
-  it("advertises execute_command, get_command_output, write_file and present_files", () => {
+  it("advertises the command, file and present tools", () => {
     expect(ASK_AGENT_SANDBOX_TOOLS.map((tool) => tool.name)).toEqual([
       "execute_command",
       "get_command_output",
+      "list_commands",
+      "stop_command",
       "write_file",
       "apply_diff",
       "present_files",
@@ -115,7 +120,7 @@ describe("AskAgentSandboxWorkspace", () => {
         (execute.input_schema as { properties: Record<string, unknown> })
           .properties,
       ),
-    ).not.toContain("background");
+    ).toContain("background");
   });
 
   it("is unavailable on other hosts and without a staged helper", async () => {
@@ -360,6 +365,199 @@ describe("AskAgentSandboxWorkspace", () => {
         input: { commandId },
       });
       expect(observed.isError).toBe(false);
+    });
+
+    it("starts background commands that outlive the turn until stopped", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      const requestApproval = approver({ decision: "run" });
+      const run = (
+        input: Record<string, unknown>,
+        extra: Partial<Parameters<typeof workspace.execute>[0]> = {},
+      ) =>
+        workspace.execute({
+          sessionId: "chat-bg",
+          turnId: "turn-1",
+          toolName: "execute_command",
+          input,
+          commandRoots: [project],
+          requestApproval,
+          ...extra,
+        });
+
+      // Only in granted folders, never with per-destination network.
+      const scratch = await run({ command: "sleep 30", background: true });
+      expect(scratch.content).toContain("background_needs_granted_folder");
+      const network = await run({
+        command: "sleep 30",
+        cwd: project,
+        background: true,
+        sandbox_permissions: "require_managed_network",
+      });
+      expect(network.content).toContain("background_network_unavailable");
+      const tooLong = await run({
+        command: "sleep 30",
+        cwd: project,
+        background: true,
+        timeoutMs: 9 * 60 * 60 * 1_000,
+      });
+      expect(tooLong.content).toContain("timeoutMs must be at most");
+      const foregroundTooLong = await run({
+        command: "true",
+        cwd: project,
+        timeoutMs: 20 * 60 * 1_000,
+      });
+      expect(foregroundTooLong.content).toContain("timeoutMs must be at most");
+      expect(requestApproval).not.toHaveBeenCalled();
+
+      const turn = new AbortController();
+      const started = await run(
+        { command: "echo started; sleep 30", cwd: project, background: true },
+        { signal: turn.signal },
+      );
+      expect(started.isError).toBe(false);
+      expect(requestApproval.mock.calls[0]![0]).toMatchObject({
+        background: true,
+        timeoutMs: ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS,
+      });
+      const record = parse(started.content).record as {
+        commandId: string;
+        state: string;
+        mode: string;
+      };
+      expect(record).toMatchObject({ state: "running", mode: "background" });
+      // Stopping the turn that started it does not stop it.
+      turn.abort();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const tool = (
+        toolName: AskAgentSandboxToolName,
+        input: Record<string, unknown> = {},
+      ) =>
+        workspace.execute({
+          sessionId: "chat-bg",
+          turnId: "turn-2",
+          toolName,
+          input,
+        });
+      const listed = parse((await tool("list_commands")).content) as unknown;
+      expect(listed).toEqual([
+        expect.objectContaining({
+          commandId: record.commandId,
+          state: "running",
+        }),
+      ]);
+      // Edits wait for it.
+      const edit = await workspace.execute({
+        sessionId: "chat-bg",
+        turnId: "turn-2",
+        toolName: "write_file",
+        input: {
+          path: path.join(project, "x.txt"),
+          content: "x",
+          expectedAbsent: true,
+        },
+        commandRoots: [project],
+        requestEditApproval: async () => ({ decision: "run" }),
+      });
+      expect(edit.content).toContain("command_running");
+      const stopped = await tool("stop_command", {
+        commandId: record.commandId,
+      });
+      expect(parse(stopped.content)).toMatchObject({ state: "cancelled" });
+      const output = await tool("get_command_output", {
+        commandId: record.commandId,
+      });
+      expect(output.content).toContain("started");
+    });
+
+    it("holds edits in a nested grant while a command from the enclosing grant runs", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const inner = path.join(project, "pkg");
+      await fs.mkdir(inner);
+      const { workspace } = await localWorkspace(root);
+      const started = await workspace.execute({
+        sessionId: "chat-outer",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "sleep 30", cwd: project, background: true },
+        commandRoots: [project, inner],
+        requestApproval: approver({ decision: "run" }),
+      });
+      expect(started.isError).toBe(false);
+      // Another chat editing under the deeper grant still waits.
+      const edit = await workspace.execute({
+        sessionId: "chat-inner",
+        turnId: "turn-1",
+        toolName: "write_file",
+        input: {
+          path: path.join(inner, "x.txt"),
+          content: "x",
+          expectedAbsent: true,
+        },
+        commandRoots: [project, inner],
+        requestEditApproval: async () => ({ decision: "run" }),
+      });
+      expect(edit.content).toContain("command_running");
+      await expect(fs.stat(path.join(inner, "x.txt"))).rejects.toThrow();
+    });
+
+    it("refuses tools for a deleted chat instead of recreating its sandbox", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      const requestApproval = approver({ decision: "run" });
+      await workspace.deleteChat("chat-gone");
+      const late = await workspace.execute({
+        sessionId: "chat-gone",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "sleep 30", cwd: project, background: true },
+        commandRoots: [project],
+        requestApproval,
+      });
+      expect(late.content).toContain("chat_deleted");
+      expect(requestApproval).not.toHaveBeenCalled();
+      const write = await workspace.execute({
+        sessionId: "chat-gone",
+        turnId: "turn-1",
+        toolName: "write_file",
+        input: { path: "a.txt", content: "a" },
+      });
+      expect(write.content).toContain("chat_deleted");
+    });
+
+    it("caps background commands per chat and stops them on revoke", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      const start = () =>
+        workspace.execute({
+          sessionId: "chat-cap",
+          turnId: "turn-1",
+          toolName: "execute_command",
+          input: { command: "sleep 30", cwd: project, background: true },
+          commandRoots: [project],
+          requestApproval: approver({ decision: "run" }),
+        });
+      for (let i = 0; i < ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS; i += 1) {
+        expect((await start()).isError).toBe(false);
+      }
+      expect((await start()).content).toContain("too_many_background_commands");
+      await workspace.revokeCommandRoot(project);
+      const listed = parse(
+        (
+          await workspace.execute({
+            sessionId: "chat-cap",
+            turnId: "turn-2",
+            toolName: "list_commands",
+            input: {},
+          })
+        ).content,
+      ) as unknown as Array<{ state: string }>;
+      expect(listed).toHaveLength(ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS);
+      expect(listed.every((entry) => entry.state === "cancelled")).toBe(true);
     });
 
     it("does not run a declined command and runs an edited one as written", async () => {

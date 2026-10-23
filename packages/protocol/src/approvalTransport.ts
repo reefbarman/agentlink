@@ -115,6 +115,13 @@ export interface ApprovalRequest {
      * Only the computer running AgentLink can approve it.
      */
     unsandboxed?: boolean;
+    /**
+     * The command keeps running in the background after the agent's tool
+     * call returns, for at most `timeoutMs`.
+     */
+    background?: boolean;
+    /** Longest the command may run before it is stopped, in milliseconds. */
+    timeoutMs?: number;
   };
   /** For commands: expanded sub-commands with existing rule info */
   subCommands?: SubCommandEntry[];

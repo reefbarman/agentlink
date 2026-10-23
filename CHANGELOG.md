@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ask Agent commands in granted folders can now run in the background. With `execute_command`'s `background: true`, a dev server, test watcher or watch build starts and the call returns straight away; it keeps running after the reply until it exits, reaches its time limit (default 1 hour, at most 8 hours), the agent stops it, or you revoke the folder or delete the chat. The command card is labelled **Background** and shows the time limit. New `list_commands` and `stop_command` tools are offered while a folder is granted for commands. A chat can run up to 5 background commands at once, and they cannot ask for internet destinations. File edits still wait until no command that can write there, background included, is running, which now also counts commands from an enclosing granted folder. Tool calls that arrive for a chat after it is deleted are refused instead of recreating its scratch folder. The shared approval card's `commandSandbox` gains `background` and `timeoutMs`.
+
 ## 1.68.0
 
 - The Ask Agent can now edit files in folders granted for commands. `write_file` with an absolute path and the new `apply_diff` tool change a file against the `contentHash` that `read_file` now returns for those files, and each change shows a write card with its diff. Approve for Me applies ordinary edits without a card; agent instruction and configuration files always ask and can only be approved on the computer running AgentLink. Git metadata and `.env` files cannot be edited, and neither can settings files whose secrets are hidden from the agent. Cards never show a partial diff: a change too long to show is refused so the agent splits it. The grant checkbox now reads **Also allow commands and edits in this folder (asks first)**.

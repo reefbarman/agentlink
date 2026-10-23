@@ -27,6 +27,24 @@ describe("projectBrowserGatewayOwnerInteractionPayload", () => {
     ).toEqual({ writableRoot: "/work/app", network: "loopback" });
   });
 
+  it("keeps a background command's flag and time limit for relay clients", () => {
+    expect(
+      projectBrowserGatewayOwnerInteractionPayload(
+        payload({
+          writableRoot: "/work/app",
+          network: "loopback",
+          background: true,
+          timeoutMs: 3_600_000,
+        }),
+      )?.approval?.commandSandbox,
+    ).toEqual({
+      writableRoot: "/work/app",
+      network: "loopback",
+      background: true,
+      timeoutMs: 3_600_000,
+    });
+  });
+
   it("keeps the unsandboxed flag so relay clients see full access", () => {
     expect(
       projectBrowserGatewayOwnerInteractionPayload(

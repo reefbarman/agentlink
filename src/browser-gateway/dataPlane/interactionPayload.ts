@@ -136,6 +136,12 @@ function approvalRequest(value: unknown): ApprovalRequest {
       ...(sandbox.unsandboxed === undefined
         ? {}
         : { unsandboxed: booleanValue(sandbox.unsandboxed) }),
+      ...(sandbox.background === undefined
+        ? {}
+        : { background: booleanValue(sandbox.background) }),
+      ...(sandbox.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: finiteNumberValue(sandbox.timeoutMs) }),
     };
   });
   copyOptional(result, "commandReview", source.commandReview, commandReview);

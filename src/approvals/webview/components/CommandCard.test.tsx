@@ -104,6 +104,27 @@ describe("CommandCard terminal presentation", () => {
     ).toBeTruthy();
   });
 
+  it("says a background command keeps running and for how long", () => {
+    renderCard({
+      kind: "command",
+      id: "ask-agent-command-bg",
+      command: "npm run dev",
+      cwd: "/work/app",
+      commandSandbox: {
+        writableRoot: "/work/app",
+        network: "loopback",
+        background: true,
+        timeoutMs: 3_600_000,
+      },
+    });
+
+    expect(
+      screen.getByText("Background · Writes only in this folder · no internet"),
+    ).toBeTruthy();
+    expect(screen.getByText("Keeps running in the background")).toBeTruthy();
+    expect(screen.getByText(/its 1 hour time limit/)).toBeTruthy();
+  });
+
   it("says a loopback host sandbox can still reach local services", () => {
     renderCard({
       kind: "command",

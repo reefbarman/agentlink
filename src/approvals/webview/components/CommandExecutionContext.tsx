@@ -21,6 +21,19 @@ interface CommandExecutionContextProps {
   thisMachineOnly?: boolean;
 }
 
+/** "1 hour", "90 minutes", "45 seconds". */
+function formatRunLimit(milliseconds: number): string {
+  const plural = (value: number, unit: string) =>
+    `${value} ${unit}${value === 1 ? "" : "s"}`;
+  if (milliseconds >= 3_600_000 && milliseconds % 3_600_000 === 0) {
+    return plural(milliseconds / 3_600_000, "hour");
+  }
+  if (milliseconds >= 60_000) {
+    return plural(Math.round(milliseconds / 60_000), "minute");
+  }
+  return plural(Math.max(1, Math.round(milliseconds / 1_000)), "second");
+}
+
 export function CommandExecutionContext({
   security,
   commandSandbox,
@@ -86,6 +99,11 @@ export function CommandExecutionContext({
           ? "Runs with workspace access, protected metadata, private HOME and temporary files. Public connections pause for exact destination approval; private and local destinations remain blocked."
           : "Runs with workspace access, protected metadata, private HOME and temporary files, and no network access."
         : "Runs in your normal shell environment with the same permissions as a terminal you open.";
+  const background = commandSandbox?.background === true;
+  const backgroundLimit =
+    typeof commandSandbox?.timeoutMs === "number"
+      ? formatRunLimit(commandSandbox.timeoutMs)
+      : undefined;
   const icon = nativeEscalation
     ? "codicon-warning"
     : protectedTerminal
@@ -122,7 +140,11 @@ export function CommandExecutionContext({
           <span class="command-context-summary-copy">
             <span class="command-context-summary-line">
               <strong>{label}</strong>
-              <span class="command-context-boundary">{shortDescription}</span>
+              <span class="command-context-boundary">
+                {background
+                  ? `Background · ${shortDescription}`
+                  : shortDescription}
+              </span>
             </span>
             {reason && (
               <span class="command-context-reason" title={reason}>
@@ -142,6 +164,17 @@ export function CommandExecutionContext({
               )}
             </div>
           </div>
+          {background && (
+            <div class="command-context-detail-row">
+              <span aria-hidden="true" class="codicon codicon-history" />
+              <div>
+                <strong>Keeps running in the background</strong>
+                <div>
+                  {`It keeps running after the agent replies, until it exits, the agent stops it, or it reaches its ${backgroundLimit ? `${backgroundLimit} ` : ""}time limit. Revoking the folder or deleting the chat stops it too.`}
+                </div>
+              </div>
+            </div>
+          )}
           {(reviewerLabel || presetLabel) && (
             <div class="command-context-detail-row">
               <span aria-hidden="true" class="codicon codicon-settings-gear" />
