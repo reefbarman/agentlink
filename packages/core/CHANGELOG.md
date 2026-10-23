@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.29.0 — 2026-10-23
+
+- Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.
+
 ## 0.28.1 — 2026-10-23
 
 - Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.

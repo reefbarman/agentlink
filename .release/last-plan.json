@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
-  "createdAt": "2026-10-23T02:44:29.140Z",
+  "sourceSha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+  "createdAt": "2026-10-23T03:00:37.573Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.66.1",
-      "baselineRef": "v1.66.1",
-      "reserved": "1.66.1",
-      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
+      "published": "1.66.2",
+      "baselineRef": "v1.66.2",
+      "reserved": "1.66.2",
+      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.66.2",
-      "effectiveBump": "patch",
+      "version": "1.67.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.66.2",
+      "tag": "v1.67.0",
       "notes": [
         {
-          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
-          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
-          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
+          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
+          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.52.1",
-      "baselineRef": "desktop-v0.52.1",
-      "reserved": "0.52.1",
-      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
+      "published": "0.52.2",
+      "baselineRef": "desktop-v0.52.2",
+      "reserved": "0.52.2",
+      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.52.2",
-      "effectiveBump": "patch",
+      "version": "0.53.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.52.2",
+      "tag": "desktop-v0.53.0",
       "notes": [
         {
-          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
-          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
-          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
+          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
+          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
           "breaking": false
         }
       ]
@@ -61,46 +61,70 @@
       "published": "0.37.0",
       "baselineRef": "cli-v0.37.0",
       "reserved": "0.37.0",
-      "commits": [],
+      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.38.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.38.0",
+      "notes": [
+        {
+          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
+          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.28.1",
       "baselineRef": "sdk-v0.28.1",
       "reserved": "0.28.1",
-      "commits": [],
+      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.24.1",
-      "baselineRef": "assistant-v0.24.1",
-      "reserved": "0.24.1",
-      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.24.2",
-      "effectiveBump": "patch",
+      "version": "0.29.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.24.2",
+      "tag": "sdk-v0.29.0",
       "notes": [
         {
-          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
-          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
-          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
+          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
+          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.24.2",
+      "baselineRef": "assistant-v0.24.2",
+      "reserved": "0.24.2",
+      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.25.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.25.0",
+      "notes": [
+        {
+          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
+          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
           "breaking": false
         }
       ]
@@ -111,6 +135,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "9d7dbcab702453c91922e3f8bb21c927922ace16": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
