@@ -14,7 +14,7 @@ src/browser-gateway/helper/askAgentSandboxWorkspace.ts
 src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
   h_e08a86bb3a33a2 11309-11311,11314-11317,12020-12123
 CHANGELOG.md
-  h_e08a86bb3a33a2 5
+  h_e08a86bb3a33a2 5-6
 src/browser-gateway/helper/browserGatewayHelper.ts
   h_e08a86bb3a33a2 299,6549,6553-6556,9043,9067-9069
   s_05a553ede5f61e::t_17c3330e299c98 6552
