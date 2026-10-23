@@ -1,0 +1,57 @@
+apps/server/src/inboxStore.ts
+  h_e08a86bb3a33a2 12-14,45-46,484,486,648-677,760-765
+  s_0230da6a30e1cf::t_3c375e54bc59da 766-767
+apps/server/src/pushService.ts
+  h_e08a86bb3a33a2 167
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 2291-2324
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 282-284,319-321,1803-1856
+  s_0230da6a30e1cf::t_5ac82c1725529f 1857-1858
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 194-195,242-254,432-434,1173-1174,1180,1190-1208,1210-1228,1690,1702,3145-3146
+  s_0230da6a30e1cf::t_2da2e6a24f467b 241,1172,1175,1209,1229-1230
+src/browser-gateway/webview/AssistantJobs.tsx
+  h_e08a86bb3a33a2 164,228
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 119,1142-1143,1677-1690,1761-1763,1766-1767,1772-1773,1780-1782,1784-1789,1792-1798,3076-3080
+  s_0230da6a30e1cf::t_94385a5e0422b0 1760,1764-1765,1768,3081
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 4,698-733
+  s_59be4f96b43130::t_de0f7cd6d91e95 734-735
+apps/server/README.md
+  h_e08a86bb3a33a2 846
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0230da6a30e1cf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8e0de5dc-ccb5-4f8b-bef6-2d60bde82be3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_59be4f96b43130": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac0726d8-33da-409a-99ad-07d2c0d18c5d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
