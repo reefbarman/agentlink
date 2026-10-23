@@ -1,0 +1,14 @@
+.agentlink/skills/triage/SKILL.md
+  h_e08a86bb3a33a2 3,19,116-124,134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d152f1f8c987cfcfcaed1178487c7edc9ebcf7f9",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
