@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.28.0 — 2026-10-23
+
+- search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.
+- **Breaking:** CLI and Assistant workspace-host sessions now use read_file with view "context" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.
+
 ## 0.27.0 — 2026-10-22
 
 - Failed scheduled MCP server reconnects are now logged instead of crashing the CLI with an unhandled rejection.
