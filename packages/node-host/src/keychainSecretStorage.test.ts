@@ -56,8 +56,17 @@ vi.mock("@napi-rs/keyring", () => ({
 }));
 
 const temporaryRoots: string[] = [];
+const hostPlatform = process.platform;
+
+// For tests asserting eager entry construction, which is macOS behaviour: a
+// Linux host creates the default Secret Service entry lazily. Restored after
+// each test.
+function onMacOS() {
+  Object.defineProperty(process, "platform", { value: "darwin" });
+}
 
 afterEach(async () => {
+  Object.defineProperty(process, "platform", { value: hostPlatform });
   values.clear();
   getPasswordCalls = 0;
   getPasswordError = undefined;
@@ -87,6 +96,7 @@ async function createStorage() {
 
 describe("createKeychainSecretStorage", () => {
   it("composes CLI and Desktop with one standalone account and distinct compatibility replicas", async () => {
+    onMacOS();
     const lockRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-mcp-composition-"),
     );
@@ -607,11 +617,13 @@ process.stdout.write(JSON.stringify(reply));
   });
 
   it("keeps the native default store selection when no Linux store is requested", async () => {
+    onMacOS();
     await createStorage();
     expect(constructorCalls).toEqual([["test-service", "test-account"]]);
   });
 
   it("requires the requested Linux store instead of allowing fallback", async () => {
+    onMacOS();
     const lockRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-keychain-linux-"),
     );
@@ -740,6 +752,7 @@ process.stdout.write(JSON.stringify(reply));
   });
 
   it("forwards the Linux store from the Codex OAuth runtime composition", async () => {
+    onMacOS();
     const lockRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-keychain-runtime-"),
     );
