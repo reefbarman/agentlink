@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.33.0 — 2026-10-23
+
+- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will
+
 ## 0.32.0 — 2026-10-23
 
 - Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.

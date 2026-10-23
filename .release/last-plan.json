@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f7a62390c1adbdf9596ad33826695af5657c2344",
-  "createdAt": "2026-10-23T13:45:28.982Z",
+  "sourceSha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+  "createdAt": "2026-10-23T14:09:42.592Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -27,7 +27,8 @@
         "8af7d872945de93e27155f573663a4b457e96cd8",
         "b386d4524530c407a9e95b5d13cf16b591ce4264",
         "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-        "f7a62390c1adbdf9596ad33826695af5657c2344"
+        "f7a62390c1adbdf9596ad33826695af5657c2344",
+        "385e9d5321a145c81ecfd2605d93f4761ff5ec36"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -123,29 +124,35 @@
           "subject": "feat(ask-agent): file edit tools in folders granted for commands",
           "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
           "breaking": false
+        },
+        {
+          "sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+          "subject": "feat(ask-agent): background commands in folders granted for commands",
+          "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.57.0",
-      "baselineRef": "desktop-v0.57.0",
-      "reserved": "0.57.0",
-      "commits": ["f7a62390c1adbdf9596ad33826695af5657c2344"],
+      "published": "0.58.0",
+      "baselineRef": "desktop-v0.58.0",
+      "reserved": "0.58.0",
+      "commits": ["385e9d5321a145c81ecfd2605d93f4761ff5ec36"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.58.0",
+      "version": "0.59.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.58.0",
+      "tag": "desktop-v0.59.0",
       "notes": [
         {
-          "sha": "f7a62390c1adbdf9596ad33826695af5657c2344",
-          "subject": "feat(ask-agent): file edit tools in folders granted for commands",
-          "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
+          "sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+          "subject": "feat(ask-agent): background commands in folders granted for commands",
+          "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
           "breaking": false
         }
       ]
@@ -154,46 +161,70 @@
       "published": "0.41.0",
       "baselineRef": "cli-v0.41.0",
       "reserved": "0.41.0",
-      "commits": [],
+      "commits": ["385e9d5321a145c81ecfd2605d93f4761ff5ec36"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.42.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.42.0",
+      "notes": [
+        {
+          "sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+          "subject": "feat(ask-agent): background commands in folders granted for commands",
+          "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.32.0",
       "baselineRef": "sdk-v0.32.0",
       "reserved": "0.32.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.29.0",
-      "baselineRef": "assistant-v0.29.0",
-      "reserved": "0.29.0",
-      "commits": ["f7a62390c1adbdf9596ad33826695af5657c2344"],
+      "commits": ["385e9d5321a145c81ecfd2605d93f4761ff5ec36"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.30.0",
+      "version": "0.33.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.30.0",
+      "tag": "sdk-v0.33.0",
       "notes": [
         {
-          "sha": "f7a62390c1adbdf9596ad33826695af5657c2344",
-          "subject": "feat(ask-agent): file edit tools in folders granted for commands",
-          "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
+          "sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+          "subject": "feat(ask-agent): background commands in folders granted for commands",
+          "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.30.0",
+      "baselineRef": "assistant-v0.30.0",
+      "reserved": "0.30.0",
+      "commits": ["385e9d5321a145c81ecfd2605d93f4761ff5ec36"],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.31.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.31.0",
+      "notes": [
+        {
+          "sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+          "subject": "feat(ask-agent): background commands in folders granted for commands",
+          "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
           "breaking": false
         }
       ]
@@ -316,6 +347,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "385e9d5321a145c81ecfd2605d93f4761ff5ec36": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
