@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "2819f2259136f5e918779b13e9859aed42890626",
-  "createdAt": "2026-10-23T02:23:50.128Z",
+  "sourceSha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
+  "createdAt": "2026-10-23T02:44:29.140Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,212 +10,108 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.66.0",
-      "baselineRef": "v1.66.0",
-      "reserved": "1.66.0",
-      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
+      "published": "1.66.1",
+      "baselineRef": "v1.66.1",
+      "reserved": "1.66.1",
+      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "1.66.1",
+      "version": "1.66.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.66.1",
+      "tag": "v1.66.2",
       "notes": [
         {
-          "sha": "2819f2259136f5e918779b13e9859aed42890626",
-          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
-          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
+          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
+          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
+          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.52.0",
-      "baselineRef": "desktop-v0.52.0",
-      "reserved": "0.52.0",
-      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
+      "published": "0.52.1",
+      "baselineRef": "desktop-v0.52.1",
+      "reserved": "0.52.1",
+      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.52.1",
+      "version": "0.52.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.52.1",
+      "tag": "desktop-v0.52.2",
       "notes": [
         {
-          "sha": "2819f2259136f5e918779b13e9859aed42890626",
-          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
-          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
+          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
+          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
+          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.36.0",
-      "baselineRef": "cli-v0.36.0",
+      "published": "0.37.0",
+      "baselineRef": "cli-v0.37.0",
       "reserved": "0.37.0",
-      "commits": [
-        "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724",
-        "2819f2259136f5e918779b13e9859aed42890626"
-      ],
+      "commits": [],
       "unknownPaths": [],
-      "breakingCommits": ["c4e06077d119f8235536cf4295393cf6d2627724"],
-      "bump": "breaking",
-      "status": "release",
-      "version": "0.37.0",
-      "effectiveBump": "minor",
-      "breaking": true,
-      "usedReservation": true,
-      "consumedIntent": false,
-      "tag": "cli-v0.37.0",
-      "notes": [
-        {
-          "sha": "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-          "subject": "feat(agent): search past sessions across sibling git worktrees",
-          "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
-          "breaking": false
-        },
-        {
-          "sha": "c4e06077d119f8235536cf4295393cf6d2627724",
-          "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
-          "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
-          "breaking": true
-        },
-        {
-          "sha": "2819f2259136f5e918779b13e9859aed42890626",
-          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
-          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
-          "breaking": false
-        }
-      ]
+      "breakingCommits": [],
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.28.0",
-      "baselineRef": "sdk-v0.28.0",
-      "reserved": "0.28.0",
-      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
+      "published": "0.28.1",
+      "baselineRef": "sdk-v0.28.1",
+      "reserved": "0.28.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.28.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.28.1",
-      "notes": [
-        {
-          "sha": "2819f2259136f5e918779b13e9859aed42890626",
-          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
-          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.24.0",
-      "baselineRef": "assistant-v0.24.0",
-      "reserved": "0.24.0",
-      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
+      "published": "0.24.1",
+      "baselineRef": "assistant-v0.24.1",
+      "reserved": "0.24.1",
+      "commits": ["5275472d81395cb2333fe368fa7e2cdf16afce19"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.24.1",
+      "version": "0.24.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.24.1",
+      "tag": "assistant-v0.24.2",
       "notes": [
         {
-          "sha": "2819f2259136f5e918779b13e9859aed42890626",
-          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
-          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
+          "sha": "5275472d81395cb2333fe368fa7e2cdf16afce19",
+          "subject": "fix(server): raise Inbox entries for Assistant chats waiting on the owner",
+          "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "1375d07f4d54533a1126115a8d58620ab0831636": {
+    "5275472d81395cb2333fe368fa7e2cdf16afce19": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Question cards in the browser gateway now disappear once the question has been answered on another surface such as VS Code, instead of staying visible until the next question.",
+      "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
       "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "990ccb71cd3fb52137b5822494781f7a8480d128": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Yes/No choice card detection now uses only the turn's final message (summary or last text block) and ignores quoted question marks, avoiding bogus cards from mid-turn narration.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "9d7bcacf33737f581333bd0a96854bf40ffbcb09": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "When the agent finishes a turn waiting for the user and ends with a direct yes/no question, the chat now shows a Yes/No choice card; \"A or B\" questions are excluded.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "364175354dab1b442032a2b0d736263d4c4cd4a4": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "23ff34dfa6f0822d84f54377058f097d6eba3881": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2b691a8919ec21e913d91c5669ca93827c7363ff": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Updates the backup witness container image to restic rest-server 0.14.0, pinned by digest, with no changes to flags, data layout or API.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c4e06077d119f8235536cf4295393cf6d2627724": {
-      "bump": "minor",
-      "breakingUnits": ["assistant", "cli", "sdk"],
-      "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2819f2259136f5e918779b13e9859aed42890626": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
-      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

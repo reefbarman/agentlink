@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.66.2
+
 - AgentLink Assistant: a chat waiting for you now reaches your Inbox, so the Assistant tab badge, desktop notifications and phone pushes tell you. A chat waiting on an approval card raises "needs your approval", and one that finished its reply raises "replied". Opening the chat, or watching it in a window that is in front, reads them, and a chat's push waits 30 seconds so it is skipped when you were already looking.
 
 ## 1.66.1
