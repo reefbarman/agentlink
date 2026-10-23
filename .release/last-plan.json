@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c4e06077d119f8235536cf4295393cf6d2627724",
-  "createdAt": "2026-10-23T01:24:53.651Z",
+  "sourceSha": "2819f2259136f5e918779b13e9859aed42890626",
+  "createdAt": "2026-10-23T02:23:50.128Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,67 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.65.1",
-      "baselineRef": "v1.65.1",
-      "reserved": "1.65.1",
-      "commits": [
-        "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724"
-      ],
+      "published": "1.66.0",
+      "baselineRef": "v1.66.0",
+      "reserved": "1.66.0",
+      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.66.0",
-      "effectiveBump": "minor",
+      "version": "1.66.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.66.0",
+      "tag": "v1.66.1",
       "notes": [
         {
-          "sha": "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-          "subject": "feat(agent): search past sessions across sibling git worktrees",
-          "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
-          "breaking": false
-        },
-        {
-          "sha": "c4e06077d119f8235536cf4295393cf6d2627724",
-          "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
-          "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
+          "sha": "2819f2259136f5e918779b13e9859aed42890626",
+          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
+          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.51.1",
-      "baselineRef": "desktop-v0.51.1",
-      "reserved": "0.51.1",
-      "commits": [
-        "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724"
-      ],
+      "published": "0.52.0",
+      "baselineRef": "desktop-v0.52.0",
+      "reserved": "0.52.0",
+      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.52.0",
-      "effectiveBump": "minor",
+      "version": "0.52.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.52.0",
+      "tag": "desktop-v0.52.1",
       "notes": [
         {
-          "sha": "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-          "subject": "feat(agent): search past sessions across sibling git worktrees",
-          "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
-          "breaking": false
-        },
-        {
-          "sha": "c4e06077d119f8235536cf4295393cf6d2627724",
-          "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
-          "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
+          "sha": "2819f2259136f5e918779b13e9859aed42890626",
+          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
+          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
           "breaking": false
         }
       ]
@@ -78,10 +60,11 @@
     "cli": {
       "published": "0.36.0",
       "baselineRef": "cli-v0.36.0",
-      "reserved": "0.36.0",
+      "reserved": "0.37.0",
       "commits": [
         "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724"
+        "c4e06077d119f8235536cf4295393cf6d2627724",
+        "2819f2259136f5e918779b13e9859aed42890626"
       ],
       "unknownPaths": [],
       "breakingCommits": ["c4e06077d119f8235536cf4295393cf6d2627724"],
@@ -90,7 +73,7 @@
       "version": "0.37.0",
       "effectiveBump": "minor",
       "breaking": true,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "cli-v0.37.0",
       "notes": [
@@ -105,72 +88,60 @@
           "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
           "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
           "breaking": true
+        },
+        {
+          "sha": "2819f2259136f5e918779b13e9859aed42890626",
+          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
+          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
+          "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.27.0",
-      "baselineRef": "sdk-v0.27.0",
-      "reserved": "0.27.0",
-      "commits": [
-        "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724"
-      ],
+      "published": "0.28.0",
+      "baselineRef": "sdk-v0.28.0",
+      "reserved": "0.28.0",
+      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
       "unknownPaths": [],
-      "breakingCommits": ["c4e06077d119f8235536cf4295393cf6d2627724"],
-      "bump": "breaking",
+      "breakingCommits": [],
+      "bump": "patch",
       "status": "release",
-      "version": "0.28.0",
-      "effectiveBump": "minor",
-      "breaking": true,
+      "version": "0.28.1",
+      "effectiveBump": "patch",
+      "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.28.0",
+      "tag": "sdk-v0.28.1",
       "notes": [
         {
-          "sha": "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-          "subject": "feat(agent): search past sessions across sibling git worktrees",
-          "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
+          "sha": "2819f2259136f5e918779b13e9859aed42890626",
+          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
+          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
           "breaking": false
-        },
-        {
-          "sha": "c4e06077d119f8235536cf4295393cf6d2627724",
-          "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
-          "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
-          "breaking": true
         }
       ]
     },
     "assistant": {
-      "published": "0.23.1",
-      "baselineRef": "assistant-v0.23.1",
-      "reserved": "0.23.1",
-      "commits": [
-        "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-        "c4e06077d119f8235536cf4295393cf6d2627724"
-      ],
+      "published": "0.24.0",
+      "baselineRef": "assistant-v0.24.0",
+      "reserved": "0.24.0",
+      "commits": ["2819f2259136f5e918779b13e9859aed42890626"],
       "unknownPaths": [],
-      "breakingCommits": ["c4e06077d119f8235536cf4295393cf6d2627724"],
-      "bump": "breaking",
+      "breakingCommits": [],
+      "bump": "patch",
       "status": "release",
-      "version": "0.24.0",
-      "effectiveBump": "minor",
-      "breaking": true,
+      "version": "0.24.1",
+      "effectiveBump": "patch",
+      "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.24.0",
+      "tag": "assistant-v0.24.1",
       "notes": [
         {
-          "sha": "4a99b9b39e9cfae3227f7a4d1cfa87562d1fcded",
-          "subject": "feat(agent): search past sessions across sibling git worktrees",
-          "summary": "search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.",
+          "sha": "2819f2259136f5e918779b13e9859aed42890626",
+          "subject": "refactor(sandbox): move portable sandbox modules into @agentlink/sandbox",
+          "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
           "breaking": false
-        },
-        {
-          "sha": "c4e06077d119f8235536cf4295393cf6d2627724",
-          "subject": "feat(sdk): give the CLI and Assistant read_file's context view",
-          "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
-          "breaking": true
         }
       ]
     }
@@ -237,6 +208,14 @@
       "breakingUnits": ["assistant", "cli", "sdk"],
       "summary": "CLI and Assistant workspace-host sessions now use read_file with view \"context\" for first-pass file context, replacing the get_context tool, with Git status, hashes, dedupe, long-line paging, symbols, diagnostics and JSONC redaction.",
       "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2819f2259136f5e918779b13e9859aed42890626": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.",
+      "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

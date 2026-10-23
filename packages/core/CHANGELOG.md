@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.28.1 — 2026-10-23
+
+- Moves portable sandbox modules into a new private @agentlink/sandbox workspace package that joins the SDK release unit, with old paths re-exporting it so existing behavior is unchanged.
+
 ## 0.28.0 — 2026-10-23
 
 - search_workspace_sessions gains an opt-in include_worktrees flag that also searches saved sessions from sibling git worktrees, with origin labels and a read-only reader that never modifies those histories.
