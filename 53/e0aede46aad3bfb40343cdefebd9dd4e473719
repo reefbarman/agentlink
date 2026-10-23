@@ -1,0 +1,95 @@
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 4309-4311,4345-4347
+  s_2b8bb21f78e32a::t_31e68aca7f76bb 4312
+src/terminal/sandbox/linuxSandboxHostCheck.ts
+  h_e08a86bb3a33a2 1-89
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 42-44,64,68,164,513-514,566-567,592-594,736-738
+  s_2b8bb21f78e32a::t_19a1e2c1926dd9 565,568
+packages/sandbox/src/SandboxBehaviorAttestationService.test.ts
+  h_e08a86bb3a33a2 28,470-562
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_e08a86bb3a33a2 406
+packages/sandbox/src/sandboxNodeRuntime.test.ts
+  h_e08a86bb3a33a2 67,72-98,132,139,191
+src/terminal/sandbox/linuxSandboxHostCheck.test.ts
+  h_e08a86bb3a33a2 1-118
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 176-177
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1536,2255
+CHANGELOG.md
+  h_e08a86bb3a33a2 8,10
+packages/sandbox/README.md
+  h_e08a86bb3a33a2 16,20
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 191-243
+src/terminal/sandbox/ProductionSandboxBehaviorProbe.test.ts
+  h_e08a86bb3a33a2 162-175,212-235,237-268,275-282,284-351
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_e08a86bb3a33a2 78,99,102-109,450-452,870,895,905-906
+  s_2b8bb21f78e32a::t_b7b48b4c8b3832 77,449
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_e08a86bb3a33a2 260-262
+  s_2b8bb21f78e32a::t_6ef0b7baecbb30 259
+src/extension.ts
+  h_e08a86bb3a33a2 266-268,584-592,1120-1132,1156,1167,1181,1203-1205,1207,1255-1257
+  s_2b8bb21f78e32a::t_45351b1e1442d2 1189,1192
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 200,202,204-221
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  h_e08a86bb3a33a2 86-87,115,118,132-135,168,170-173,362,414,416,833-859,863-878,881,885-887,896,899
+  s_2b8bb21f78e32a::t_07288cb3a3da03 131,136,879-880,882-884
+packages/sandbox/src/SandboxBehaviorAttestationService.ts
+  h_e08a86bb3a33a2 79-94,108,110-111,115,121-127,137-140,146-147,344-346,348,394,460-462,701-702
+  s_2b8bb21f78e32a::t_6c954f7ec09ed4 109,128-136,141-145,458-459,463,700,703
+scripts/package-sandbox-runtime.mjs
+  h_e08a86bb3a33a2 77-78
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 7922,7925-7927,7969,7983-7989,11888,11893-11899,11917-11924
+  s_2b8bb21f78e32a::t_52ff84578d218b 7923-7924
+packages/protocol/src/terminalSecurity.ts
+  h_e08a86bb3a33a2 153
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 7
+  s_2b8bb21f78e32a::t_1365997a5921af 6
+packages/sandbox/src/sandboxNodeRuntime.ts
+  h_e08a86bb3a33a2 43,109,114,116,145,209,211,247,258
+src/terminal/sandbox/ProductionSandboxBehaviorProbe.ts
+  h_e08a86bb3a33a2 2,4,6,11,22-27,56-59,68-77,80-81,144-173,207-208,210-213,546-548,569-570,658-686,695-697,715,719,721-723,777-779,797,902,906,962-979,998,1000-1001,1004,1008-1014,1018-1135
+  s_d292a813407ea5::t_18936dd83c741b 82,687-694,698-714,718,771,1017
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.ts
+  h_e08a86bb3a33a2 95,97-98
+  s_2b8bb21f78e32a::t_5a3e35ae3db309 96
+resources/builtin-skills/documentation/references/release-notes.md
+  s_2b8bb21f78e32a::t_666f2c39690cc4 8,10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2b8bb21f78e32a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24b66e41-2537-42c5-824c-69bfcf65bb5f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_d292a813407ea5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f365c71-3937-4349-a32b-b9060738aafd",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
