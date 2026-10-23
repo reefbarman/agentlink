@@ -9,8 +9,10 @@ import {
   findNestedRepository,
   type AskAgentCommandApprovalDecision,
   type AskAgentCommandApprovalProposal,
+  type AskAgentEditApprovalProposal,
   type AskAgentNetworkApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pathToFileURL } from "node:url";
@@ -104,6 +106,7 @@ describe("AskAgentSandboxWorkspace", () => {
       "execute_command",
       "get_command_output",
       "write_file",
+      "apply_diff",
       "present_files",
     ]);
     const execute = ASK_AGENT_SANDBOX_TOOLS[0]!;
@@ -716,6 +719,176 @@ describe("AskAgentSandboxWorkspace", () => {
         input: { command: "true", sandbox_permissions: "root" },
       });
       expect(invalid.content).toContain("sandbox_permissions must be one of");
+    });
+
+    it("edits files in a granted folder only after approval, against the read baseline", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const target = path.join(project, "notes.txt");
+      await fs.writeFile(target, "alpha\nbeta\n");
+      const { workspace } = await localWorkspace(root);
+      const hash = createHash("sha256").update("alpha\nbeta\n").digest("hex");
+      const proposals: AskAgentEditApprovalProposal[] = [];
+      const approve =
+        (decision: AskAgentCommandApprovalDecision) =>
+        async (proposal: AskAgentEditApprovalProposal) => {
+          proposals.push(proposal);
+          return decision;
+        };
+      const edit = (
+        toolName: "write_file" | "apply_diff",
+        input: Record<string, unknown>,
+        decision: AskAgentCommandApprovalDecision = { decision: "run" },
+      ) =>
+        workspace.execute({
+          sessionId: "chat-edit",
+          turnId: "turn-1",
+          toolName,
+          input,
+          commandRoots: [project],
+          requestEditApproval: approve(decision),
+        });
+
+      const declined = await edit(
+        "apply_diff",
+        {
+          path: target,
+          diff: "<<<<<<< SEARCH\nbeta\n======= DIVIDER =======\nBETA\n>>>>>>> REPLACE",
+          expectedContentHash: hash,
+        },
+        { decision: "reject", reason: "no" },
+      );
+      expect(declined).toMatchObject({
+        content: expect.stringContaining("rejected_by_user"),
+      });
+      expect(await fs.readFile(target, "utf8")).toBe("alpha\nbeta\n");
+      expect(proposals[0]).toMatchObject({
+        sessionId: "chat-edit",
+        toolName: "apply_diff",
+        path: target,
+        root: project,
+        operation: "modified",
+        protected: false,
+      });
+      expect(proposals[0]!.diff).toContain("+BETA");
+
+      const applied = await edit("apply_diff", {
+        path: target,
+        diff: "<<<<<<< SEARCH\nbeta\n======= DIVIDER =======\nBETA\n>>>>>>> REPLACE",
+        expectedContentHash: hash,
+      });
+      expect(applied.isError).toBe(false);
+      expect(await fs.readFile(target, "utf8")).toBe("alpha\nBETA\n");
+
+      // A stale baseline is refused before any card.
+      const stale = await edit("write_file", {
+        path: target,
+        content: "overwrite",
+        expectedContentHash: hash,
+      });
+      expect(stale.isError).toBe(true);
+      expect(proposals).toHaveLength(2);
+
+      const created = await edit("write_file", {
+        path: path.join(project, "new.txt"),
+        content: "new",
+        expectedAbsent: true,
+      });
+      expect(created.isError).toBe(false);
+      expect(proposals[2]).toMatchObject({ operation: "created" });
+      expect(await fs.readFile(path.join(project, "new.txt"), "utf8")).toBe(
+        "new",
+      );
+    });
+
+    it("withdraws an open edit card when the folder's grant is revoked", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      let cardSignal: AbortSignal | undefined;
+      let opened!: () => void;
+      const cardOpen = new Promise<void>((resolve) => {
+        opened = resolve;
+      });
+      const edit = workspace.execute({
+        sessionId: "chat-edit",
+        turnId: "turn-1",
+        toolName: "write_file",
+        input: {
+          path: path.join(project, "late.txt"),
+          content: "late",
+          expectedAbsent: true,
+        },
+        commandRoots: [project],
+        requestEditApproval: (proposal) => {
+          cardSignal = proposal.signal;
+          opened();
+          // Approves only after the revoke, like a slow click.
+          return new Promise((resolve) =>
+            proposal.signal.addEventListener("abort", () =>
+              resolve({ decision: "run" }),
+            ),
+          );
+        },
+      });
+      await cardOpen;
+      await workspace.revokeCommandRoot(project);
+      const result = await edit;
+      expect(cardSignal?.aborted).toBe(true);
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("cancelled");
+      await expect(fs.stat(path.join(project, "late.txt"))).rejects.toThrow();
+    });
+
+    it("marks instruction files protected and refuses Git metadata and other folders", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const other = await temporaryDirectory("al-ask-other-");
+      await fs.mkdir(path.join(project, ".git"));
+      const { workspace } = await localWorkspace(root);
+      const proposals: AskAgentEditApprovalProposal[] = [];
+      const edit = (filePath: string) =>
+        workspace.execute({
+          sessionId: "chat-edit",
+          turnId: "turn-1",
+          toolName: "write_file",
+          input: { path: filePath, content: "x", expectedAbsent: true },
+          commandRoots: [project],
+          requestEditApproval: async (proposal) => {
+            proposals.push(proposal);
+            return { decision: "reject" };
+          },
+        });
+
+      await edit(path.join(project, "AGENTS.md"));
+      expect(proposals[0]).toMatchObject({ protected: true });
+      const git = await edit(path.join(project, ".git", "config"));
+      expect(git.isError).toBe(true);
+      const outside = await edit(path.join(other, "x.txt"));
+      expect(outside.content).toContain("path_not_granted");
+      // Without an approval channel nothing is written.
+      const unattended = await workspace.execute({
+        sessionId: "chat-edit",
+        turnId: "turn-1",
+        toolName: "write_file",
+        input: {
+          path: path.join(project, "y.txt"),
+          content: "y",
+          expectedAbsent: true,
+        },
+        commandRoots: [project],
+      });
+      expect(unattended.content).toContain("edit_requires_approval");
+      expect(proposals).toHaveLength(1);
+      await expect(fs.stat(path.join(project, "y.txt"))).rejects.toThrow();
+      // Scratch-folder writes keep their simple form.
+      const scratch = await workspace.execute({
+        sessionId: "chat-edit",
+        turnId: "turn-1",
+        toolName: "write_file",
+        input: { path: "a.txt", content: "a", expectedAbsent: true },
+      });
+      expect(scratch.content).toContain("only for absolute paths");
     });
 
     it("finds repositories nested in a folder", async () => {

@@ -10166,7 +10166,9 @@ export function BrowserGatewayApp({
                         )
                       }
                     />
-                    <span>Also allow commands in this folder (asks first)</span>
+                    <span>
+                      Also allow commands and edits in this folder (asks first)
+                    </span>
                   </label>
                   <div class="ask-agent-memory-actions">
                     <button

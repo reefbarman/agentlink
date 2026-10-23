@@ -1,5 +1,6 @@
 /** @vitest-environment node */
 
+import { createHash } from "crypto";
 import * as fs from "fs/promises";
 import { unwatchFile } from "fs";
 import * as http from "http";
@@ -12004,6 +12005,243 @@ describe("BrowserGatewayHelper proxy routing", () => {
       await expect(
         fs.stat(path.join(project, "fetched.txt")),
       ).resolves.toBeTruthy();
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("edits granted-folder files on a diff card, with instruction files approved only on this machine", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const notes = path.join(project, "notes.txt");
+    await fs.writeFile(notes, "alpha\nbeta\n");
+    const hash = createHash("sha256").update("alpha\nbeta\n").digest("hex");
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: () =>
+        workspaceHost.createLocalWorkspaceExecutionBackend(),
+    });
+    const calls: Array<{ name: string; input: Record<string, unknown> }> = [
+      { name: "read_file", input: { path: notes } },
+      {
+        name: "apply_diff",
+        input: {
+          path: notes,
+          diff: "<<<<<<< SEARCH\nbeta\n======= DIVIDER =======\nBETA\n>>>>>>> REPLACE",
+          expectedContentHash: hash,
+        },
+      },
+      {
+        name: "write_file",
+        input: {
+          path: path.join(project, "AGENTS.md"),
+          content: "be nice",
+          expectedAbsent: true,
+        },
+      },
+      {
+        name: "write_file",
+        input: {
+          path: path.join(project, "auto.txt"),
+          content: "auto",
+          expectedAbsent: true,
+        },
+      },
+    ];
+    const toolResults: string[] = [];
+    let call = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      if (toolMessages?.length) {
+        toolResults.push(JSON.stringify(toolMessages));
+        return { text: "Done.", toolCalls: [] };
+      }
+      call += 1;
+      const next = calls.shift()!;
+      return {
+        text: "",
+        toolCalls: [{ id: `edit-${call}`, name: next.name, input: next.input }],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+    const fromLan = async (handler: string, body: unknown) => {
+      const written: { status?: number; body?: string } = {};
+      const req = Object.assign(Readable.from([JSON.stringify(body)]), {
+        socket: { remoteAddress: "192.168.50.20" },
+        headers: { "content-type": "application/json" },
+      });
+      await (
+        harness.helper as unknown as Record<
+          string,
+          (req: unknown, res: unknown) => Promise<void>
+        >
+      )[handler]!.call(harness.helper, req, {
+        writeHead: (status: number) => {
+          written.status = status;
+        },
+        end: (text: string) => {
+          written.body = text;
+        },
+      });
+      return written;
+    };
+    const pendingApproval = async () => {
+      let approval: Record<string, unknown> | null = null;
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval?.kind).toBe("write");
+        approval = body.snapshot.ui.approval;
+      });
+      return approval!;
+    };
+
+    try {
+      expect(
+        (
+          await post("/api/ask-agent/read-grants", {
+            path: project,
+            confirm: true,
+            access: "commands",
+          })
+        ).ok,
+      ).toBe(true);
+
+      // read_file reports the baseline edits need.
+      expect((await post("/api/ask-agent/send", { text: "Read" })).ok).toBe(
+        true,
+      );
+      expect(toolResults[0]).toContain(hash);
+
+      // An ordinary edit shows its diff and any signed-in client can apply it.
+      const edited = post("/api/ask-agent/send", { text: "Edit" });
+      const card = await pendingApproval();
+      expect(card).toMatchObject({
+        filePath: notes,
+        writeOperation: "modify",
+      });
+      expect(String(card.detail)).toContain("+BETA");
+      const lanApply = await fromLan("handleAskAgentApprovalRequest", {
+        id: card.id,
+        decision: "accept",
+      });
+      expect(lanApply.status).toBe(200);
+      expect((await edited).ok).toBe(true);
+      expect(await fs.readFile(notes, "utf8")).toBe("alpha\nBETA\n");
+
+      // Instruction files always ask, even with Approve for Me on, and
+      // only this machine can approve them.
+      expect(
+        (await post("/api/ask-agent/command-policy", { approveForMe: true }))
+          .ok,
+      ).toBe(true);
+      const instructions = post("/api/ask-agent/send", { text: "Instruct" });
+      const protectedCard = await pendingApproval();
+      expect(String(protectedCard.detail)).toContain(
+        "Only the computer running AgentLink can approve",
+      );
+      const lanProtected = await fromLan("handleAskAgentApprovalRequest", {
+        id: protectedCard.id,
+        decision: "accept",
+      });
+      expect(lanProtected.status).toBe(403);
+      expect(lanProtected.body).toContain(
+        "protected_edit_requires_this_machine",
+      );
+      const dataPlane = harness.helper as unknown as {
+        executeAskAgentApprovalCommand(params: {
+          requestId: string;
+          decision: "approve" | "reject";
+        }): Promise<void>;
+      };
+      await expect(
+        dataPlane.executeAskAgentApprovalCommand({
+          requestId: String(protectedCard.id),
+          decision: "approve",
+        }),
+      ).rejects.toThrow("protected_edit_requires_this_machine");
+      await expect(fs.stat(path.join(project, "AGENTS.md"))).rejects.toThrow();
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: protectedCard.id,
+            decision: "accept",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await instructions).ok).toBe(true);
+      expect(await fs.readFile(path.join(project, "AGENTS.md"), "utf8")).toBe(
+        "be nice",
+      );
+
+      // Approve for Me applies an ordinary new file without a card.
+      expect((await post("/api/ask-agent/send", { text: "Auto" })).ok).toBe(
+        true,
+      );
+      expect(await fs.readFile(path.join(project, "auto.txt"), "utf8")).toBe(
+        "auto",
+      );
+
+      // Settings files with hidden secrets, and diffs too long to show in
+      // full, are refused even with Approve for Me on.
+      const settings = path.join(project, "settings.json");
+      await fs.writeFile(settings, '{ "access_token": "real-secret" }');
+      const decide = (
+        harness.helper as unknown as {
+          requestAskAgentEditApproval(proposal: unknown): Promise<{
+            decision: string;
+            reason?: string;
+          }>;
+        }
+      ).requestAskAgentEditApproval.bind(harness.helper);
+      const proposal = {
+        sessionId: "s",
+        toolName: "write_file",
+        root: project,
+        operation: "modified",
+        protected: false,
+        signal: new AbortController().signal,
+      };
+      const secrets = await decide({
+        ...proposal,
+        path: settings,
+        diff: "-real-secret\n+[REDACTED]",
+      });
+      expect(secrets).toMatchObject({ decision: "deny" });
+      expect(secrets.reason).toContain("edit_refused_secrets");
+      expect(secrets.reason).not.toContain("real-secret");
+      const large = await decide({
+        ...proposal,
+        path: path.join(project, "AGENTS.md"),
+        protected: true,
+        diff: "+x".repeat(60_000),
+      });
+      expect(large).toMatchObject({ decision: "deny" });
+      expect(large.reason).toContain("edit_too_large_to_review");
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(project, { recursive: true, force: true });

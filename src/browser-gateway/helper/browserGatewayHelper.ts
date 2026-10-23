@@ -17,7 +17,7 @@ import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { PassThrough, Writable } from "stream";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { z } from "zod";
 import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
 import {
@@ -305,6 +305,7 @@ import {
   findNestedRepository,
   type AskAgentCommandApprovalDecision,
   type AskAgentCommandApprovalProposal,
+  type AskAgentEditApprovalProposal,
   type AskAgentNetworkApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
 import { isProviderSafeToolName } from "../../core/tools/providerToolNames.js";
@@ -479,6 +480,13 @@ export interface HelperRuntimeOptions {
 const ASK_AGENT_COMMAND_APPROVAL_PREFIX = "ask-agent-command-";
 /** Approval ids for public destinations those commands connect to. */
 const ASK_AGENT_NETWORK_APPROVAL_PREFIX = "ask-agent-network-";
+/** Approval ids for file changes in folders granted for commands. */
+const ASK_AGENT_EDIT_APPROVAL_PREFIX = "ask-agent-edit-";
+/**
+ * Longest diff an edit card shows, in characters. Longer edits are refused
+ * rather than approved from a partial diff.
+ */
+const ASK_AGENT_EDIT_DIFF_MAX_CHARS = 100_000;
 
 /**
  * Whether an HTTP request came from this computer. In-process calls (relay
@@ -1163,6 +1171,11 @@ export class BrowserGatewayHelper {
   private readonly askAgentCommandPolicy: AskAgentCommandPolicy;
   /** Network destination cards, shown one at a time. */
   private askAgentNetworkApprovals: Promise<unknown> = Promise.resolve();
+  /**
+   * Pending edit cards for agent instruction or configuration files, which
+   * only this computer can approve.
+   */
+  private readonly askAgentProtectedEditApprovals = new Set<string>();
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -2373,6 +2386,13 @@ export class BrowserGatewayHelper {
       current?.commandSandbox?.unsandboxed === true
     ) {
       throw new Error("unsandboxed_command_requires_this_machine");
+    }
+    if (
+      params.decision === "approve" &&
+      current &&
+      this.askAgentProtectedEditApprovals.has(current.id)
+    ) {
+      throw new Error("protected_edit_requires_this_machine");
     }
     // Ask Agent's own cards read their usual decision names; approving
     // from here never saves a rule.
@@ -5451,6 +5471,19 @@ export class BrowserGatewayHelper {
       }
       if (
         pendingCommand?.id === body.id &&
+        this.askAgentProtectedEditApprovals.has(pendingCommand.id) &&
+        body.decision !== "reject" &&
+        !isFromThisMachine(req)
+      ) {
+        writeJson(res, 403, {
+          error: "protected_edit_requires_this_machine",
+          message:
+            "Changes to agent instruction or configuration files can only be approved on the computer running AgentLink. From here you can only reject it.",
+        });
+        return;
+      }
+      if (
+        pendingCommand?.id === body.id &&
         pendingCommand.kind === "network" &&
         pendingCommand.id.startsWith(ASK_AGENT_NETWORK_APPROVAL_PREFIX) &&
         body.decision.startsWith("allow-") &&
@@ -6494,13 +6527,14 @@ export class BrowserGatewayHelper {
       const sandboxTools =
         completeWithToolCalls &&
         (await this.askAgentSandbox?.isAvailable()) === true;
+      const commandRoots = sandboxTools
+        ? await this.askAgentCommandRoots()
+        : [];
       const additionalInstructions =
         [
           instructionSnapshot?.prompt,
           sandboxTools ? ASK_AGENT_SANDBOX_PROMPT : undefined,
-          sandboxTools
-            ? askAgentCommandFoldersPrompt(await this.askAgentCommandRoots())
-            : undefined,
+          sandboxTools ? askAgentCommandFoldersPrompt(commandRoots) : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join("\n\n") || undefined;
@@ -6511,7 +6545,12 @@ export class BrowserGatewayHelper {
       }
       const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
         ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
-        ...(sandboxTools ? ASK_AGENT_SANDBOX_TOOLS : []),
+        // apply_diff only edits granted folders, so it needs one.
+        ...(sandboxTools
+          ? ASK_AGENT_SANDBOX_TOOLS.filter(
+              (tool) => tool.name !== "apply_diff" || commandRoots.length > 0,
+            )
+          : []),
         ...(instructionSnapshot
           ? (this.askAgentInstructions.toolDefinitions(
               instructionSnapshot,
@@ -8898,6 +8937,8 @@ export class BrowserGatewayHelper {
         this.requestAskAgentCommandApproval(proposal, signal),
       requestNetworkApproval: (proposal) =>
         this.requestAskAgentNetworkApproval(proposal, signal),
+      requestEditApproval: (proposal) =>
+        this.requestAskAgentEditApproval(proposal),
       isCommandRootGranted: async (root) =>
         (await this.askAgentCommandRoots()).includes(root),
     });
@@ -9071,6 +9112,110 @@ export class BrowserGatewayHelper {
       };
     }
     return edited ? { decision: "edit", command: edited } : { decision: "run" };
+  }
+
+  /**
+   * Decide a file change in a granted folder. Approve for Me applies it
+   * without a card, except for agent instruction and configuration files,
+   * which always ask and which only this computer can approve. Otherwise
+   * any signed-in client can apply or reject the change on a card showing
+   * its diff.
+   */
+  private async requestAskAgentEditApproval(
+    proposal: AskAgentEditApprovalProposal,
+  ): Promise<AskAgentCommandApprovalDecision> {
+    const { signal } = proposal;
+    // read_file hides secrets in these files, so the agent only saw a
+    // redacted copy. Writing it back would replace the real values, and
+    // the diff would show them on the card.
+    if (
+      proposal.operation === "modified" &&
+      isStructuredConfigPath(proposal.path)
+    ) {
+      const current = await fs
+        .readFile(proposal.path, "utf-8")
+        .catch(() => undefined);
+      if (
+        current === undefined ||
+        getStructuredSecretRedactionMetadata(
+          redactStructuredSecrets(proposal.path, current),
+        )
+      ) {
+        return {
+          decision: "deny",
+          reason:
+            "edit_refused_secrets: this settings file contains values hidden from you; ask the user to make this change",
+        };
+      }
+    }
+    const policy = await this.askAgentCommandPolicy.snapshot();
+    if (policy.approveForMe && !proposal.protected) {
+      this.logAskAgentEvent("ask-agent.edit-approval", {
+        ok: true,
+        decision: "allow",
+        by: "approve-for-me",
+      });
+      return { decision: "run" };
+    }
+    if (
+      this.askAgentMemoryProposalBridge.getPendingApproval() ||
+      this.askAgentController.getPendingApproval()
+    ) {
+      throw new Error("ask_agent_approval_pending");
+    }
+    if (proposal.diff.length > ASK_AGENT_EDIT_DIFF_MAX_CHARS) {
+      return {
+        decision: "deny",
+        reason: `edit_too_large_to_review: the change is too long to show on an approval card (over ${ASK_AGENT_EDIT_DIFF_MAX_CHARS} characters of diff); split it into smaller apply_diff edits`,
+      };
+    }
+    const diff = proposal.diff;
+    const id = `${ASK_AGENT_EDIT_APPROVAL_PREFIX}${randomUUID()}`;
+    const request: ApprovalRequest = {
+      kind: "write",
+      id,
+      filePath: proposal.path,
+      writeOperation: proposal.operation === "created" ? "create" : "modify",
+      writeChoices: [
+        {
+          label: proposal.operation === "created" ? "Create" : "Apply",
+          value: "accept",
+          isPrimary: true,
+        },
+      ],
+      detail: [
+        proposal.protected
+          ? "This is an agent instruction or configuration file. Only the computer running AgentLink can approve this change; other devices can only reject it."
+          : undefined,
+        diff,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+    if (proposal.protected) this.askAgentProtectedEditApprovals.add(id);
+    try {
+      const decision = this.askAgentController.requestApproval(request, signal);
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+      const result = await decision;
+      this.logAskAgentEvent("ask-agent.edit-approval", {
+        ok: true,
+        decision: result.decision,
+        protected: proposal.protected,
+      });
+      if (result.decision !== "accept") {
+        return {
+          decision: "reject",
+          ...(typeof result.rejectionReason === "string" &&
+          result.rejectionReason.trim()
+            ? { reason: result.rejectionReason.trim() }
+            : {}),
+        };
+      }
+      return { decision: "run" };
+    } finally {
+      this.askAgentProtectedEditApprovals.delete(id);
+    }
   }
 
   /**
@@ -9340,10 +9485,19 @@ export class BrowserGatewayHelper {
         ),
       };
     }
-    const raw = await fs.readFile(resolved.path, "utf-8");
+    const bytes = await fs.readFile(resolved.path);
+    const raw = bytes.toString("utf-8");
     const structuredRedaction = isStructuredConfigPath(resolved.path)
       ? redactStructuredSecrets(resolved.path, raw)
       : undefined;
+    // The baseline write_file and apply_diff need, for files the agent can
+    // edit. Left out when secrets were hidden, so a redacted copy is never
+    // written back over the real file.
+    const editable =
+      !getStructuredSecretRedactionMetadata(structuredRedaction) &&
+      (await this.askAgentCommandRoots()).some((root) =>
+        this.isPathInsideRoot(resolved.path, root),
+      );
     const visibleRaw = structuredRedaction?.content ?? raw;
     const offset = Math.max(
       1,
@@ -9364,6 +9518,11 @@ export class BrowserGatewayHelper {
         .map((line, index) => `${offset + index} | ${line}`)
         .join("\n")
         .slice(0, 100_000),
+      ...(editable
+        ? {
+            contentHash: createHash("sha256").update(bytes).digest("hex"),
+          }
+        : {}),
       ...(getStructuredSecretRedactionMetadata(structuredRedaction)
         ? {
             redaction:

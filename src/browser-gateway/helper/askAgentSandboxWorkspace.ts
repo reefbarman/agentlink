@@ -27,6 +27,9 @@ type WorkspaceProcessLauncher = ReturnType<
 type WorkspaceCommandTools = Awaited<
   ReturnType<WorkspaceHostModule["createWorkspaceCommandTools"]>
 >;
+type WorkspaceFileTools = ReturnType<
+  WorkspaceHostModule["createWorkspaceFileTools"]
+>;
 type WorkspaceCommandSupervisor = Awaited<
   ReturnType<WorkspaceHostModule["WorkspaceCommandSupervisor"]["create"]>
 >;
@@ -65,6 +68,7 @@ export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
   "execute_command",
   "get_command_output",
   "write_file",
+  "apply_diff",
   "present_files",
 ] as const;
 export type AskAgentSandboxToolName =
@@ -160,14 +164,40 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
     {
       name: "write_file",
       description:
-        "Create or overwrite a text file in this chat's sandboxed scratch folder. The path is relative to the scratch folder; missing parent folders are created. Cannot write anywhere else.",
+        "Create or overwrite a text file. A relative path is in this chat's sandboxed scratch folder (missing parent folders are created, no approval). An absolute path must be inside a folder the user granted for commands: then pass expectedContentHash (the contentHash read_file returned) to replace an existing file, or expectedAbsent: true to create a new one, and the change waits for the user's approval.",
       input_schema: {
         type: "object",
         properties: {
           path: { type: "string", minLength: 1 },
           content: { type: "string" },
+          expectedContentHash: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            description:
+              "Granted folders only: SHA-256 of the current file, from read_file's contentHash.",
+          },
+          expectedAbsent: {
+            type: "boolean",
+            description:
+              "Granted folders only: true to create a file that must not exist yet.",
+          },
         },
         required: ["path", "content"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "apply_diff",
+      description:
+        "Edit an existing text file inside a folder the user granted for commands, using SEARCH/REPLACE blocks (each SEARCH must match exactly once). Pass the absolute path and expectedContentHash from read_file. The change waits for the user's approval. Each block is the line <<<<<<< SEARCH, the exact old lines, the line ======= DIVIDER =======, the new lines, then the line >>>>>>> REPLACE.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string", minLength: 1 },
+          diff: { type: "string", minLength: 1 },
+          expectedContentHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        },
+        required: ["path", "diff", "expectedContentHash"],
         additionalProperties: false,
       },
     },
@@ -204,7 +234,9 @@ export function askAgentCommandFoldersPrompt(
     "The user granted these folders for commands. To run a command in one, pass its absolute path (or a folder inside it) as execute_command's cwd:",
     ...roots.map((root) => `- ${root}`),
     "",
-    "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. write_file and present_files still only work in the scratch folder.",
+    "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. present_files still only works in the scratch folder.",
+    "",
+    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path and that contentHash, or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed.",
     "",
     'When a command in a granted folder needs the internet (installing packages, downloading, git fetch), pass sandbox_permissions: "require_managed_network" with a reason; each new destination then waits for the user\'s approval. Only when the sandbox blocks something essential, pass sandbox_permissions: "require_escalated" with a reason to run it outside the sandbox with the user\'s full permissions. The user must approve that on their computer, so they may not be able to from a phone.',
   ].join("\n");
@@ -234,6 +266,31 @@ export interface AskAgentCommandApprovalProposal {
   readonly sandbox: "workspace-write" | "unsandboxed";
   /** The model's reason, when it asked for the network or to escalate. */
   readonly reason?: string;
+}
+
+/** A file change in a granted folder the user is asked to approve. */
+export interface AskAgentEditApprovalProposal {
+  readonly sessionId: string;
+  readonly toolName: "write_file" | "apply_diff";
+  /** Absolute path of the file. */
+  readonly path: string;
+  /** The granted folder the file is in. */
+  readonly root: string;
+  readonly operation: "created" | "modified";
+  /** Unified diff of the change. */
+  readonly diff: string;
+  /**
+   * An agent instruction or configuration file (for example AGENTS.md or
+   * `.agentlink/`). Approve for Me never applies, and only this computer
+   * can approve it.
+   */
+  readonly protected: boolean;
+  readonly protectionReason?: string;
+  /**
+   * Aborted when the turn stops or the folder's grant is revoked, so an
+   * open card is withdrawn.
+   */
+  readonly signal: AbortSignal;
 }
 
 /** A public destination a granted-folder command is connecting to. */
@@ -425,6 +482,43 @@ const MODEL = {
 const HELPER_ONLY_ENVIRONMENT =
   /^(ELECTRON_|NODE_PATH$|NODE_OPTIONS$|AGENTLINK_)/;
 
+/**
+ * Canonical absolute path for a file that may not exist yet: the nearest
+ * existing ancestor is resolved through symlinks and the rest appended.
+ */
+async function canonicalTarget(value: unknown): Promise<string | undefined> {
+  if (typeof value !== "string" || !path.isAbsolute(value.trim())) {
+    return undefined;
+  }
+  let existing = path.resolve(value.trim());
+  const rest: string[] = [];
+  for (;;) {
+    const real = await fs.realpath(existing).catch(() => undefined);
+    if (real) return path.join(real, ...rest.reverse());
+    const parent = path.dirname(existing);
+    if (parent === existing) return undefined;
+    rest.push(path.basename(existing));
+    existing = parent;
+  }
+}
+
+function isFileApprovalDisplay(value: unknown): value is {
+  readonly kind: "file_write";
+  readonly operation: "created" | "modified";
+  readonly diff: string;
+  readonly protected: boolean;
+  readonly protectionReason?: string;
+} {
+  if (!value || typeof value !== "object") return false;
+  const display = value as Record<string, unknown>;
+  return (
+    display.kind === "file_write" &&
+    (display.operation === "created" || display.operation === "modified") &&
+    typeof display.diff === "string" &&
+    typeof display.protected === "boolean"
+  );
+}
+
 /** Forget an approved launch mode and withdraw its open network requests. */
 function endLaunch(chat: ChatSandbox, launchId: string): void {
   chat.launchModes.get(launchId)?.ended.abort();
@@ -456,6 +550,10 @@ interface SandboxToolRequest {
   /** Ask the user about a command in a granted folder. */
   readonly requestApproval?: (
     proposal: AskAgentCommandApprovalProposal,
+  ) => Promise<AskAgentCommandApprovalDecision>;
+  /** Ask the user about a file change in a granted folder. */
+  readonly requestEditApproval?: (
+    proposal: AskAgentEditApprovalProposal,
   ) => Promise<AskAgentCommandApprovalDecision>;
   /** Ask the user about a public destination an approved command connects to. */
   readonly requestNetworkApproval?: (
@@ -539,7 +637,16 @@ export class AskAgentSandboxWorkspace {
   private readonly chats = new Map<string, Promise<ChatSandbox>>();
   /** Clock value at each folder's latest command-grant revocation. */
   private readonly commandRootRevocations = new Map<string, number>();
+  /** File tools per granted folder, dropped when the grant is revoked. */
+  private readonly grantedFileTools = new Map<
+    string,
+    Promise<WorkspaceFileTools>
+  >();
   private revocationClock = 0;
+  /** Open edit cards per granted folder, withdrawn when it is revoked. */
+  private readonly pendingEdits = new Map<string, Set<AbortController>>();
+  /** Edits being written per granted folder; revoking waits for them. */
+  private readonly editCommits = new Map<string, Set<Promise<unknown>>>();
   private runtime: SandboxRuntimeProvider | undefined;
   private workspaceHost: Promise<WorkspaceHostModule> | undefined;
   private digestSecrets: Map<string, string> | undefined;
@@ -695,7 +802,23 @@ export class AskAgentSandboxWorkspace {
     try {
       switch (request.toolName) {
         case "write_file":
+          if (
+            typeof request.input.path === "string" &&
+            path.isAbsolute(request.input.path.trim())
+          ) {
+            return await this.editGrantedFile(request);
+          }
+          if (
+            request.input.expectedContentHash !== undefined ||
+            request.input.expectedAbsent !== undefined
+          ) {
+            return errorResult(
+              "expectedContentHash and expectedAbsent are only for absolute paths in folders granted for commands",
+            );
+          }
           return await this.writeFile(request.sessionId, request.input);
+        case "apply_diff":
+          return await this.editGrantedFile(request);
         case "present_files":
           return await this.presentFiles(request.sessionId, request.input);
         default:
@@ -714,6 +837,11 @@ export class AskAgentSandboxWorkspace {
     // Recorded before any await, so a call that began earlier with a stale
     // list of roots cannot recreate this folder's launcher.
     this.commandRootRevocations.set(root, ++this.revocationClock);
+    this.grantedFileTools.delete(root);
+    for (const controller of this.pendingEdits.get(root) ?? []) {
+      controller.abort();
+    }
+    await Promise.allSettled(this.editCommits.get(root) ?? []);
     await Promise.all(
       [...this.chats.values()].map(async (pending) => {
         const chat = await pending.catch(() => undefined);
@@ -1562,6 +1690,229 @@ export class AskAgentSandboxWorkspace {
     });
     if (!validation.ok) return { result: errorResult(validation.reason) };
     return { input: { ...prepared } };
+  }
+
+  /**
+   * `write_file` with an absolute path, or `apply_diff`, in a folder granted
+   * for commands. Uses the workspace file tools (baseline hash, diff,
+   * protected paths, re-validation before the write) and asks the user.
+   */
+  private async editGrantedFile(
+    request: SandboxToolRequest,
+  ): Promise<AskAgentSandboxToolResult> {
+    const toolName = request.toolName as "write_file" | "apply_diff";
+    const target = await canonicalTarget(request.input.path);
+    const root = target
+      ? (request.commandRoots ?? [])
+          .filter((candidate) => isInside(target, candidate))
+          .sort((left, right) => right.length - left.length)[0]
+      : undefined;
+    if (!target || !root || target === root) {
+      return errorResult(
+        "path_not_granted: edits work in the scratch folder (relative paths) or at an absolute path inside a folder the user granted for commands",
+      );
+    }
+    if (!request.requestEditApproval) {
+      return errorResult("edit_requires_approval");
+    }
+    const startedAt = this.revocationClock;
+    const tools = await this.fileToolsFor(root);
+    const discovery = {
+      principal: PRINCIPAL,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      input: { text: "", attachments: undefined },
+    };
+    const tool = (await tools.resolveTools(discovery)).find(
+      (candidate) => candidate.definition.name === toolName,
+    );
+    if (!tool) return errorResult(`unknown_tool:${toolName}`);
+    const validation = tool.validate({
+      ...request.input,
+      path: path.relative(root, target),
+    });
+    if (!validation.valid) {
+      return errorResult(
+        `invalid_input: ${validation.issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")}`,
+      );
+    }
+    const authorization = await tools.authorizeToolCall({
+      ...discovery,
+      model: MODEL,
+      toolCallId: request.turnId,
+      toolName,
+      input: validation.input,
+      effect: "write",
+    });
+    if (authorization.decision === "deny") {
+      return errorResult(authorization.reason ?? "edit_denied");
+    }
+    if (authorization.decision === "require_user") {
+      const display = authorization.displayContent;
+      if (!isFileApprovalDisplay(display)) {
+        return errorResult("edit_requires_approval");
+      }
+      let decision: AskAgentCommandApprovalDecision;
+      const card = new AbortController();
+      const abortCard = () => card.abort();
+      request.signal?.addEventListener("abort", abortCard, { once: true });
+      if (request.signal?.aborted) card.abort();
+      const pendingInRoot = this.pendingEdits.get(root) ?? new Set();
+      pendingInRoot.add(card);
+      this.pendingEdits.set(root, pendingInRoot);
+      try {
+        decision = await request.requestEditApproval({
+          sessionId: request.sessionId,
+          toolName,
+          path: target,
+          root,
+          operation: display.operation,
+          diff: display.diff,
+          protected: display.protected,
+          ...(display.protectionReason
+            ? { protectionReason: display.protectionReason }
+            : {}),
+          signal: card.signal,
+        });
+        if (card.signal.aborted) throw new Error("edit_cancelled");
+      } catch (error) {
+        const pending = errorMessage(error) === "ask_agent_approval_pending";
+        return {
+          content: JSON.stringify({
+            status: pending ? "approval_pending" : "cancelled",
+            error: pending
+              ? "Another approval is already pending"
+              : "Edit approval was cancelled",
+          }),
+          isError: true,
+        };
+      } finally {
+        request.signal?.removeEventListener("abort", abortCard);
+        pendingInRoot.delete(card);
+        if (pendingInRoot.size === 0) this.pendingEdits.delete(root);
+      }
+      if (decision.decision === "deny") {
+        return {
+          content: JSON.stringify({
+            status: "forbidden",
+            error: decision.reason,
+          }),
+          isError: true,
+        };
+      }
+      if (decision.decision !== "run") {
+        return {
+          content: JSON.stringify({
+            status: "rejected_by_user",
+            error: "The user declined this change",
+            ...(decision.decision === "reject" && decision.reason
+              ? { reason: decision.reason }
+              : {}),
+          }),
+          isError: true,
+        };
+      }
+      // The file or policy may have changed while the card was open.
+      const pending = await tools.validatePendingWrite({
+        principal: PRINCIPAL,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        toolName,
+        input: validation.input,
+        displayContent: display,
+      });
+      if (!pending.ok) return errorResult(pending.reason);
+    } else if (authorization.decision !== "allow") {
+      return errorResult("edit_requires_approval");
+    }
+    if (!(await this.isStillGranted(root, startedAt, request))) {
+      return errorResult(
+        "path_not_granted: this folder's command grant was revoked",
+      );
+    }
+    // The file tools resolve the path once and then write through it, so a
+    // command swapping a folder for a link mid-write could redirect the
+    // write outside the grant. Edits wait until no command runs there, and
+    // the path must still resolve to the same place.
+    if (await this.commandRunningIn(root)) {
+      return errorResult(
+        "command_running: a command is still running in this folder; wait for it to finish, then retry the edit",
+      );
+    }
+    if ((await canonicalTarget(request.input.path)) !== target) {
+      return errorResult(
+        "path_changed: the file's location changed while the edit was pending; read it again and retry",
+      );
+    }
+    if (
+      request.signal?.aborted ||
+      (this.commandRootRevocations.get(root) ?? 0) > startedAt
+    ) {
+      return errorResult(
+        "path_not_granted: the edit was stopped or this folder's command grant was revoked",
+      );
+    }
+    // Registered synchronously after the last check, so a revoke either
+    // refuses this edit above or waits for the write to finish.
+    const commit = tool.executeValidated(validation.input, {
+      principal: PRINCIPAL,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      model: MODEL,
+      signal: request.signal,
+    });
+    const commits = this.editCommits.get(root) ?? new Set();
+    commits.add(commit);
+    this.editCommits.set(root, commits);
+    let result: Awaited<typeof commit>;
+    try {
+      result = await commit;
+    } finally {
+      commits.delete(commit);
+      if (commits.size === 0) this.editCommits.delete(root);
+    }
+    return {
+      content:
+        typeof result.modelContent === "string"
+          ? result.modelContent
+          : JSON.stringify(result.modelContent),
+      isError: result.isError === true,
+    };
+  }
+
+  /** Whether any chat still has a command running inside `root`. */
+  private async commandRunningIn(root: string): Promise<boolean> {
+    for (const pending of this.chats.values()) {
+      const chat = await pending.catch(() => undefined);
+      if (
+        chat?.supervisor
+          .list({ ownerId: OWNER_ID })
+          .some(
+            (record) =>
+              (record.state === "running" || record.state === "interrupted") &&
+              isInside(record.cwd, root),
+          )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private fileToolsFor(root: string): Promise<WorkspaceFileTools> {
+    let tools = this.grantedFileTools.get(root);
+    if (!tools) {
+      tools = this.loadWorkspaceHost().then((host) =>
+        host.createWorkspaceFileTools({ projectRoot: root }),
+      );
+      this.grantedFileTools.set(root, tools);
+      tools.catch(() => {
+        if (this.grantedFileTools.get(root) === tools) {
+          this.grantedFileTools.delete(root);
+        }
+      });
+    }
+    return tools;
   }
 
   private loadWorkspaceHost(): Promise<WorkspaceHostModule> {

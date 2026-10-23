@@ -8067,7 +8067,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       { target: { value: "/tmp/ask-agent-project" } },
     );
     fireEvent.click(
-      screen.getByLabelText("Also allow commands in this folder (asks first)"),
+      screen.getByLabelText(
+        "Also allow commands and edits in this folder (asks first)",
+      ),
     );
     fireEvent.click(screen.getByText("Confirm read and command grant"));
     await screen.findByText(

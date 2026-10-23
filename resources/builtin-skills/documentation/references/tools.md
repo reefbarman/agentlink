@@ -200,7 +200,7 @@ Files you attach to the chat are copied into `inputs/`. Deleting the chat delete
 
 ### Ask Agent commands in granted folders
 
-The Ask Agent's local access panel grants folders and files for reading. When the scratch folder is available you can also tick **Also allow commands in this folder (asks first)** to grant a folder for commands. The agent then sees the folder listed in its instructions and can run `execute_command` with `cwd` set to an absolute path inside it:
+The Ask Agent's local access panel grants folders and files for reading. When the scratch folder is available you can also tick **Also allow commands and edits in this folder (asks first)** to grant a folder for commands and file edits. The agent then sees the folder listed in its instructions and can run `execute_command` with `cwd` set to an absolute path inside it:
 
 - Unless a rule or Approve for Me decides it, a command shows a **Run a terminal command** card with **Run**, an editable command and **Reject**, on any signed-in client including a paired phone. Nothing runs until you approve; an edited command runs as you wrote it.
 - The card has a rule row per sub-command, like VS Code's command card: **Allow**, **Prompt** or **Forbidden**, matched as a prefix, exact command or regex, with scope **Session** (this chat, until the helper restarts or the chat is deleted), **Project** (this granted folder) or **Global** (every granted folder). **Save Rules & Run** saves them; Project and Global rules are kept in `~/.agentlink/ask-agent-command-policy.json`. Matching follows VS Code: every part of a compound command must be allowed to skip the card, Forbidden beats Prompt beats Allow, and a Forbidden match refuses the command without a card (the tool result has `status: "forbidden"`). Ask Agent keeps its own rules and does not use VS Code's.
@@ -214,7 +214,21 @@ The Ask Agent's local access panel grants folders and files for reading. When th
 - Grants can be added only from Desktop or a browser on the same computer (this now applies to read-only grants too; paired LAN and phone clients get `grant_requires_this_machine`). Commands can be granted only for a folder, not for the whole disk or your home folder, and only where the scratch-folder sandbox is available (otherwise `commands_unavailable`). Because the sandbox protects Git metadata and agent instruction files only at the top of the folder, a folder that contains other repositories (outside `node_modules`) is refused with `commands_grant_contains_repositories`; grant each repository's folder instead. A grant applies to the folder it was made for: if that path is later replaced with a symlink to somewhere else, commands there stop working until you grant it again. Any client can revoke a grant; revoking a commands grant, or re-granting the folder as read-only, stops its running commands and refuses new ones.
 - Grants last until the browser gateway helper restarts.
 
-`write_file` and `present_files` still work only in the scratch folder, so in a granted folder the agent edits files through commands.
+#### File edits in granted folders
+
+The agent can also edit files in a folder granted for commands, without running a command:
+
+- `read_file` on a file in such a folder returns a `contentHash` (SHA-256 of the file). It is left out when secrets in a settings file were hidden from the result, so a redacted copy can never be written back.
+- `write_file` with an absolute path inside the folder creates a file (`expectedAbsent: true`) or replaces one (`expectedContentHash` from `read_file`). Relative paths still write to the scratch folder.
+- `apply_diff` changes part of a file with SEARCH/REPLACE blocks against `expectedContentHash`. It is offered only while a folder is granted for commands.
+- An edit whose file changed since it was read fails before any card, so the agent re-reads and tries again.
+- Each edit shows a write card with the file path and diff (**Apply** or **Create**, or **Reject**). Any signed-in client can apply it. With Approve for Me on, ordinary edits apply without a card.
+- Agent instruction and configuration files (for example `AGENTS.md`, `CLAUDE.md`, `.agentlink/` and `.claude/`) always show the card, even with Approve for Me, and only Desktop or a browser on the same computer can apply them; other clients get `protected_edit_requires_this_machine` and can only reject. Git metadata (`.git/`) and `.env` files cannot be edited.
+- Settings files whose secrets `read_file` hides cannot be changed (`edit_refused_secrets`), so the real values are never overwritten or shown on a card. A change with more than 100,000 characters of diff is refused (`edit_too_large_to_review`) rather than approved from a partial view; the agent splits it into smaller edits. With Approve for Me on, ordinary edits of any size still apply.
+- An edit waits for no command to be running in that folder (`command_running`), and fails with `path_changed` if the file's location changed while the card was open.
+- Paths outside every granted folder, or the granted folder itself, fail with `path_not_granted`. Revoking the grant withdraws an open edit card, and a write already in progress finishes before the revoke completes.
+
+`present_files` still works only in the scratch folder.
 
 ## Work with people and the session
 
