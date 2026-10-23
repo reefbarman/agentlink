@@ -31,6 +31,8 @@ const RELEASES = [
   release("sdk-v0.3.0", ["agentlink-sdk-artifacts.json", "SHA256SUMS"]),
   release("cli-v0.3.0", [
     "agentlink-cli-darwin-arm64-v0.3.0.tar.gz",
+    "agentlink-cli-linux-arm64-v0.3.0.tar.gz",
+    "agentlink-cli-linux-x64-v0.3.0.tar.gz",
     "SHA256SUMS",
   ]),
   release("v1.24.0", [
@@ -87,6 +89,41 @@ test("install.sh selects each surface by its own tag series", () => {
   assert.match(desktop.stdout, /skipping verification/);
 });
 
+test("install.sh selects the Linux CLI archive for glibc x64 and arm64", () => {
+  for (const [machine, target] of [
+    ["x86_64", "linux-x64"],
+    ["aarch64", "linux-arm64"],
+  ]) {
+    const cli = runInstaller(["--surface", "cli"], {
+      AGENTLINK_INSTALL_OS: "Linux",
+      AGENTLINK_INSTALL_ARCH: machine,
+      AGENTLINK_INSTALL_LIBC: "glibc",
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.match(
+      cli.stdout,
+      new RegExp(`Selected cli-v0\\.3\\.0: agentlink-cli-${target}-v0\\.3\\.0`),
+    );
+  }
+
+  // Older releases only had a macOS archive.
+  const old = runInstaller(["--surface", "cli", "--version", "0.1.0"], {
+    AGENTLINK_INSTALL_OS: "Linux",
+    AGENTLINK_INSTALL_ARCH: "x86_64",
+    AGENTLINK_INSTALL_LIBC: "glibc",
+  });
+  assert.notEqual(old.status, 0);
+  assert.match(old.stderr, /CLI preview \(linux-x64\)/);
+
+  const musl = runInstaller(["--surface", "cli"], {
+    AGENTLINK_INSTALL_OS: "Linux",
+    AGENTLINK_INSTALL_ARCH: "x86_64",
+    AGENTLINK_INSTALL_LIBC: "musl",
+  });
+  assert.notEqual(musl.status, 0);
+  assert.match(musl.stderr, /needs a glibc-based Linux/);
+});
+
 test("install.sh honours --version and legacy per-file checksums", () => {
   const cli = runInstaller(["--surface", "cli", "--version", "0.1.0"]);
   assert.equal(cli.status, 0, cli.stderr);
@@ -105,7 +142,7 @@ test("install.sh refuses unsupported platforms and arguments", () => {
     AGENTLINK_INSTALL_ARCH: "x64",
   });
   assert.notEqual(intelCli.status, 0);
-  assert.match(intelCli.stderr, /Apple Silicon only/);
+  assert.match(intelCli.stderr, /Apple Silicon Macs only/);
 
   const intelDesktop = runInstaller(["--surface", "desktop", "--arch", "x64"]);
   assert.notEqual(intelDesktop.status, 0);

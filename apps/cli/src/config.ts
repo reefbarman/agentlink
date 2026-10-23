@@ -3,9 +3,12 @@ import {
   listCodexModels,
 } from "@agentlink/core/codex";
 import {
-  AGENTLINK_SHARED_KEYCHAIN_SERVICE,
-  createKeychainSecretStorage,
-} from "@agentlink/node-host";
+  ENVIRONMENT_VARIABLE_NAME,
+  OPENAI_API_KEY_ENV,
+  resolveApiKey,
+  storeApiKey,
+} from "./credentials.js";
+import { AGENTLINK_SHARED_KEYCHAIN_SERVICE } from "@agentlink/node-host";
 import type {
   CliCompatibleProvider,
   CliConfig,
@@ -64,16 +67,38 @@ export async function writeCliConfig(
   await fs.rename(temporaryPath, configPath);
 }
 
-export async function getApiKey(account: string): Promise<string | undefined> {
-  const storage = await createKeychainSecretStorage({ account });
-  return (await storage.get())?.trim() || undefined;
+/** Environment variables checked for an account's key, before the store. */
+export function apiKeyEnvironmentVariables(
+  account: string,
+  config?: Pick<CliConfig, "compatibleProviders">,
+): readonly string[] {
+  if (account === OPENAI_API_KEY_ACCOUNT) return OPENAI_API_KEY_ENV;
+  const compatible = config?.compatibleProviders.find(
+    (provider) => compatibleCredentialAccount(provider) === account,
+  );
+  return compatible?.apiKeyEnv ? [compatible.apiKeyEnv] : [];
 }
 
-export async function setApiKey(account: string, value: string): Promise<void> {
-  const normalized = value.trim();
-  if (!normalized) throw new Error("API key cannot be empty");
-  const storage = await createKeychainSecretStorage({ account });
-  await storage.store(normalized);
+export async function getApiKey(
+  account: string,
+  config?: Pick<CliConfig, "compatibleProviders">,
+): Promise<string | undefined> {
+  return await resolveApiKey(
+    account,
+    apiKeyEnvironmentVariables(account, config),
+  );
+}
+
+export async function setApiKey(
+  account: string,
+  value: string,
+  config?: Pick<CliConfig, "compatibleProviders">,
+): Promise<void> {
+  await storeApiKey(
+    account,
+    value,
+    apiKeyEnvironmentVariables(account, config),
+  );
 }
 
 export function compatibleCredentialAccount(provider: { id: string }): string {
@@ -178,6 +203,15 @@ function compatibleProviders(value: unknown): CliCompatibleProvider[] {
         throw new Error(`${label}.${key} must be a boolean`);
       }
     }
+    if (
+      item.apiKeyEnv !== undefined &&
+      (typeof item.apiKeyEnv !== "string" ||
+        !ENVIRONMENT_VARIABLE_NAME.test(item.apiKeyEnv))
+    ) {
+      throw new Error(
+        `${label}.apiKeyEnv must be an environment variable name`,
+      );
+    }
     if (!Array.isArray(item.models) || item.models.length === 0) {
       throw new Error(`${label}.models must be a non-empty array`);
     }
@@ -189,6 +223,9 @@ function compatibleProviders(value: unknown): CliCompatibleProvider[] {
         : {}),
       ...(profile ? { profile } : {}),
       ...(item.noAuth === true ? { noAuth: true } : {}),
+      ...(typeof item.apiKeyEnv === "string"
+        ? { apiKeyEnv: item.apiKeyEnv }
+        : {}),
       ...(item.allowInsecureHttp === true ? { allowInsecureHttp: true } : {}),
       models: item.models.map((model, modelIndex) =>
         compatibleModel(model, `${label}.models[${modelIndex}]`),

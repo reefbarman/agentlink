@@ -96,13 +96,16 @@ export async function createKeychainSecretStorage(
     process.platform === "linux"
       ? (options.linuxStore ?? DEFAULT_KEYCHAIN_LINUX_STORE)
       : options.linuxStore;
-  const asyncEntry = linuxStore
-    ? new AsyncEntry(service, account, { linux: { store: linuxStore } })
-    : new AsyncEntry(service, account);
+  const createEntry = (): KeychainEntry =>
+    linuxStore
+      ? new AsyncEntry(service, account, { linux: { store: linuxStore } })
+      : new AsyncEntry(service, account);
+  // On Linux the constructor already connects to D-Bus, so Secret Service
+  // entries are created lazily inside the diagnostics wrapper.
   const nativeEntry: KeychainEntry =
     process.platform === "linux" && linuxStore === "secret-service"
-      ? withSecretServiceDiagnostics(asyncEntry)
-      : asyncEntry;
+      ? withSecretServiceDiagnostics(createEntry)
+      : createEntry();
   const helperPath =
     options.credentialsHelperPath === null
       ? undefined
@@ -271,15 +274,22 @@ function withDirectFallback(
 /**
  * Report a missing Secret Service as one typed, actionable error. Without a
  * session bus the native call can only fail, so skip it. Other native errors
- * that name the Secret Service or D-Bus are wrapped with their cause kept.
+ * that name the Secret Service or D-Bus, including ones thrown while creating
+ * the entry, are wrapped with their cause kept.
  */
-function withSecretServiceDiagnostics(entry: KeychainEntry): KeychainEntry {
-  const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+function withSecretServiceDiagnostics(
+  createEntry: () => KeychainEntry,
+): KeychainEntry {
+  let entry: KeychainEntry | undefined;
+  const run = async <T>(
+    operation: (entry: KeychainEntry) => Promise<T>,
+  ): Promise<T> => {
     if (!(await hasSessionBus())) {
       throw new LinuxCredentialStoreUnavailableError("no_session_bus");
     }
     try {
-      return await operation();
+      entry ??= createEntry();
+      return await operation(entry);
     } catch (error) {
       if (isSecretServiceUnavailable(error)) {
         throw new LinuxCredentialStoreUnavailableError(
@@ -291,9 +301,9 @@ function withSecretServiceDiagnostics(entry: KeychainEntry): KeychainEntry {
     }
   };
   return {
-    getPassword: () => run(() => entry.getPassword()),
-    setPassword: (value) => run(() => entry.setPassword(value)),
-    deletePassword: () => run(() => entry.deletePassword()),
+    getPassword: () => run((current) => current.getPassword()),
+    setPassword: (value) => run((current) => current.setPassword(value)),
+    deletePassword: () => run((current) => current.deletePassword()),
   };
 }
 

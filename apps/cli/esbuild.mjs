@@ -1,6 +1,13 @@
 import * as esbuild from "esbuild";
 
 import {
+  CLI_RIPGREP_BINARY_VERSION,
+  CLI_RIPGREP_PACKAGE_VERSION,
+  CLI_TARGETS,
+  resolveCliTarget,
+  resolveCliTargetPackage,
+} from "../../scripts/cli-targets.mjs";
+import {
   chmod,
   copyFile,
   mkdir,
@@ -16,19 +23,15 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(root, "../..");
 const require = createRequire(import.meta.url);
 const manifest = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
 const packageBuild = process.argv.includes("--package");
-if (
-  packageBuild &&
-  (process.platform !== "darwin" || process.arch !== "arm64")
-) {
-  throw new Error(
-    "CLI packaging requires macOS Apple Silicon; source builds are platform-neutral.",
-  );
-}
+// Package builds target one release platform (`--target`, default the host);
+// the ripgrep binary for another platform is a pinned download.
+const packageTarget = packageBuild ? resolveCliTarget() : undefined;
 const output = path.join(root, "dist", "agentlink.js");
 await rm(path.dirname(output), { recursive: true, force: true });
 await mkdir(path.dirname(output), { recursive: true });
@@ -156,25 +159,33 @@ if (forbiddenUpdateDependencies.size > 0) {
   );
 }
 
-const ripgrepPackage = "@vscode/ripgrep-darwin-arm64";
-const ripgrepVersion = "1.18.0";
-const ripgrepSha256 =
-  "6ef40346bf31fcce79d9614c7745c198542925a0c7d4911e1ffe794c53392ac1";
+// Source builds copy the host's ripgrep when it is installed.
+const ripgrepTarget =
+  packageTarget ?? CLI_TARGETS[`${process.platform}-${process.arch}`];
+const ripgrepPackage = ripgrepTarget?.ripgrep.package;
+const ripgrepVersion = CLI_RIPGREP_PACKAGE_VERSION;
+const ripgrepSha256 = ripgrepTarget?.ripgrep.sha256;
 const bundledPackages = await collectBundledPackages(build.metafile);
 const noticePackages = [...bundledPackages];
-let ripgrepManifestPath;
-if (
-  packageBuild ||
-  (process.platform === "darwin" && process.arch === "arm64")
-) {
+let ripgrepRoot;
+if (packageTarget) {
+  ripgrepRoot = await resolveCliTargetPackage({
+    repoRoot,
+    target: packageTarget,
+    asset: packageTarget.ripgrep,
+    version: ripgrepVersion,
+  });
+} else if (ripgrepPackage) {
   try {
-    ripgrepManifestPath = require.resolve(`${ripgrepPackage}/package.json`);
+    ripgrepRoot = path.dirname(
+      require.resolve(`${ripgrepPackage}/package.json`),
+    );
   } catch (error) {
-    if (packageBuild || error.code !== "MODULE_NOT_FOUND") throw error;
+    if (error.code !== "MODULE_NOT_FOUND") throw error;
   }
 }
-if (ripgrepManifestPath) {
-  const ripgrepRoot = path.dirname(ripgrepManifestPath);
+if (ripgrepRoot) {
+  const ripgrepManifestPath = path.join(ripgrepRoot, "package.json");
   const installedRipgrepManifest = JSON.parse(
     await readFile(ripgrepManifestPath, "utf8"),
   );
@@ -202,7 +213,7 @@ if (ripgrepManifestPath) {
     license: "MIT",
     source: "https://github.com/microsoft/vscode-ripgrep",
     details: [
-      "Packaged binary: ripgrep 15.0.0 (darwin-arm64)",
+      `Packaged binary: ripgrep ${CLI_RIPGREP_BINARY_VERSION} (${ripgrepTarget.id})`,
       `SHA-256: ${ripgrepSha256}`,
     ],
     licenseFiles: [path.join(ripgrepRoot, "LICENSE")],
@@ -217,7 +228,7 @@ await writeFile(
   `${JSON.stringify(
     {
       schemaVersion: 1,
-      platform: packageBuild ? "darwin-arm64" : "source",
+      platform: packageTarget ? packageTarget.id : "source",
       bundle: "agentlink.js",
       externalImports,
       bundledDependencies: bundledDependencyInventory(bundledPackages),
@@ -230,7 +241,7 @@ await writeFile(
               path: "rg",
               package: ripgrepPackage,
               packageVersion: ripgrepVersion,
-              binaryVersion: "15.0.0",
+              binaryVersion: CLI_RIPGREP_BINARY_VERSION,
               sha256: ripgrepSha256,
             },
           }

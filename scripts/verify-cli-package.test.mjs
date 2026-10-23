@@ -69,6 +69,34 @@ test("accepts the standalone CLI package boundary", () => {
   });
 });
 
+test("accepts a Linux package with its own platform and ripgrep", () => {
+  const linuxRuntime = {
+    ...runtimeManifest,
+    platform: "linux-arm64",
+    assets: {
+      ripgrep: {
+        ...runtimeManifest.assets.ripgrep,
+        package: "@vscode/ripgrep-linux-arm64",
+        sha256:
+          "e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda",
+      },
+    },
+  };
+  const linuxManifest = { ...manifest, os: ["linux"], cpu: ["arm64"] };
+  assert.equal(
+    verifyCliPackage(linuxManifest, files, linuxRuntime).ripgrep.package,
+    "@vscode/ripgrep-linux-arm64",
+  );
+  assert.throws(
+    () => verifyCliPackage(manifest, files, linuxRuntime),
+    /os must be linux/u,
+  );
+  assert.throws(
+    () => verifyCliPackage(linuxManifest, files, runtimeManifest),
+    /os must be darwin/u,
+  );
+});
+
 test("rejects source-only builds and missing distribution platform metadata", () => {
   assert.throws(
     () =>

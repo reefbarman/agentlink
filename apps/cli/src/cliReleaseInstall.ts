@@ -31,6 +31,25 @@ const requiredFiles = [
   "dist/agentlink.js",
 ] as const;
 
+/** Release targets with a standalone CLI archive. */
+const CLI_RELEASE_TARGETS = new Set([
+  "darwin-arm64",
+  "linux-x64",
+  "linux-arm64",
+]);
+
+export function cliReleaseTarget(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string | undefined {
+  const target = `${platform}-${arch}`;
+  return CLI_RELEASE_TARGETS.has(target) ? target : undefined;
+}
+
+function cliBundleName(target: string): string {
+  return `agentlink-cli-${target}`;
+}
+
 export interface CliPreviewLayout {
   readonly bundleRoot: string;
   readonly libraryRoot: string;
@@ -55,10 +74,10 @@ export async function recognizeCliPreviewLayout(
   const launcher = path.join(binDirectory, "agentlink");
   const bundleName = path.basename(bundleRoot);
   const previewDirectory = path.dirname(bundleRoot);
+  const target = cliReleaseTarget();
   if (
-    process.platform !== "darwin" ||
-    process.arch !== "arm64" ||
-    !/^agentlink-cli-darwin-arm64$/u.test(bundleName) ||
+    !target ||
+    bundleName !== cliBundleName(target) ||
     path.basename(previewDirectory) === "cli" ||
     !/^cli-preview\.[^/]+$/u.test(path.basename(previewDirectory)) ||
     path.dirname(previewDirectory) !== libraryRoot
@@ -112,6 +131,7 @@ export function validateArchiveListing(
 export async function verifyCliUpdateBundle(
   root: string,
   candidateVersion: string,
+  target: string | undefined = cliReleaseTarget(),
 ): Promise<void> {
   const manifest = JSON.parse(
     await readFile(path.join(root, "bundle-manifest.json"), "utf8"),
@@ -125,7 +145,8 @@ export async function verifyCliUpdateBundle(
   if (manifest.schemaVersion !== 1)
     throw new Error("Unknown CLI bundle manifest version. Update manually.");
   if (
-    manifest.platform !== "darwin-arm64" ||
+    !target ||
+    manifest.platform !== target ||
     manifest.version !== candidateVersion ||
     manifest.signing !== "unsigned" ||
     !manifest.files ||
@@ -215,7 +236,7 @@ export async function installCliReleaseUpdate(
       stagingRoot,
       "--no-same-owner",
     ]);
-    const expectedBundleName = "agentlink-cli-darwin-arm64";
+    const expectedBundleName = path.basename(layout.bundleRoot);
     const stagingEntries = await readdir(stagingRoot);
     if (
       stagingEntries.length !== 1 ||
@@ -253,12 +274,7 @@ export async function installCliReleaseUpdate(
     );
     try {
       await symlink(
-        path.join(
-          destination,
-          "agentlink-cli-darwin-arm64",
-          "bin",
-          "agentlink",
-        ),
+        path.join(destination, expectedBundleName, "bin", "agentlink"),
         temporaryLauncher,
       );
       await rename(temporaryLauncher, layout.launcher);

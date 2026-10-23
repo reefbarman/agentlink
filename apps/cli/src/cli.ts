@@ -1,4 +1,5 @@
 import {
+  CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
   createCodexOAuthRuntime,
   createResponsesWebSocketConnector,
   SessionPreferencesStore,
@@ -69,6 +70,13 @@ import {
   setApiKey,
   writeCliConfig,
 } from "./config.js";
+import {
+  OPENAI_API_KEY_ENV,
+  assertCredentialStoreAvailable,
+  createCliCodexOAuthStorage,
+  lookupApiKey,
+  platformCredentialStoreName,
+} from "./credentials.js";
 import {
   cliMcpGlobalConfigPath,
   cliMcpProjectConfigPath,
@@ -496,26 +504,34 @@ export async function runCli(
       await io.readSecret(`MCP credential ${parsed.value}: `),
     );
     io.output.write(
-      `Stored MCP credential ${parsed.value} in macOS Keychain.\n`,
+      `Stored MCP credential ${parsed.value} in ${platformCredentialStoreName()}.\n`,
     );
     return 0;
   }
 
   const oauth = createCodexOAuthRuntime({
     log: (message) => io.error.write(`[oauth] ${message}\n`),
+    storage: await createCliCodexOAuthStorage(),
   });
   await oauth.ready();
   if (parsed.command === "auth-codex") {
     requireTty(io, "Codex sign-in");
+    await assertCredentialStoreAvailable(CODEX_OAUTH_CREDENTIALS_STORAGE_KEY);
     return await signInCodex(oauth.manager, io);
   }
   if (parsed.command === "auth-openai") {
     requireTty(io, "OpenAI API-key setup");
+    await assertCredentialStoreAvailable(
+      OPENAI_API_KEY_ACCOUNT,
+      OPENAI_API_KEY_ENV,
+    );
     await setApiKey(
       OPENAI_API_KEY_ACCOUNT,
       await io.readSecret("OpenAI API key: "),
     );
-    io.output.write("OpenAI API key stored in macOS Keychain.\n");
+    io.output.write(
+      `OpenAI API key stored in ${platformCredentialStoreName()}.\n`,
+    );
     return 0;
   }
 
@@ -712,7 +728,10 @@ async function createHost(options: {
         ? {}
         : {
             resolveApiKey: () =>
-              getApiKey(compatibleCredentialAccount(compatible)),
+              getApiKey(
+                compatibleCredentialAccount(compatible),
+                options.config,
+              ),
           }),
     });
   }
@@ -2752,7 +2771,7 @@ async function printStatus(
   const [oauthAccounts, openAiKey, sessions, languageIntelligence] =
     await Promise.all([
       manager.listAccounts(),
-      getApiKey(OPENAI_API_KEY_ACCOUNT),
+      lookupApiKey(OPENAI_API_KEY_ACCOUNT, OPENAI_API_KEY_ENV),
       host.listSessions(),
       host.languageStatus(),
     ]);
@@ -2767,13 +2786,28 @@ async function printStatus(
             accounts: oauthAccounts.length,
             active: oauthAccounts.find((a) => a.isActive)?.label,
           },
-          openai: { configured: Boolean(openAiKey) },
+          openai: {
+            configured: Boolean(openAiKey.value),
+            ...(openAiKey.source ? { source: openAiKey.source } : {}),
+            ...(openAiKey.environmentVariable
+              ? { environmentVariable: openAiKey.environmentVariable }
+              : {}),
+          },
           compatible: config.compatibleProviders.map((provider) => ({
             id: provider.id,
             noAuth: Boolean(provider.noAuth),
+            ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
             models: provider.models.map((model) => model.id),
           })),
         },
+        // Unavailable on Linux without a desktop keyring; API keys can then
+        // come from the environment. An environment key skips the store read.
+        credentialStore:
+          openAiKey.source === "environment"
+            ? "not-checked"
+            : openAiKey.storeUnavailable
+              ? "unavailable"
+              : "available",
         sessions: sessions.length,
         languageIntelligence,
         web: webStatus(config),
@@ -3091,7 +3125,9 @@ function parseArguments(
     });
   auth
     .command("openai")
-    .description("store an OpenAI API key in macOS Keychain")
+    .description(
+      "store an OpenAI API key in the OS credential store (or set AGENTLINK_OPENAI_API_KEY)",
+    )
     .action((_options: unknown, command: Command) => {
       select({ command: "auth-openai", project: project(command) });
     });
@@ -3192,7 +3228,7 @@ function parseArguments(
     });
   mcp
     .command("credential <credential-id>")
-    .description("store an MCP credential in macOS Keychain")
+    .description("store an MCP credential in the OS credential store")
     .action((value: string, _options: unknown, command: Command) => {
       select({ command: "mcp-credential", value, project: project(command) });
     });

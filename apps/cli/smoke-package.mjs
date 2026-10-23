@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { packCli } from "./pack.mjs";
 import path from "node:path";
+import { resolveCliTarget } from "../../scripts/cli-targets.mjs";
 
 const root = import.meta.dirname;
 const artifacts = path.join(root, "artifacts");
@@ -32,10 +33,11 @@ try {
   );
   const installedDependencies =
     collectInstalledDependencyNames(dependencyTree).sort();
+  // The smoke installs the packed CLI on this host, so expect its addon.
   const expectedDependencies = [
     "@agentlink/cli",
     "@napi-rs/keyring",
-    "@napi-rs/keyring-darwin-arm64",
+    resolveCliTarget({ argv: [] }).keyring.package,
   ];
   if (
     JSON.stringify(installedDependencies) !==

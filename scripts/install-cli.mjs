@@ -1,3 +1,4 @@
+import { cliBundleName, resolveCliTarget } from "./cli-targets.mjs";
 import {
   cp,
   lstat,
@@ -20,10 +21,6 @@ import { verifyCliBundle } from "./verify-cli-bundle.mjs";
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
-);
-const defaultBundle = path.join(
-  repoRoot,
-  "cli-releases/agentlink-cli-darwin-arm64",
 );
 
 async function entryType(file) {
@@ -55,14 +52,12 @@ async function recognisedEntrypoint(file, installedLauncher) {
   );
 }
 
-export async function installCli({
-  bundle = defaultBundle,
-  home = os.homedir(),
-} = {}) {
-  if (process.platform !== "darwin" || process.arch !== "arm64") {
-    throw new Error("Standalone CLI installation supports macOS ARM64 only.");
-  }
-  const source = path.resolve(bundle);
+export async function installCli({ bundle, home = os.homedir() } = {}) {
+  // Installs the bundle built for this host (macOS: development-signed only).
+  const target = resolveCliTarget({ argv: [], env: {} });
+  const source = path.resolve(
+    bundle ?? path.join(repoRoot, "cli-releases", cliBundleName(target.id)),
+  );
   await verifyCliBundle(source); // Unsigned CI previews cannot be installed by this command.
   const lib = path.join(home, ".local/lib/agentlink");
   const bin = path.join(home, ".local/bin");
@@ -84,7 +79,7 @@ export async function installCli({
       `Refusing to replace non-directory CLI installation: ${installed}`,
     );
   }
-  const processes = execFileSync("ps", ["-axo", "command="], {
+  const processes = execFileSync("ps", ["-A", "-o", "command="], {
     encoding: "utf8",
   });
   if (

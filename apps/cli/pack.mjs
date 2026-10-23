@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
+import { CLI_TARGETS } from "../../scripts/cli-targets.mjs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,7 +17,10 @@ export async function packCli() {
   const runtimeManifest = JSON.parse(
     await readFile(path.join(root, "dist/runtime-manifest.json"), "utf8"),
   );
-  if (runtimeManifest.platform !== "darwin-arm64") {
+  const target = Object.hasOwn(CLI_TARGETS, runtimeManifest.platform)
+    ? CLI_TARGETS[runtimeManifest.platform]
+    : undefined;
+  if (!target) {
     throw new Error(
       "Run npm run build:package --workspace @agentlink/cli before packaging.",
     );
@@ -27,8 +31,8 @@ export async function packCli() {
     scripts: _scripts,
     ...manifest
   } = sourceManifest;
-  manifest.os = ["darwin"];
-  manifest.cpu = ["arm64"];
+  manifest.os = [target.platform];
+  manifest.cpu = [target.arch];
   await rm(stage, { recursive: true, force: true });
   await mkdir(stage, { recursive: true });
   await mkdir(artifacts, { recursive: true });

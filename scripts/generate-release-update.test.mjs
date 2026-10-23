@@ -79,18 +79,29 @@ test("advertises Desktop DMGs as primary assets, not ZIPs or blockmaps", () => {
   assert.equal(metadata.channel, "preview");
 });
 
-test("generates CLI metadata for its versioned archive", () => {
+test("generates CLI metadata for its macOS and Linux archives", () => {
+  const archives = ["darwin-arm64", "linux-arm64", "linux-x64"].map(
+    (target) => `agentlink-cli-${target}-v0.3.0.tar.gz`,
+  );
   const metadata = generateReleaseUpdate({
     product: "cli",
     version: "0.3.0",
-    files: [
-      "agentlink-cli-darwin-arm64-v0.3.0.tar.gz",
-      "agentlink-cli-darwin-arm64-v0.3.0.tar.gz.sha256",
-    ],
+    files: archives.flatMap((name) => [name, `${name}.sha256`]),
   });
   assert.deepEqual(metadata.targets, {
     "darwin-arm64": "agentlink-cli-darwin-arm64-v0.3.0.tar.gz",
+    "linux-arm64": "agentlink-cli-linux-arm64-v0.3.0.tar.gz",
+    "linux-x64": "agentlink-cli-linux-x64-v0.3.0.tar.gz",
   });
+  assert.throws(
+    () =>
+      generateReleaseUpdate({
+        product: "cli",
+        version: "0.3.0",
+        files: [archives[0]],
+      }),
+    /missing agentlink-cli-linux-arm64-v0\.3\.0\.tar\.gz, agentlink-cli-linux-x64-v0\.3\.0\.tar\.gz/u,
+  );
   assert.equal(metadata.tag, "cli-v0.3.0");
   assert.deepEqual(metadata.engines, {});
 });

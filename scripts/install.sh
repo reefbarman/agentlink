@@ -23,9 +23,10 @@ Usage: install.sh [--surface vscode|desktop|cli] [--version X.Y.Z] [--arch arm64
   --surface   What to install (default: vscode)
                 vscode   VS Code extension (VSIX) via the `code` command
                 desktop  macOS Desktop preview: downloads and opens the DMG
-                cli      macOS Apple Silicon CLI preview: ~/.local/bin/agentlink
+                cli      CLI preview for macOS Apple Silicon or Linux x64/arm64
+                         (glibc): ~/.local/bin/agentlink
   --version   Install this exact version instead of the newest release
-  --arch      Override the detected architecture (Desktop only)
+  --arch      Override the detected architecture (Desktop and CLI)
   --dry-run   Print the selected release and actions without installing
 
 For the Node SDK, use scripts/install-sdk.mjs instead.
@@ -66,6 +67,47 @@ mac_arch() {
   else
     echo "x64"
   fi
+}
+
+linux_arch() {
+  local arch="${AGENTLINK_INSTALL_ARCH:-$(uname -m)}"
+  case "$arch" in
+    arm64|aarch64) echo "arm64" ;;
+    x64|x86_64|amd64) echo "x64" ;;
+    *) echo "$arch" ;;
+  esac
+}
+
+# glibc or musl; AGENTLINK_INSTALL_LIBC overrides detection (used by tests).
+linux_libc() {
+  if [ -n "${AGENTLINK_INSTALL_LIBC:-}" ]; then
+    echo "$AGENTLINK_INSTALL_LIBC"
+  elif getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+    echo "glibc"
+  else
+    echo "musl"
+  fi
+}
+
+cli_target() {
+  local arch
+  case "$OS" in
+    Darwin)
+      arch="${ARCH_OVERRIDE:-$(mac_arch)}"
+      [ "$arch" = "arm64" ] || die "The CLI preview supports Apple Silicon Macs only."
+      echo "darwin-arm64"
+      ;;
+    Linux)
+      [ "$(linux_libc)" = "glibc" ] \
+        || die "The CLI preview needs a glibc-based Linux; Alpine and other musl systems are not supported yet."
+      arch="${ARCH_OVERRIDE:-$(linux_arch)}"
+      case "$arch" in
+        x64|arm64) echo "linux-$arch" ;;
+        *) die "Unsupported CLI architecture: $arch" ;;
+      esac
+      ;;
+    *) die "The CLI preview is available for macOS Apple Silicon and Linux only." ;;
+  esac
 }
 
 vscode_target() {
@@ -120,11 +162,11 @@ case "$SURFACE" in
     LABEL="Desktop preview (macOS $ARCH)"
     ;;
   cli)
-    [ "$OS" = "Darwin" ] && [ "$(mac_arch)" = "arm64" ] \
-      || die "The CLI preview is available for macOS Apple Silicon only."
+    CLI_TARGET=$(cli_target)
+    CLI_BUNDLE="agentlink-cli-$CLI_TARGET"
     TAG_PREFIX="cli-v"
-    ASSET_PATTERN="agentlink-cli-darwin-arm64-v${VERSION_PATTERN}\\.tar\\.gz"
-    LABEL="CLI preview (macOS arm64)"
+    ASSET_PATTERN="${CLI_BUNDLE}-v${VERSION_PATTERN}\\.tar\\.gz"
+    LABEL="CLI preview ($CLI_TARGET)"
     ;;
   *) die "Unknown surface: $SURFACE (expected vscode, desktop, or cli)" ;;
 esac
@@ -255,8 +297,8 @@ case "$SURFACE" in
     if [ -e "$LINK" ] || [ -L "$LINK" ]; then
       CURRENT=$(readlink "$LINK" || true)
       case "$CURRENT" in
-        "$LIB"/cli-preview.*/agentlink-cli-darwin-arm64/bin/agentlink)
-          PREVIOUS="${CURRENT%/agentlink-cli-darwin-arm64/bin/agentlink}"
+        "$LIB"/cli-preview.*/"$CLI_BUNDLE"/bin/agentlink)
+          PREVIOUS="${CURRENT%/"$CLI_BUNDLE"/bin/agentlink}"
           ;;
         *) die "An agentlink command already exists at $LINK and was not installed by this script. No files were replaced." ;;
       esac
@@ -264,15 +306,19 @@ case "$SURFACE" in
     mkdir -p "$BIN" "$LIB"
     STAGE=$(mktemp -d "$LIB/cli-preview.XXXXXX")
     tar -xzf "$WORKDIR/$FILENAME" -C "$STAGE"
-    [ -x "$STAGE/agentlink-cli-darwin-arm64/bin/agentlink" ] || {
+    [ -x "$STAGE/$CLI_BUNDLE/bin/agentlink" ] || {
       rm -rf "$STAGE"
-      die "The archive does not contain agentlink-cli-darwin-arm64/bin/agentlink."
+      die "The archive does not contain $CLI_BUNDLE/bin/agentlink."
     }
-    ln -sfn "$STAGE/agentlink-cli-darwin-arm64/bin/agentlink" "$LINK"
+    ln -sfn "$STAGE/$CLI_BUNDLE/bin/agentlink" "$LINK"
     echo ""
     echo "Installed $TAG at $LINK"
     [ -z "$PREVIOUS" ] || echo "The previous preview remains at $PREVIOUS; delete it once the new version works."
     echo "Add ~/.local/bin to PATH if needed, then run: agentlink --help"
-    echo "This preview is unsigned and not notarised. macOS may block its first launch."
+    if [ "$OS" = "Darwin" ]; then
+      echo "This preview is unsigned and not notarised. macOS may block its first launch."
+    else
+      echo "Credentials are kept in your desktop keyring (Secret Service). On a server without one, set AGENTLINK_OPENAI_API_KEY instead; see the CLI guide."
+    fi
     ;;
 esac

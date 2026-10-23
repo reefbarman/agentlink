@@ -16,6 +16,11 @@ export interface CliCompatibleProvider {
   readonly baseURL: string;
   readonly profile?: "generic" | "openrouter";
   readonly noAuth?: boolean;
+  /**
+   * Environment variable holding this provider's API key. Checked before the
+   * OS credential store, for hosts without one.
+   */
+  readonly apiKeyEnv?: string;
   readonly allowInsecureHttp?: boolean;
   readonly models: readonly CliCompatibleModel[];
 }

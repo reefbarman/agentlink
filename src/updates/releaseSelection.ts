@@ -60,8 +60,13 @@ export function expectedReleaseAsset(
   if (product === "desktop" && target.startsWith("darwin-")) {
     return `AgentLink-Desktop-${version}-mac-${target.slice(7)}.dmg`;
   }
-  if (product === "cli" && target === "darwin-arm64") {
-    return `agentlink-cli-darwin-arm64-v${version}.tar.gz`;
+  if (
+    product === "cli" &&
+    (target === "darwin-arm64" ||
+      target === "linux-x64" ||
+      target === "linux-arm64")
+  ) {
+    return `agentlink-cli-${target}-v${version}.tar.gz`;
   }
   if (
     product === "assistant" &&

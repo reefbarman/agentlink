@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 
+import { CLI_TARGETS } from "./cli-targets.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -23,7 +24,9 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const launcher =
   '#!/bin/sh\nset -eu\nentry=$0\nwhile [ -L "$entry" ]; do\n  base=$(cd -P "$(dirname "$entry")" && pwd)\n  entry=$(readlink "$entry")\n  case "$entry" in /*) ;; *) entry=$base/$entry ;; esac\ndone\nroot=$(cd -P "$(dirname "$entry")/.." && pwd)\nexec "$root/node/bin/AgentLink CLI" "$root/dist/agentlink.js" "$@"\n';
 
-async function fixture(root) {
+async function fixture(root, targetId = "darwin-arm64") {
+  const target = CLI_TARGETS[targetId];
+  const addonPath = `dist/node_modules/${target.keyring.package}/${target.keyring.addon}`;
   const contents = {
     "bin/agentlink": launcher,
     "node/bin/AgentLink CLI":
@@ -32,9 +35,15 @@ async function fixture(root) {
     "dist/agentlink.js": "script",
     "dist/rg": "ripgrep",
     "dist/runtime-manifest.json": JSON.stringify({
-      platform: "darwin-arm64",
+      platform: target.id,
       bundle: "agentlink.js",
-      assets: { ripgrep: { path: "rg", sha256: digest("ripgrep") } },
+      assets: {
+        ripgrep: {
+          path: "rg",
+          package: target.ripgrep.package,
+          sha256: digest("ripgrep"),
+        },
+      },
       runtimeDependencies: { "@napi-rs/keyring": EXPECTED_KEYRING_VERSION },
       externalImports: ["@napi-rs/keyring"],
     }),
@@ -50,13 +59,12 @@ async function fixture(root) {
       name: "@napi-rs/keyring",
       version: EXPECTED_KEYRING_VERSION,
     }),
-    "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json":
+    [`dist/node_modules/${target.keyring.package}/package.json`]:
       JSON.stringify({
-        name: "@napi-rs/keyring-darwin-arm64",
+        name: target.keyring.package,
         version: EXPECTED_KEYRING_VERSION,
       }),
-    "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node":
-      "addon",
+    [addonPath]: "addon",
   };
   const files = {};
   for (const [name, contentsValue] of Object.entries(contents)) {
@@ -69,21 +77,17 @@ async function fixture(root) {
     await chmod(path.join(root, name), 0o755);
   const upstreamSha256 = {
     node: files["node/bin/AgentLink CLI"],
-    addon:
-      files[
-        "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
-      ],
+    addon: files[addonPath],
     ripgrep: files["dist/rg"],
   };
   const manifest = {
     schemaVersion: 1,
     version: "0.1.0",
-    platform: "darwin-arm64",
+    platform: target.id,
     signing: "unsigned",
     node: {
       version: "22.23.3",
-      archiveSha256:
-        "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
+      archiveSha256: target.nodeArchiveSha256,
     },
     upstreamSha256,
     postSignSha256: upstreamSha256,
@@ -121,6 +125,48 @@ test("unsigned preview requires explicit verification opt-in; inventory and hash
   await assert.rejects(
     verifyCliBundle(root, { allowUnsigned: true }),
     /inventory/u,
+  );
+});
+
+test("Linux bundles are always unsigned and carry the target's keyring addon", async (t) => {
+  for (const targetId of ["linux-x64", "linux-arm64"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agentlink-cli-linux-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const manifest = await fixture(root, targetId);
+    // Nothing to sign, so no explicit unsigned opt-in is needed.
+    await verifyCliBundle(root);
+
+    await writeFile(
+      path.join(root, "bundle-manifest.json"),
+      JSON.stringify({ ...manifest, signing: "development" }),
+    );
+    await assert.rejects(verifyCliBundle(root), /must be unsigned/u);
+
+    await writeFile(
+      path.join(root, "bundle-manifest.json"),
+      JSON.stringify({
+        ...manifest,
+        node: {
+          ...manifest.node,
+          archiveSha256: CLI_TARGETS["darwin-arm64"].nodeArchiveSha256,
+        },
+      }),
+    );
+    await assert.rejects(verifyCliBundle(root), /Invalid standalone CLI/u);
+  }
+});
+
+test("rejects bundles for unknown targets", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentlink-cli-target-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manifest = await fixture(root);
+  await writeFile(
+    path.join(root, "bundle-manifest.json"),
+    JSON.stringify({ ...manifest, platform: "linux-riscv64" }),
+  );
+  await assert.rejects(
+    verifyCliBundle(root, { allowUnsigned: true }),
+    /Invalid standalone CLI/u,
   );
 });
 

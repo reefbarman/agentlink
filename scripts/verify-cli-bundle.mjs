@@ -1,3 +1,4 @@
+import { CLI_NODE_VERSION, CLI_TARGETS } from "./cli-targets.mjs";
 import { lstat, readFile, readdir } from "node:fs/promises";
 
 import { builtinModules } from "node:module";
@@ -11,32 +12,35 @@ const runtimePath = "node/bin/AgentLink CLI";
 // scripts/build-credentials-helper.mjs.
 const credentialsHelperPath = "dist/AgentLink Credentials (CLI)";
 const credentialsHelperIdentifier = "com.agentlink.credentials";
-const nativePaths = {
-  node: runtimePath,
-  addon:
-    "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
-  ripgrep: "dist/rg",
-};
 const identifiers = {
   node: "com.agentlink.cli.node",
   addon: "com.agentlink.cli.keyring",
   ripgrep: "com.agentlink.cli.rg",
 };
-const required = [
-  "bin/agentlink",
-  runtimePath,
-  "node/LICENSE",
-  "dist/agentlink.js",
-  "dist/rg",
-  "dist/runtime-manifest.json",
-  "LICENSE",
-  "README.md",
-  "THIRD_PARTY_NOTICES.md",
-  "package.json",
-  "dist/node_modules/@napi-rs/keyring/package.json",
-  "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json",
-  nativePaths.addon,
-];
+function nativePathsFor(target) {
+  return {
+    node: runtimePath,
+    addon: `dist/node_modules/${target.keyring.package}/${target.keyring.addon}`,
+    ripgrep: "dist/rg",
+  };
+}
+function requiredFor(target) {
+  return [
+    "bin/agentlink",
+    runtimePath,
+    "node/LICENSE",
+    "dist/agentlink.js",
+    "dist/rg",
+    "dist/runtime-manifest.json",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "package.json",
+    "dist/node_modules/@napi-rs/keyring/package.json",
+    `dist/node_modules/${target.keyring.package}/package.json`,
+    nativePathsFor(target).addon,
+  ];
+}
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 // The CLI manifest pins the Keychain runtime exactly; derive the expected
@@ -49,24 +53,33 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   const manifest = JSON.parse(
     await readFile(path.join(root, "bundle-manifest.json"), "utf8"),
   );
+  const target = Object.hasOwn(CLI_TARGETS, manifest.platform)
+    ? CLI_TARGETS[manifest.platform]
+    : undefined;
   if (
     manifest.schemaVersion !== 1 ||
-    manifest.platform !== "darwin-arm64" ||
+    !target ||
     !/^\d+\.\d+\.\d+$/u.test(manifest.version) ||
-    manifest.node?.version !== "22.23.3" ||
-    manifest.node?.archiveSha256 !==
-      "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53"
+    manifest.node?.version !== CLI_NODE_VERSION ||
+    manifest.node?.archiveSha256 !== target.nodeArchiveSha256
   ) {
     throw new Error("Invalid standalone CLI bundle manifest.");
   }
+  // Linux bundles have nothing to sign, so unsigned is their only mode.
   if (
-    manifest.signing !== "development" &&
-    !(allowUnsigned && manifest.signing === "unsigned")
+    target.signable
+      ? manifest.signing !== "development" &&
+        !(allowUnsigned && manifest.signing === "unsigned")
+      : manifest.signing !== "unsigned"
   ) {
     throw new Error(
-      "CLI bundle is not development signed; unsigned previews require explicit allowUnsigned.",
+      target.signable
+        ? "CLI bundle is not development signed; unsigned previews require explicit allowUnsigned."
+        : `${target.id} CLI bundles must be unsigned.`,
     );
   }
+  const nativePaths = nativePathsFor(target);
+  const required = requiredFor(target);
   const files = {};
   async function walk(relative = "") {
     for (const item of await readdir(path.join(root, relative), {
@@ -125,9 +138,10 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
     await readFile(path.join(root, "dist/runtime-manifest.json"), "utf8"),
   );
   if (
-    runtime.platform !== "darwin-arm64" ||
+    runtime.platform !== target.id ||
     runtime.bundle !== "agentlink.js" ||
     runtime.assets?.ripgrep?.path !== "rg" ||
+    runtime.assets.ripgrep.package !== target.ripgrep.package ||
     runtime.assets.ripgrep.sha256 !== manifest.upstreamSha256.ripgrep ||
     runtime.runtimeDependencies?.["@napi-rs/keyring"] !==
       EXPECTED_KEYRING_VERSION ||
@@ -149,7 +163,7 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
     await readFile(
       path.join(
         root,
-        "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json",
+        `dist/node_modules/${target.keyring.package}/package.json`,
       ),
       "utf8",
     ),
@@ -157,7 +171,7 @@ export async function verifyCliBundle(root, { allowUnsigned = false } = {}) {
   if (
     keyring.name !== "@napi-rs/keyring" ||
     keyring.version !== EXPECTED_KEYRING_VERSION ||
-    addon.name !== "@napi-rs/keyring-darwin-arm64" ||
+    addon.name !== target.keyring.package ||
     addon.version !== EXPECTED_KEYRING_VERSION
   ) {
     throw new Error("Unexpected Keychain runtime package versions.");

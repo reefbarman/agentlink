@@ -22,6 +22,7 @@ let getPasswordCalls = 0;
 let getPasswordError: Error | undefined;
 let setPasswordCalls = 0;
 const constructorCalls: unknown[][] = [];
+let constructorError: Error | undefined;
 const failSetOnce = new Set<string>();
 
 vi.mock("@napi-rs/keyring", () => ({
@@ -32,6 +33,7 @@ vi.mock("@napi-rs/keyring", () => ({
       ...rest: unknown[]
     ) {
       constructorCalls.push([service, account, ...rest]);
+      if (constructorError) throw constructorError;
     }
 
     async getPassword(): Promise<string | undefined> {
@@ -59,6 +61,7 @@ afterEach(async () => {
   values.clear();
   getPasswordCalls = 0;
   getPasswordError = undefined;
+  constructorError = undefined;
   vi.unstubAllEnvs();
   setPasswordCalls = 0;
   constructorCalls.length = 0;
@@ -694,6 +697,25 @@ process.stdout.write(JSON.stringify(reply));
         reason: "secret_service_unavailable",
         cause,
       });
+    });
+
+    it("classifies a D-Bus failure raised while creating the entry", async () => {
+      // Seen on headless Ubuntu: a bus socket exists but autolaunch fails.
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+      const cause = new Error(
+        "Platform failure: DBus error: Using X11 for dbus-daemon autolaunch was disabled at compile time, set your DBUS_SESSION_BUS_ADDRESS instead",
+      );
+      constructorError = cause;
+      const storage = await linuxStorage();
+      expect(constructorCalls).toEqual([]);
+
+      await expect(storage.get()).rejects.toMatchObject({
+        reason: "secret_service_unavailable",
+        cause,
+      });
+      constructorError = undefined;
+      values.set("test-service:test-account", "recovered");
+      await expect(storage.get()).resolves.toBe("recovered");
     });
 
     it("passes unrelated native errors through unchanged", async () => {

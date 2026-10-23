@@ -11,7 +11,18 @@ permissions:
 
 jobs:
   cli-package:
-    runs-on: macos-15
+    strategy:
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      AGENTLINK_CLI_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,13 +37,15 @@ jobs:
           AGENTLINK_MAC_SIGNING: unsigned
         run: npm run cli:bundle
       - name: Verify packaged CLI launch
+        env:
+          BUNDLE: cli-releases/agentlink-cli-${{ matrix.target }}
         run: |
-          cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --help
-          "cli-releases/agentlink-cli-darwin-arm64/node/bin/AgentLink CLI" --input-type=module -e 'await import("./cli-releases/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js")'
-          node apps/cli/smoke-tui.mjs cli-releases/agentlink-cli-darwin-arm64/bin/agentlink --executable --no-color
+          "$BUNDLE/bin/agentlink" --help
+          "$BUNDLE/node/bin/AgentLink CLI" --input-type=module -e "await import(\"./$BUNDLE/dist/node_modules/@napi-rs/keyring/index.js\")"
+          node apps/cli/smoke-tui.mjs "$BUNDLE/bin/agentlink" --executable --no-color
       - uses: actions/upload-artifact@v7
         with:
-          name: agentlink-cli-darwin-arm64-unsigned
+          name: agentlink-cli-${{ matrix.target }}-unsigned
           path: cli-releases/*.tar.gz
           if-no-files-found: error
 

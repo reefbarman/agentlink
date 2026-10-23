@@ -39,9 +39,23 @@ permissions:
 
 jobs:
   package:
-    runs-on: macos-15
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            tmpdir: /private/tmp/
+          - target: linux-x64
+            runner: ubuntu-24.04
+            tmpdir: /tmp/
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            tmpdir: /tmp/
+    runs-on: ${{ matrix.runner }}
     env:
-      TMPDIR: /private/tmp/
+      TMPDIR: ${{ matrix.tmpdir }}
+      AGENTLINK_CLI_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,31 +74,37 @@ jobs:
         run: |
           VERSION=$(node -p 'require("./apps/cli/package.json").version')
           test "${REQUESTED_VERSION#cli-v}" = "$VERSION"
-      - run: npm run lint
-      - run: npm test
+      # The full gates run once; the Linux jobs only package and smoke.
+      - if: matrix.target == 'darwin-arm64'
+        run: npm run lint
+      - if: matrix.target == 'darwin-arm64'
+        run: npm test
       - name: Build unsigned standalone CLI
         env:
           AGENTLINK_MAC_SIGNING: unsigned
         run: npm run cli:bundle
       - name: Verify archive, launch, and checksum
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           VERSION=$(node -p 'require("./apps/cli/package.json").version')
-          ARCHIVE="cli-releases/agentlink-cli-darwin-arm64-v${VERSION}.tar.gz"
+          BUNDLE="agentlink-cli-${TARGET}"
+          ARCHIVE="cli-releases/${BUNDLE}-v${VERSION}.tar.gz"
           test -f "$ARCHIVE"
           STAGING=$(mktemp -d)
           trap 'rm -rf "$STAGING"' EXIT
           tar -xzf "$ARCHIVE" -C "$STAGING"
-          node scripts/verify-cli-bundle.mjs "$STAGING/agentlink-cli-darwin-arm64" --allow-unsigned
-          "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --help
-          "$STAGING/agentlink-cli-darwin-arm64/node/bin/AgentLink CLI" --input-type=module -e 'await import(process.argv[1])' "$STAGING/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js"
-          node apps/cli/smoke-tui.mjs "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --executable --no-color
+          node scripts/verify-cli-bundle.mjs "$STAGING/$BUNDLE" --allow-unsigned
+          "$STAGING/$BUNDLE/bin/agentlink" --help
+          "$STAGING/$BUNDLE/node/bin/AgentLink CLI" --input-type=module -e 'await import(process.argv[1])' "$STAGING/$BUNDLE/dist/node_modules/@napi-rs/keyring/index.js"
+          node apps/cli/smoke-tui.mjs "$STAGING/$BUNDLE/bin/agentlink" --executable --no-color
           (cd cli-releases && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256")
       - uses: actions/upload-artifact@v7
         with:
-          name: agentlink-cli-darwin-arm64-release
+          name: agentlink-cli-${{ matrix.target }}-release
           path: |
-            cli-releases/agentlink-cli-darwin-arm64-v*.tar.gz
-            cli-releases/agentlink-cli-darwin-arm64-v*.tar.gz.sha256
+            cli-releases/agentlink-cli-${{ matrix.target }}-v*.tar.gz
+            cli-releases/agentlink-cli-${{ matrix.target }}-v*.tar.gz.sha256
           if-no-files-found: error
 
   release:
@@ -105,16 +125,19 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
-          name: agentlink-cli-darwin-arm64-release
+          pattern: agentlink-cli-*-release
+          merge-multiple: true
           path: dist
       - name: Verify release asset set
         run: |
           VERSION=${RELEASE_VERSION#cli-v}
-          ARCHIVE="dist/agentlink-cli-darwin-arm64-v${VERSION}.tar.gz"
-          test -f "$ARCHIVE"
-          test -f "$ARCHIVE.sha256"
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2
-          (cd dist && sha256sum -c "$(basename "$ARCHIVE").sha256")
+          for TARGET in darwin-arm64 linux-x64 linux-arm64; do
+            ARCHIVE="dist/agentlink-cli-${TARGET}-v${VERSION}.tar.gz"
+            test -f "$ARCHIVE"
+            test -f "$ARCHIVE.sha256"
+            (cd dist && sha256sum -c "$(basename "$ARCHIVE").sha256")
+          done
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 6
       - name: Generate release update metadata
         run: node scripts/generate-release-update.mjs --product cli --dir dist
       - name: Publish CLI preview GitHub Release
@@ -126,7 +149,7 @@ jobs:
           TARGET=$(git rev-parse HEAD)
           {
             node scripts/release-coordinator.mjs notes --unit cli --version "$VERSION" && printf '\n' || true
-            printf '%s\n' 'macOS Apple Silicon preview. This standalone CLI includes Node, ripgrep, and the Keychain runtime. It is unsigned and not notarised. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli`, which verifies the checksum and links `~/.local/bin/agentlink`. See the [CLI installation guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/standalone-cli.md) for manual setup and limitations.'
+            printf '%s\n' 'Preview for macOS Apple Silicon and Linux (x64 and arm64, glibc). This standalone CLI includes Node, ripgrep, and the OS credential-store runtime. It is unsigned and not notarised. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli`, which verifies the checksum and links `~/.local/bin/agentlink`. See the [CLI installation guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/standalone-cli.md) for manual setup and limitations.'
           } > notes.md
           node scripts/release-publish.mjs \
             --tag "cli-v${VERSION}" --target "$TARGET" \

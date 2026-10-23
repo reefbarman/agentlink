@@ -1,6 +1,6 @@
 ---
 name: standalone-cli
-description: Install, configure, and use the macOS Apple Silicon AgentLink CLI preview from a GitHub release or source build. Use for standalone CLI tarballs, terminal coding chat, reviewed file edits and commands, managed TypeScript or JavaScript language intelligence, LSP installation and status, diagnostics, symbols, definitions, references, hover, instructions, skills, MCP configuration, trust, credentials, OAuth, sessions, storage, cancellation, or current limits.
+description: Install, configure, and use the AgentLink CLI preview on macOS Apple Silicon or Linux (x64, arm64) from a GitHub release or source build. Use for standalone CLI tarballs, Linux and headless servers, environment API keys, terminal coding chat, reviewed file edits and commands, managed TypeScript or JavaScript language intelligence, LSP installation and status, diagnostics, symbols, definitions, references, hover, instructions, skills, MCP configuration, trust, credentials, OAuth, sessions, storage, cancellation, or current limits.
 ---
 
 # Standalone AgentLink CLI
@@ -9,7 +9,7 @@ The standalone CLI preview runs a local multi-turn AgentLink coding session with
 
 ## Requirements and packaging
 
-- macOS on Apple Silicon.
+- macOS on Apple Silicon, or Linux on x64 or arm64 with glibc (for example Ubuntu, Debian, Fedora, Arch or SteamOS). Alpine and other musl-based systems are not supported yet.
 - Node.js 22.19.0 or newer for repository builds and the legacy npm package. The GitHub release bundle includes its own pinned Node runtime.
 - An interactive terminal for coding chat and credential entry.
 - Public npm registry access only when installing the legacy npm tarball, because `@napi-rs/keyring` is an exact runtime dependency. The GitHub release archive is self-contained.
@@ -18,13 +18,13 @@ The standalone CLI preview runs a local multi-turn AgentLink coding session with
 
 From a local macOS Apple Silicon VS Code window with AgentLink installed, **AgentLink: Install CLI** in the Command Palette finds the latest published CLI preview. After an unsigned-preview warning, a visible terminal downloads and checksum-verifies the archive, extracts into a unique `~/.local/lib/agentlink/cli-preview.*` directory, and links `~/.local/bin/agentlink`. An existing launcher is never replaced. Add `~/.local/bin` to PATH if needed. This is separate from the signed source-build installer below; it does not bypass macOS security checks, change shell profiles, or alter sessions and credentials. To uninstall, remove that symlink and the unique bundle directory it points to.
 
-From a terminal, the release installer does the same without VS Code. It selects the newest `cli-vX.Y.Z` release (or `--version X.Y.Z`), verifies the SHA-256 checksum, and links `~/.local/bin/agentlink`. It upgrades a launcher that points at an earlier `cli-preview.*` bundle, keeping the old bundle until you delete it, and refuses to replace any other `agentlink` command. Use `--dry-run` to see the selected release first:
+From a terminal on macOS or Linux, the release installer does the same without VS Code. It picks the archive for your system (`darwin-arm64`, `linux-x64` or `linux-arm64`; `--arch x64|arm64` overrides the architecture), selects the newest `cli-vX.Y.Z` release (or `--version X.Y.Z`), verifies the SHA-256 checksum, and links `~/.local/bin/agentlink`. Linux archives start with the first release after 0.38.0. It upgrades a launcher that points at an earlier `cli-preview.*` bundle, keeping the old bundle until you delete it, and refuses to replace any other `agentlink` command. Use `--dry-run` to see the selected release first:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli
 ```
 
-To install manually, download `agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz` and its checksum from the newest [CLI preview release](https://github.com/reefbarman/agentlink/releases?q=cli-v&expanded=true). Releases have a `.sha256` file for the archive; newer releases also have a `SHA256SUMS` file covering every asset. From the directory containing both downloads, verify the archive before extracting (replace `X.Y.Z` with the release version):
+To install manually, download `agentlink-cli-<target>-vX.Y.Z.tar.gz` (`<target>` is `darwin-arm64`, `linux-x64` or `linux-arm64`) and its checksum from the newest [CLI preview release](https://github.com/reefbarman/agentlink/releases?q=cli-v&expanded=true). Releases have a `.sha256` file for the archive; newer releases also have a `SHA256SUMS` file covering every asset. From the directory containing both downloads, verify the archive before extracting (replace `X.Y.Z` with the release version):
 
 ```sh
 shasum -a 256 -c agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz.sha256
@@ -34,7 +34,22 @@ tar -xzf agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz
 ./agentlink-cli-darwin-arm64/bin/agentlink --project /path/to/project
 ```
 
-The archive includes Node 22.23.3, the Keychain runtime, and ripgrep. It needs no separate Node or npm installation to run. Keep the extracted directory together; the `bin/agentlink` launcher resolves its sibling runtime. For a command on your PATH, link that launcher from a directory on PATH without moving the bundle's contents. Quit active CLI sessions before replacing an extracted bundle. This public preview is **unsigned and not notarised**; macOS may warn or refuse to run downloaded executables. Only use it if you trust the release and have verified the checksum. It is not a signed installer and does not alter existing CLI installations, sessions, or credentials. There is no Intel macOS, Linux, or Windows build yet.
+On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`, and the `agentlink-cli-linux-x64` or `agentlink-cli-linux-arm64` directory.
+
+The archive includes Node 22.23.3, the OS credential-store runtime, and ripgrep. It needs no separate Node or npm installation to run. Keep the extracted directory together; the `bin/agentlink` launcher resolves its sibling runtime. For a command on your PATH, link that launcher from a directory on PATH without moving the bundle's contents. Quit active CLI sessions before replacing an extracted bundle. This public preview is **unsigned and not notarised**; macOS may warn or refuse to run downloaded executables. Only use it if you trust the release and have verified the checksum. It is not a signed installer and does not alter existing CLI installations, sessions, or credentials. There is no Intel macOS, musl Linux, or Windows build yet.
+
+### Linux and headless servers
+
+The Linux CLI keeps API keys and Codex sign-in in your desktop keyring through Secret Service (GNOME Keyring or KWallet). It never falls back to plain text or to the kernel keyring, which loses credentials on reboot.
+
+A server or SSH session usually has no keyring. The CLI still starts there: it reports `"credentialStore": "unavailable"` in `agentlink status`, and lists no Codex accounts. Supply API keys through the environment instead:
+
+- OpenAI: `AGENTLINK_OPENAI_API_KEY`, or `OPENAI_API_KEY` if that is not set. Either one takes precedence over a stored key.
+- OpenAI-compatible endpoints: add `"apiKeyEnv": "VARIABLE_NAME"` to the provider in `~/.agentlink/cli/config.json`, for example `"apiKeyEnv": "OPENROUTER_API_KEY"`. That variable is read before the stored key.
+
+`agentlink status` shows whether each key came from the environment or the credential store. Without a keyring, `agentlink auth openai`, `agentlink auth codex` and MCP credential storage fail with an error that explains why. Codex subscription sign-in needs a keyring: sign in from a desktop session, or start a session bus and an unlocked keyring for that user.
+
+The Linux sandbox and the Native Agent terminal are not part of the CLI yet. Commands run as reviewed, unsandboxed local processes, the same as on macOS.
 
 ### Update notifications
 
@@ -50,7 +65,7 @@ From the repository, run `npm run cli:install` or the AgentLink **Build and inst
 
 Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. It requires exactly one valid **Apple Development** identity, or an explicit full name/fingerprint in `AGENTLINK_MAC_SIGNING_IDENTITY`. Inspect available identities with `security find-identity -v -p codesigning`. Missing or ambiguous identities fail the build. The signing tool can ask once for private-key access. Do not share private keys or passwords in chat or commit them.
 
-`npm run cli:bundle` packages without installing. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an unsigned preview under `cli-releases/`, like the public release archive; the signed local installer refuses that preview. Apple Development signing is local development identity, not Developer ID distribution signing or notarisation.
+`npm run cli:bundle` packages without installing. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an unsigned preview under `cli-releases/`, like the public release archive; the signed local installer refuses that preview. Set `AGENTLINK_CLI_TARGET=linux-x64` or `linux-arm64` to build a Linux bundle from any host: its Node, ripgrep and keyring assets are downloaded and checked against pinned hashes. Linux bundles are always unsigned and have no credentials helper. On Linux, `npm run cli:install` installs the bundle built for that machine. Apple Development signing is local development identity, not Developer ID distribution signing or notarisation.
 
 The signed bundle reads and writes shared Keychain credentials through **AgentLink Credentials (CLI)**, a signed single-purpose helper shipped next to `agentlink.js`, so macOS prompts name the CLI and one **Always Allow** is shared with VS Code and Desktop. See the troubleshooting guide's Keychain section. Unsigned previews have no helper and use the Keychain directly. The bundled runtime is named `AgentLink CLI` (it was `node`) and keeps the identifier `com.agentlink.cli.node`, so existing approvals still apply. Existing Keychain items may require **Always Allow** once for that caller. Rebuilds with the same signing identity should preserve access, but certificate changes, locked keychains, or item policies can still prompt. No item permissions are changed automatically. The dedicated runtime is still a general-purpose interpreter, so Keychain trust applies to that executable, not exclusively to AgentLink JavaScript.
 
@@ -58,7 +73,7 @@ The installer refuses unrelated existing `agentlink` entrypoints and retains pre
 
 ### Source builds and legacy npm tarballs
 
-The legacy npm tarball uses external Node and does not provide a dedicated signing identity. Source compilation is platform-neutral for CI; this does not add Linux or Intel CLI runtime support. macOS ARM64 assets and platform restrictions are applied when packaging, not while installing source workspaces.
+The legacy npm tarball uses external Node and does not provide a dedicated signing identity. Source compilation is platform-neutral. Each package build targets one platform (`AGENTLINK_CLI_TARGET` or the host), and its ripgrep asset and `os`/`cpu` restrictions are applied when packaging, not while installing source workspaces.
 
 Exercise the source-build TUI in real colour and no-colour PTYs, including resize, keyboard controls, Ctrl+Z/SIGCONT job control, Ctrl+C exit, and terminal restoration:
 
@@ -105,7 +120,7 @@ agentlink config compatible PROVIDER_ID BASE_URL MODEL_ID CONTEXT_TOKENS OUTPUT_
 agentlink config model PROVIDER_ID/MODEL_ID
 ```
 
-Append `no-auth` only for an endpoint that genuinely requires no API key. API keys and OAuth accounts are stored in the shared macOS Keychain service. Endpoint/model metadata is stored under `~/.agentlink/cli/config.json`; secrets are never written there. `AGENTLINK_HOME` changes the CLI data root for development or testing but does not change the shared Keychain service.
+Append `no-auth` only for an endpoint that genuinely requires no API key. API keys and OAuth accounts are stored in the shared macOS Keychain service, or Secret Service on Linux. On a machine without a credential store, use environment API keys instead (see Linux and headless servers). Endpoint/model metadata is stored under `~/.agentlink/cli/config.json`; secrets are never written there. `AGENTLINK_HOME` changes the CLI data root for development or testing but does not change the shared Keychain service.
 
 ### Instruction profiles
 
@@ -323,10 +338,10 @@ Each MCP tool call is separately reviewed because MCP servers are unsandboxed an
 
 ## Status, security, and limits
 
-`agentlink status --project PATH` reports project identity, selected model, provider readiness, and session count without exposing secrets. `agentlink config show` prints non-secret CLI configuration and Keychain account names.
+`agentlink status --project PATH` reports project identity, selected model, provider readiness (including whether an API key came from the environment or the credential store), credential-store availability, and session count without exposing secrets. `agentlink config show` prints non-secret CLI configuration and Keychain account names.
 
 Before every physical provider request, including a retry, the standalone host checks a conservative input envelope against both a fixed byte ceiling and the selected model's declared input capacity. An over-limit conversation stops before network dispatch; the CLI then condenses the history once and retries (see Session recall and condensing), and only tells you to start a fresh session if it still does not fit. The capacity check estimates tokens the way the condenser does (about four characters a token) and keeps a small safety margin, so it agrees with when condensing happens.
 
-The CLI stores provider secrets, MCP credentials, and OAuth records in macOS Keychain. Local configuration, durable sessions, command rules, retained process output, child results, and project trust state remain under the AgentLink data root. Removing the npm package does not delete that data or Keychain entries. Review and remove them separately when decommissioning a machine or account.
+The CLI stores provider secrets, MCP credentials, and OAuth records in macOS Keychain or Linux Secret Service, and never in plain text. Environment API keys are read for each request and never stored. Local configuration, durable sessions, command rules, retained process output, child results, and project trust state remain under the AgentLink data root. Removing the npm package does not delete that data or Keychain entries. Review and remove them separately when decommissioning a machine or account.
 
 This preview does not claim sandbox confinement, unattended operation, piped chat automation, interactive or persistent PTYs, detached or nested agents, VS Code editor-buffer conflict parity, multi-language intelligence, refactoring/code-action support, or a stable public SDK/CLI contract. Reviewed commands, background writers, stdio MCP servers, and the TypeScript language server are unsandboxed local processes and can exceed file scopes. HTTPS MCP is restricted to approved public destinations, but remote content and all language-server or MCP output remain untrusted.

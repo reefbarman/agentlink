@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
 import {
+  cliReleaseTarget,
   installCliReleaseUpdate,
   recognizeCliPreviewLayout,
   validateArchiveListing,
   verifyCliUpdateBundle,
 } from "./cliReleaseInstall.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   mkdir,
   mkdtemp,
@@ -64,11 +65,23 @@ describe("CLI release installer verification", () => {
         }),
       );
       await expect(
-        verifyCliUpdateBundle(root, "1.2.3"),
+        verifyCliUpdateBundle(root, "1.2.3", "darwin-arm64"),
       ).resolves.toBeUndefined();
+      // An archive for another platform is never installed.
+      await expect(
+        verifyCliUpdateBundle(root, "1.2.3", "linux-x64"),
+      ).rejects.toThrow("does not match this release");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("maps supported hosts to CLI release targets", () => {
+    expect(cliReleaseTarget("darwin", "arm64")).toBe("darwin-arm64");
+    expect(cliReleaseTarget("linux", "x64")).toBe("linux-x64");
+    expect(cliReleaseTarget("linux", "arm64")).toBe("linux-arm64");
+    expect(cliReleaseTarget("darwin", "x64")).toBeUndefined();
+    expect(cliReleaseTarget("win32", "x64")).toBeUndefined();
   });
 
   it("rejects unknown schemas, inventory drift, and hash mismatches", async () => {
@@ -102,19 +115,16 @@ describe("CLI release installer verification", () => {
         manifestPath,
         JSON.stringify({ ...manifest, schemaVersion: 2 }),
       );
-      await expect(verifyCliUpdateBundle(root, "1.2.3")).rejects.toThrow(
+      const verify = () => verifyCliUpdateBundle(root, "1.2.3", "darwin-arm64");
+      await expect(verify()).rejects.toThrow(
         "Unknown CLI bundle manifest version",
       );
       await writeFile(manifestPath, JSON.stringify(manifest));
       await writeFile(path.join(root, "unexpected.txt"), "extra");
-      await expect(verifyCliUpdateBundle(root, "1.2.3")).rejects.toThrow(
-        "inventory",
-      );
+      await expect(verify()).rejects.toThrow("inventory");
       await rm(path.join(root, "unexpected.txt"));
       await writeFile(path.join(root, "bin/agentlink"), "tampered");
-      await expect(verifyCliUpdateBundle(root, "1.2.3")).rejects.toThrow(
-        "SHA-256 mismatch",
-      );
+      await expect(verify()).rejects.toThrow("SHA-256 mismatch");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,6 +1,8 @@
 # AgentLink CLI
 
-macOS Apple Silicon preview of AgentLink's standalone local coding host. The public GitHub release is unsigned and not notarised; the local source installer creates a separate development-signed bundle.
+Preview of AgentLink's standalone local coding host for macOS Apple Silicon and Linux x64/arm64 (glibc). The public GitHub release is unsigned and not notarised; the local source installer creates a separate development-signed bundle on macOS.
+
+On Linux, credentials live in Secret Service (GNOME Keyring or KWallet). On a headless server without one, set `AGENTLINK_OPENAI_API_KEY` (or `OPENAI_API_KEY`), or `apiKeyEnv` on an OpenAI-compatible provider. Build a Linux bundle from any host with `AGENTLINK_CLI_TARGET=linux-x64 npm run cli:bundle` (or `linux-arm64`). See the [standalone CLI guide](../../resources/builtin-skills/documentation/references/standalone-cli.md#linux-and-headless-servers).
 
 ## GitHub release preview
 

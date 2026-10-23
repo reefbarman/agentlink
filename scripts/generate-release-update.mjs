@@ -31,7 +31,11 @@ const PRODUCTS = {
     manifest: "apps/cli/package.json",
     tagPrefix: "cli-v",
     channel: "preview",
-    targets: [["darwin-arm64", "darwin-arm64"]],
+    targets: [
+      ["darwin-arm64", "darwin-arm64"],
+      ["linux-arm64", "linux-arm64"],
+      ["linux-x64", "linux-x64"],
+    ],
   },
 };
 

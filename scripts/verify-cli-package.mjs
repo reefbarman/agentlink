@@ -1,3 +1,9 @@
+import {
+  CLI_RIPGREP_BINARY_VERSION,
+  CLI_RIPGREP_PACKAGE_VERSION,
+  CLI_TARGETS,
+} from "./cli-targets.mjs";
+
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -162,21 +168,30 @@ export const EXPECTED_BUNDLED_DEPENDENCIES = {
   "zod@3.25.76": "3.25.76",
   "zod-to-json-schema": "3.25.2",
 };
-const EXPECTED_RIPGREP = {
-  path: "rg",
-  package: "@vscode/ripgrep-darwin-arm64",
-  packageVersion: "1.18.0",
-  binaryVersion: "15.0.0",
-  sha256: "6ef40346bf31fcce79d9614c7745c198542925a0c7d4911e1ffe794c53392ac1",
-};
+export function expectedCliRipgrep(target) {
+  return {
+    path: "rg",
+    package: target.ripgrep.package,
+    packageVersion: CLI_RIPGREP_PACKAGE_VERSION,
+    binaryVersion: CLI_RIPGREP_BINARY_VERSION,
+    sha256: target.ripgrep.sha256,
+  };
+}
 
 export function verifyCliPackage(manifest, files, runtimeManifest) {
   const errors = [];
+  const target =
+    runtimeManifest && Object.hasOwn(CLI_TARGETS, runtimeManifest.platform)
+      ? CLI_TARGETS[runtimeManifest.platform]
+      : CLI_TARGETS["darwin-arm64"];
+  const expectedRipgrep = expectedCliRipgrep(target);
   if (manifest.bin?.agentlink !== "dist/agentlink.js") {
     errors.push("bin.agentlink must be dist/agentlink.js");
   }
-  if (manifest.os?.join(",") !== "darwin") errors.push("os must be darwin");
-  if (manifest.cpu?.join(",") !== "arm64") errors.push("cpu must be arm64");
+  if (manifest.os?.join(",") !== target.platform)
+    errors.push(`os must be ${target.platform}`);
+  if (manifest.cpu?.join(",") !== target.arch)
+    errors.push(`cpu must be ${target.arch}`);
   if (manifest.engines?.node !== ">=22.19.0") {
     errors.push("engines.node must be >=22.19.0");
   }
@@ -219,8 +234,10 @@ export function verifyCliPackage(manifest, files, runtimeManifest) {
   if (!runtimeManifest || runtimeManifest.schemaVersion !== 1) {
     errors.push("invalid runtime manifest");
   } else {
-    if (runtimeManifest.platform !== "darwin-arm64") {
-      errors.push("runtime manifest platform must be darwin-arm64");
+    if (!Object.hasOwn(CLI_TARGETS, runtimeManifest.platform)) {
+      errors.push(
+        `runtime manifest platform must be one of ${Object.keys(CLI_TARGETS).join(", ")}`,
+      );
     }
     if (runtimeManifest.bundle !== "agentlink.js") {
       errors.push("runtime manifest bundle must be agentlink.js");
@@ -251,7 +268,7 @@ export function verifyCliPackage(manifest, files, runtimeManifest) {
     }
     if (
       JSON.stringify(runtimeManifest.assets?.ripgrep) !==
-      JSON.stringify(EXPECTED_RIPGREP)
+      JSON.stringify(expectedRipgrep)
     ) {
       errors.push("runtime manifest ripgrep asset is invalid");
     }
@@ -265,7 +282,7 @@ export function verifyCliPackage(manifest, files, runtimeManifest) {
     externalImports: EXPECTED_EXTERNAL_IMPORTS,
     bundledDependencies: EXPECTED_BUNDLED_DEPENDENCIES,
     fileCount: sortedFiles.length,
-    ripgrep: EXPECTED_RIPGREP,
+    ripgrep: expectedRipgrep,
   };
 }
 

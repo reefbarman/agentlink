@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compareReleaseVersions,
+  expectedReleaseAsset,
   parseReleaseUpdateMetadata,
   releaseVersionFromTag,
   satisfiesReleaseEngine,
@@ -41,6 +42,19 @@ describe("release selection", () => {
     expect(releaseVersionFromTag("desktop-v0.3.0", "vscode")).toBeUndefined();
     expect(releaseVersionFromTag("sdk-v0.3.0", "cli")).toBeUndefined();
     expect(releaseVersionFromTag("cli-v0.3.0-beta", "cli")).toBeUndefined();
+  });
+  it("names CLI archives for macOS and Linux targets only", () => {
+    expect(expectedReleaseAsset("cli", "0.4.0", "darwin-arm64")).toBe(
+      "agentlink-cli-darwin-arm64-v0.4.0.tar.gz",
+    );
+    expect(expectedReleaseAsset("cli", "0.4.0", "linux-x64")).toBe(
+      "agentlink-cli-linux-x64-v0.4.0.tar.gz",
+    );
+    expect(expectedReleaseAsset("cli", "0.4.0", "linux-arm64")).toBe(
+      "agentlink-cli-linux-arm64-v0.4.0.tar.gz",
+    );
+    expect(expectedReleaseAsset("cli", "0.4.0", "alpine-x64")).toBeUndefined();
+    expect(expectedReleaseAsset("cli", "0.4.0", "win32-x64")).toBeUndefined();
   });
   it("rejects unknown engine formats without guessing compatibility", () => {
     expect(satisfiesReleaseEngine("1.110.0", "^1.109.0")).toBe(true);
