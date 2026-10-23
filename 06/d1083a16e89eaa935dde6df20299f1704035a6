@@ -1,0 +1,92 @@
+packages/sandbox/src/linuxSandboxPrerequisites.test.ts
+  h_e08a86bb3a33a2 1-230
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 157-190
+package.json
+  h_e08a86bb3a33a2 1271
+packages/sandbox/src/linuxSandboxPrerequisites.ts
+  h_e08a86bb3a33a2 1-384
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 6
+scripts/build-apply-seccomp.mjs
+  h_e08a86bb3a33a2 1-249
+packages/sandbox/src/NodeSandboxHelperTransport.ts
+  h_e08a86bb3a33a2 24-26,51-55,92,94,308-311,327-329
+  s_0064a84f5e8923::t_21de5c281d805d 93,95
+packages/sandbox/src/NodeSandboxHelperTransport.test.ts
+  h_e08a86bb3a33a2 99-138,292-293
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 149-150,153-164,679,683,699,729
+scripts/sandbox-runtime-evidence.mjs
+  h_e08a86bb3a33a2 40
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 1824-1952
+packages/sandbox/src/index.ts
+  h_e08a86bb3a33a2 17
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 110-114,118
+packages/sandbox/src/sandboxedProcessLauncher.ts
+  h_e08a86bb3a33a2 60-61,167
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 128-137,141
+scripts/sandbox-linux-runtime.mjs
+  h_e08a86bb3a33a2 1-264
+scripts/sandbox-interactive-helper.mjs
+  h_e08a86bb3a33a2 2-7,458-462,467-469,486-488,665-666,668,671-676,860,869-877,882-893,1061
+  s_0064a84f5e8923::t_9cfe62737fbd37 1,463,485,894-896
+scripts/build-apply-seccomp.test.mjs
+  h_e08a86bb3a33a2 1-52
+scripts/sandbox-linux-runtime.test.mjs
+  h_e08a86bb3a33a2 1-300
+scripts/package-sandbox-runtime.mjs
+  h_e08a86bb3a33a2 1-4,12,122-130,247-253,292-309,328
+  s_0064a84f5e8923::t_c44b3bd4fef6b3 310-311
+scripts/package-sandbox-runtime.test.mjs
+  h_e08a86bb3a33a2 2-10,156-214
+  s_09b809467dcd08::t_39579952a85c56 215
+CHANGELOG.md
+  h_e08a86bb3a33a2 10
+.gitignore
+  h_e08a86bb3a33a2 19
+packages/sandbox/README.md
+  h_e08a86bb3a33a2 16-24
+resources/builtin-skills/documentation/references/release-notes.md
+  s_33b617a76a5e44::t_3cee52c3d64a23 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0064a84f5e8923": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67dad6a7-80e4-41db-93b7-cb3945f08a2b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_09b809467dcd08": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7055c671-314b-4225-bd9d-67c70257e01f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_33b617a76a5e44": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "79274d87-c5d4-4b05-8ddd-fca67e5cca29",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
