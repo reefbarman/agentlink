@@ -11,7 +11,7 @@ scripts/release-plan.mjs
 src/terminal/sandbox/gitMetadataProtection.ts
   h_e08a86bb3a33a2 1-2
 package.json
-  h_e08a86bb3a33a2 1228
+  h_e08a86bb3a33a2 1228,1280
 src/terminal/sandbox/SandboxHelperClient.ts
   h_e08a86bb3a33a2 1-2
 src/terminal/sandbox/sandboxHelperProtocol.ts
@@ -27,7 +27,7 @@ packages/sandbox/src/sandboxPolicyCompiler.ts
 src/terminal/sandbox/SandboxCapabilityAuthority.ts
   h_e08a86bb3a33a2 1-2
 packages/sandbox/package.json
-  h_e08a86bb3a33a2 1-2,4-35,37-42
+  h_e08a86bb3a33a2 1-42
 src/terminal/sandbox/sandboxPolicyCompiler.ts
   h_e08a86bb3a33a2 1-2
 packages/sandbox/src/SandboxCapabilityAuthority.test.ts
