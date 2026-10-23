@@ -1,0 +1,51 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 193,214,229
+  h_e08a86bb3a33a2 213
+src/browser-gateway/helper/askAgentSandboxWorkspace.test.ts
+  h_e08a86bb3a33a2 6-7,9,107,111-112,370-560
+  h_e08a86bb3a33a2 123,561-562
+src/approvals/webview/components/CommandCard.test.tsx
+  h_e08a86bb3a33a2 107-127
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_e08a86bb3a33a2 139-144
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 70-71,76-79,99-103,127,140-145,179-195,275,277,292-293,647-651,695-705,858-860,928-932,1151-1153,1156-1157,1159,1161-1163,1167,1170,1219-1245,1287-1289,1379-1393,1395-1419,1428-1431,1435,1450-1452,1768,1987-1993,1995-1997,2013,2021-2030,2032,2044-2046,2049-2051,2055-2065,2070
+  h_e08a86bb3a33a2 196-199,276,1155,1158,1286,1290,1394,1420,1432,1998-2012,2014-2020,2043,2047
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 11309-11311,11314-11317,12020-12123
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 299,6549,6553-6556,9043,9067-9069
+  s_05a553ede5f61e::t_17c3330e299c98 6552
+src/browser-gateway/dataPlane/interactionPayload.test.ts
+  h_e08a86bb3a33a2 30-47
+src/approvals/webview/components/CommandExecutionContext.tsx
+  h_e08a86bb3a33a2 24-36,102-106,144-146,167-177
+  s_05a553ede5f61e::t_cf2a4498f93e93 143,147
+packages/protocol/src/approvalTransport.ts
+  h_e08a86bb3a33a2 118-124
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_05a553ede5f61e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0edf0e0e-5d7a-4c7e-8287-13d64a13398f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
