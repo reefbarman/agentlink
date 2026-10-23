@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/sandbox",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "private": true,
   "description": "Portable macOS command sandbox policy, helper protocol, and launcher for AgentLink hosts",
   "license": "MIT",
@@ -33,8 +33,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/node-host": "0.30.0",
-    "@agentlink/protocol": "0.30.0",
+    "@agentlink/node-host": "0.31.0",
+    "@agentlink/protocol": "0.31.0",
     "picomatch": "^4.0.5"
   },
   "engines": {
