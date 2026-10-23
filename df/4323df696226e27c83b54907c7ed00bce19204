@@ -1,0 +1,101 @@
+apps/desktop/src/setup.ts
+  h_e08a86bb3a33a2 501,507,555
+src/browser-gateway/helper/askAgentSandboxWorkspace.test.ts
+  h_e08a86bb3a33a2 107,118,120,125,169-182
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2255
+scripts/verify-desktop-package.mjs
+  h_e08a86bb3a33a2 5,7-8,41-45,48,55-58,61,133-137,141
+  s_05b4774cd77188::t_d96d596d277f5f 138-139
+apps/desktop/src/sharedCredentialStore.test.ts
+  h_e08a86bb3a33a2 1-49
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 42
+apps/desktop/src/desktopMcpPath.ts
+  h_e08a86bb3a33a2 19,24-26
+  s_05b4774cd77188::t_2cabc857155a6c 21-23
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 8862-8867,8870
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 3,87-102
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 189,199
+apps/desktop/src/DesktopMcpWindow.ts
+  h_e08a86bb3a33a2 37-38,113-115
+apps/desktop/src/desktopLoginItem.test.ts
+  h_e08a86bb3a33a2 46,54,56,63,69,73-82
+  s_05b4774cd77188::t_2927bd615877ea 62,64,83-84
+apps/desktop/src/sharedCredentialStore.ts
+  h_e08a86bb3a33a2 14-41
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 24
+apps/desktop/package.mjs
+  h_e08a86bb3a33a2 1-4,11,24-27,59,74-77,111-112,180,182-184,207-214,217,221,266-267,269,272-281
+  s_05b4774cd77188::t_e5a55005906c8a 268,270-271
+apps/desktop/src/desktopLoginItem.ts
+  h_e08a86bb3a33a2 10-11,24-30,39,41,51-52,54,69,71,73,78,83-84,86-87,89
+  s_05b4774cd77188::t_9ddd7e7382d3e3 9,12,50,53,72,82,85,88
+apps/desktop/electron-builder.yml
+  h_e08a86bb3a33a2 8-9,36-53
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 421-425
+apps/desktop/src/desktopPlatform.ts
+  h_e08a86bb3a33a2 1-38
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 13,196,755-773,778,785
+scripts/verify-desktop-package.test.mjs
+  h_e08a86bb3a33a2 2-4,54-95
+  s_05b4774cd77188::t_01dee3d995d504 1,96-97
+CHANGELOG.md
+  h_e08a86bb3a33a2 14-15
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 35-39,106,145-148,412,540,726-732,943,953-955,959-961,1014,1018
+  s_05b4774cd77188::t_88e7795c0dadb6 956-958
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 110
+apps/desktop/src/setup.html
+  h_e08a86bb3a33a2 20-21
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 98-102
+apps/desktop/src/desktopMcpPath.test.ts
+  h_e08a86bb3a33a2 44-58,62-63
+apps/desktop/src/desktopPlatform.test.ts
+  h_e08a86bb3a33a2 1-37
+apps/desktop/esbuild.mjs
+  h_e08a86bb3a33a2 75-76
+scripts/package-keychain-runtime.mjs
+  h_e08a86bb3a33a2 6-7,13-19,56,59-62
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 65,75
+resources/builtin-skills/documentation/references/release-notes.md
+  s_5eb4a62bcdaa66::t_d9d5d6f211fe89 14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df4323df696226e27c83b54907c7ed00bce19204",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_05b4774cd77188": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c23ee4d-0c66-4ead-a08e-4f4fa10620bc",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_5eb4a62bcdaa66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "19116d5e-0a97-491e-b964-61a743a4d8db",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
