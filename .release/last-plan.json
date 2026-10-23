@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-  "createdAt": "2026-10-23T03:00:37.573Z",
+  "sourceSha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
+  "createdAt": "2026-10-23T03:26:37.233Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,139 +10,124 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.66.2",
-      "baselineRef": "v1.66.2",
-      "reserved": "1.66.2",
-      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "published": "1.67.0",
+      "baselineRef": "v1.67.0",
+      "reserved": "1.67.0",
+      "commits": ["3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.67.0",
-      "effectiveBump": "minor",
+      "version": "1.67.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.67.0",
+      "tag": "v1.67.1",
       "notes": [
         {
-          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
-          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
+          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
+          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.52.2",
-      "baselineRef": "desktop-v0.52.2",
-      "reserved": "0.52.2",
-      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "published": "0.53.0",
+      "baselineRef": "desktop-v0.53.0",
+      "reserved": "0.53.0",
+      "commits": ["3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.53.0",
-      "effectiveBump": "minor",
+      "version": "0.53.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.53.0",
+      "tag": "desktop-v0.53.1",
       "notes": [
         {
-          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
-          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
+          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
+          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.37.0",
-      "baselineRef": "cli-v0.37.0",
-      "reserved": "0.37.0",
-      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "published": "0.38.0",
+      "baselineRef": "cli-v0.38.0",
+      "reserved": "0.38.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.38.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.38.0",
-      "notes": [
-        {
-          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
-          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.28.1",
-      "baselineRef": "sdk-v0.28.1",
-      "reserved": "0.28.1",
-      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "published": "0.29.0",
+      "baselineRef": "sdk-v0.29.0",
+      "reserved": "0.29.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.29.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.29.0",
-      "notes": [
-        {
-          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
-          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.24.2",
-      "baselineRef": "assistant-v0.24.2",
-      "reserved": "0.24.2",
-      "commits": ["9d7dbcab702453c91922e3f8bb21c927922ace16"],
+      "published": "0.25.0",
+      "baselineRef": "assistant-v0.25.0",
+      "reserved": "0.25.0",
+      "commits": [
+        "5067671d95ac8b21e38281ae3d85b531baaf33c1",
+        "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.25.0",
-      "effectiveBump": "minor",
+      "version": "0.25.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.25.0",
+      "tag": "assistant-v0.25.1",
       "notes": [
         {
-          "sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
-          "subject": "feat(sandbox): add piped sandboxed process launches for non-terminal hosts",
-          "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+          "sha": "5067671d95ac8b21e38281ae3d85b531baaf33c1",
+          "subject": "fix(server): raise Inbox entries for Assistant chat background-agent approvals",
+          "summary": "Assistant chats now raise an Inbox needs-approval entry, with badge and notifications, when one of their background agents waits for approval.",
+          "breaking": false
+        },
+        {
+          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
+          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
+          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "5275472d81395cb2333fe368fa7e2cdf16afce19": {
+    "5067671d95ac8b21e38281ae3d85b531baaf33c1": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Assistant chats that stop on an approval card or finish a reply now raise Inbox entries, so the badge, desktop notifications and delayed pushes tell the owner the chat is waiting.}]}</br>",
+      "summary": "Assistant chats now raise an Inbox needs-approval entry, with badge and notifications, when one of their background agents waits for approval.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     },
-    "9d7dbcab702453c91922e3f8bb21c927922ace16": {
-      "bump": "minor",
+    "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d": {
+      "bump": "patch",
       "breakingUnits": [],
-      "summary": "Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.",
+      "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

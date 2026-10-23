@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.67.1
+
 - AgentLink Assistant: a background agent in a chat that is waiting for your approval now raises "needs your approval" in the Inbox too, so the Assistant tab badge, desktop notifications and phone pushes tell you.
 
 ## 1.67.0
