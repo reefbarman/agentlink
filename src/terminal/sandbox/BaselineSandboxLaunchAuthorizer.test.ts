@@ -16,9 +16,9 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { BaselineSandboxLaunchAuthorizer } from "./BaselineSandboxLaunchAuthorizer.js";
-import { SandboxPreparationError } from "./SandboxPreparationError.js";
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
 import type { SandboxCapabilityGrantTimingEvent } from "./sandboxCapabilityGrantTiming.js";
+import { SandboxPreparationError } from "./SandboxPreparationError.js";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -189,9 +189,15 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       expect(environment.TMPDIR).toBe(
         await realpath(test.hostTemporaryDirectory),
       );
+      // Linux has no /private alias for /tmp.
       expect(policy.writableRoots).toEqual(
-        expect.arrayContaining(["/tmp", "/private/tmp"]),
+        expect.arrayContaining(
+          process.platform === "darwin" ? ["/tmp", "/private/tmp"] : ["/tmp"],
+        ),
       );
+      if (process.platform !== "darwin") {
+        expect(policy.writableRoots).not.toContain("/private/tmp");
+      }
       expect(policy.readableRoots).toEqual(["/"]);
       expect(policy.deniedWriteRoots).toEqual(
         expect.arrayContaining([
