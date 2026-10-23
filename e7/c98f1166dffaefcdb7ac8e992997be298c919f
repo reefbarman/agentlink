@@ -1,0 +1,69 @@
+apps/desktop/package.mjs
+  h_e08a86bb3a33a2 13,175-181
+  h_e08a86bb3a33a2 182
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 14,157-192,297-377
+  h_e08a86bb3a33a2 378-380
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 110
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 49,329-330,381,11222-11311
+  s_0432c0e94cd2fc::t_1ecf5b4cca690c 11312-11313
+packages/sandbox/src/NodeSandboxHelperTransport.ts
+  h_e08a86bb3a33a2 42-47,312
+CLAUDE.md
+  h_e08a86bb3a33a2 167
+scripts/verify-desktop-package.mjs
+  h_e08a86bb3a33a2 26-27
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 136-141,580-590,592-594,596-604,642,687,701-703
+  h_e08a86bb3a33a2 135,591,595,686,704-705
+src/agent/webview/components/ToolCallBlock.tsx
+  h_e08a86bb3a33a2 1285-1289,1294-1308
+  s_0432c0e94cd2fc::t_c9ecb3978b3dc4 1284,1290-1291
+src/agent/webview/components/ToolCallBlock.test.tsx
+  h_e08a86bb3a33a2 179-202
+scripts/package-sandbox-runtime.mjs
+  h_e08a86bb3a33a2 122,126,134-135,223-225,227,237,260
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 189-200
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 2044-2047,2051-2057
+  s_0432c0e94cd2fc::t_5538e67f2fd195 2058-2059
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 294-300,952,1136-1137,1228-1229,1499-1509,2564-2568,6211-6224,6227,6536-6538,8453-8460,8462,8597-8647,8694-8705,8708-8714,10112
+  s_0432c0e94cd2fc::t_d3579003595539 8461,8463-8465,8648-8649
+src/browser-gateway/helper/askAgentSandboxWorkspace.test.ts
+  h_e08a86bb3a33a2 1-288
+packages/sandbox/src/sandboxedProcessLauncher.ts
+  h_e08a86bb3a33a2 53-59,162-164
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 1-716
+scripts/verify-desktop-package.test.mjs
+  h_e08a86bb3a33a2 26-27
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0432c0e94cd2fc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "65f6057e-5adb-4590-9b91-c5fb60f8f3cf",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
