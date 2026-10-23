@@ -20,4 +20,5 @@ export * from "./turnFailureDetail.js";
 export * from "./webTools.js";
 export * from "./workspaceExecutionBackend.js";
 export * from "./workspaceHostRuntime.js";
+export * from "./workspaceReadFileContext.js";
 export * from "./workspaceOwnership.js";

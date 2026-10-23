@@ -34,6 +34,7 @@ export * from "./mcpStdioTools.js";
 export * from "./nodeHostAgent.js";
 export * from "./readTools.js";
 export * from "./sessionPreferences.js";
+export * from "./structuredConfigRedaction.js";
 export * from "./sharedOpenAiCompatibleConfig.js";
 export * from "./sharedOpenAiCompatibleCredentials.js";
 export * from "./skillCatalogProjection.js";

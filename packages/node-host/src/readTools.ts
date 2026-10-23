@@ -9,6 +9,7 @@ import {
   createNodeHostLocalFileSystem,
   type NodeHostFileSystem,
 } from "./fileSystem.js";
+import { redactNodeHostStructuredConfig } from "./structuredConfigRedaction.js";
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_LINE_LENGTH = 500;
@@ -119,11 +120,10 @@ export function createNodeHostReadTools<
           if (stat.size > maxFileBytes) return error("file_too_large");
           const bytes = await files.readFile(resolved.path);
           if (isBinary(bytes)) return error("binary_file");
-          const redacted = redactStructuredConfig(
+          const redacted = redactNodeHostStructuredConfig(
             resolved.path,
             bytes.toString("utf8"),
           );
-          if (redacted.error) return error(redacted.error);
           const lines = redacted.content.split(/\r?\n/u);
           const offset = readBoundedInteger(
             input.offset,
@@ -397,8 +397,10 @@ async function searchPath(options: {
   if (stat.kind === "file") {
     const bytes = await files.readFile(target).catch(() => undefined);
     if (!bytes || bytes.length > MAX_FILE_BYTES || isBinary(bytes)) return;
-    const redacted = redactStructuredConfig(target, bytes.toString("utf8"));
-    if (redacted.error) return;
+    const redacted = redactNodeHostStructuredConfig(
+      target,
+      bytes.toString("utf8"),
+    );
     for (const [index, line] of redacted.content.split(/\r?\n/u).entries()) {
       if (options.matches.length >= options.limit) return;
       if (options.regex.test(line)) {
@@ -433,71 +435,6 @@ function isPathWithin(candidate: string, root: string): boolean {
       relative !== ".." &&
       !path.isAbsolute(relative))
   );
-}
-
-function redactStructuredConfig(
-  filePath: string,
-  content: string,
-):
-  | { content: string; redacted: boolean; error?: never }
-  | {
-      content: string;
-      redacted: boolean;
-      error: string;
-    } {
-  if (!isStructuredConfigPath(filePath)) return { content, redacted: false };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return {
-      content: "",
-      redacted: false,
-      error: "malformed_structured_config",
-    };
-  }
-  const redacted = redactStructuredValue(parsed);
-  return {
-    content: `${JSON.stringify(redacted.value, null, 2)}\n`,
-    redacted: redacted.changed,
-  };
-}
-
-function isStructuredConfigPath(filePath: string): boolean {
-  const base = path.basename(filePath).toLowerCase();
-  return (
-    base.endsWith(".json") ||
-    base.endsWith(".jsonc") ||
-    base.includes("config") ||
-    base.includes("settings")
-  );
-}
-
-function redactStructuredValue(value: unknown): {
-  value: unknown;
-  changed: boolean;
-} {
-  if (Array.isArray(value)) {
-    const entries = value.map(redactStructuredValue);
-    return {
-      value: entries.map((entry) => entry.value),
-      changed: entries.some((entry) => entry.changed),
-    };
-  }
-  if (!value || typeof value !== "object") return { value, changed: false };
-  let changed = false;
-  const result: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (/(api[-_]?key|auth|credential|password|secret|token)/iu.test(key)) {
-      result[key] = "[REDACTED]";
-      changed = true;
-      continue;
-    }
-    const redacted = redactStructuredValue(nested);
-    result[key] = redacted.value;
-    changed ||= redacted.changed;
-  }
-  return { value: result, changed };
 }
 
 function isBinary(bytes: Uint8Array): boolean {

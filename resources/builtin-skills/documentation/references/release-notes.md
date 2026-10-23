@@ -4,6 +4,8 @@
 
 - `search_workspace_sessions` can now search past sessions from other git worktrees of the same repository with `include_worktrees: true`. Sibling worktree history is read without being modified and has its own index, so default searches are unchanged. Matches show the worktree root as `origin`, and `read_workspace_session_excerpt` reads them directly.
 
+- The CLI and Assistant now use `read_file` with `view: "context"` for the same first-pass context shape as VS Code instead of advertising a separate `get_context` tool. The shared workspace-host view adds VS Code-shaped metadata, normalised Git status, content hashes, per-session unchanged-range deduplication, long-line continuation, bounded symbol outlines, and diagnostic summaries when managed TypeScript/JavaScript intelligence is enabled. Existing project-relative scopes, ignored/protected paths, remote execution backends, and reviewed-write baseline checks are unchanged; the standalone default content view remains intentionally narrower than VS Code's rich content reader. Structured JSON/JSONC settings now use VS Code's narrower eligibility rules and line-preserving redaction, so source config modules and ordinary JSON files remain readable and redacted line numbers still match disk.
+
 ## 1.65.1
 
 - Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.

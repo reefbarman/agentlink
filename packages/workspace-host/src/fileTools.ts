@@ -11,6 +11,7 @@ import {
   createNodeHostApplyDiffTools,
   createNodeHostReadTools,
   createNodeHostWriteTools,
+  redactNodeHostStructuredConfig,
 } from "@agentlink/node-host";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -24,9 +25,14 @@ import {
   type WorkspaceProcessHandle,
   type WorkspaceProcessLauncher,
 } from "./workspaceExecutionBackend.js";
+import {
+  buildWorkspaceReadFileContext,
+  detectWorkspaceReadFileLanguage,
+  WorkspaceReadFileContextTracker,
+  type WorkspaceReadFileContextEnrichment,
+} from "./workspaceReadFileContext.js";
 
 const MAX_CONTEXT_BYTES = 1_000_000;
-const MAX_CONTEXT_LINES = 200;
 const MAX_SEARCH_RESULTS = 100;
 const MAX_SEARCH_OUTPUT_BYTES = 2_000_000;
 const SEARCH_TIMEOUT_MS = 10_000;
@@ -104,11 +110,22 @@ export interface CreateWorkspaceFileToolsOptions {
     request: WorkspaceFileScopeRequest,
     relativePath: string,
   ) => boolean | Promise<boolean>;
+  /** @deprecated Use enrichReadFileContext for VS Code-shaped enrichment. */
   readonly enrichContext?: (
     request: WorkspaceFileScopeRequest,
     relativePath: string,
     signal?: AbortSignal,
   ) => unknown | Promise<unknown>;
+  readonly enrichReadFileContext?: (
+    request: WorkspaceFileScopeRequest,
+    relativePath: string,
+    options: {
+      readonly includeSymbols: boolean;
+      readonly signal?: AbortSignal;
+    },
+  ) =>
+    | WorkspaceReadFileContextEnrichment
+    | Promise<WorkspaceReadFileContextEnrichment>;
   readonly onFileCommitted?: (
     request: WorkspaceFileScopeRequest,
     relativePath: string,
@@ -157,6 +174,7 @@ export function createWorkspaceFileTools(
   const resolveScopes: ResolveWorkspaceFileScopes =
     options.resolveScopes ??
     (() => [{ path: ".", kind: "directory", access: "read_write" }]);
+  const contextTracker = new WorkspaceReadFileContextTracker();
   const resolveTools: HostToolResolver = async (request) => {
     const scopes = await resolveFileScopes(
       files,
@@ -193,27 +211,29 @@ export function createWorkspaceFileTools(
         );
       }
     }
-    return [
-      ...tools.map((tool) =>
-        wrapProjectTool(
-          files,
-          tool,
-          request,
-          projectRoot,
-          resolveScopes,
-          options.canWritePath,
-          options.onFileCommitted,
-          options.mutations,
-        ),
-      ),
-      createContextTool(
-        runtime,
-        request,
-        projectRoot,
-        resolveScopes,
-        options.enrichContext,
-      ),
-    ];
+    return tools.map((tool) =>
+      tool.definition.name === "read_file"
+        ? createWorkspaceReadFileTool(
+            runtime,
+            tool,
+            request,
+            projectRoot,
+            resolveScopes,
+            options.enrichReadFileContext,
+            options.enrichContext,
+            contextTracker,
+          )
+        : wrapProjectTool(
+            files,
+            tool,
+            request,
+            projectRoot,
+            resolveScopes,
+            options.canWritePath,
+            options.onFileCommitted,
+            options.mutations,
+          ),
+    );
   };
 
   const authorizeToolCall: AuthorizeToolCall = async (request) => {
@@ -695,29 +715,50 @@ async function executeRipgrepSearch(
   });
 }
 
-function createContextTool(
+function createWorkspaceReadFileTool(
   runtime: FileToolsRuntime,
+  contentTool: HostTool,
   discovery: HostToolResolveRequest,
   projectRoot: string,
   resolveScopes: ResolveWorkspaceFileScopes,
-  enrichContext: CreateWorkspaceFileToolsOptions["enrichContext"],
+  enrichReadFileContext: CreateWorkspaceFileToolsOptions["enrichReadFileContext"],
+  enrichLegacyContext: CreateWorkspaceFileToolsOptions["enrichContext"],
+  tracker: WorkspaceReadFileContextTracker,
 ): HostTool {
   return defineTool({
-    name: "get_context",
+    name: "read_file",
     description:
-      "Read a bounded project-relative text file slice with SHA-256 baseline, file metadata, and explicit Git availability.",
+      'Read a project-relative text file with line numbers. Use view "context" for a VS Code-shaped first-pass pack with bounded content, file metadata, Git status, optional symbols and diagnostics, and session working-set state. The default "content" view keeps the narrower exact text reader.',
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "string", minLength: 1 },
+        path: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Project-relative path. Absolute paths and project escapes are rejected.",
+        },
+        view: { type: "string", enum: ["content", "context"] },
         offset: { type: "integer", minimum: 1 },
-        limit: { type: "integer", minimum: 1, maximum: MAX_CONTEXT_LINES },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 400,
+          description:
+            "Maximum lines: 200 for the default content view, 400 for context.",
+        },
+        include_symbols: { type: "boolean" },
+        character_offset: { type: "integer", minimum: 0 },
+        dedupe_unchanged_content: { type: "boolean" },
+        refresh: { type: "boolean" },
       },
       required: ["path"],
       additionalProperties: false,
     },
     effect: "read",
-    displayInput: (input) => ({ path: input.path }),
+    authorization: "none",
+    parallelSafe: true,
+    displayInput: (input) => ({ path: input.path, view: input.view }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
       const { files } = runtime;
@@ -725,9 +766,7 @@ function createContextTool(
         files,
         projectRoot,
         input.path,
-        {
-          allowAbsent: false,
-        },
+        { allowAbsent: false },
       );
       if (!resolved.ok) return toolError(resolved.error);
       const relativePath = toRelativePath(projectRoot, resolved.path);
@@ -745,6 +784,45 @@ function createContextTool(
         return toolError(protection.reason ?? "protected_content");
       }
       if (isIgnoredPath(relativePath)) return toolError("path_ignored");
+      if (
+        input.view !== undefined &&
+        input.view !== "content" &&
+        input.view !== "context"
+      ) {
+        return toolError("invalid_read_file_view");
+      }
+      if (
+        input.view !== "context" &&
+        typeof input.limit === "number" &&
+        input.limit > 200
+      ) {
+        return toolError("content_limit_exceeds_200");
+      }
+      if (
+        input.view !== "context" &&
+        (input.include_symbols !== undefined ||
+          input.character_offset !== undefined ||
+          input.dedupe_unchanged_content !== undefined ||
+          input.refresh !== undefined)
+      ) {
+        return toolError("context_options_require_context_view");
+      }
+      if (input.view !== "context") {
+        const contentInput = { ...input };
+        delete contentInput.view;
+        delete contentInput.include_symbols;
+        delete contentInput.character_offset;
+        delete contentInput.dedupe_unchanged_content;
+        delete contentInput.refresh;
+        return projectResult(
+          await contentTool.execute(
+            { ...contentInput, path: resolved.path },
+            context,
+          ),
+          projectRoot,
+          "read_file",
+        );
+      }
       const stat = await files.lstat(resolved.path).catch(() => undefined);
       if (stat?.kind !== "file" || stat.nlink > 1) {
         return toolError("not_a_private_regular_file");
@@ -752,21 +830,24 @@ function createContextTool(
       if (stat.size > MAX_CONTEXT_BYTES) return toolError("file_too_large");
       const bytes = await files.readFile(resolved.path);
       if (bytes.includes(0)) return toolError("binary_file");
-      const text = bytes.toString("utf8");
-      const lines = text.split(/\r?\n/u);
-      const offset = boundedInteger(input.offset, 1, 1, lines.length || 1);
-      const limit = boundedInteger(
-        input.limit,
-        MAX_CONTEXT_LINES,
-        1,
-        MAX_CONTEXT_LINES,
+      const redacted = redactNodeHostStructuredConfig(
+        resolved.path,
+        bytes.toString("utf8"),
       );
-      const selected = lines.slice(offset - 1, offset - 1 + limit);
-      const [git, languageIntelligence] = await Promise.all([
+      const includeSymbols = input.include_symbols !== false;
+      const [git, enrichment, legacyLanguageIntelligence] = await Promise.all([
         readGitStatus(runtime, projectRoot, relativePath, discovery),
-        enrichContext
+        enrichReadFileContext
           ? Promise.resolve(
-              enrichContext(discovery, relativePath, context.signal),
+              enrichReadFileContext(discovery, relativePath, {
+                includeSymbols,
+                signal: context.signal,
+              }),
+            ).catch(() => undefined)
+          : undefined,
+        enrichLegacyContext
+          ? Promise.resolve(
+              enrichLegacyContext(discovery, relativePath, context.signal),
             ).catch((error) => ({
               state: "failed",
               reason: `language_context_failed:${toolErrorCode(error)}`,
@@ -774,34 +855,42 @@ function createContextTool(
             }))
           : undefined,
       ]);
-      const payload = {
-        path: relativePath,
-        contentHash: contentHash(bytes),
-        bytes: bytes.length,
-        modifiedAt: new Date(stat.mtimeMs).toISOString(),
-        offset,
-        totalLines: lines.length,
-        truncated: offset - 1 + selected.length < lines.length,
-        text: selected
-          .map((line, index) => `${offset + index} | ${line}`)
-          .join("\n"),
-        git,
-        ...(languageIntelligence !== undefined ? { languageIntelligence } : {}),
-      };
-      return {
-        modelContent: JSON.stringify(payload),
-        displayContent: {
+      const result = buildWorkspaceReadFileContext(
+        {
+          sessionId: context.sessionId,
           path: relativePath,
-          contentHash: payload.contentHash,
-          lines: selected.length,
-          truncated: payload.truncated,
-          git: git.status,
-          ...(languageIntelligence &&
-          typeof languageIntelligence === "object" &&
-          "state" in languageIntelligence
-            ? { languageIntelligence: languageIntelligence.state }
+          absolutePath: resolved.path,
+          bytes,
+          modifiedMs: stat.mtimeMs,
+          content: redacted.content,
+          redacted: redacted.redacted,
+          ...(redacted.status ? { redactionStatus: redacted.status } : {}),
+          language: detectWorkspaceReadFileLanguage(relativePath),
+          ...(git.status === "available" ? { gitStatus: git.value } : {}),
+          ...(enrichment ? { enrichment } : {}),
+          ...(legacyLanguageIntelligence !== undefined
+            ? { legacyLanguageIntelligence }
             : {}),
+          params: {
+            ...(typeof input.offset === "number"
+              ? { offset: input.offset }
+              : {}),
+            ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+            ...(typeof input.character_offset === "number"
+              ? { characterOffset: input.character_offset }
+              : {}),
+            ...(input.dedupe_unchanged_content === true
+              ? { dedupeUnchangedContent: true }
+              : {}),
+            ...(input.refresh === true ? { refresh: true } : {}),
+          },
         },
+        tracker,
+      );
+      if (!result.ok) return toolError(result.error);
+      return {
+        modelContent: JSON.stringify(result.payload, null, 2),
+        displayContent: result.display,
       };
     },
   });
@@ -827,14 +916,12 @@ function relativePathSchema(schema: CoreModelJsonSchema): CoreModelJsonSchema {
 
 function projectDescription(name: string): string {
   switch (name) {
-    case "read_file":
-      return "Read a bounded text file using a project-relative path. Sensitive or ignored content is withheld.";
     case "list_files":
       return "List bounded project files using a project-relative directory path.";
     case "search_files":
       return "Run bounded regex text search using a project-relative path. This is not semantic search.";
     case "write_file":
-      return "Propose a reviewed project-relative file replacement. Existing files require the SHA-256 hash returned by get_context; new files require expectedAbsent=true.";
+      return 'Propose a reviewed project-relative file replacement. Existing files require the SHA-256 hash returned by read_file with view "context"; new files require expectedAbsent=true.';
     case "apply_diff":
       return "Propose reviewed canonical SEARCH/DIVIDER/REPLACE blocks for one project-relative file pinned by its SHA-256 hash.";
     default:
@@ -1451,7 +1538,7 @@ async function readGitStatus(
           executable,
           args: [
             "status",
-            "--short",
+            "--porcelain=v1",
             "--untracked-files=all",
             "--",
             relativePath,
@@ -1478,7 +1565,10 @@ async function readGitStatus(
           clearTimeout(timer);
           resolve(
             exit.exitCode === 0
-              ? { status: "available", value: output.trim() || "clean" }
+              ? {
+                  status: "available",
+                  value: normalizeWorkspaceGitStatus(output + decoder.end()),
+                }
               : { status: "unavailable" },
           );
         }),
@@ -1488,6 +1578,33 @@ async function readGitStatus(
       },
     );
   });
+}
+
+export type WorkspaceGitStatus =
+  | "unmerged"
+  | "staged"
+  | "modified"
+  | "untracked"
+  | "clean";
+
+export function normalizeWorkspaceGitStatus(
+  output: string,
+): WorkspaceGitStatus {
+  const codes = output
+    .split(/\r?\n/gu)
+    .map((line) => line.slice(0, 2))
+    .filter((code) => code.length === 2 && code !== "##");
+  if (codes.some((code) => /^(?:DD|AU|UD|UA|DU|AA|UU)$/u.test(code))) {
+    return "unmerged";
+  }
+  if (codes.some((code) => code[0] !== " " && code[0] !== "?")) {
+    return "staged";
+  }
+  if (codes.some((code) => code[1] !== " " && code[1] !== "?")) {
+    return "modified";
+  }
+  if (codes.some((code) => code === "??")) return "untracked";
+  return "clean";
 }
 
 function sameTurn(

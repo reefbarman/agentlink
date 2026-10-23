@@ -8,6 +8,7 @@ import { createNodeHostLocalFileSystem } from "@agentlink/node-host";
 
 import {
   createWorkspaceFileTools,
+  normalizeWorkspaceGitStatus,
   type WorkspaceFileApprovalDisplay,
 } from "./fileTools.js";
 import type {
@@ -56,6 +57,7 @@ async function fixture() {
     root,
     files,
     sessionGrants,
+    toolNames: tools.map((tool) => tool.definition.name),
     tool(name: string) {
       const tool = tools.find(
         (candidate) => candidate.definition.name === name,
@@ -81,7 +83,22 @@ function hash(value: string): string {
 }
 
 describe("workspace file tools", () => {
-  it("enriches context without letting unavailable language analysis erase file context", async () => {
+  it("normalizes porcelain Git status with VS Code's priority", () => {
+    expect(normalizeWorkspaceGitStatus("")).toBe("clean");
+    expect(normalizeWorkspaceGitStatus("## main...origin/main\n")).toBe(
+      "clean",
+    );
+    expect(normalizeWorkspaceGitStatus("?? new.ts\n")).toBe("untracked");
+    expect(normalizeWorkspaceGitStatus(" M changed.ts\n")).toBe("modified");
+    expect(normalizeWorkspaceGitStatus("M  staged.ts\n M changed.ts\n")).toBe(
+      "staged",
+    );
+    expect(
+      normalizeWorkspaceGitStatus("UU conflicted.ts\nM  staged.ts\n"),
+    ).toBe("unmerged");
+  });
+
+  it("enriches the read_file context view without changing file access", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "workspace-files-lsp-"),
     );
@@ -93,28 +110,60 @@ describe("workspace file tools", () => {
       let observedSignal: AbortSignal | undefined;
       const files = createWorkspaceFileTools({
         projectRoot: root,
-        enrichContext: async (_request, _relativePath, signal) => {
-          observedSignal = signal;
+        enrichReadFileContext: async (_request, _relativePath, options) => {
+          observedSignal = options.signal;
           return {
-            state: "unavailable",
-            reason: "TypeScript intelligence is not installed",
-            retryable: false,
+            diagnostics: { errors: 0, warnings: 1, note: "fixture" },
+            symbols: { variable: ["value (line 1)"] },
           };
         },
       });
       const tools = await files.resolveTools(discovery);
       const controller = new AbortController();
       const result = await tools
-        .find((tool) => tool.definition.name === "get_context")!
+        .find((tool) => tool.definition.name === "read_file")!
         .execute(
-          { path: "index.ts" },
+          { path: "index.ts", view: "context" },
           { ...context(), signal: controller.signal },
         );
       expect(observedSignal).toBe(controller.signal);
       expect(JSON.parse(String(result.modelContent))).toMatchObject({
         path: "index.ts",
-        text: expect.stringContaining("export const value"),
-        languageIntelligence: { state: "unavailable", retryable: false },
+        content: expect.stringContaining("export const value"),
+        diagnostics: { errors: 0, warnings: 1 },
+        symbols: { variable: ["value (line 1)"] },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the legacy enrichContext SDK callback and payload", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-legacy-lsp-"),
+    );
+    try {
+      await fs.writeFile(path.join(root, "index.ts"), "export {};\n");
+      let observedSignal: AbortSignal | undefined;
+      const files = createWorkspaceFileTools({
+        projectRoot: root,
+        enrichContext: (_request, _relativePath, signal) => {
+          observedSignal = signal;
+          return { state: "ready", legacy: true };
+        },
+      });
+      const controller = new AbortController();
+      const result = await (
+        await files.resolveTools(discovery)
+      )
+        .find((tool) => tool.definition.name === "read_file")!
+        .execute(
+          { path: "index.ts", view: "context" },
+          { ...context(), signal: controller.signal },
+        );
+      expect(observedSignal).toBe(controller.signal);
+      expect(JSON.parse(String(result.modelContent))).toMatchObject({
+        languageIntelligence: { state: "ready", legacy: true },
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -125,14 +174,102 @@ describe("workspace file tools", () => {
     const test = await fixture();
     await fs.writeFile(path.join(test.root, "visible.txt"), "hello\nworld\n");
     await fs.writeFile(path.join(test.root, ".env"), "TOKEN=secret\n");
+    await fs.mkdir(path.join(test.root, "node_modules"));
+    await fs.writeFile(
+      path.join(test.root, "node_modules/ignored.js"),
+      "secret",
+    );
+    const settingsContent =
+      '{\n  // keep this line\n  "theme": "dark",\n  "apiKey": "secret",\n}\n';
+    await fs.writeFile(path.join(test.root, "settings.json"), settingsContent);
 
     const result = await test
-      .tool("get_context")
-      .execute({ path: "visible.txt" }, context());
+      .tool("read_file")
+      .execute({ path: "visible.txt", view: "context" }, context());
     expect(JSON.parse(String(result.modelContent))).toMatchObject({
       path: "visible.txt",
-      contentHash: hash("hello\nworld\n"),
-      text: "1 | hello\n2 | world\n3 | ",
+      content: "1 | hello\n2 | world\n3 | ",
+      working_set: {
+        status: "new",
+        content_hash: hash("hello\nworld\n"),
+        should_include_content: true,
+      },
+    });
+    const redacted = await test
+      .tool("read_file")
+      .execute({ path: "settings.json", view: "context" }, context());
+    expect(JSON.parse(String(redacted.modelContent))).toMatchObject({
+      content:
+        '1 | {\n2 |   // keep this line\n3 |   "theme": "dark",\n4 |   "apiKey": "[REDACTED]",\n5 | }\n6 | ',
+      redaction: { type: "structured_secret_values" },
+      working_set: { content_hash: hash(settingsContent) },
+    });
+    expect(test.toolNames).not.toContain("get_context");
+    expect(
+      (
+        test.tool("read_file").definition.input_schema.properties as Record<
+          string,
+          { enum?: string[] }
+        >
+      ).view?.enum,
+    ).toEqual(["content", "context"]);
+    for (const view of ["content", "context"] as const) {
+      await expect(
+        test.tool("read_file").execute({ path: ".env", view }, context()),
+      ).resolves.toMatchObject({ isError: true });
+      await expect(
+        test
+          .tool("read_file")
+          .execute({ path: "node_modules/ignored.js", view }, context()),
+      ).resolves.toMatchObject({ isError: true });
+    }
+    await expect(
+      test
+        .tool("read_file")
+        .execute({ path: "visible.txt", limit: 201 }, context()),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: expect.stringContaining("content_limit_exceeds_200"),
+    });
+    await expect(
+      test
+        .tool("read_file")
+        .execute({ path: "visible.txt", include_symbols: false }, context()),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: expect.stringContaining(
+        "context_options_require_context_view",
+      ),
+    });
+    const omitted = await test.tool("read_file").execute(
+      {
+        path: "visible.txt",
+        view: "context",
+        dedupe_unchanged_content: true,
+      },
+      context(),
+    );
+    expect(JSON.parse(String(omitted.modelContent))).toMatchObject({
+      working_set: {
+        status: "omitted_unchanged",
+        should_include_content: false,
+      },
+    });
+    expect(JSON.parse(String(omitted.modelContent))).not.toHaveProperty(
+      "content",
+    );
+    const refreshed = await test.tool("read_file").execute(
+      {
+        path: "visible.txt",
+        view: "context",
+        dedupe_unchanged_content: true,
+        refresh: true,
+      },
+      context(),
+    );
+    expect(JSON.parse(String(refreshed.modelContent))).toMatchObject({
+      content: "1 | hello\n2 | world\n3 | ",
+      working_set: { status: "unchanged", should_include_content: true },
     });
 
     const search = await test
@@ -145,8 +282,36 @@ describe("workspace file tools", () => {
       .tool("list_files")
       .execute({ path: "." }, context());
     expect(JSON.parse(String(listed.modelContent)).entries).toEqual([
+      "settings.json",
       "visible.txt",
     ]);
+  });
+
+  it("rechecks read scope for both read_file views", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-scope-"),
+    );
+    try {
+      await fs.writeFile(path.join(root, "allowed.txt"), "allowed\n");
+      await fs.writeFile(path.join(root, "denied.txt"), "denied\n");
+      const files = createWorkspaceFileTools({
+        projectRoot: root,
+        resolveScopes: () => [{ path: "allowed.txt", kind: "file" }],
+      });
+      const read = (await files.resolveTools(discovery)).find(
+        (tool) => tool.definition.name === "read_file",
+      )!;
+      for (const view of ["content", "context"] as const) {
+        await expect(
+          read.execute({ path: "denied.txt", view }, context()),
+        ).resolves.toMatchObject({
+          isError: true,
+          modelContent: expect.stringContaining("path_not_scoped"),
+        });
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses fixed packaged ripgrep arguments and filters protected bounded results", async () => {
@@ -606,8 +771,8 @@ describe("workspace file tools", () => {
       expect(result.isError).toBe(true);
     }
     const linkedContext = await test
-      .tool("get_context")
-      .execute({ path: "linked.txt" }, context());
+      .tool("read_file")
+      .execute({ path: "linked.txt", view: "context" }, context());
     expect(linkedContext.isError).toBe(true);
     expect(String(linkedContext.modelContent)).toContain(
       "not_a_private_regular_file",
@@ -679,15 +844,15 @@ describe("workspace file tools", () => {
       const tool = (name: string) =>
         tools.find((candidate) => candidate.definition.name === name)!;
 
-      const contextResult = await tool("get_context").execute(
-        { path: "notes.txt" },
+      const contextResult = await tool("read_file").execute(
+        { path: "notes.txt", view: "context" },
         context(),
       );
       expect(JSON.parse(String(contextResult.modelContent))).toMatchObject({
         path: "notes.txt",
-        contentHash: hash("alpha\nbeta\n"),
-        text: "1 | alpha\n2 | beta\n3 | ",
-        git: { status: "available", value: "M notes.txt" },
+        content: "1 | alpha\n2 | beta\n3 | ",
+        git_status: "modified",
+        working_set: { content_hash: hash("alpha\nbeta\n") },
       });
 
       const search = await tool("search_files").execute(

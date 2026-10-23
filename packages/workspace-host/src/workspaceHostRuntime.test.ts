@@ -551,7 +551,7 @@ describe("createWorkspaceHost", () => {
     ).rejects.toThrow("Invalid project storage key");
   });
 
-  it("gates language tools by host enablement and keeps disabled context explicit", async () => {
+  it("gates language tools while keeping read_file context available", async () => {
     const parent = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-host-lsp-"),
     );
@@ -581,7 +581,7 @@ describe("createWorkspaceHost", () => {
         ) as (typeof requestBodies)[number];
         requestBodies.push(body);
         return requestBodies.length === 1
-          ? toolCall("get_context", { path: "index.ts" })
+          ? toolCall("read_file", { path: "index.ts", view: "context" })
           : completion("context inspected");
       });
     const common = {
@@ -622,11 +622,15 @@ describe("createWorkspaceHost", () => {
         (tool) => tool.function?.name,
       );
       expect(advertised).not.toEqual(expect.arrayContaining(languageToolNames));
+      expect(advertised).toContain("read_file");
+      expect(advertised).not.toContain("get_context");
       const toolResult = requestBodies[1]?.messages?.find(
         (message) => message.role === "tool",
       )?.content;
-      expect(toolResult).toContain('"diagnostics":{"state":"unavailable"');
-      expect(toolResult).toContain('"symbols":{"state":"unavailable"');
+      expect(toolResult).toContain('"language": "typescript"');
+      expect(toolResult).toContain('"content": "1 | export const value = 1;');
+      expect(toolResult).not.toContain('"diagnostics"');
+      expect(toolResult).not.toContain('"symbols"');
     } finally {
       await disabled.close();
     }

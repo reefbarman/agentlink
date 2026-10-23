@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
  * host-resolved, never model-supplied.
  *
  * Covered: `execute_command` processes, file reads/writes/listing, the
- * ripgrep-backed `search_files`, and the git status probe in `get_context`.
+ * ripgrep-backed `search_files`, and the Git status probe in `read_file`'s context view.
  * Not covered: project identity and ownership, language services, stdio MCP,
  * and instruction/artifact catalogs, which still execute in the host process.
  */

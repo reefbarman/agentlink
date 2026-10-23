@@ -56,6 +56,7 @@ import {
   type ResolveWorkspaceFileScopes,
   type WorkspaceFileApprovalPolicy,
 } from "./fileTools.js";
+import { createManagedTypeScriptReadFileEnrichment } from "./workspaceReadFileContext.js";
 import {
   createWorkspaceMcpToolApproval,
   createWorkspaceMcpTools,
@@ -878,14 +879,14 @@ export async function createWorkspaceHost(
         ripgrepExecutable: options.files.ripgrepExecutable,
         executionBackend: options.executionBackend,
         processOwnerId: commandOwnerId,
-        enrichContext: languageService
-          ? async (request, relativePath, signal) => {
+        enrichReadFileContext: languageService
+          ? async (request, relativePath, contextOptions) => {
               const filePath = path.join(project.root, relativePath);
               const canReadResultPath = (resultPath: string) =>
                 canReadLanguagePath(request, resultPath);
               const [diagnostics, symbols] = await Promise.all([
                 languageService
-                  .diagnostics(filePath, signal)
+                  .diagnostics(filePath, contextOptions.signal)
                   .then((result) =>
                     sanitizeManagedTypeScriptResult(
                       result,
@@ -893,32 +894,24 @@ export async function createWorkspaceHost(
                       canReadResultPath,
                     ),
                   ),
-                languageService
-                  .symbols(filePath, signal)
-                  .then((result) =>
-                    sanitizeManagedTypeScriptResult(
-                      result,
-                      project.root,
-                      canReadResultPath,
-                    ),
-                  ),
+                contextOptions.includeSymbols
+                  ? languageService
+                      .symbols(filePath, contextOptions.signal)
+                      .then((result) =>
+                        sanitizeManagedTypeScriptResult(
+                          result,
+                          project.root,
+                          canReadResultPath,
+                        ),
+                      )
+                  : undefined,
               ]);
-              return { diagnostics, symbols };
+              return createManagedTypeScriptReadFileEnrichment(
+                diagnostics,
+                symbols,
+              );
             }
-          : () => ({
-              diagnostics: {
-                state: "unavailable",
-                reason:
-                  "TypeScript intelligence is not enabled for this project",
-                retryable: false,
-              },
-              symbols: {
-                state: "unavailable",
-                reason:
-                  "TypeScript intelligence is not enabled for this project",
-                retryable: false,
-              },
-            }),
+          : undefined,
         onFileCommitted: languageService
           ? async (_request, relativePath) => {
               await languageService
@@ -1221,7 +1214,7 @@ export async function createWorkspaceHost(
         `The canonical project root is ${project.root}.`,
         composeWorkspacePromptProfile(model),
         options.files
-          ? "Use only the project-relative file tools that are actually exposed. Read before editing, preserve the SHA-256 baseline, and expect every ungranted write to pause for human review."
+          ? 'Use only the project-relative file tools that are actually exposed. Prefer read_file with view "context" for first-pass orientation; its working_set.content_hash is the SHA-256 baseline for an edit. Expect every ungranted write to pause for human review.'
           : "File tools are not enabled.",
         options.commands
           ? "Commands are unsandboxed, non-PTY, close stdin, and have no persistent shell state. Use background mode only for a long-lived development process that may run concurrently with file edits."
