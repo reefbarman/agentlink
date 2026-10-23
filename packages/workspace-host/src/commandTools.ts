@@ -38,7 +38,8 @@ export interface WorkspaceCommandApprovalDisplay {
   readonly environmentKeys: readonly string[];
   readonly mode: WorkspaceCommandMode;
   readonly timeoutMs: number;
-  readonly unsandboxed: true;
+  /** False only when the host runs commands through a sandboxed launcher. */
+  readonly unsandboxed: boolean;
   readonly concurrentEditingWarning: boolean;
   readonly ruleDecision: WorkspaceCommandRuleDecision | "unmatched";
   readonly policyFingerprint: string;
@@ -65,6 +66,12 @@ export interface CreateWorkspaceCommandToolsOptions {
   readonly mutations: WorkspaceMutationCoordinator;
   readonly stateDirectory: string;
   readonly shellExecutable?: string;
+  /**
+   * Set when `supervisor` launches through a sandbox (for example
+   * `createSandboxedWorkspaceProcessLauncher`), so approval displays and
+   * summaries say so. Defaults to false.
+   */
+  readonly sandboxed?: boolean;
   readonly environmentDigestSecret: string;
   readonly resolveEnvironment?: () =>
     | NodeJS.ProcessEnv
@@ -133,6 +140,7 @@ export async function createWorkspaceCommandTools(
     : projectRoot;
   const commandRootRelative = path.relative(projectRoot, commandRoot);
   const shellExecutable = options.shellExecutable ?? "/bin/zsh";
+  const unsandboxed = options.sandboxed !== true;
   if (!path.isAbsolute(shellExecutable)) {
     throw new Error("Workspace command shell must be absolute");
   }
@@ -207,7 +215,7 @@ export async function createWorkspaceCommandTools(
       environmentKeys,
       mode,
       timeoutMs,
-      unsandboxed: true,
+      unsandboxed,
       concurrentEditingWarning: mode === "background",
       ruleDecision,
       policyFingerprint,
@@ -254,12 +262,13 @@ export async function createWorkspaceCommandTools(
     ) {
       return { decision: "allow", preparedInput: { launch: prepared.launch } };
     }
+    const boundary = unsandboxed ? "unsandboxed" : "sandboxed";
     return {
       decision: "require_user",
       summary:
         prepared.display.mode === "background"
-          ? "Launch unsandboxed background command with concurrent editing"
-          : "Run unsandboxed foreground command",
+          ? `Launch ${boundary} background command with concurrent editing`
+          : `Run ${boundary} foreground command`,
       displayContent: prepared.display,
       preparedInput: { launch: prepared.launch },
     };
@@ -325,7 +334,8 @@ export async function createWorkspaceCommandTools(
       ) {
         return { ok: false, reason: "Command environment changed" };
       }
-      return sameDisplay(launch, request.displayContent)
+      return sameDisplay(launch, request.displayContent) &&
+        request.displayContent.unsandboxed === unsandboxed
         ? { ok: true }
         : { ok: false, reason: "Pending command display changed" };
     };
@@ -751,7 +761,7 @@ export function isWorkspaceCommandApprovalDisplay(
     display.environmentKeys.every((key) => typeof key === "string") &&
     (display.mode === "foreground" || display.mode === "background") &&
     typeof display.timeoutMs === "number" &&
-    display.unsandboxed === true &&
+    typeof display.unsandboxed === "boolean" &&
     typeof display.concurrentEditingWarning === "boolean" &&
     typeof display.policyFingerprint === "string" &&
     typeof display.operationDigest === "string"

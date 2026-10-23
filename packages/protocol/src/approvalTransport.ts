@@ -96,6 +96,19 @@ export interface ApprovalRequest {
   targetPath?: string;
   /** For commands: the full compound command */
   command?: string;
+  /**
+   * For commands from hosts without an attested terminal security summary
+   * (Ask Agent): the sandbox the command will run in.
+   */
+  commandSandbox?: {
+    /** The only folder the command can write to, besides temporary folders. */
+    writableRoot: string;
+    /**
+     * `none`: no network at all. `loopback`: no internet, but connections to
+     * services on this computer (macOS sandbox) still work.
+     */
+    network: "none" | "loopback";
+  };
   /** For commands: expanded sub-commands with existing rule info */
   subCommands?: SubCommandEntry[];
   /** For commands: throwaway inline files materialized for this command */

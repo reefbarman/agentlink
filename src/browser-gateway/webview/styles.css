@@ -1513,6 +1513,16 @@ textarea {
   width: 100%;
 }
 
+.ask-agent-handoff-field.ask-agent-grant-commands {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.ask-agent-handoff-field.ask-agent-grant-commands input {
+  width: auto;
+}
+
 .ask-agent-read-grants-list {
   display: flex;
   flex-direction: column;

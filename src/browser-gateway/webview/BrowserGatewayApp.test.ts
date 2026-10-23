@@ -499,6 +499,7 @@ type TestSnapshot = {
       rootPath: string;
       label: string;
       kind: "file" | "directory";
+      access?: "read" | "commands";
     }>;
     mcpStatusInfos: never[];
   };
@@ -7916,10 +7917,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe(false);
   });
 
-  it("routes Ask Agent read-only grant and revoke actions locally", async () => {
+  it("routes Ask Agent read and command grant and revoke actions locally", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const askSnapshot = createAskAgentSessionResponse().snapshot;
     let granted = false;
+    const grantBodies: Array<Record<string, unknown>> = [];
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init) => {
       const url = String(input);
@@ -7936,17 +7938,19 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           path?: string;
           confirm?: boolean;
+          access?: "read" | "commands";
         };
-        expect(body).toEqual({ path: "/tmp/ask-agent-read", confirm: true });
+        grantBodies.push(body);
         granted = true;
         const next = createAskAgentSessionResponse().snapshot;
         next.ui.readGrants = [
           {
             id: "grant-1",
             createdAt: 100,
-            rootPath: "/tmp/ask-agent-read",
-            label: "ask-agent-read",
+            rootPath: body.path ?? "",
+            label: (body.path ?? "").split("/").pop() ?? "",
             kind: "directory",
+            access: body.access,
           },
         ];
         return jsonResponse({ ok: true, snapshot: next });
@@ -7983,7 +7987,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     fireEvent.click(await screen.findByTitle("Read-only local file grants"));
-    await screen.findByText("Read-only local file access");
+    await screen.findByText("Local file access");
     expect(
       screen.getByText("No local paths have been granted to Ask Agent."),
     ).toBeTruthy();
@@ -8002,10 +8006,34 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
     await screen.findByText("Read-only access granted for Ask Agent.");
     expect(granted).toBe(true);
+    expect(grantBodies.at(-1)).toEqual({
+      path: "/tmp/ask-agent-read",
+      confirm: true,
+      access: "read",
+    });
+    await screen.findByText((content) => content.includes("read only"));
 
     fireEvent.click(screen.getByText("Revoke"));
-    await screen.findByText("Read-only access revoked.");
+    await screen.findByText("Local access revoked.");
     await screen.findByText("No local paths have been granted to Ask Agent.");
+
+    fireEvent.input(
+      screen.getByPlaceholderText("/Users/name/project or /Users/name/file.md"),
+      { target: { value: "/tmp/ask-agent-project" } },
+    );
+    fireEvent.click(
+      screen.getByLabelText("Also allow commands in this folder (asks first)"),
+    );
+    fireEvent.click(screen.getByText("Confirm read and command grant"));
+    await screen.findByText(
+      "Ask Agent can now read this folder and ask to run commands in it.",
+    );
+    expect(grantBodies.at(-1)).toEqual({
+      path: "/tmp/ask-agent-project",
+      confirm: true,
+      access: "commands",
+    });
+    await screen.findByText((content) => content.includes("read + commands"));
     expect(
       fetchMock.mock.calls.some(
         ([input]) => String(input) === "/api/read-grants",

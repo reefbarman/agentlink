@@ -84,6 +84,43 @@ afterEach(() => {
 });
 
 describe("CommandCard terminal presentation", () => {
+  it("describes a host sandbox that only writes in one folder", () => {
+    const { container } = renderCard({
+      kind: "command",
+      id: "ask-agent-command-1",
+      command: "npm test",
+      cwd: "/work/app",
+      commandSandbox: { writableRoot: "/work/app", network: "none" },
+    });
+
+    expect(screen.getByText("Sandboxed command")).toBeTruthy();
+    expect(
+      screen.getByText("Writes only in this folder · no network"),
+    ).toBeTruthy();
+    expect(screen.getByText(/can only write inside \/work\/app/)).toBeTruthy();
+    expect(screen.getByText(/It has no network access\./)).toBeTruthy();
+    expect(
+      container.querySelector(".command-context-summary > .codicon-shield"),
+    ).toBeTruthy();
+  });
+
+  it("says a loopback host sandbox can still reach local services", () => {
+    renderCard({
+      kind: "command",
+      id: "ask-agent-command-2",
+      command: "npm test",
+      cwd: "/work/app",
+      commandSandbox: { writableRoot: "/work/app", network: "loopback" },
+    });
+
+    expect(
+      screen.getByText("Writes only in this folder · no internet"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/can connect to services running on this computer/),
+    ).toBeTruthy();
+  });
+
   it("presents normal-shell execution as the AgentLink Terminal", () => {
     const { container } = renderCard(request("native"));
 

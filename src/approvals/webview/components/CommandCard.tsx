@@ -449,12 +449,14 @@ export function CommandCard({
       </div>
 
       {(security ||
+        request.commandSandbox ||
         reason ||
         commandReview ||
         humanOnlyReason ||
         recoveryAttempt) && (
         <CommandExecutionContext
           security={security}
+          commandSandbox={security ? undefined : request.commandSandbox}
           reason={reason}
           review={commandReview}
           humanOnlyReason={humanOnlyReason}

@@ -297,6 +297,10 @@ import {
   AskAgentSandboxWorkspace,
   isAskAgentSandboxToolName,
   type AskAgentSandboxToolName,
+  askAgentCommandFoldersPrompt,
+  findNestedRepository,
+  type AskAgentCommandApprovalDecision,
+  type AskAgentCommandApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
 import { isProviderSafeToolName } from "../../core/tools/providerToolNames.js";
 import {
@@ -5499,12 +5503,38 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     try {
+      // Grants widen what the agent can reach on this machine, so only
+      // Desktop or a browser on the same machine can add them. Paired LAN
+      // and phone clients can still revoke.
+      if (
+        classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+        "loopback"
+      ) {
+        writeJson(res, 403, {
+          ok: false,
+          error: "grant_requires_this_machine",
+          message:
+            "Grant folders from AgentLink Desktop or a browser on the same computer.",
+        });
+        return;
+      }
       const body = (await readJsonBody(req)) as {
         path?: unknown;
         confirm?: unknown;
+        access?: unknown;
       } | null;
       const requestedPath =
         typeof body?.path === "string" ? body.path.trim() : "";
+      const access =
+        body?.access === undefined || body.access === "read"
+          ? ("read" as const)
+          : body.access === "commands"
+            ? ("commands" as const)
+            : null;
+      if (!access) {
+        writeJson(res, 400, { ok: false, error: "invalid_access" });
+        return;
+      }
       if (!requestedPath || body?.confirm !== true) {
         writeJson(res, 400, {
           ok: false,
@@ -5520,21 +5550,80 @@ export class BrowserGatewayHelper {
         writeJson(res, 404, { ok: false, error: "path_not_found" });
         return;
       }
+      if (
+        access === "commands" &&
+        (await this.askAgentSandbox?.isAvailable()) !== true
+      ) {
+        writeJson(res, 409, {
+          ok: false,
+          error: "commands_unavailable",
+          message:
+            "Commands need the command sandbox, which is not available on this computer.",
+        });
+        return;
+      }
+      if (access === "commands" && !stat.isDirectory()) {
+        writeJson(res, 400, {
+          ok: false,
+          error: "commands_grant_requires_directory",
+          message: "Commands can only be granted for a folder.",
+        });
+        return;
+      }
       const realPath = await fs.realpath(resolvedPath);
+      const homeRealPath = await fs
+        .realpath(os.homedir())
+        .catch(() => os.homedir());
+      if (
+        access === "commands" &&
+        (realPath === path.parse(realPath).root || realPath === homeRealPath)
+      ) {
+        writeJson(res, 400, {
+          ok: false,
+          error: "commands_grant_too_broad",
+          message:
+            "Grant commands for a project folder, not your whole disk or home folder.",
+        });
+        return;
+      }
+      if (access === "commands") {
+        // The sandbox protects Git metadata and agent instruction files only
+        // at the top of the folder, so repositories inside it would not be.
+        const nested = await findNestedRepository(realPath);
+        if (nested) {
+          writeJson(res, 400, {
+            ok: false,
+            error: "commands_grant_contains_repositories",
+            message:
+              nested === "too_large"
+                ? "This folder is too large to check for other repositories. Grant commands for a single project folder."
+                : `This folder contains another repository (${path.dirname(nested)}). Grant commands for that repository's folder instead.`,
+          });
+          return;
+        }
+      }
       const grant = {
         id: `ask-agent-read-grant-${randomUUID()}`,
         createdAt: Date.now(),
         rootPath: realPath,
         label: path.basename(realPath) || realPath,
         kind: stat.isDirectory() ? ("directory" as const) : ("file" as const),
+        access,
       };
+      const replaced = this.askAgentSessionStore
+        .getReadGrants()
+        .find((candidate) => candidate.rootPath === realPath);
       const grants = this.askAgentSessionStore.addReadGrant(grant);
+      if (replaced?.access === "commands" && access !== "commands") {
+        await this.revokeAskAgentCommandRootIfUncovered(realPath);
+      }
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
       this.logAskAgentEvent("ask-agent.read-grant.add", {
         ok: true,
         grantId: grant.id,
         kind: grant.kind,
+        access,
       });
       writeJson(res, 200, { ok: true, grants, snapshot: response.snapshot });
     } catch (err) {
@@ -5553,9 +5642,15 @@ export class BrowserGatewayHelper {
     try {
       const body = (await readJsonBody(req)) as { id?: unknown } | null;
       const id = typeof body?.id === "string" ? body.id.trim() : "";
+      const revoked = this.askAgentSessionStore
+        .getReadGrants()
+        .find((grant) => grant.id === id);
       if (!id || !this.askAgentSessionStore.removeReadGrant(id)) {
         writeJson(res, 404, { ok: false, error: "read_grant_not_found" });
         return;
+      }
+      if (revoked?.access === "commands") {
+        await this.revokeAskAgentCommandRootIfUncovered(revoked.rootPath);
       }
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
@@ -6221,6 +6316,9 @@ export class BrowserGatewayHelper {
         [
           instructionSnapshot?.prompt,
           sandboxTools ? ASK_AGENT_SANDBOX_PROMPT : undefined,
+          sandboxTools
+            ? askAgentCommandFoldersPrompt(await this.askAgentCommandRoots())
+            : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join("\n\n") || undefined;
@@ -8613,6 +8711,11 @@ export class BrowserGatewayHelper {
       toolName,
       input: toolCall.input,
       signal,
+      commandRoots: await this.askAgentCommandRoots(),
+      requestApproval: (proposal) =>
+        this.requestAskAgentCommandApproval(proposal, signal),
+      isCommandRootGranted: async (root) =>
+        (await this.askAgentCommandRoots()).includes(root),
     });
     this.logAskAgentEvent(`ask-agent.tool.${toolName}`, {
       ok: !result.isError,
@@ -8633,6 +8736,90 @@ export class BrowserGatewayHelper {
         result.content,
         result.isError,
       ),
+    };
+  }
+
+  /**
+   * Folders currently granted for commands. A grant stores the canonical
+   * path it was made for; if that path now resolves somewhere else (for
+   * example it was replaced with a symlink), the grant no longer applies
+   * rather than moving to the new target.
+   */
+  private async askAgentCommandRoots(): Promise<string[]> {
+    const roots = await Promise.all(
+      this.askAgentSessionStore
+        .getReadGrants()
+        .filter(
+          (grant) => grant.access === "commands" && grant.kind === "directory",
+        )
+        .map(async (grant) =>
+          (await fs.realpath(grant.rootPath).catch(() => null)) ===
+          grant.rootPath
+            ? grant.rootPath
+            : null,
+        ),
+    );
+    return [...new Set(roots.filter((root): root is string => Boolean(root)))];
+  }
+
+  /** Stop command access to a folder no remaining commands grant covers. */
+  private async revokeAskAgentCommandRootIfUncovered(
+    root: string,
+  ): Promise<void> {
+    if ((await this.askAgentCommandRoots()).includes(root)) return;
+    await this.askAgentSandbox
+      ?.revokeCommandRoot(root)
+      .catch((error: unknown) =>
+        logHelper(`ask-agent command grant revoke: ${String(error)}`),
+      );
+  }
+
+  /**
+   * Allow once / Deny card for a sandboxed command in a granted folder.
+   * Sandboxed commands can be approved from any signed-in client.
+   */
+  private async requestAskAgentCommandApproval(
+    proposal: AskAgentCommandApprovalProposal,
+    signal: AbortSignal,
+  ): Promise<AskAgentCommandApprovalDecision> {
+    if (
+      this.askAgentMemoryProposalBridge.getPendingApproval() ||
+      this.askAgentController.getPendingApproval()
+    ) {
+      throw new Error("ask_agent_approval_pending");
+    }
+    const request: ApprovalRequest = {
+      kind: "command",
+      id: `ask-agent-command-${randomUUID()}`,
+      command: proposal.command,
+      cwd: proposal.cwd,
+      commandSandbox: {
+        writableRoot: proposal.root,
+        network: proposal.network,
+      },
+    };
+    const decision = this.askAgentController.requestApproval(request, signal);
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    const result = await decision;
+    this.logAskAgentEvent("ask-agent.command-approval", {
+      ok: true,
+      decision: result.decision,
+    });
+    if (result.decision === "run-once") return { decision: "run" };
+    if (
+      result.decision === "edit" &&
+      typeof result.editedCommand === "string" &&
+      result.editedCommand.trim()
+    ) {
+      return { decision: "edit", command: result.editedCommand };
+    }
+    return {
+      decision: "reject",
+      ...(typeof result.rejectionReason === "string" &&
+      result.rejectionReason.trim()
+        ? { reason: result.rejectionReason.trim() }
+        : {}),
     };
   }
 

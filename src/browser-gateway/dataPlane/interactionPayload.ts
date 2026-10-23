@@ -123,6 +123,13 @@ function approvalRequest(value: unknown): ApprovalRequest {
   copyOptional(result, "queueTotal", source.queueTotal, finiteNumberValue);
   copyOptional(result, "reason", source.reason, stringValue);
   copyOptional(result, "cwd", source.cwd, stringValue);
+  copyOptional(result, "commandSandbox", source.commandSandbox, (item) => {
+    const sandbox = recordValue(item);
+    return {
+      writableRoot: stringValue(sandbox.writableRoot),
+      network: enumValue(sandbox.network, ["none", "loopback"] as const),
+    };
+  });
   copyOptional(result, "commandReview", source.commandReview, commandReview);
   copyOptional(result, "humanOnlyReason", source.humanOnlyReason, stringValue);
   copyOptional(

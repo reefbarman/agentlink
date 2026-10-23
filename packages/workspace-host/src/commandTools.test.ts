@@ -17,6 +17,7 @@ async function fixture(
     backgroundOwnerSessionId?: string;
     /** Project-relative folder commands are confined to. */
     commandRoot?: string;
+    sandboxed?: boolean;
   } = {},
 ) {
   const parent = await fs.mkdtemp(
@@ -46,6 +47,7 @@ async function fixture(
     mutations: new WorkspaceMutationCoordinator(),
     stateDirectory,
     shellExecutable: "/bin/zsh",
+    ...(options.sandboxed ? { sandboxed: true } : {}),
     environmentDigestSecret: "test-environment-digest-secret",
     resolveEnvironment: () => environment,
     requiresApproval: () => options.requiresApproval === true,
@@ -97,6 +99,52 @@ describe("workspace command tools", () => {
         },
       });
       expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await test.supervisor.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
+
+  it("says a command is sandboxed when the host launches through a sandbox", async () => {
+    const test = await fixture({}, { sandboxed: true });
+    try {
+      const result = await test.tools.authorizeToolCall({
+        ...test.request,
+        model: {
+          model: { providerId: "fixture", modelId: "fixture" },
+          source: "turn",
+        },
+        toolCallId: "call-1",
+        toolName: "execute_command",
+        input: { command: "printf ok" },
+        effect: "write",
+      });
+      expect(result).toMatchObject({
+        decision: "require_user",
+        summary: "Run sandboxed foreground command",
+        displayContent: { unsandboxed: false },
+      });
+      if (result.decision !== "require_user") throw new Error("unexpected");
+      await expect(
+        test.tools.validatePendingLaunch({
+          ...test.request,
+          toolName: "execute_command",
+          input: result.preparedInput!,
+          displayContent: result.displayContent,
+        }),
+      ).resolves.toEqual({ ok: true });
+      // A display claiming the other boundary is not this launch's.
+      await expect(
+        test.tools.validatePendingLaunch({
+          ...test.request,
+          toolName: "execute_command",
+          input: result.preparedInput!,
+          displayContent: {
+            ...(result.displayContent as WorkspaceCommandApprovalDisplay),
+            unsandboxed: true,
+          },
+        }),
+      ).resolves.toMatchObject({ ok: false });
     } finally {
       await test.supervisor.close();
       await fs.rm(test.parent, { recursive: true, force: true });

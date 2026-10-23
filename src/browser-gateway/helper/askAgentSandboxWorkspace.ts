@@ -29,6 +29,12 @@ type WorkspaceCommandTools = Awaited<
 type WorkspaceCommandSupervisor = Awaited<
   ReturnType<WorkspaceHostModule["WorkspaceCommandSupervisor"]["create"]>
 >;
+type WorkspaceProcessLaunch = Parameters<
+  WorkspaceProcessLauncher["launchProcess"]
+>[0];
+type WorkspaceProcessHandle = ReturnType<
+  WorkspaceProcessLauncher["launchProcess"]
+>;
 
 /**
  * Per-chat sandboxed scratch folders for the Ask Agent helper (Desktop and
@@ -39,6 +45,12 @@ type WorkspaceCommandSupervisor = Awaited<
  * directories, cannot read the rest of the user's home or other chats, and
  * have loopback-only networking. The sandbox is the security boundary, so
  * calls run without an approval card.
+ *
+ * Folders the user granted for commands (from this machine only) can also
+ * be a command's `cwd`. Those commands use the same workspace-write sandbox
+ * as VS Code (host readable, writes only inside the granted folder and
+ * temporary directories, Git and agent policy files protected, no network)
+ * and every one waits for an approval card, because the folder is real work.
  */
 
 export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
@@ -89,7 +101,7 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
           cwd: {
             type: "string",
             description:
-              "Working directory relative to the scratch folder. Defaults to the scratch folder.",
+              "Working directory relative to the scratch folder (the default), or an absolute path inside a folder the user granted for commands. Commands in a granted folder wait for the user's approval.",
           },
           timeoutMs: {
             type: "integer",
@@ -150,6 +162,91 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
     },
   ]);
 
+/**
+ * Prompt section for folders granted for commands, or undefined when none
+ * are. Listed so the model knows which absolute `cwd` values are allowed.
+ */
+export function askAgentCommandFoldersPrompt(
+  roots: readonly string[],
+): string | undefined {
+  if (roots.length === 0) return undefined;
+  return [
+    "## Folders granted for commands",
+    "",
+    "The user granted these folders for commands. To run a command in one, pass its absolute path (or a folder inside it) as execute_command's cwd:",
+    ...roots.map((root) => `- ${root}`),
+    "",
+    "Each command there waits for the user to approve it, so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. write_file and present_files still only work in the scratch folder.",
+  ].join("\n");
+}
+
+/** What the user is asked to approve for a command in a granted folder. */
+export interface AskAgentCommandApprovalProposal {
+  readonly command: string;
+  readonly cwd: string;
+  /** The granted folder the command can write to. */
+  readonly root: string;
+  readonly timeoutMs: number;
+  /**
+   * `loopback` on macOS, where the sandbox still allows connections to
+   * services on this computer; `none` on Linux, where each command has a
+   * private network namespace.
+   */
+  readonly network: "none" | "loopback";
+}
+
+const NESTED_REPOSITORY_SCAN_MAX_DIRECTORIES = 20_000;
+const NESTED_REPOSITORY_SCAN_MAX_DEPTH = 8;
+
+/**
+ * The sandbox protects Git metadata and agent instruction files only at the
+ * top of a writable root, so a commands grant must not contain other
+ * repositories. Returns the first nested `.git` found, `too_large` when the
+ * folder is too big to check, or undefined. Symlinks and `node_modules` are
+ * not followed.
+ */
+export async function findNestedRepository(
+  root: string,
+): Promise<string | "too_large" | undefined> {
+  let scanned = 0;
+  let level = [root];
+  for (
+    let depth = 0;
+    depth < NESTED_REPOSITORY_SCAN_MAX_DEPTH && level.length > 0;
+    depth += 1
+  ) {
+    const next: string[] = [];
+    for (const directory of level) {
+      scanned += 1;
+      if (scanned > NESTED_REPOSITORY_SCAN_MAX_DIRECTORIES) return "too_large";
+      const entries = await fs
+        .readdir(directory, { withFileTypes: true })
+        .catch(() => []);
+      for (const entry of entries) {
+        const child = path.join(directory, entry.name);
+        if (entry.name === ".git") {
+          if (directory !== root) return child;
+          continue;
+        }
+        if (
+          entry.isDirectory() &&
+          !entry.isSymbolicLink() &&
+          entry.name !== "node_modules"
+        ) {
+          next.push(child);
+        }
+      }
+    }
+    level = next;
+  }
+  return undefined;
+}
+
+export type AskAgentCommandApprovalDecision =
+  | { readonly decision: "run" }
+  | { readonly decision: "edit"; readonly command: string }
+  | { readonly decision: "reject"; readonly reason?: string };
+
 export interface AskAgentSandboxInputFile {
   readonly name: string;
   readonly base64: string;
@@ -189,18 +286,81 @@ export interface AskAgentSandboxWorkspaceOptions {
   readonly checkLinuxPrerequisites?: (
     options: CheckLinuxSandboxPrerequisitesOptions,
   ) => Promise<LinuxSandboxPrerequisites>;
-  /** Test seam replacing the sandboxed launcher. */
+  /**
+   * Environment for commands in granted folders. Defaults to this process's
+   * environment (Desktop starts the helper with the login-shell PATH) minus
+   * helper-only variables; the sandbox also drops KEY/SECRET/TOKEN names.
+   */
+  readonly hostEnvironment?: () => NodeJS.ProcessEnv;
+  /**
+   * Test seam replacing the sandboxed launcher. Called once per chat for the
+   * scratch folder, and once per chat and granted folder with `grantedRoot`
+   * set (then `workDirectory` is that folder).
+   */
   readonly createProcessLauncher?: (options: {
     readonly workDirectory: string;
     readonly deniedReadRoots: readonly string[];
     readonly trustedRuntimeRoots: readonly string[];
+    readonly grantedRoot?: string;
   }) => WorkspaceProcessLauncher | Promise<WorkspaceProcessLauncher>;
 }
 
+interface GrantedFolder {
+  readonly launcher: WorkspaceProcessLauncher;
+  readonly commandTools: WorkspaceCommandTools;
+}
+
 interface ChatSandbox {
+  readonly sessionId: string;
   readonly workDirectory: string;
+  readonly stateDirectory: string;
   readonly supervisor: WorkspaceCommandSupervisor;
   readonly commandTools: WorkspaceCommandTools;
+  /** Keyed by canonical granted root; removed when the grant is revoked. */
+  readonly granted: Map<string, Promise<GrantedFolder>>;
+}
+
+const OWNER_ID = "ask-agent-sandbox";
+const PRINCIPAL = { tenantId: "local", subjectId: "ask-agent" };
+const MODEL = {
+  model: { providerId: "ask-agent", modelId: "ask-agent" },
+  source: "runtime" as const,
+};
+/** Helper-process variables that must not leak into user commands. */
+const HELPER_ONLY_ENVIRONMENT =
+  /^(ELECTRON_|NODE_PATH$|NODE_OPTIONS$|AGENTLINK_)/;
+
+function refusedLaunch(error: Error): WorkspaceProcessHandle {
+  const started = Promise.reject(error);
+  started.catch(() => undefined);
+  return {
+    pid: undefined,
+    started,
+    exited: Promise.resolve({}),
+    signal: () => true,
+  };
+}
+
+interface SandboxToolRequest {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly toolName: AskAgentSandboxToolName;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly signal?: AbortSignal;
+  /**
+   * Canonical folders currently granted for commands. Read per call so a
+   * revoked grant stops applying immediately.
+   */
+  readonly commandRoots?: readonly string[];
+  /** Ask the user about a command in a granted folder. */
+  readonly requestApproval?: (
+    proposal: AskAgentCommandApprovalProposal,
+  ) => Promise<AskAgentCommandApprovalDecision>;
+  /**
+   * Whether a folder is still granted for commands, checked again just
+   * before launch so a grant revoked during the call is not used.
+   */
+  readonly isCommandRootGranted?: (root: string) => Promise<boolean>;
 }
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
@@ -272,8 +432,12 @@ export class AskAgentSandboxWorkspace {
   private readonly homeDirectory: string;
   private readonly maxWorkspaceBytes: number;
   private readonly chats = new Map<string, Promise<ChatSandbox>>();
+  /** Clock value at each folder's latest command-grant revocation. */
+  private readonly commandRootRevocations = new Map<string, number>();
+  private revocationClock = 0;
   private runtime: SandboxRuntimeProvider | undefined;
   private workspaceHost: Promise<WorkspaceHostModule> | undefined;
+  private digestSecrets: Map<string, string> | undefined;
   private linuxCheck:
     | Promise<{ available: boolean; ripgrepPath: string | undefined }>
     | undefined;
@@ -420,13 +584,9 @@ export class AskAgentSandboxWorkspace {
     }
   }
 
-  async execute(request: {
-    readonly sessionId: string;
-    readonly turnId: string;
-    readonly toolName: AskAgentSandboxToolName;
-    readonly input: Readonly<Record<string, unknown>>;
-    readonly signal?: AbortSignal;
-  }): Promise<AskAgentSandboxToolResult> {
+  async execute(
+    request: SandboxToolRequest,
+  ): Promise<AskAgentSandboxToolResult> {
     try {
       switch (request.toolName) {
         case "write_file":
@@ -439,6 +599,37 @@ export class AskAgentSandboxWorkspace {
     } catch (error) {
       return errorResult(errorMessage(error));
     }
+  }
+
+  /**
+   * Stop applying a revoked command grant: later launches there are refused
+   * and commands still running inside it are stopped.
+   */
+  async revokeCommandRoot(root: string): Promise<void> {
+    // Recorded before any await, so a call that began earlier with a stale
+    // list of roots cannot recreate this folder's launcher.
+    this.commandRootRevocations.set(root, ++this.revocationClock);
+    await Promise.all(
+      [...this.chats.values()].map(async (pending) => {
+        const chat = await pending.catch(() => undefined);
+        if (!chat) return;
+        chat.granted.delete(root);
+        const running = chat.supervisor
+          .list({ ownerId: OWNER_ID })
+          .filter(
+            (record) =>
+              (record.state === "running" || record.state === "interrupted") &&
+              isInside(record.cwd, root),
+          );
+        await Promise.all(
+          running.map((record) =>
+            chat.supervisor
+              .stop(record.commandId, { ownerId: OWNER_ID })
+              .catch(() => undefined),
+          ),
+        );
+      }),
+    );
   }
 
   async deleteChat(sessionId: string): Promise<void> {
@@ -635,13 +826,31 @@ export class AskAgentSandboxWorkspace {
     };
   }
 
-  private async runCommandTool(request: {
-    readonly sessionId: string;
-    readonly turnId: string;
-    readonly toolName: AskAgentSandboxToolName;
-    readonly input: Readonly<Record<string, unknown>>;
-    readonly signal?: AbortSignal;
-  }): Promise<AskAgentSandboxToolResult> {
+  /** The granted root containing an absolute `cwd`, or why there is none. */
+  private async grantedRootFor(
+    work: string,
+    cwd: unknown,
+    commandRoots: readonly string[],
+  ): Promise<{ root?: string; relativeCwd?: string; error?: string }> {
+    if (typeof cwd !== "string" || !path.isAbsolute(cwd.trim())) return {};
+    const real = await fs.realpath(cwd.trim()).catch(() => undefined);
+    if (!real) return { error: "cwd_not_found" };
+    if (isInside(real, work)) return {};
+    // The deepest grant wins when grants nest.
+    const root = commandRoots
+      .filter((candidate) => isInside(real, candidate))
+      .sort((left, right) => right.length - left.length)[0];
+    return root
+      ? { root, relativeCwd: path.relative(root, real) || "." }
+      : {
+          error:
+            "cwd_not_granted: commands run in the scratch folder or in a folder the user granted for commands",
+        };
+  }
+
+  private async runCommandTool(
+    request: SandboxToolRequest,
+  ): Promise<AskAgentSandboxToolResult> {
     if (request.toolName === "execute_command") {
       if (request.input.background === true) {
         return errorResult(
@@ -659,26 +868,44 @@ export class AskAgentSandboxWorkspace {
         );
       }
     }
+    const startedAt = this.revocationClock;
     const sandbox = await this.chatSandbox(request.sessionId);
+    let grantedRoot: string | undefined;
+    let input = request.input;
     if (request.toolName === "execute_command") {
-      await this.assertUnderQuota(sandbox.workDirectory);
+      const granted = await this.grantedRootFor(
+        sandbox.workDirectory,
+        request.input.cwd,
+        request.commandRoots ?? [],
+      );
+      if (granted.error) return errorResult(granted.error);
+      grantedRoot = granted.root;
+      if (grantedRoot) {
+        // Workspace command tools take a cwd relative to their project.
+        input = { ...request.input, cwd: granted.relativeCwd };
+      } else {
+        await this.assertUnderQuota(sandbox.workDirectory);
+      }
     }
-    const principal = { tenantId: "local", subjectId: "ask-agent" };
+    const commandTools = grantedRoot
+      ? (await this.grantedFolder(sandbox, grantedRoot)).commandTools
+      : sandbox.commandTools;
+    const principal = PRINCIPAL;
     const discovery = {
       principal,
       sessionId: request.sessionId,
       turnId: request.turnId,
       input: { text: "", attachments: undefined },
     };
-    const tools = await sandbox.commandTools.resolveTools(discovery);
+    const tools = await commandTools.resolveTools(discovery);
     const tool = tools.find(
       (candidate) => candidate.definition.name === request.toolName,
     );
     if (!tool) return errorResult(`unknown_tool:${request.toolName}`);
     const validation = tool.validate({
-      ...request.input,
+      ...input,
       ...(request.toolName === "execute_command" &&
-      request.input.timeoutMs === undefined
+      input.timeoutMs === undefined
         ? { timeoutMs: ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS }
         : {}),
     });
@@ -687,28 +914,51 @@ export class AskAgentSandboxWorkspace {
         `invalid_input: ${validation.issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")}`,
       );
     }
-    const model = {
-      model: { providerId: "ask-agent", modelId: "ask-agent" },
-      source: "runtime" as const,
-    };
+    const model = MODEL;
     let executable = validation.input;
     if (request.toolName === "execute_command") {
-      const authorization = await sandbox.commandTools.authorizeToolCall({
-        ...discovery,
-        model,
-        toolCallId: request.turnId,
-        toolName: request.toolName,
-        input: validation.input,
-        effect: "write",
-      });
-      if (authorization.decision !== "allow") {
+      const authorize = (candidate: Readonly<Record<string, unknown>>) =>
+        commandTools.authorizeToolCall({
+          ...discovery,
+          model,
+          toolCallId: request.turnId,
+          toolName: "execute_command",
+          input: candidate,
+          effect: "write",
+        });
+      const authorization = await authorize(validation.input);
+      if (authorization.decision === "deny") {
+        return errorResult(authorization.reason ?? "command_denied");
+      }
+      if (authorization.decision === "allow") {
+        executable = { ...(authorization.preparedInput ?? validation.input) };
+      } else if (
+        authorization.decision === "require_user" &&
+        grantedRoot &&
+        request.requestApproval
+      ) {
+        const approved = await this.approveGrantedCommand({
+          request,
+          root: grantedRoot,
+          commandTools,
+          authorization,
+          reauthorize: (command) => authorize({ ...validation.input, command }),
+        });
+        if ("result" in approved) return approved.result;
+        executable = approved.input;
+      } else {
+        return errorResult("command_requires_approval");
+      }
+      if (
+        grantedRoot &&
+        !(await this.isStillGranted(grantedRoot, startedAt, request))
+      ) {
+        // Drop a launcher this stale call may have recreated.
+        sandbox.granted.delete(grantedRoot);
         return errorResult(
-          authorization.decision === "deny"
-            ? (authorization.reason ?? "command_denied")
-            : "command_requires_approval",
+          "cwd_not_granted: this folder's command grant was revoked",
         );
       }
-      executable = { ...(authorization.preparedInput ?? validation.input) };
     }
     const result = await tool.executeValidated(executable, {
       principal,
@@ -749,29 +999,10 @@ export class AskAgentSandboxWorkspace {
     const workDirectory = await this.ensureWorkDirectory(sessionId);
     const stateDirectory = path.join(this.chatDirectory(sessionId), "state");
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    this.workspaceHost ??= import("@agentlink/workspace-host");
-    const host = await this.workspaceHost;
+    const host = await this.loadWorkspaceHost();
     const deniedReadRoots = this.deniedReadRoots();
-    // On Linux the sandboxed shell runs AgentLink's apply-seccomp helper, so
-    // its directory must stay readable when the runtime sits inside a hidden
-    // root (an extracted AppImage or a source checkout under /home). Only that
-    // directory is re-allowed, not the rest of the install.
-    const trustedRuntimeRoots =
-      this.platform === "linux"
-        ? [
-            path.dirname(
-              linuxSandboxApplySeccompPath(
-                path.join(
-                  this.options.extensionRoot,
-                  "dist",
-                  "sandbox-runtime",
-                ),
-                process.arch,
-              ),
-            ),
-          ]
-        : [];
-    const launcher = this.options.createProcessLauncher
+    const trustedRuntimeRoots = this.trustedRuntimeRoots();
+    const scratchLauncher = this.options.createProcessLauncher
       ? await this.options.createProcessLauncher({
           workDirectory,
           deniedReadRoots,
@@ -788,24 +1019,62 @@ export class AskAgentSandboxWorkspace {
           homeDirectory: this.homeDirectory,
           fallbackShell: "/bin/sh",
         });
-    const ownerId = "ask-agent-sandbox";
     const locale = this.platform === "linux" ? "C.UTF-8" : "en_US.UTF-8";
+    const granted = new Map<string, Promise<GrantedFolder>>();
+    // One supervisor per chat, so get_command_output finds commands from the
+    // scratch folder and granted folders alike. Each launch goes to the
+    // launcher for the root its cwd is in; a revoked grant has no launcher.
+    const routingLauncher: WorkspaceProcessLauncher = {
+      launchProcess: (launch: WorkspaceProcessLaunch) => {
+        const cwd = launch.request.cwd;
+        if (isInside(cwd, workDirectory)) {
+          return scratchLauncher.launchProcess(launch);
+        }
+        const root = [...granted.keys()]
+          .filter((candidate) => isInside(cwd, candidate))
+          .sort((left, right) => right.length - left.length)[0];
+        const folder = root ? granted.get(root) : undefined;
+        if (!folder) {
+          return refusedLaunch(
+            new host.WorkspaceProcessLaunchError("cwd_not_granted"),
+          );
+        }
+        const started = folder.then((resolved) =>
+          resolved.launcher.launchProcess(launch),
+        );
+        return {
+          get pid() {
+            return undefined;
+          },
+          started: started.then((handle) => handle.started),
+          exited: started.then(
+            (handle) => handle.exited,
+            () => ({}),
+          ),
+          signal: (signal) => {
+            void started.then(
+              (handle) => handle.signal(signal),
+              () => undefined,
+            );
+            return true;
+          },
+        };
+      },
+    };
     const supervisor = await host.WorkspaceCommandSupervisor.create({
       stateDirectory,
-      ownerId,
-      executionBackend: launcher,
+      ownerId: OWNER_ID,
+      executionBackend: routingLauncher,
     });
     const commandTools = await host.createWorkspaceCommandTools({
       projectRoot: workDirectory,
-      ownerId,
+      ownerId: OWNER_ID,
       supervisor,
       mutations: new host.WorkspaceMutationCoordinator(),
       stateDirectory,
-      // macOS always ships zsh; Linux distributions reliably ship bash.
-      shellExecutable: this.platform === "linux" ? "/bin/bash" : "/bin/zsh",
-      environmentDigestSecret: createHash("sha256")
-        .update(`${process.pid}:${sessionId}:${Date.now()}`)
-        .digest("hex"),
+      shellExecutable: this.shellExecutable(),
+      sandboxed: true,
+      environmentDigestSecret: this.environmentDigestSecret(sessionId),
       resolveEnvironment: () => ({
         PATH: SANDBOX_PATH,
         LANG: locale,
@@ -816,7 +1085,237 @@ export class AskAgentSandboxWorkspace {
       // Every command is confined by the sandbox, which is the boundary here.
       hasSessionGrant: () => true,
     });
-    return { workDirectory, supervisor, commandTools };
+    return {
+      sessionId,
+      workDirectory,
+      stateDirectory,
+      supervisor,
+      commandTools,
+      granted,
+    };
+  }
+
+  private async isStillGranted(
+    root: string,
+    startedAt: number,
+    request: SandboxToolRequest,
+  ): Promise<boolean> {
+    if ((this.commandRootRevocations.get(root) ?? 0) > startedAt) return false;
+    if (
+      request.isCommandRootGranted &&
+      !(await request.isCommandRootGranted(root))
+    ) {
+      return false;
+    }
+    return (this.commandRootRevocations.get(root) ?? 0) <= startedAt;
+  }
+
+  /** Command tools for one granted folder in one chat, created on first use. */
+  private grantedFolder(
+    chat: ChatSandbox,
+    root: string,
+  ): Promise<GrantedFolder> {
+    let folder = chat.granted.get(root);
+    if (!folder) {
+      folder = this.createGrantedFolder(chat, root);
+      chat.granted.set(root, folder);
+      folder.catch(() => {
+        if (chat.granted.get(root) === folder) chat.granted.delete(root);
+      });
+    }
+    return folder;
+  }
+
+  private async createGrantedFolder(
+    chat: ChatSandbox,
+    root: string,
+  ): Promise<GrantedFolder> {
+    const host = await this.loadWorkspaceHost();
+    const trustedRuntimeRoots = this.trustedRuntimeRoots();
+    const ripgrepPath =
+      this.platform === "linux"
+        ? (await this.checkLinuxHost()).ripgrepPath
+        : undefined;
+    // VS Code's workspace-write profile: the host stays readable (so tools
+    // installed under the home folder run), writes are limited to the folder
+    // and temporary directories, and Git and agent policy files are protected.
+    const launcher = this.options.createProcessLauncher
+      ? await this.options.createProcessLauncher({
+          workDirectory: root,
+          deniedReadRoots: [],
+          trustedRuntimeRoots,
+          grantedRoot: root,
+        })
+      : host.createSandboxedWorkspaceProcessLauncher({
+          runtime: this.sandboxRuntime(ripgrepPath),
+          platform: this.platform,
+          writableRoots: [root],
+          trustedRuntimeRoots,
+          temporaryHome: false,
+          shareHostTemporaryDirectories: true,
+          homeDirectory: this.homeDirectory,
+          fallbackShell: "/bin/sh",
+        });
+    const stateDirectory = path.join(
+      chat.stateDirectory,
+      "granted",
+      createHash("sha256").update(root).digest("hex").slice(0, 32),
+    );
+    await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    const commandTools = await host.createWorkspaceCommandTools({
+      projectRoot: root,
+      ownerId: OWNER_ID,
+      supervisor: chat.supervisor,
+      mutations: new host.WorkspaceMutationCoordinator(),
+      stateDirectory,
+      shellExecutable: this.shellExecutable(),
+      sandboxed: true,
+      environmentDigestSecret: this.environmentDigestSecret(chat.sessionId),
+      resolveEnvironment: () => this.grantedEnvironment(),
+      // A granted folder is real work: every command asks, whatever rules say.
+      hasSessionGrant: () => false,
+      requiresApproval: () => true,
+    });
+    return { launcher, commandTools };
+  }
+
+  /**
+   * Show the approval card for a prepared command in a granted folder. On
+   * approval returns the input to execute; otherwise the tool result.
+   */
+  private async approveGrantedCommand(options: {
+    readonly request: SandboxToolRequest;
+    readonly root: string;
+    readonly commandTools: WorkspaceCommandTools;
+    readonly authorization: {
+      readonly displayContent?: unknown;
+      readonly preparedInput?: Readonly<Record<string, unknown>>;
+    };
+    readonly reauthorize: (
+      command: string,
+    ) => ReturnType<WorkspaceCommandTools["authorizeToolCall"]>;
+  }): Promise<
+    | { readonly input: Readonly<Record<string, unknown>> }
+    | { readonly result: AskAgentSandboxToolResult }
+  > {
+    const { request, root, commandTools } = options;
+    const host = await this.loadWorkspaceHost();
+    const display = options.authorization.displayContent;
+    const prepared = options.authorization.preparedInput;
+    if (!prepared || !host.isWorkspaceCommandApprovalDisplay(display)) {
+      return { result: errorResult("command_requires_approval") };
+    }
+    let decision: AskAgentCommandApprovalDecision;
+    try {
+      decision = await request.requestApproval!({
+        command: display.command,
+        cwd: display.cwd,
+        root,
+        timeoutMs: display.timeoutMs,
+        network: this.platform === "linux" ? "none" : "loopback",
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      return {
+        result: {
+          content: JSON.stringify({
+            status:
+              message === "ask_agent_approval_pending"
+                ? "approval_pending"
+                : "cancelled",
+            error:
+              message === "ask_agent_approval_pending"
+                ? "Another approval is already pending"
+                : "Command approval was cancelled",
+          }),
+          isError: true,
+        },
+      };
+    }
+    if (decision.decision === "reject") {
+      return {
+        result: {
+          content: JSON.stringify({
+            status: "rejected_by_user",
+            error: "The user declined this command",
+            ...(decision.reason ? { reason: decision.reason } : {}),
+          }),
+          isError: true,
+        },
+      };
+    }
+    if (decision.decision === "edit") {
+      // The user wrote this command, so it runs without a second card.
+      const edited = await options.reauthorize(decision.command);
+      if (edited.decision === "deny") {
+        return { result: errorResult(edited.reason ?? "command_denied") };
+      }
+      if (!edited.preparedInput) {
+        return { result: errorResult("command_requires_approval") };
+      }
+      return { input: { ...edited.preparedInput } };
+    }
+    const validation = await commandTools.validatePendingLaunch({
+      principal: PRINCIPAL,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      toolName: "execute_command",
+      input: prepared,
+      displayContent: display,
+    });
+    if (!validation.ok) return { result: errorResult(validation.reason) };
+    return { input: { ...prepared } };
+  }
+
+  private loadWorkspaceHost(): Promise<WorkspaceHostModule> {
+    this.workspaceHost ??= import("@agentlink/workspace-host");
+    return this.workspaceHost;
+  }
+
+  /** macOS always ships zsh; Linux distributions reliably ship bash. */
+  private shellExecutable(): string {
+    return this.platform === "linux" ? "/bin/bash" : "/bin/zsh";
+  }
+
+  private environmentDigestSecret(sessionId: string): string {
+    this.digestSecrets ??= new Map();
+    let secret = this.digestSecrets.get(sessionId);
+    if (!secret) {
+      secret = createHash("sha256")
+        .update(`${process.pid}:${sessionId}:${Date.now()}:${Math.random()}`)
+        .digest("hex");
+      this.digestSecrets.set(sessionId, secret);
+    }
+    return secret;
+  }
+
+  private grantedEnvironment(): NodeJS.ProcessEnv {
+    const source = this.options.hostEnvironment?.() ?? process.env;
+    return Object.fromEntries(
+      Object.entries(source).filter(
+        ([name, value]) =>
+          value !== undefined && !HELPER_ONLY_ENVIRONMENT.test(name),
+      ),
+    );
+  }
+
+  /**
+   * On Linux the sandboxed shell runs AgentLink's apply-seccomp helper, so
+   * its directory must stay readable when the runtime sits inside a hidden
+   * root (an extracted AppImage or a source checkout under /home). Only that
+   * directory is re-allowed, not the rest of the install.
+   */
+  private trustedRuntimeRoots(): string[] {
+    return this.platform === "linux"
+      ? [
+          path.dirname(
+            linuxSandboxApplySeccompPath(
+              path.join(this.options.extensionRoot, "dist", "sandbox-runtime"),
+              process.arch,
+            ),
+          ),
+        ]
+      : [];
   }
 
   private sandboxRuntime(ripgrepPath?: string): SandboxRuntimeProvider {

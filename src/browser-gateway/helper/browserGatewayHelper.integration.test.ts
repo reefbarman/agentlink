@@ -7471,6 +7471,24 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     expect(grant.ok).toBe(true);
 
+    // Without the command sandbox, folders cannot be granted for commands.
+    const commands = await fetch(
+      `${harness.helperBase}/api/ask-agent/read-grants`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          path: tempRoot,
+          confirm: true,
+          access: "commands",
+        }),
+      },
+    );
+    expect(commands.status).toBe(409);
+    await expect(commands.json()).resolves.toMatchObject({
+      error: "commands_unavailable",
+    });
+
     const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: harness.cookie },
@@ -11308,6 +11326,234 @@ describe("BrowserGatewayHelper proxy routing", () => {
       expect(shouted).toBe("DISTINCTIVE-SANDBOX-42");
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("runs an approved sandboxed command in a folder granted for commands", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const projectFile = path.join(project, "README.md");
+    await fs.writeFile(projectFile, "readme");
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const launchedRoots: Array<string | undefined> = [];
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: ({ grantedRoot }) => {
+        launchedRoots.push(grantedRoot);
+        return workspaceHost.createLocalWorkspaceExecutionBackend();
+      },
+    });
+    const revokeCommandRoot = vi.spyOn(sandbox, "revokeCommandRoot");
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (completionParams.length === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "granted-run",
+              name: "execute_command",
+              input: {
+                command: "printf distinctive-granted-77 > granted.txt",
+                cwd: project,
+              },
+            },
+          ],
+        };
+      }
+      return { text: "Done.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const grantRequest = (body: unknown) =>
+      fetch(`${harness.helperBase}/api/ask-agent/read-grants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+
+    try {
+      // Only this machine can add grants; paired LAN and phone clients cannot.
+      const written: { status?: number; body?: string } = {};
+      await (
+        harness.helper as unknown as {
+          handleAskAgentReadGrantAddRequest(
+            req: unknown,
+            res: unknown,
+          ): Promise<void>;
+        }
+      ).handleAskAgentReadGrantAddRequest(
+        { socket: { remoteAddress: "192.168.50.20" } },
+        {
+          writeHead: (status: number) => {
+            written.status = status;
+          },
+          end: (body: string) => {
+            written.body = body;
+          },
+        },
+      );
+      expect(written.status).toBe(403);
+      expect(written.body).toContain("grant_requires_this_machine");
+
+      const invalid = await grantRequest({
+        path: project,
+        confirm: true,
+        access: "everything",
+      });
+      expect(invalid.status).toBe(400);
+      const fileGrant = await grantRequest({
+        path: projectFile,
+        confirm: true,
+        access: "commands",
+      });
+      expect(fileGrant.status).toBe(400);
+      await expect(fileGrant.json()).resolves.toMatchObject({
+        error: "commands_grant_requires_directory",
+      });
+      const tooBroad = await grantRequest({
+        path: os.homedir(),
+        confirm: true,
+        access: "commands",
+      });
+      expect(tooBroad.status).toBe(400);
+
+      const grant = await grantRequest({
+        path: project,
+        confirm: true,
+        access: "commands",
+      });
+      expect(grant.ok).toBe(true);
+      const grantBody = (await grant.json()) as {
+        snapshot: {
+          ui: {
+            readGrants: Array<{
+              id: string;
+              rootPath: string;
+              access?: string;
+            }>;
+          };
+        };
+      };
+      expect(grantBody.snapshot.ui.readGrants).toEqual([
+        expect.objectContaining({ rootPath: project, access: "commands" }),
+      ]);
+
+      const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({ text: "Write a file in my project" }),
+      });
+      let approvalId = "";
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval).toMatchObject({
+          kind: "command",
+          command: "printf distinctive-granted-77 > granted.txt",
+          cwd: project,
+          // The macOS sandbox still allows connections to local services.
+          commandSandbox: { writableRoot: project, network: "loopback" },
+        });
+        approvalId = String(body.snapshot.ui.approval?.id);
+      });
+      expect(approvalId).toMatch(/^ask-agent-command-/);
+      // Nothing runs before the user approves.
+      await expect(
+        fs.stat(path.join(project, "granted.txt")),
+      ).rejects.toThrow();
+      expect(completionParams[0]?.additionalInstructions).toContain(
+        `- ${project}`,
+      );
+
+      const approval = await fetch(
+        `${harness.helperBase}/api/ask-agent/approval`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify({ id: approvalId, decision: "run-once" }),
+        },
+      );
+      expect(approval.ok).toBe(true);
+      expect((await sendPromise).ok).toBe(true);
+      expect(await fs.readFile(path.join(project, "granted.txt"), "utf8")).toBe(
+        "distinctive-granted-77",
+      );
+      expect(launchedRoots).toContain(project);
+
+      const grantId = grantBody.snapshot.ui.readGrants[0]!.id;
+      const revoke = await fetch(
+        `${harness.helperBase}/api/ask-agent/read-grants/revoke`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify({ id: grantId }),
+        },
+      );
+      expect(revoke.ok).toBe(true);
+      expect(revokeCommandRoot).toHaveBeenCalledWith(project);
+
+      // A folder holding other repositories cannot be granted for commands,
+      // because the sandbox only protects the top-level Git metadata.
+      await fs.mkdir(path.join(project, "inner", ".git"), { recursive: true });
+      const nested = await grantRequest({
+        path: project,
+        confirm: true,
+        access: "commands",
+      });
+      expect(nested.status).toBe(400);
+      await expect(nested.json()).resolves.toMatchObject({
+        error: "commands_grant_contains_repositories",
+      });
+
+      // A granted path later replaced by a symlink no longer applies.
+      const movable = path.join(project, "inner");
+      await fs.rm(path.join(movable, ".git"), { recursive: true });
+      expect(
+        (
+          await grantRequest({
+            path: movable,
+            confirm: true,
+            access: "commands",
+          })
+        ).ok,
+      ).toBe(true);
+      const commandRoots = () =>
+        (
+          harness.helper as unknown as {
+            askAgentCommandRoots(): Promise<string[]>;
+          }
+        ).askAgentCommandRoots();
+      expect(await commandRoots()).toEqual([movable]);
+      await fs.rename(movable, `${movable}-moved`);
+      await fs.symlink(sandboxRoot, movable);
+      expect(await commandRoots()).toEqual([]);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
     }
   });
 

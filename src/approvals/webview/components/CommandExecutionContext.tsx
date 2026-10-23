@@ -1,4 +1,5 @@
 import type {
+  ApprovalRequest,
   CommandRecoveryAttempt,
   CommandReviewSummary,
 } from "@agentlink/protocol/approval-transport";
@@ -7,6 +8,8 @@ import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/termi
 
 interface CommandExecutionContextProps {
   security?: TerminalExecutionSecuritySummary;
+  /** Host-described sandbox, used when there is no security summary. */
+  commandSandbox?: ApprovalRequest["commandSandbox"];
   reason?: string;
   review?: CommandReviewSummary;
   humanOnlyReason?: string;
@@ -18,6 +21,7 @@ interface CommandExecutionContextProps {
 
 export function CommandExecutionContext({
   security,
+  commandSandbox,
   reason,
   review,
   humanOnlyReason,
@@ -26,15 +30,20 @@ export function CommandExecutionContext({
   nativeEscalation = false,
   approvalRulesSupported = false,
 }: CommandExecutionContextProps) {
-  const protectedTerminal = security?.route === "sandbox";
+  const hostSandbox =
+    !security && !nativeEscalation ? commandSandbox : undefined;
+  const protectedTerminal =
+    security?.route === "sandbox" || Boolean(hostSandbox);
   const managedNetwork = ["proxy-only", "partial"].includes(
     security?.sandbox?.capabilities.network ?? "",
   );
   const label = nativeEscalation
     ? "Full terminal access"
-    : protectedTerminal
-      ? "Protected Terminal"
-      : "AgentLink Terminal";
+    : hostSandbox
+      ? "Sandboxed command"
+      : protectedTerminal
+        ? "Protected Terminal"
+        : "AgentLink Terminal";
   const firstCommandNotStarted =
     recoveryAttempt?.commandSent === false &&
     recoveryAttempt.processLaunched === false;
@@ -46,20 +55,30 @@ export function CommandExecutionContext({
       ? approvalRulesSupported
         ? "Normal user permissions"
         : "One run · normal user permissions"
-      : protectedTerminal
-        ? managedNetwork
-          ? "Workspace access · mediated network"
-          : "Workspace access · private HOME · no network"
-        : "Normal shell permissions";
+      : hostSandbox
+        ? hostSandbox.network === "none"
+          ? "Writes only in this folder · no network"
+          : "Writes only in this folder · no internet"
+        : protectedTerminal
+          ? managedNetwork
+            ? "Workspace access · mediated network"
+            : "Workspace access · private HOME · no network"
+          : "Normal shell permissions";
   const description = nativeEscalation
     ? approvalRulesSupported
       ? "Runs with your normal user permissions, including host files, credentials, network, and local processes."
       : "This exact command will run once with your normal user permissions. It can access host files, credentials, network services, and local processes that the sandbox normally protects. This approval is not saved and cannot approve future commands."
-    : protectedTerminal
-      ? managedNetwork
-        ? "Runs with workspace access, protected metadata, private HOME and temporary files. Public connections pause for exact destination approval; private and local destinations remain blocked."
-        : "Runs with workspace access, protected metadata, private HOME and temporary files, and no network access."
-      : "Runs in your normal shell environment with the same permissions as a terminal you open.";
+    : hostSandbox
+      ? `Runs once in a sandbox. It can read files on this computer, but can only write inside ${hostSandbox.writableRoot} and temporary folders. Git metadata and agent instruction files at the top of that folder stay read-only. ${
+          hostSandbox.network === "none"
+            ? "It has no network access."
+            : "It cannot reach the internet, but can connect to services running on this computer."
+        }`
+      : protectedTerminal
+        ? managedNetwork
+          ? "Runs with workspace access, protected metadata, private HOME and temporary files. Public connections pause for exact destination approval; private and local destinations remain blocked."
+          : "Runs with workspace access, protected metadata, private HOME and temporary files, and no network access."
+        : "Runs in your normal shell environment with the same permissions as a terminal you open.";
   const icon = nativeEscalation
     ? "codicon-warning"
     : protectedTerminal

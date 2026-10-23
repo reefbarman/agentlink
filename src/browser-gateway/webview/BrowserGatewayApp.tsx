@@ -481,6 +481,7 @@ type AskAgentReadGrant = {
   rootPath: string;
   label: string;
   kind: "file" | "directory";
+  access?: "read" | "commands";
 };
 
 type BrowserGatewayInstanceOption = {
@@ -2357,6 +2358,7 @@ export function BrowserGatewayApp({
   const [showAskAgentHandoff, setShowAskAgentHandoff] = useState(false);
   const [showAskAgentReadGrants, setShowAskAgentReadGrants] = useState(false);
   const [askAgentReadGrantPath, setAskAgentReadGrantPath] = useState("");
+  const [askAgentGrantCommands, setAskAgentGrantCommands] = useState(false);
   const [askAgentReadGrantPending, setAskAgentReadGrantPending] =
     useState(false);
   const [askAgentHandoffTargetId, setAskAgentHandoffTargetId] = useState("");
@@ -4825,8 +4827,13 @@ export function BrowserGatewayApp({
       );
       return;
     }
+    const access = askAgentGrantCommands ? "commands" : "read";
     setAskAgentReadGrantPending(true);
-    setSendStatus("Granting read-only access…");
+    setSendStatus(
+      access === "commands"
+        ? "Granting read and command access…"
+        : "Granting read-only access…",
+    );
     try {
       const response = await fetch("/api/ask-agent/read-grants", {
         method: "POST",
@@ -4835,20 +4842,28 @@ export function BrowserGatewayApp({
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ path: requestedPath, confirm: true }),
+        body: JSON.stringify({ path: requestedPath, confirm: true, access }),
       });
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         error?: string;
+        message?: string;
         snapshot?: GatewaySnapshot;
       };
       if (!response.ok || !body.ok || !body.snapshot) {
-        setSendStatus(`Read grant failed: ${body.error ?? response.status}`);
+        setSendStatus(
+          `Grant failed: ${body.message ?? body.error ?? response.status}`,
+        );
         return;
       }
       commitAskAgentSnapshot(body.snapshot);
       setAskAgentReadGrantPath("");
-      setSendStatus("Read-only access granted for Ask Agent.");
+      setAskAgentGrantCommands(false);
+      setSendStatus(
+        access === "commands"
+          ? "Ask Agent can now read this folder and ask to run commands in it."
+          : "Read-only access granted for Ask Agent.",
+      );
       logAskAgentBrowserEvent("read_grant.add", { ok: true });
     } catch (err) {
       setSendStatus(`Read grant error: ${String(err)}`);
@@ -4885,7 +4900,7 @@ export function BrowserGatewayApp({
         return;
       }
       commitAskAgentSnapshot(body.snapshot);
-      setSendStatus("Read-only access revoked.");
+      setSendStatus("Local access revoked.");
       logAskAgentBrowserEvent("read_grant.revoke", { ok: true });
     } catch (err) {
       setSendStatus(`Read grant revoke error: ${String(err)}`);
@@ -10015,16 +10030,19 @@ export function BrowserGatewayApp({
               )}
               {showAskAgentReadGrants && isAskAgentSelected && (
                 <section
-                  aria-label="Ask Agent read-only local grants"
+                  aria-label="Ask Agent local access grants"
                   class="ask-agent-memory-panel ask-agent-read-grants-panel"
                 >
                   <div class="ask-agent-memory-panel-header">
                     <div>
-                      <strong>Read-only local file access</strong>
+                      <strong>Local file access</strong>
                       <span>
-                        Grant exact local files or directories for Ask Agent
-                        read/list/search tools. No write, shell, editor, or MCP
-                        access is enabled.
+                        Grant local files or folders for Ask Agent to read, list
+                        and search. A folder can also allow commands: each one
+                        asks you first, runs in a sandbox that can only write
+                        inside that folder, and has no network. Grants can only
+                        be added on this computer and end when AgentLink
+                        restarts.
                       </span>
                     </div>
                     <button
@@ -10049,13 +10067,27 @@ export function BrowserGatewayApp({
                       placeholder="/Users/name/project or /Users/name/file.md"
                     />
                   </label>
+                  <label class="ask-agent-handoff-field ask-agent-grant-commands">
+                    <input
+                      type="checkbox"
+                      checked={askAgentGrantCommands}
+                      onChange={(event) =>
+                        setAskAgentGrantCommands(
+                          (event.target as HTMLInputElement).checked,
+                        )
+                      }
+                    />
+                    <span>Also allow commands in this folder (asks first)</span>
+                  </label>
                   <div class="ask-agent-memory-actions">
                     <button
                       disabled={askAgentReadGrantPending}
                       onClick={() => void addAskAgentReadGrant()}
                       type="button"
                     >
-                      Confirm read grant
+                      {askAgentGrantCommands
+                        ? "Confirm read and command grant"
+                        : "Confirm read grant"}
                     </button>
                   </div>
                   {askAgentReadGrants.length > 0 ? (
@@ -10065,7 +10097,11 @@ export function BrowserGatewayApp({
                           <div>
                             <strong>{grant.label}</strong>
                             <span>
-                              {grant.kind} · {grant.rootPath}
+                              {grant.kind}
+                              {grant.access === "commands"
+                                ? " · read + commands"
+                                : " · read only"}{" "}
+                              · {grant.rootPath}
                             </span>
                           </div>
                           <button

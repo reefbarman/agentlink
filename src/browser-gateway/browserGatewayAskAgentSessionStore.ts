@@ -155,6 +155,11 @@ export interface BrowserGatewayAskAgentReadGrant {
   rootPath: string;
   label: string;
   kind: "file" | "directory";
+  /**
+   * `commands` (directories only) also lets Ask Agent run sandboxed
+   * commands there, each behind an approval card. Absent means `read`.
+   */
+  access?: "read" | "commands";
 }
 
 export interface BrowserGatewayAskAgentQueuedMessage {

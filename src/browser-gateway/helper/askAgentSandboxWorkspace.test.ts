@@ -5,8 +5,12 @@ import * as path from "node:path";
 import {
   ASK_AGENT_SANDBOX_TOOLS,
   AskAgentSandboxWorkspace,
+  askAgentCommandFoldersPrompt,
+  findNestedRepository,
+  type AskAgentCommandApprovalDecision,
+  type AskAgentCommandApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pathToFileURL } from "node:url";
 
@@ -27,17 +31,32 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 }
 
 /** Runs commands unsandboxed so the composition is testable everywhere. */
-async function localWorkspace(rootDirectory: string) {
+async function localWorkspace(
+  rootDirectory: string,
+  hostEnvironment?: () => NodeJS.ProcessEnv,
+) {
   const host = await import("@agentlink/workspace-host");
-  const launches: Array<{ workDirectory: string; denied: readonly string[] }> =
-    [];
+  const launches: Array<{
+    workDirectory: string;
+    denied: readonly string[];
+    grantedRoot?: string;
+  }> = [];
   const workspace = new AskAgentSandboxWorkspace({
     rootDirectory,
     extensionRoot: rootDirectory,
     platform: "darwin",
     homeDirectory: "/Users/example",
-    createProcessLauncher: ({ workDirectory, deniedReadRoots }) => {
-      launches.push({ workDirectory, denied: deniedReadRoots });
+    ...(hostEnvironment ? { hostEnvironment } : {}),
+    createProcessLauncher: ({
+      workDirectory,
+      deniedReadRoots,
+      grantedRoot,
+    }) => {
+      launches.push({
+        workDirectory,
+        denied: deniedReadRoots,
+        ...(grantedRoot ? { grantedRoot } : {}),
+      });
       return host.createLocalWorkspaceExecutionBackend();
     },
   });
@@ -245,6 +264,258 @@ describe("AskAgentSandboxWorkspace", () => {
         data: Buffer.from("report").toString("base64"),
       },
     ]);
+  });
+
+  describe("in folders granted for commands", () => {
+    function approver(decision: AskAgentCommandApprovalDecision) {
+      return vi.fn(
+        async (
+          _proposal: AskAgentCommandApprovalProposal,
+        ): Promise<AskAgentCommandApprovalDecision> => decision,
+      );
+    }
+
+    it("runs a command there only after the user approves it", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      await fs.mkdir(path.join(project, "src"));
+      const { workspace, launches } = await localWorkspace(root, () => ({
+        PATH: process.env.PATH,
+        CUSTOM_VAR: "kept",
+        ELECTRON_RUN_AS_NODE: "1",
+        NODE_PATH: "/helper/node_modules",
+        AGENTLINK_BROWSER_GATEWAY_STANDALONE_MCP: "1",
+      }));
+      const requestApproval = approver({ decision: "run" });
+
+      const ran = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: {
+          command:
+            'printf "%s|%s|%s|%s" "$CUSTOM_VAR" "$ELECTRON_RUN_AS_NODE" "$NODE_PATH" "$PWD" > out.txt',
+          cwd: path.join(project, "src"),
+        },
+        commandRoots: [project],
+        requestApproval,
+      });
+
+      expect(ran.isError).toBe(false);
+      expect(requestApproval).toHaveBeenCalledTimes(1);
+      expect(requestApproval.mock.calls[0]![0]).toMatchObject({
+        cwd: path.join(project, "src"),
+        root: project,
+      });
+      // Helper-only variables never reach the command.
+      expect(
+        await fs.readFile(path.join(project, "src", "out.txt"), "utf8"),
+      ).toBe(`kept|||${path.join(project, "src")}`);
+      expect(launches).toContainEqual({
+        workDirectory: project,
+        denied: [],
+        grantedRoot: project,
+      });
+
+      // get_command_output finds granted-folder commands too.
+      const commandId = (parse(ran.content).record as { commandId: string })
+        .commandId;
+      const observed = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-2",
+        toolName: "get_command_output",
+        input: { commandId },
+      });
+      expect(observed.isError).toBe(false);
+    });
+
+    it("does not run a declined command and runs an edited one as written", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+
+      const declined = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch declined.txt", cwd: project },
+        commandRoots: [project],
+        requestApproval: approver({ decision: "reject", reason: "not now" }),
+      });
+      expect(declined.isError).toBe(true);
+      expect(parse(declined.content)).toMatchObject({
+        status: "rejected_by_user",
+        reason: "not now",
+      });
+      await expect(
+        fs.stat(path.join(project, "declined.txt")),
+      ).rejects.toThrow();
+
+      const edited = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-2",
+        toolName: "execute_command",
+        input: { command: "touch original.txt", cwd: project },
+        commandRoots: [project],
+        requestApproval: approver({
+          decision: "edit",
+          command: "touch edited.txt",
+        }),
+      });
+      expect(edited.isError).toBe(false);
+      await expect(
+        fs.stat(path.join(project, "edited.txt")),
+      ).resolves.toBeTruthy();
+      await expect(
+        fs.stat(path.join(project, "original.txt")),
+      ).rejects.toThrow();
+    });
+
+    it("refuses folders that are not granted, and asks even without a rule", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const other = await temporaryDirectory("al-ask-other-");
+      const { workspace } = await localWorkspace(root);
+
+      const outside = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch x", cwd: other },
+        commandRoots: [project],
+        requestApproval: approver({ decision: "run" }),
+      });
+      expect(outside.isError).toBe(true);
+      expect(outside.content).toContain("cwd_not_granted");
+
+      // Without an approval channel a granted-folder command cannot run.
+      const unattended = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch x", cwd: project },
+        commandRoots: [project],
+      });
+      expect(unattended.isError).toBe(true);
+      expect(unattended.content).toContain("command_requires_approval");
+      await expect(fs.stat(path.join(project, "x"))).rejects.toThrow();
+    });
+
+    it("stops running commands and refuses new ones when the grant is revoked", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+
+      const running = workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch started && sleep 30", cwd: project },
+        commandRoots: [project],
+        requestApproval: approver({ decision: "run" }),
+      });
+      await vi.waitFor(() => fs.stat(path.join(project, "started")), {
+        timeout: 10_000,
+        interval: 50,
+      });
+      await workspace.revokeCommandRoot(project);
+      const stopped = await running;
+      expect(parse(stopped.content).record).toMatchObject({
+        state: "cancelled",
+      });
+
+      // A stale caller that still lists the root cannot launch there.
+      const requestApproval = approver({ decision: "run" });
+      const later = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-2",
+        toolName: "execute_command",
+        input: { command: "touch later", cwd: project },
+        commandRoots: [],
+        requestApproval,
+      });
+      expect(later.isError).toBe(true);
+      expect(requestApproval).not.toHaveBeenCalled();
+      await expect(fs.stat(path.join(project, "later"))).rejects.toThrow();
+    }, 20_000);
+
+    it("refuses a command whose grant is revoked while it waits for approval", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      let granted = true;
+
+      // The caller listed the folder before the user revoked it on the card.
+      const result = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch stale", cwd: project },
+        commandRoots: [project],
+        requestApproval: async () => {
+          granted = false;
+          await workspace.revokeCommandRoot(project);
+          return { decision: "run" };
+        },
+        isCommandRootGranted: async () => granted,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("cwd_not_granted");
+      await expect(fs.stat(path.join(project, "stale"))).rejects.toThrow();
+
+      // The same holds when only the revocation itself is known.
+      const late = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-2",
+        toolName: "execute_command",
+        input: { command: "touch late", cwd: project },
+        commandRoots: [project],
+        requestApproval: async () => {
+          await workspace.revokeCommandRoot(project);
+          return { decision: "run" };
+        },
+      });
+      expect(late.isError).toBe(true);
+      await expect(fs.stat(path.join(project, "late"))).rejects.toThrow();
+    });
+
+    it("reports the macOS sandbox's local-only network on the approval", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      const requestApproval = approver({ decision: "reject" });
+      await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "true", cwd: project },
+        commandRoots: [project],
+        requestApproval,
+      });
+      expect(requestApproval.mock.calls[0]![0].network).toBe("loopback");
+    });
+
+    it("finds repositories nested in a folder", async () => {
+      const project = await temporaryDirectory("al-ask-project-");
+      await fs.mkdir(path.join(project, ".git"));
+      await fs.mkdir(path.join(project, "node_modules", "dep", ".git"), {
+        recursive: true,
+      });
+      expect(await findNestedRepository(project)).toBeUndefined();
+      await fs.mkdir(path.join(project, "packages", "inner", ".git"), {
+        recursive: true,
+      });
+      expect(await findNestedRepository(project)).toBe(
+        path.join(project, "packages", "inner", ".git"),
+      );
+    });
+
+    it("lists granted folders in the prompt only when there are some", () => {
+      expect(askAgentCommandFoldersPrompt([])).toBeUndefined();
+      expect(askAgentCommandFoldersPrompt(["/work/app"])).toContain(
+        "- /work/app",
+      );
+    });
   });
 
   it("refuses writes and presented files outside the work folder", async () => {
