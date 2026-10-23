@@ -1,0 +1,62 @@
+scripts/sandbox-linux-runtime.mjs
+  h_e08a86bb3a33a2 9,19-23,62-68,70,98,119-121
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 208-209,211,216
+  s_0c0b734d57d598::t_9e3d48f922199e 217
+src/terminal/phase1Inactive.test.ts
+  h_e08a86bb3a33a2 120
+packages/sandbox/src/linuxSandboxPrerequisites.ts
+  h_e08a86bb3a33a2 1,17,61-63,80-81,84,295-306
+  s_0c0b734d57d598::t_89aef63594d2fc 307-309
+scripts/sandbox-linux-runtime.test.mjs
+  h_e08a86bb3a33a2 5,11-18,21-22,25-55,112,166,169
+  s_50cbcb7195dd3b::t_abf14a587f60d7 56
+packages/sandbox/src/sandboxNodeRuntime.ts
+  h_e08a86bb3a33a2 14-19,121,123-125,160-161,275
+  s_0c0b734d57d598::t_2803bfc2003fcb 155-159,162
+package.json
+  h_e08a86bb3a33a2 352
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 177
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 8,316-327
+CHANGELOG.md
+  h_e08a86bb3a33a2 13
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 139
+packages/sandbox/src/linuxSandboxPrerequisites.test.ts
+  h_e08a86bb3a33a2 17,66,106-111,130
+resources/builtin-skills/documentation/references/package-contract.md
+  s_0c0b734d57d598::t_bcc343809143c8 126
+resources/builtin-skills/documentation/references/release-notes.md
+  s_0c0b734d57d598::t_113bd61f62ac25 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0c0b734d57d598": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6eb9725-ee82-44d0-8d74-3c54bfa3124c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_50cbcb7195dd3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1958f9a-a7eb-4545-b74a-008c70e99665",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
