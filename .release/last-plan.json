@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "8af7d872945de93e27155f573663a4b457e96cd8",
-  "createdAt": "2026-10-23T12:09:33.523Z",
+  "sourceSha": "28f97e60028f59290d0bfebcd6deecde95c81d7c",
+  "createdAt": "2026-10-23T12:26:32.122Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -24,7 +24,8 @@
         "fc0635b1683cb0efb09d5964689a6d79a12f4846",
         "df4323df696226e27c83b54907c7ed00bce19204",
         "63cf98267343e364c809f115aef9043669b6191a",
-        "8af7d872945de93e27155f573663a4b457e96cd8"
+        "8af7d872945de93e27155f573663a4b457e96cd8",
+        "b386d4524530c407a9e95b5d13cf16b591ce4264"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -102,29 +103,35 @@
           "subject": "feat(ask-agent): run sandboxed commands in granted folders with approval",
           "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
           "breaking": false
+        },
+        {
+          "sha": "b386d4524530c407a9e95b5d13cf16b591ce4264",
+          "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
+          "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.54.0",
-      "baselineRef": "desktop-v0.54.0",
-      "reserved": "0.54.0",
-      "commits": ["8af7d872945de93e27155f573663a4b457e96cd8"],
+      "published": "0.55.0",
+      "baselineRef": "desktop-v0.55.0",
+      "reserved": "0.55.0",
+      "commits": ["b386d4524530c407a9e95b5d13cf16b591ce4264"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.55.0",
+      "version": "0.56.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.55.0",
+      "tag": "desktop-v0.56.0",
       "notes": [
         {
-          "sha": "8af7d872945de93e27155f573663a4b457e96cd8",
-          "subject": "feat(ask-agent): run sandboxed commands in granted folders with approval",
-          "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
+          "sha": "b386d4524530c407a9e95b5d13cf16b591ce4264",
+          "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
+          "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
           "breaking": false
         }
       ]
@@ -132,7 +139,7 @@
     "cli": {
       "published": "0.39.0",
       "baselineRef": "cli-v0.39.0",
-      "reserved": "0.39.0",
+      "reserved": "0.40.0",
       "commits": ["8af7d872945de93e27155f573663a4b457e96cd8"],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -141,7 +148,7 @@
       "version": "0.40.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "cli-v0.40.0",
       "notes": [
@@ -154,49 +161,37 @@
       ]
     },
     "sdk": {
-      "published": "0.30.0",
-      "baselineRef": "sdk-v0.30.0",
-      "reserved": "0.30.0",
-      "commits": ["8af7d872945de93e27155f573663a4b457e96cd8"],
+      "published": "0.31.0",
+      "baselineRef": "sdk-v0.31.0",
+      "reserved": "0.31.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.31.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.31.0",
-      "notes": [
-        {
-          "sha": "8af7d872945de93e27155f573663a4b457e96cd8",
-          "subject": "feat(ask-agent): run sandboxed commands in granted folders with approval",
-          "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.26.0",
-      "baselineRef": "assistant-v0.26.0",
-      "reserved": "0.26.0",
-      "commits": ["8af7d872945de93e27155f573663a4b457e96cd8"],
+      "published": "0.27.0",
+      "baselineRef": "assistant-v0.27.0",
+      "reserved": "0.27.0",
+      "commits": ["b386d4524530c407a9e95b5d13cf16b591ce4264"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.27.0",
+      "version": "0.28.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.27.0",
+      "tag": "assistant-v0.28.0",
       "notes": [
         {
-          "sha": "8af7d872945de93e27155f573663a4b457e96cd8",
-          "subject": "feat(ask-agent): run sandboxed commands in granted folders with approval",
-          "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
+          "sha": "b386d4524530c407a9e95b5d13cf16b591ce4264",
+          "subject": "feat(ask-agent): command rules and Approve for Me in granted folders",
+          "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
           "breaking": false
         }
       ]
@@ -295,6 +290,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "b386d4524530c407a9e95b5d13cf16b591ce4264": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
