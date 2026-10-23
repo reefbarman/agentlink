@@ -1,0 +1,54 @@
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+CHANGELOG.md
+  h_e08a86bb3a33a2 8-10
+packages/node-host/README.md
+  h_e08a86bb3a33a2 138
+scripts/package-sandbox-runtime.test.mjs
+  h_e08a86bb3a33a2 2-5,32-33,110-166
+  s_272de3498a403d::t_51c73ea6dbce2b 30-31,34,167
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 12-15,22,39,61-62,627-717
+  s_272de3498a403d::t_ebbd3cc9e8d4e6 718-719
+packages/node-host/src/keychainSecretStorage.ts
+  h_e08a86bb3a33a2 20-53,58-62,95-100,102-105,271-291,293-320
+  s_272de3498a403d::t_d9e063c36207a1 292,321-322
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 64-70
+scripts/package-sandbox-runtime.mjs
+  h_e08a86bb3a33a2 70-75,102-123,125-137,158,167,221,223,233,239,241-243,256,271
+  s_e97964ab04ad3e::t_589b7afd14e686 124
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 198,204
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 8-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_272de3498a403d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7e8a9ab9-ecf3-4c57-8de0-31b4973ccc73",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_e97964ab04ad3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23ffcfba-431f-40e0-ac70-c3938d6617c3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
