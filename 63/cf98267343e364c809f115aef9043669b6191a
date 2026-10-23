@@ -1,0 +1,51 @@
+scripts/smoke-desktop-deb.sh
+  h_e08a86bb3a33a2 1-78
+CHANGELOG.md
+  h_e08a86bb3a33a2 15
+scripts/verify-desktop-package.test.mjs
+  h_e08a86bb3a33a2 4,99-121
+  h_e08a86bb3a33a2 122-124
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 52-92
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 87,89,91,102-103
+  s_5c98086f2fa509::t_1f45d30932209e 90
+apps/desktop/package.mjs
+  h_e08a86bb3a33a2 4,96-109,126-127
+apps/desktop/electron-builder.yml
+  h_e08a86bb3a33a2 54-86
+scripts/verify-desktop-package.mjs
+  h_e08a86bb3a33a2 5,133-176
+  h_e08a86bb3a33a2 177-178
+resources/builtin-skills/documentation/references/release-notes.md
+  s_7b2c284034760b::t_7efa5ce88b8960 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "63cf98267343e364c809f115aef9043669b6191a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_5c98086f2fa509": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05284327-b44c-4b4f-ba07-3fd0a826336b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_7b2c284034760b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a1c7185-b1ed-4e0f-8184-04c08686f051",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
