@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-  "createdAt": "2026-10-23T13:02:16.577Z",
+  "sourceSha": "f7a62390c1adbdf9596ad33826695af5657c2344",
+  "createdAt": "2026-10-23T13:45:28.982Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -26,7 +26,8 @@
         "63cf98267343e364c809f115aef9043669b6191a",
         "8af7d872945de93e27155f573663a4b457e96cd8",
         "b386d4524530c407a9e95b5d13cf16b591ce4264",
-        "0f866355725b5bd93d2c82db3c6e6ea26f739e58"
+        "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
+        "f7a62390c1adbdf9596ad33826695af5657c2344"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -116,101 +117,83 @@
           "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
           "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
           "breaking": false
+        },
+        {
+          "sha": "f7a62390c1adbdf9596ad33826695af5657c2344",
+          "subject": "feat(ask-agent): file edit tools in folders granted for commands",
+          "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.56.0",
-      "baselineRef": "desktop-v0.56.0",
-      "reserved": "0.56.0",
-      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
+      "published": "0.57.0",
+      "baselineRef": "desktop-v0.57.0",
+      "reserved": "0.57.0",
+      "commits": ["f7a62390c1adbdf9596ad33826695af5657c2344"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.57.0",
+      "version": "0.58.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.57.0",
+      "tag": "desktop-v0.58.0",
       "notes": [
         {
-          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
-          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
+          "sha": "f7a62390c1adbdf9596ad33826695af5657c2344",
+          "subject": "feat(ask-agent): file edit tools in folders granted for commands",
+          "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.40.0",
-      "baselineRef": "cli-v0.40.0",
-      "reserved": "0.40.0",
-      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
+      "published": "0.41.0",
+      "baselineRef": "cli-v0.41.0",
+      "reserved": "0.41.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.41.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.41.0",
-      "notes": [
-        {
-          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
-          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.31.0",
-      "baselineRef": "sdk-v0.31.0",
-      "reserved": "0.31.0",
-      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
+      "published": "0.32.0",
+      "baselineRef": "sdk-v0.32.0",
+      "reserved": "0.32.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.32.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.32.0",
-      "notes": [
-        {
-          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
-          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.28.0",
-      "baselineRef": "assistant-v0.28.0",
-      "reserved": "0.28.0",
-      "commits": ["0f866355725b5bd93d2c82db3c6e6ea26f739e58"],
+      "published": "0.29.0",
+      "baselineRef": "assistant-v0.29.0",
+      "reserved": "0.29.0",
+      "commits": ["f7a62390c1adbdf9596ad33826695af5657c2344"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.29.0",
+      "version": "0.30.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.29.0",
+      "tag": "assistant-v0.30.0",
       "notes": [
         {
-          "sha": "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
-          "subject": "feat(ask-agent): network access and Mac-only escalation for granted-folder commands",
-          "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
+          "sha": "f7a62390c1adbdf9596ad33826695af5657c2344",
+          "subject": "feat(ask-agent): file edit tools in folders granted for commands",
+          "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
           "breaking": false
         }
       ]
@@ -325,6 +308,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f7a62390c1adbdf9596ad33826695af5657c2344": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
