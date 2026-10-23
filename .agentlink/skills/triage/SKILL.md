@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Triage, consolidate, prioritize, and prune active AgentLink bug reports, self-improvement suggestions, and feature requests. Use when reviewing feedback, reducing duplicate reports, evaluating product improvements, deciding P0/P1/P2/P3 priorities, cleaning the feedback queue, or creating canonical entries.
+description: Triage, consolidate, prioritize, and prune active AgentLink bug reports, self-improvement suggestions, and feature requests, then pick and fix a batch from the accepted backlog. Use when the user says "triage", reviews feedback, reduces duplicate reports, evaluates product improvements, decides P0/P1/P2/P3 priorities, cleans the feedback queue, creates canonical entries, or wants triaged feedback fixed.
 ---
 
 # Feedback triage
@@ -16,6 +16,7 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
 - Duplicate or related P0/P1 entries are replaced by a canonical report that cites the original stable IDs and their key reproductions.
 - The user explicitly decides whether P2/P3 entries should be deleted.
 - The final active queue is verified against the agreed dispositions, including useful P2/P3 improvements intentionally kept.
+- Unless the user limits the request to triage only, 3-4 accepted items are selected from the triaged backlog and fixed (see step 9). A bare "triage" request means triage **and** fix.
 
 ## Workflow
 
@@ -112,6 +113,15 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
    - If lower-priority deletion was approved, confirm only the approved entries were removed and intentionally retained P2/P3 proposals remain.
    - Report the before/after count, retained bugs, approved improvements, deferred proposals, deleted count, and any lower-priority entries intentionally kept.
 
+9. **Select and fix a batch from the accepted backlog**
+   - When the user asks to "triage" without saying "triage only", this step is part of the request and is the user's implementation permission for the selected items. Do not ask again for permission to start fixing.
+   - Pick 3-4 items from all triaged entries (not just newly accepted ones). Prefer, in order: higher priority, verified AgentLink-owned cause, small and well-bounded scope, and items that share code so one change closes several. Skip items blocked on a product decision, external owners, or files with unrelated in-progress local changes (ask first per local instructions).
+   - Before fixing, re-check each pick against current code and recent commits; an item may already be fixed. If so, delete it as historical/fixed and pick another.
+   - If fewer than 3 viable items exist, fix what is viable and say so plainly rather than padding the batch with low-value or speculative work.
+   - State the selected items and one-line reasons in a single short message, then implement them with normal code-mode practice: focused tests, `npm run fmt`, `npm run lint`, `npm test`, docs/changelog updates per `CLAUDE.md`, and the repository's delivery convention.
+   - After each fix is validated, delete its feedback entry by stable ID. Leave unfixed entries triaged.
+   - Final report: triage results (step 8) plus, per fixed item, what changed, validation run, and the deleted feedback IDs.
+
 ## Guardrails
 
 - When consolidating reports, never delete an entry before its replacement has been recorded and triaged. Deliberately declined standalone proposals do not require a replacement; mixed reports must retain any valid bug evidence first.
@@ -121,4 +131,4 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
 - Before creating or retaining a canonical entry, decide whether the underlying bug or unmet need is actionable and whether the requested change is desirable under governing standards, safety constraints, and product goals. Current product contracts describe today's behavior, not a prohibition on new features.
 - Do not use stable IDs from stale/filtered output without rechecking the active queue.
 - Treat deletion as logical removal from the active queue; the append-only audit record remains available.
-- Never treat triage review, backlog approval, or a suggested fix as permission to implement. Do not modify workspace source files as part of feedback triage unless the user separately requests implementation work.
+- Backlog approval or a suggested fix alone is not permission to implement. Implementation permission comes from the user's request: a bare "triage" covers step 9 for the selected batch; "triage only" or an explicit limit does not.
