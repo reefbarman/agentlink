@@ -57,6 +57,13 @@ execFileSync(
     ...(signing.mode === "development"
       ? [`--config.afterPack=${path.join(desktopRoot, "sign.mjs")}`]
       : []),
+    // electron-builder's ${arch} is per format on x64 (AppImage "x86_64",
+    // deb "amd64"), so pin Linux names to our target's arch.
+    ...(linux
+      ? [
+          `--config.linux.artifactName=AgentLink-Desktop-\${version}-linux-${arch}.\${ext}`,
+        ]
+      : []),
     linux ? "--linux" : "--mac",
     `--${arch}`,
     "--publish",
