@@ -4306,8 +4306,10 @@ async function executeCommandWithAudit(
         category === "feature_disabled"
           ? "Enable agentlink.terminal.enabled in the owning host to use sandbox execution, then retry. This is a configuration limit, not a missing Node executable."
           : category === "remote_host" || category === "unsupported_host"
-            ? "Verified sandbox execution requires a supported local macOS extension host. Use a supported local host for this sandbox request; changing the Node path or repeatedly reloading this host cannot add sandbox support."
-            : "Inspect the owning host's terminal configuration and AgentLink output channel to determine why required sandbox execution is unavailable. Repair the identified host limitation before retrying; do not assume Node is missing.";
+            ? "Verified sandbox execution requires a supported local macOS or Linux extension host. Use a supported local host for this sandbox request; changing the Node path or repeatedly reloading this host cannot add sandbox support."
+            : category === "linux_sandbox_prerequisites_missing"
+              ? "This Linux host does not meet the bubblewrap sandbox prerequisites. The AgentLink output channel lists each failed check with its fix (for example installing bubblewrap, socat or ripgrep, or a user-namespace restriction). Report it to the user: the fix changes the host, and relaxing a host-wide namespace restriction is the user's decision. Retry after they repair it and reload the window."
+              : "Inspect the owning host's terminal configuration and AgentLink output channel to determine why required sandbox execution is unavailable. Repair the identified host limitation before retrying; do not assume Node is missing.";
       return {
         content: [
           {
@@ -4340,7 +4342,9 @@ async function executeCommandWithAudit(
                           : category === "remote_host" ||
                               category === "unsupported_host"
                             ? "use_supported_local_host"
-                            : "inspect_host_sandbox_availability",
+                            : category === "linux_sandbox_prerequisites_missing"
+                              ? "repair_linux_sandbox_prerequisites_then_reload"
+                              : "inspect_host_sandbox_availability",
                     same_command_after_repair: true,
                   },
                 ],

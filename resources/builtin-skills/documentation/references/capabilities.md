@@ -197,11 +197,28 @@ Local lexical indexing works without credentials. Vector and hybrid ranking requ
 
 In multi-project VS Code workspaces, creating a user terminal opens a directory chooser inside the AgentLink Terminal panel, not VS Code's top-of-window picker. Choose a project by name and full path, use the arrow keys or Tab to navigate and Enter to select, or dismiss with Cancel or Escape. This also applies when the panel creates its first terminal. Single-project workspaces open directly.
 
-Sandbox-backed terminals on supported local macOS hosts (`agentlink.terminal.enabled`, `agentlink.terminal.nodePath`). When an agent command starts, AgentLink selects its terminal immediately if that VS Code window is focused; otherwise it waits until the window regains focus, avoiding an unsolicited OS-level window activation. Explicit terminal-open actions remain immediate. Foreground sandbox commands that end in a high-confidence interactive prompt are terminated after a short inactivity grace and return structured `interactive_prompt` termination evidence without native retry. Background commands remain observation-only and expose prompt hints through `get_terminal_output`. Requirements: [AgentLink Terminal](complete-reference.md#agentlink-terminal).
+Sandbox-backed terminals on supported local macOS and Linux hosts (`agentlink.terminal.enabled`, `agentlink.terminal.nodePath`). When an agent command starts, AgentLink selects its terminal immediately if that VS Code window is focused; otherwise it waits until the window regains focus, avoiding an unsolicited OS-level window activation. Explicit terminal-open actions remain immediate. Foreground sandbox commands that end in a high-confidence interactive prompt are terminated after a short inactivity grace and return structured `interactive_prompt` termination evidence without native retry. Background commands remain observation-only and expose prompt hints through `get_terminal_output`. Requirements: [AgentLink Terminal](complete-reference.md#agentlink-terminal).
 
-On local Linux x64 and arm64 hosts (glibc, not Alpine), the AgentLink Terminal is available without the command sandbox. Approved agent commands run unsandboxed in the AgentLink Terminal, with the same shell integration as macOS (bash and zsh integrated, sh/dash/ksh raw, fish and PowerShell in a VS Code terminal), and the command result reports `executionSurface: "agentlink-native"` with `routeReason` `verified-local-linux`. Your `terminal.integrated.defaultProfile.linux`, `profiles.linux` and `env.linux` settings choose the shell.
+On local Linux x64 and arm64 hosts (glibc, not Alpine), the AgentLink Terminal runs approved agent commands unsandboxed, with the same shell integration as macOS (bash and zsh integrated, sh/dash/ksh raw, fish and PowerShell in a VS Code terminal), and the command result reports `executionSurface: "agentlink-native"` with `routeReason` `verified-local-linux`. Your `terminal.integrated.defaultProfile.linux`, `profiles.linux` and `env.linux` settings choose the shell.
 
-On Windows, Alpine Linux and remote extension hosts (Remote-SSH, WSL, dev containers), the AgentLink Terminal and the command sandbox are not available yet. Approved agent commands run unsandboxed in an ordinary VS Code terminal instead, and the command result reports `executionSurface: "vscode-compatibility"` with `routeReason` `unsupported-host` or `remote-host`. With Approve for Me on, each such command needs a one-shot native approval because no sandbox can run it. Requests that require the sandbox (`require_managed_network`, `with_additional_permissions`, `temporary_home`, or a read-only command policy) stay blocked on these hosts and on Linux.
+### Linux command sandbox
+
+On local Linux x64 and arm64 hosts (glibc), sandboxed commands (Approve for Me commands and requests that need the sandbox) run under bubblewrap when the host passes AgentLink's sandbox check. The result reports `route: "sandbox"`, `backend: "bubblewrap"` and `routeReason` `verified-local-linux`. The check needs:
+
+- `/usr/bin/bwrap` (bubblewrap 0.4 or newer), `socat` in `/usr/bin` or `/bin`, and ripgrep (VS Code's bundled `rg`, or `/usr/bin/rg`).
+- The `apply-seccomp` helper that ships in Linux VSIXs.
+- Unprivileged user namespaces. Ubuntu 23.10 and later restrict them through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), which stops the sandbox. Only a host-wide sysctl change lifts that, so AgentLink reports it and leaves the decision to you.
+
+The check runs once per window and logs each result, with a fix, to the AgentLink output channel. When it fails, commands fall back as if there were no sandbox: Approve for Me commands need a one-shot native approval and run in a VS Code terminal (`routeReason` `runtime-unavailable`), and sandbox-only requests are blocked with `sandbox_diagnostic.category` `linux_sandbox_prerequisites_missing`. Reload the window after fixing the host.
+
+The Linux sandbox differs from macOS:
+
+- Each command gets its own network namespace. It cannot reach services on the host's `localhost`, and anything it listens on is invisible to the host, so an `allow_local_binding` dev server cannot be opened from your browser.
+- Unix socket creation is blocked by seccomp, so host sockets such as Docker's are unreachable.
+- Commands have no controlling terminal. Output still goes to a terminal, but programs that open `/dev/tty` (password prompts, some pagers and editors) do not work.
+- The sandbox shell is `/bin/bash` (macOS uses `/bin/zsh`).
+
+On Windows, Alpine Linux and remote extension hosts (Remote-SSH, WSL, dev containers), the AgentLink Terminal and the command sandbox are not available yet. Approved agent commands run unsandboxed in an ordinary VS Code terminal instead, and the command result reports `executionSurface: "vscode-compatibility"` with `routeReason` `unsupported-host` or `remote-host`. With Approve for Me on, each such command needs a one-shot native approval because no sandbox can run it. Requests that require the sandbox (`require_managed_network`, `with_additional_permissions`, `temporary_home`, or a read-only command policy) stay blocked on these hosts.
 
 ## Editor entry points
 

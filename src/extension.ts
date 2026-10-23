@@ -263,6 +263,9 @@ import {
   SandboxNodeRuntimeUnavailableError,
   type ResolvedSandboxNodeRuntime,
 } from "./terminal/sandbox/sandboxNodeRuntime.js";
+import { LINUX_SANDBOX_WARNINGS } from "@agentlink/sandbox";
+import { createLinuxSandboxHostCheck } from "./terminal/sandbox/linuxSandboxHostCheck.js";
+import { getRipgrepBinPath } from "./util/ripgrep.js";
 import {
   readVscodeTerminalConfigurationSnapshot,
   readVscodeTerminalSurfaceConfiguration,
@@ -578,6 +581,15 @@ export async function activate(
   let hostTerminalCoordinator!: Phase1HostTerminalCoordinator;
   let customTerminalRuntimeWarning: string | undefined;
   let sandboxRuntimeWarning: string | undefined;
+  // Linux: the bubblewrap doctor runs once per window. Installing a missing
+  // tool or changing the host's user-namespace policy needs a window reload.
+  let linuxSandboxRipgrepPath: string | undefined;
+  const checkLinuxSandboxHost = createLinuxSandboxHostCheck({
+    nodePtyAvailable,
+    runtimeRoot: path.join(context.extensionPath, "dist", "sandbox-runtime"),
+    resolveRipgrep: getRipgrepBinPath,
+    log,
+  });
   const resetSandboxNodeRuntime = () => {
     resolvedSandboxNodeRuntime = undefined;
     sandboxNodeRuntimePromise = undefined;
@@ -1105,6 +1117,19 @@ export async function activate(
     },
     getSandboxAvailability:
       async (): Promise<SandboxPreparationAvailability> => {
+        let linuxRipgrepPath: string | undefined;
+        if (process.platform === "linux") {
+          const linuxHost = await checkLinuxSandboxHost();
+          if (!linuxHost.available) {
+            return {
+              status: "runtime-unavailable",
+              detail: linuxHost.detail,
+              diagnostic: { category: "linux_sandbox_prerequisites_missing" },
+            };
+          }
+          linuxRipgrepPath = linuxHost.ripgrepPath;
+          linuxSandboxRipgrepPath = linuxRipgrepPath;
+        }
         let runtime: ResolvedSandboxNodeRuntime;
         const runtimeWasCached = sandboxNodeRuntimePromise !== undefined;
         try {
@@ -1128,6 +1153,7 @@ export async function activate(
               probe: createProductionSandboxBehaviorProbe({
                 extensionRoot: context.extensionPath,
                 nodeExecutable: runtime.executable,
+                ...(linuxRipgrepPath ? { ripgrepPath: linuxRipgrepPath } : {}),
               }),
               onUnexpectedProbeError: (detail) =>
                 log(
@@ -1138,6 +1164,7 @@ export async function activate(
             extensionRoot: context.extensionPath,
             extensionVersion: extVersion,
             nodeExecutable: runtime.executable,
+            ...(linuxRipgrepPath ? { ripgrepPath: linuxRipgrepPath } : {}),
           });
           const attestation =
             await sandboxBehaviorAttestationService.attest(fingerprint);
@@ -1151,6 +1178,7 @@ export async function activate(
               diagnostic: { category: attestation.failureCode },
             };
           }
+          const backend = attestation.summary.metadata.backend;
           return {
             status: "verified",
             attestation: {
@@ -1158,10 +1186,10 @@ export async function activate(
               attestationVersion: attestation.summary.attestationVersion,
               policyVersion: attestation.summary.metadata.policyVersion,
               profileId: attestation.summary.metadata.profileId,
-              backend: "seatbelt",
+              backend,
               architecture: attestation.summary.metadata.architecture,
               capabilities: {
-                backend: "seatbelt",
+                backend,
                 processTree: true,
                 filesystemRead: "host-visible",
                 filesystemWrite: "strict",
@@ -1172,8 +1200,11 @@ export async function activate(
                 resourceLimits: "partial",
                 warnings: [
                   "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
-                  "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
+                  backend === "bubblewrap"
+                    ? "Host temporary directories are available for development toolchain compatibility."
+                    : "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
                   "CPU, memory, process-count, and disk quotas are not fully enforced.",
+                  ...(backend === "bubblewrap" ? LINUX_SANDBOX_WARNINGS : []),
                 ],
               },
             },
@@ -1221,6 +1252,9 @@ export async function activate(
         createNodeSandboxHelperTransportFactory({
           extensionRoot: context.extensionPath,
           nodeExecutable: resolvedSandboxNodeRuntime.executable,
+          ...(linuxSandboxRipgrepPath
+            ? { ripgrepPath: linuxSandboxRipgrepPath }
+            : {}),
         }),
       );
       try {

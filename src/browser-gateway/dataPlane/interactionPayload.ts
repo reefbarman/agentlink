@@ -403,7 +403,7 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
       attestationVersion: stringValue(sandbox.attestationVersion),
       policyVersion: stringValue(sandbox.policyVersion),
       profileId: stringValue(sandbox.profileId),
-      backend: enumValue(sandbox.backend, ["seatbelt"] as const),
+      backend: enumValue(sandbox.backend, ["seatbelt", "bubblewrap"] as const),
       architecture: enumValue(sandbox.architecture, ["arm64", "x64"] as const),
       capabilities: sandboxCapabilities(sandbox.capabilities),
     };

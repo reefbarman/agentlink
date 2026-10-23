@@ -159,6 +159,20 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
       });
       const runtimeChanged = await test.fingerprint();
       expect(runtimeChanged.digest).not.toBe(nativeChanged.digest);
+
+      expect((await test.fingerprint()).digest).toBe(runtimeChanged.digest);
+      // A sibling script the helper imports, not just the entry file.
+      await writeFile(
+        path.join(path.dirname(test.helperPath), "sandbox-linux-runtime.mjs"),
+        "export {};",
+      );
+      const siblingAdded = await test.fingerprint();
+      expect(siblingAdded.digest).not.toBe(runtimeChanged.digest);
+      await writeFile(
+        path.join(path.dirname(test.helperPath), "sandbox-linux-runtime.mjs"),
+        "export const x = 1;",
+      );
+      expect((await test.fingerprint()).digest).not.toBe(siblingAdded.digest);
     } finally {
       await test.dispose();
     }
@@ -195,18 +209,146 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
     }
   });
 
-  it("rejects unsupported hosts before issuing a fingerprint", async () => {
+  it.each([
+    ["win32", "x64"],
+    ["linux", "riscv64"],
+  ] as const)(
+    "rejects unsupported host %s/%s before issuing a fingerprint",
+    async (platform, architecture) => {
+      const test = await fixture();
+      try {
+        await expect(
+          createProductionSandboxRuntimeFingerprint({
+            extensionRoot: test.root,
+            extensionVersion: "1.2.3",
+            nodeExecutable: test.nodeExecutable,
+            platform,
+            architecture,
+          }),
+        ).rejects.toThrow("supports local macOS and Linux arm64/x64 only");
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  async function linuxFixture() {
     const test = await fixture();
-    try {
-      await expect(
+    const tools = path.join(test.root, "system");
+    const applySeccomp = path.join(
+      test.root,
+      "dist",
+      "sandbox-runtime",
+      "vendor",
+      "seccomp",
+      "x64",
+      "apply-seccomp",
+    );
+    await Promise.all([
+      mkdir(tools, { recursive: true }),
+      mkdir(path.dirname(applySeccomp), { recursive: true }),
+    ]);
+    const bwrap = path.join(tools, "bwrap");
+    const socat = path.join(tools, "socat");
+    const rg = path.join(tools, "rg");
+    await Promise.all([
+      writeFile(bwrap, "bwrap", { mode: 0o755 }),
+      writeFile(socat, "socat", { mode: 0o755 }),
+      writeFile(rg, "rg", { mode: 0o755 }),
+      writeFile(applySeccomp, "apply-seccomp", { mode: 0o755 }),
+    ]);
+    return {
+      ...test,
+      bwrap,
+      socat,
+      rg,
+      applySeccomp,
+      fingerprint: (
+        overrides: { socatCandidates?: string[]; defaultRipgrep?: string } = {},
+      ) =>
         createProductionSandboxRuntimeFingerprint({
           extensionRoot: test.root,
           extensionVersion: "1.2.3",
           nodeExecutable: test.nodeExecutable,
           platform: "linux",
           architecture: "x64",
+          ripgrepPath: rg,
+          shellPath: test.nodeExecutable,
+          linuxSystemTools: {
+            bwrapPath: bwrap,
+            socatCandidates: overrides.socatCandidates ?? [socat],
+            defaultRipgrepPath:
+              overrides.defaultRipgrep ?? path.join(test.root, "none"),
+          },
         }),
-      ).rejects.toThrow("supports local macOS arm64/x64 only");
+    };
+  }
+
+  it("binds the bubblewrap backend and its host tools on Linux", async () => {
+    const test = await linuxFixture();
+    try {
+      const first = await test.fingerprint();
+      expect(first.metadata).toMatchObject({
+        backend: "bubblewrap",
+        platform: "linux",
+        architecture: "x64",
+      });
+      let previous = first.digest;
+      for (const file of [test.applySeccomp, test.bwrap, test.socat, test.rg]) {
+        await writeFile(file, `changed-${path.basename(file)}-tool`, {
+          mode: 0o755,
+        });
+        const changed = await test.fingerprint();
+        expect(changed.digest).not.toBe(previous);
+        previous = changed.digest;
+      }
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("fails closed on Linux when a sandbox tool is missing", async () => {
+    const test = await linuxFixture();
+    try {
+      await expect(
+        test.fingerprint({ socatCandidates: [path.join(test.root, "none")] }),
+      ).rejects.toThrow("socat is not installed");
+      await rm(test.applySeccomp);
+      await expect(test.fingerprint()).rejects.toThrow();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("binds the tools the Linux helper would actually execute", async () => {
+    const test = await linuxFixture();
+    try {
+      // A non-executable first socat is skipped, as the helper skips it.
+      const skipped = path.join(test.root, "system", "socat-noexec");
+      await writeFile(skipped, "socat", { mode: 0o644 });
+      const first = await test.fingerprint({
+        socatCandidates: [skipped, test.socat],
+      });
+      await writeFile(skipped, "changed-unused-socat", { mode: 0o644 });
+      expect(
+        (await test.fingerprint({ socatCandidates: [skipped, test.socat] }))
+          .digest,
+      ).toBe(first.digest);
+
+      // A host ripgrep that lost its execute bit falls back to the default.
+      await chmod(test.rg, 0o644);
+      await expect(test.fingerprint()).rejects.toThrow(
+        "ripgrep is not available",
+      );
+      const fallback = path.join(test.root, "system", "default-rg");
+      await writeFile(fallback, "rg", { mode: 0o755 });
+      const usingFallback = await test.fingerprint({
+        defaultRipgrep: fallback,
+      });
+      await writeFile(fallback, "changed-default-rg", { mode: 0o755 });
+      expect(
+        (await test.fingerprint({ defaultRipgrep: fallback })).digest,
+      ).not.toBe(usingFallback.digest);
     } finally {
       await test.dispose();
     }

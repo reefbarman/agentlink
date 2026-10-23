@@ -25,7 +25,7 @@ function fingerprint(
       platform: "darwin",
       architecture: "arm64",
       ...overrides,
-    },
+    } as SandboxBehaviorRuntimeFingerprint["metadata"],
   };
 }
 
@@ -466,5 +466,98 @@ describe("SandboxBehaviorAttestationService", () => {
     expectFailure(await pending, "service_disposed");
     expect(cleanups[2]).toHaveBeenCalledTimes(1);
     expectFailure(await service.attest(fingerprint("c")), "service_disposed");
+  });
+
+  describe("bubblewrap on Linux", () => {
+    const linuxFingerprint = (): SandboxBehaviorRuntimeFingerprint => ({
+      ...fingerprint("d"),
+      metadata: {
+        ...fingerprint("d").metadata,
+        backend: "bubblewrap",
+        platform: "linux",
+      },
+    });
+    const namespacedChecks = (
+      overrides: Partial<
+        Record<
+          | "hostLoopbackUnreachable"
+          | "privateConnectDenied"
+          | "proxyEndpointsLoopbackOnly",
+          boolean
+        >
+      > = {},
+    ): SandboxBehaviorSyntheticCheckResult => ({
+      ...passingChecks(),
+      networkConfinement: {
+        hostLoopbackUnreachable: true,
+        privateConnectDenied: true,
+        publicConnectDenied: true,
+        listenerCapabilityBindAllowed: true,
+        listenerCapabilityPrivateConnectDenied: true,
+        listenerCapabilityPublicConnectDenied: true,
+        proxyEndpointsLoopbackOnly: true,
+        ...overrides,
+      },
+    });
+    const serviceWith = (checks: SandboxBehaviorSyntheticCheckResult) =>
+      new SandboxBehaviorAttestationService({
+        probe: { run: async () => ({ outcome: "checks", checks }) },
+      });
+
+    it("verifies namespaced network checks for a bubblewrap fingerprint", async () => {
+      const result =
+        await serviceWith(namespacedChecks()).attest(linuxFingerprint());
+      expect(result.verified).toBe(true);
+      if (result.verified) {
+        expect(result.summary.metadata).toMatchObject({
+          backend: "bubblewrap",
+          platform: "linux",
+        });
+      }
+    });
+
+    it.each([
+      "hostLoopbackUnreachable",
+      "privateConnectDenied",
+      "proxyEndpointsLoopbackOnly",
+    ] as const)("fails closed when %s is false", async (field) => {
+      expectFailure(
+        await serviceWith(namespacedChecks({ [field]: false })).attest(
+          linuxFingerprint(),
+        ),
+        "network_block_failed",
+      );
+    });
+
+    it("does not accept Seatbelt network evidence for bubblewrap or the reverse", async () => {
+      expectFailure(
+        await serviceWith(passingChecks()).attest(linuxFingerprint()),
+        "network_block_failed",
+      );
+      expectFailure(
+        await serviceWith(namespacedChecks()).attest(fingerprint("e")),
+        "network_block_failed",
+      );
+    });
+
+    it.each([
+      { backend: "bubblewrap", platform: "darwin" },
+      { backend: "seatbelt", platform: "linux" },
+    ] as const)(
+      "rejects mismatched backend $backend on $platform",
+      ({ backend, platform }) => {
+        const service = serviceWith(namespacedChecks());
+        expect(() =>
+          service.attest({
+            digest: "f".repeat(64),
+            metadata: {
+              ...fingerprint().metadata,
+              backend,
+              platform,
+            } as unknown as SandboxBehaviorRuntimeFingerprint["metadata"],
+          }),
+        ).toThrow("metadata is unsupported");
+      },
+    );
   });
 });

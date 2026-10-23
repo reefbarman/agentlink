@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream, type Stats } from "node:fs";
 import {
+  access,
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
+  readlink,
   realpath,
   rm,
   stat,
@@ -15,6 +18,12 @@ import {
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+
+import {
+  LINUX_SANDBOX_BWRAP_PATH,
+  linuxSandboxApplySeccompPath,
+  sandboxBackendFor,
+} from "@agentlink/sandbox";
 
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
 import { BaselineSandboxLaunchAuthorizer } from "./BaselineSandboxLaunchAuthorizer.js";
@@ -44,6 +53,10 @@ export interface ProductionSandboxBehaviorProbeOptions {
   extensionRoot: string;
   nodeExecutable: string;
   homeDirectory?: string;
+  /** Defaults to `process.platform`; picks the expected backend and checks. */
+  platform?: NodeJS.Platform;
+  /** Linux only: the ripgrep the bubblewrap helper uses, such as VS Code's. */
+  ripgrepPath?: string;
 }
 
 export interface ProductionSandboxFingerprintOptions {
@@ -52,7 +65,20 @@ export interface ProductionSandboxFingerprintOptions {
   nodeExecutable: string;
   architecture?: string;
   platform?: NodeJS.Platform;
+  /** Linux only: the ripgrep the bubblewrap helper uses. */
+  ripgrepPath?: string;
+  /** The shell sandboxed commands start in; defaults by platform. */
+  shellPath?: string;
+  /** Tests only: where the Linux system tools are looked up. */
+  linuxSystemTools?: {
+    bwrapPath?: string;
+    socatCandidates?: readonly string[];
+    defaultRipgrepPath?: string;
+  };
 }
+
+const LINUX_SOCAT_CANDIDATES = ["/usr/bin/socat", "/bin/socat"] as const;
+const LINUX_DEFAULT_RIPGREP = "/usr/bin/rg";
 
 export class SandboxRuntimeFingerprintNodeUnavailableError extends Error {
   constructor() {
@@ -115,6 +141,36 @@ interface ScriptEvidence {
   proxyEndpointsLoopbackOnly: boolean;
 }
 
+const SCRIPT_EVIDENCE_KEYS = [
+  "workspaceCreateAllowed",
+  "workspaceModifyAllowed",
+  "outsideReadAllowed",
+  "outsideWriteDenied",
+  "gitWriteDenied",
+  "policyWriteDenied",
+  "agentsWriteDenied",
+  "codexWriteDenied",
+  "instructionsWriteDenied",
+  "symlinkWriteDenied",
+  "nonexistentDescendantWriteDenied",
+  "childOutsideReadAllowed",
+  "grandchildProtectedAccessDenied",
+  "homeMatchesHost",
+  "hostHomeReadAllowed",
+  "hostHomeWriteDenied",
+  "hostTmpEnvironmentMatched",
+  "hostTmpWriteAllowed",
+  "slashTmpWriteAllowed",
+  "cacheIsPrivate",
+  "credentialEnvironmentInherited",
+  "baselineIpv4LoopbackConnectAllowed",
+  "baselineIpv6LoopbackConnectAllowedOrUnavailable",
+  "baselineListenerBindDenied",
+  "privateConnectDenied",
+  "publicConnectDenied",
+  "proxyEndpointsLoopbackOnly",
+] as const satisfies readonly (keyof ScriptEvidence)[];
+
 interface ListenerCapabilityEvidence {
   listenerCapabilityBindAllowed: boolean;
   listenerCapabilityPrivateConnectDenied: boolean;
@@ -148,8 +204,13 @@ function connectAllowed(host, port) {
   });
 }
 
+// On Linux the command has its own network namespace with only loopback, so
+// an outside address has no route rather than a policy error.
 function policyDenied(error) {
-  return error && (error.code === "EPERM" || error.code === "EACCES");
+  if (!error) return false;
+  if (error.code === "EPERM" || error.code === "EACCES") return true;
+  return process.platform === "linux" &&
+    (error.code === "ENETUNREACH" || error.code === "EHOSTUNREACH");
 }
 
 function connectPolicyDenied(host, port) {
@@ -482,6 +543,9 @@ function parseScriptEvidence<T>(output: string): T | undefined {
 export function createProductionSandboxBehaviorProbe(
   options: ProductionSandboxBehaviorProbeOptions,
 ): SandboxBehaviorProbeAdapter {
+  const platform = options.platform ?? process.platform;
+  const expectedBackend = sandboxBackendFor(platform);
+  const namespacedNetwork = expectedBackend === "bubblewrap";
   return {
     async run(request) {
       const fixtures = await createFixtures();
@@ -502,6 +566,8 @@ export function createProductionSandboxBehaviorProbe(
         createNodeSandboxHelperTransportFactory({
           extensionRoot: options.extensionRoot,
           nodeExecutable: options.nodeExecutable,
+          platform,
+          ...(options.ripgrepPath ? { ripgrepPath: options.ripgrepPath } : {}),
         }),
       );
       request.registerCleanup(() => runtime.dispose());
@@ -589,12 +655,72 @@ export function createProductionSandboxBehaviorProbe(
       const violations = conformance.events.filter(
         (event) => event.type === "violation",
       );
+      const fixtureHits =
+        ipv4Listener.hits() + (ipv6Listener ? ipv6Listener.hits() : 0);
+      // In its own network namespace the command cannot reach host loopback
+      // at all, and its listeners stay private, so a baseline bind succeeds.
+      const hostLoopbackUnreachable =
+        !evidence.baselineIpv4LoopbackConnectAllowed &&
+        (ipv6Listener
+          ? !evidence.baselineIpv6LoopbackConnectAllowedOrUnavailable
+          : true) &&
+        fixtureHits === 0;
+      const expectedEvidence: Record<keyof ScriptEvidence, boolean> = {
+        ...(Object.fromEntries(
+          SCRIPT_EVIDENCE_KEYS.map((key) => [key, true]),
+        ) as Record<keyof ScriptEvidence, boolean>),
+        ...(namespacedNetwork
+          ? {
+              baselineIpv4LoopbackConnectAllowed: false,
+              baselineIpv6LoopbackConnectAllowedOrUnavailable: !ipv6Listener,
+              baselineListenerBindDenied: false,
+            }
+          : {}),
+      };
+      const evidenceMatchesBackend = SCRIPT_EVIDENCE_KEYS.every(
+        (key) => evidence[key] === expectedEvidence[key],
+      );
+      const networkConfinement: SandboxBehaviorSyntheticCheckResult["networkConfinement"] =
+        namespacedNetwork
+          ? {
+              hostLoopbackUnreachable,
+              privateConnectDenied: evidence.privateConnectDenied,
+              publicConnectDenied: evidence.publicConnectDenied,
+              listenerCapabilityBindAllowed:
+                listenerEvidence.listenerCapabilityBindAllowed,
+              listenerCapabilityPrivateConnectDenied:
+                listenerEvidence.listenerCapabilityPrivateConnectDenied,
+              listenerCapabilityPublicConnectDenied:
+                listenerEvidence.listenerCapabilityPublicConnectDenied,
+              proxyEndpointsLoopbackOnly: evidence.proxyEndpointsLoopbackOnly,
+            }
+          : {
+              baselineIpv4LoopbackConnectAllowed:
+                evidence.baselineIpv4LoopbackConnectAllowed,
+              baselineIpv6LoopbackConnectAllowedOrUnavailable:
+                evidence.baselineIpv6LoopbackConnectAllowedOrUnavailable,
+              baselineListenerBindDenied: evidence.baselineListenerBindDenied,
+              privateConnectDenied: evidence.privateConnectDenied,
+              publicConnectDenied: evidence.publicConnectDenied,
+              listenerCapabilityBindAllowed:
+                listenerEvidence.listenerCapabilityBindAllowed,
+              listenerCapabilityPrivateConnectDenied:
+                listenerEvidence.listenerCapabilityPrivateConnectDenied,
+              listenerCapabilityPublicConnectDenied:
+                listenerEvidence.listenerCapabilityPublicConnectDenied,
+              loopbackFixtureReached:
+                ipv4Listener.hits() > 0 &&
+                (!ipv6Listener || ipv6Listener.hits() > 0),
+              proxyEndpointsLoopbackOnly: evidence.proxyEndpointsLoopbackOnly,
+            };
       const checks: SandboxBehaviorSyntheticCheckResult = {
         helperLifecycle: {
-          productionHelperLaunched: conformance.ready.backend === "seatbelt",
+          productionHelperLaunched:
+            conformance.ready.backend === expectedBackend,
           protocolIdentityMatched:
-            conformance.ready.backend === "seatbelt" &&
-            interrupt.ready.backend === "seatbelt",
+            conformance.ready.backend === expectedBackend &&
+            listenerCapability.ready.backend === expectedBackend &&
+            interrupt.ready.backend === expectedBackend,
           readyObserved: true,
           outputObserved: conformance.output.includes(MARKER),
           exitObserved: conformance.exitCode !== undefined,
@@ -642,31 +768,15 @@ export function createProductionSandboxBehaviorProbe(
           credentialEnvironmentInherited:
             evidence.credentialEnvironmentInherited,
         },
-        networkConfinement: {
-          baselineIpv4LoopbackConnectAllowed:
-            evidence.baselineIpv4LoopbackConnectAllowed,
-          baselineIpv6LoopbackConnectAllowedOrUnavailable:
-            evidence.baselineIpv6LoopbackConnectAllowedOrUnavailable,
-          baselineListenerBindDenied: evidence.baselineListenerBindDenied,
-          privateConnectDenied: evidence.privateConnectDenied,
-          publicConnectDenied: evidence.publicConnectDenied,
-          listenerCapabilityBindAllowed:
-            listenerEvidence.listenerCapabilityBindAllowed,
-          listenerCapabilityPrivateConnectDenied:
-            listenerEvidence.listenerCapabilityPrivateConnectDenied,
-          listenerCapabilityPublicConnectDenied:
-            listenerEvidence.listenerCapabilityPublicConnectDenied,
-          loopbackFixtureReached:
-            ipv4Listener.hits() > 0 &&
-            (!ipv6Listener || ipv6Listener.hits() > 0),
-          proxyEndpointsLoopbackOnly: evidence.proxyEndpointsLoopbackOnly,
-        },
+        networkConfinement,
         denialEvidence: {
           expectedDenialsObserved:
             evidence.outsideReadAllowed &&
             evidence.outsideWriteDenied &&
             evidence.gitWriteDenied &&
-            evidence.baselineListenerBindDenied &&
+            (namespacedNetwork
+              ? hostLoopbackUnreachable
+              : evidence.baselineListenerBindDenied) &&
             evidence.privateConnectDenied &&
             evidence.publicConnectDenied &&
             listenerEvidence.listenerCapabilityPrivateConnectDenied &&
@@ -684,7 +794,7 @@ export function createProductionSandboxBehaviorProbe(
           successIndependentOfExitCode:
             conformance.exitCode === 0 &&
             listenerCapability.exitCode === 0 &&
-            Object.values(evidence).every(Boolean) &&
+            evidenceMatchesBackend &&
             Object.values(listenerEvidence).every(Boolean),
         },
       };
@@ -789,11 +899,11 @@ export async function createProductionSandboxRuntimeFingerprint(
   const platform = options.platform ?? process.platform;
   const architecture = options.architecture ?? process.arch;
   if (
-    platform !== "darwin" ||
+    (platform !== "darwin" && platform !== "linux") ||
     (architecture !== "arm64" && architecture !== "x64")
   ) {
     throw new Error(
-      "Production sandbox attestation supports local macOS arm64/x64 only",
+      "Production sandbox attestation supports local macOS and Linux arm64/x64 only",
     );
   }
   const extensionRoot = await realpath(options.extensionRoot);
@@ -849,6 +959,24 @@ export async function createProductionSandboxRuntimeFingerprint(
   const nodePtyVersion = (
     JSON.parse(nodePtyPackageJson) as { version?: string }
   ).version;
+  const runtimeRoot = path.join(extensionRoot, "dist", "sandbox-runtime");
+  // The helper entry imports sibling scripts and loads sandbox-runtime, and
+  // every command starts in the outer shell, so all of them are bound too.
+  const [runtimeTree, shell] = await Promise.all([
+    runtimeTreeManifest(runtimeRoot),
+    fileIdentity(
+      options.shellPath ?? (platform === "linux" ? "/bin/bash" : "/bin/zsh"),
+    ),
+  ]);
+  const linuxTools =
+    platform === "linux"
+      ? await linuxSandboxToolIdentities(
+          path.join(extensionRoot, "dist", "sandbox-runtime"),
+          architecture,
+          options.ripgrepPath,
+          options.linuxSystemTools,
+        )
+      : undefined;
   const digest = createHash("sha256")
     .update(
       JSON.stringify({
@@ -867,22 +995,143 @@ export async function createProductionSandboxRuntimeFingerprint(
           mode: nodeIdentity.mode,
           size: nodeIdentity.size,
           mtimeMs: nodeIdentity.mtimeMs,
+          ctimeMs: nodeIdentity.ctimeMs,
         },
+        runtimeTree,
+        shell,
         platform,
         architecture,
+        ...(linuxTools ? { linuxTools } : {}),
       }),
     )
     .digest("hex");
+  const common = {
+    extensionVersion: options.extensionVersion,
+    policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
+    profileId: PROFILE_ID,
+    helperProtocolVersion: SANDBOX_HELPER_PROTOCOL_VERSION,
+    architecture,
+  } as const;
   return {
     digest,
-    metadata: {
-      extensionVersion: options.extensionVersion,
-      policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
-      profileId: PROFILE_ID,
-      helperProtocolVersion: SANDBOX_HELPER_PROTOCOL_VERSION,
-      backend: "seatbelt",
-      platform: "darwin",
-      architecture,
-    },
+    metadata:
+      platform === "linux"
+        ? { ...common, backend: "bubblewrap", platform: "linux" }
+        : { ...common, backend: "seatbelt", platform: "darwin" },
+  };
+}
+
+function metadataIdentity(metadata: Stats) {
+  // ctime changes on every write, rename or chmod and cannot be set back by
+  // an unprivileged process, unlike mtime.
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    mode: metadata.mode,
+    uid: metadata.uid,
+    size: metadata.size,
+    mtimeMs: metadata.mtimeMs,
+    ctimeMs: metadata.ctimeMs,
+  };
+}
+
+async function fileIdentity(filePath: string) {
+  const canonical = await realpath(filePath);
+  const metadata = await stat(canonical);
+  if (!metadata.isFile()) {
+    throw new Error(`Sandbox tool is not a regular file: ${filePath}`);
+  }
+  return { path: canonical, ...metadataIdentity(metadata) };
+}
+
+async function isExecutableFile(filePath: string): Promise<boolean> {
+  try {
+    if (!(await stat(filePath)).isFile()) return false;
+    await access(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Metadata for every entry in the staged runtime: helper scripts,
+ * sandbox-runtime and its dependencies, node-pty and apply-seccomp. Any
+ * change re-runs attestation without hashing megabytes per command.
+ */
+async function runtimeTreeManifest(root: string) {
+  const entries: Array<Record<string, unknown>> = [];
+  const visit = async (directory: string): Promise<void> => {
+    const names = (await readdir(directory)).sort();
+    for (const name of names) {
+      const entryPath = path.join(directory, name);
+      const metadata = await lstat(entryPath);
+      const relative = path.relative(root, entryPath);
+      if (metadata.isSymbolicLink()) {
+        entries.push({
+          path: relative,
+          link: await readlink(entryPath),
+          ...metadataIdentity(metadata),
+        });
+      } else if (metadata.isDirectory()) {
+        entries.push({ path: relative, ...metadataIdentity(metadata) });
+        await visit(entryPath);
+      } else {
+        entries.push({ path: relative, ...metadataIdentity(metadata) });
+      }
+    }
+  };
+  await visit(root);
+  return entries;
+}
+
+/**
+ * The bubblewrap backend runs host tools, so an upgrade or replacement of
+ * any of them must re-run attestation. The staged apply-seccomp is hashed;
+ * system tools are identified by their file metadata, like the Node runtime.
+ */
+async function linuxSandboxToolIdentities(
+  runtimeRoot: string,
+  architecture: string,
+  ripgrepPath: string | undefined,
+  systemTools: ProductionSandboxFingerprintOptions["linuxSystemTools"],
+) {
+  const applySeccompPath = linuxSandboxApplySeccompPath(
+    runtimeRoot,
+    architecture,
+  );
+  // Select tools exactly as scripts/sandbox-linux-runtime.mjs does at launch:
+  // the first executable socat, and the host ripgrep only when it is an
+  // absolute executable, otherwise /usr/bin/rg.
+  let socatPath: string | undefined;
+  for (const candidate of systemTools?.socatCandidates ??
+    LINUX_SOCAT_CANDIDATES) {
+    if (await isExecutableFile(candidate)) {
+      socatPath = candidate;
+      break;
+    }
+  }
+  if (!socatPath) throw new Error("socat is not installed");
+  const ripgrep =
+    ripgrepPath &&
+    path.isAbsolute(ripgrepPath) &&
+    (await isExecutableFile(ripgrepPath))
+      ? ripgrepPath
+      : (systemTools?.defaultRipgrepPath ?? LINUX_DEFAULT_RIPGREP);
+  if (!(await isExecutableFile(ripgrep))) {
+    throw new Error("ripgrep is not available");
+  }
+  const [applySeccompHash, applySeccomp, bwrap, socat, rg] = await Promise.all([
+    hashFile(applySeccompPath),
+    fileIdentity(applySeccompPath),
+    fileIdentity(systemTools?.bwrapPath ?? LINUX_SANDBOX_BWRAP_PATH),
+    fileIdentity(socatPath),
+    fileIdentity(ripgrep),
+  ]);
+  return {
+    applySeccomp: { ...applySeccomp, hash: applySeccompHash },
+    bwrap,
+    socat,
+    rg,
   };
 }

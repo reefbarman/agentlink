@@ -7919,6 +7919,12 @@ describe("handleExecuteCommand", () => {
   describe("hosts without the AgentLink terminal", () => {
     const hosts = [
       {
+        platform: "win32" as const,
+        remoteName: undefined,
+        routeReason: "unsupported-host",
+      },
+      {
+        // A local Linux host without node-pty or bubblewrap prerequisites.
         platform: "linux" as const,
         remoteName: undefined,
         routeReason: "unsupported-host",
@@ -7960,7 +7966,7 @@ describe("handleExecuteCommand", () => {
         throw new Error("Native Agent terminal is macOS-only");
       });
       const createSandboxProvider = vi.fn(() => {
-        throw new Error("Sandbox is macOS-only");
+        throw new Error("Sandbox is unavailable on this host");
       });
       const router = new AgentTerminalProviderRouter({
         isEnabled: () => true,
@@ -7974,7 +7980,13 @@ describe("handleExecuteCommand", () => {
         createNativeAgentProvider,
         createSandboxProvider,
         getSandboxAvailability: vi.fn(() => {
-          throw new Error("Host cannot attest sandbox");
+          if (platform !== "linux" || remoteName) {
+            throw new Error("Host cannot attest sandbox");
+          }
+          return {
+            status: "runtime-unavailable" as const,
+            diagnostic: { category: "linux_sandbox_prerequisites_missing" },
+          };
         }),
       });
       return {
@@ -11873,10 +11885,17 @@ describe("handleExecuteCommand", () => {
     },
     {
       enabled: true,
-      platform: "linux" as const,
+      platform: "win32" as const,
       remoteName: undefined,
       category: "unsupported_host",
       action: "use_supported_local_host",
+    },
+    {
+      enabled: true,
+      platform: "linux" as const,
+      remoteName: undefined,
+      category: "linux_sandbox_prerequisites_missing",
+      action: "repair_linux_sandbox_prerequisites_then_reload",
     },
   ])(
     "does not prescribe Node repair for $category",
@@ -11895,7 +11914,14 @@ describe("handleExecuteCommand", () => {
         createNativeProvider: createProvider,
         createSandboxProvider: createProvider,
         getSandboxAvailability: vi.fn(() => {
-          throw new Error("Host cannot attest sandbox");
+          if (category !== "linux_sandbox_prerequisites_missing") {
+            throw new Error("Host cannot attest sandbox");
+          }
+          return {
+            status: "runtime-unavailable" as const,
+            detail: "bubblewrap is not installed at /usr/bin/bwrap.",
+            diagnostic: { category },
+          };
         }),
       });
       try {

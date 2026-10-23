@@ -64,8 +64,36 @@ describe("resolveSandboxNodeRuntime", () => {
       "/opt/node-v22/bin/node",
       nodePtyRoot,
       "arm64",
+      "darwin",
     );
     expect(operations.realpath).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a Linux runtime and probes it as a Linux runtime", async () => {
+    const probe = vi.fn(async () => ({ ok: true }));
+
+    await expect(
+      resolveSandboxNodeRuntime({
+        extensionRoot,
+        environmentPath: "/usr/local/bin",
+        platform: "linux",
+        architecture: "x64",
+        userId: 1000,
+        fileOperations: fileOperations({
+          stat: vi.fn(async () => metadata({ uid: 0 })),
+        }),
+        probe,
+      }),
+    ).resolves.toEqual({
+      executable: "/usr/local/bin/node",
+      source: "environment",
+    });
+    expect(probe).toHaveBeenCalledWith(
+      "/usr/local/bin/node",
+      nodePtyRoot,
+      "x64",
+      "linux",
+    );
   });
 
   it("falls through incompatible PATH candidates to a standard location", async () => {
@@ -101,12 +129,14 @@ describe("resolveSandboxNodeRuntime", () => {
       "/environment/bin/node",
       nodePtyRoot,
       "arm64",
+      "darwin",
     );
     expect(probe).toHaveBeenNthCalledWith(
       2,
       "/opt/homebrew/bin/node",
       nodePtyRoot,
       "arm64",
+      "darwin",
     );
   });
 
@@ -158,7 +188,7 @@ describe("resolveSandboxNodeRuntime", () => {
   });
 
   it.each([
-    ["linux", "arm64", "supports local macOS only"],
+    ["win32", "x64", "supports local macOS and Linux only"],
     ["darwin", "riscv64", "does not support architecture riscv64"],
   ])(
     "rejects unsupported host %s/%s",

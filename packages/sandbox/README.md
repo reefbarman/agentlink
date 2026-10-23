@@ -13,11 +13,11 @@ It contains:
 
 The sandbox itself is enforced by the packaged helper scripts (`scripts/sandbox-*.mjs`) on top of `@anthropic-ai/sandbox-runtime`, staged into `dist/sandbox-runtime` by `scripts/package-sandbox-runtime.mjs`. `createNodeSandboxHelperTransportFactory` locates that staged runtime relative to an `extensionRoot`.
 
-The VS Code terminal integration (coordinator, pty sessions, provider router, baseline launch authorizer, production behavior probe) stays in `src/terminal/sandbox` and imports from this package. That integration is macOS-only today.
+The VS Code terminal integration (coordinator, pty sessions, provider router, baseline launch authorizer, production behavior probe) stays in `src/terminal/sandbox` and imports from this package. It runs on local macOS (Seatbelt) and local glibc Linux (bubblewrap).
 
 ## Linux (bubblewrap)
 
-The helper and `launchSandboxedProcess` also run on Linux x64 and arm64 (glibc), where launch metadata reports `backend: "bubblewrap"`. No AgentLink surface turns this on yet. Commands run under bubblewrap with a read-only root, private network, PID and user namespaces and no capabilities, and under `apply-seccomp`, which stops them creating unix sockets. Loopback is private to the sandbox, so commands cannot reach services on the host's localhost.
+The helper and `launchSandboxedProcess` also run on Linux x64 and arm64 (glibc), where launch metadata reports `backend: "bubblewrap"`. The VS Code extension uses it for sandboxed agent commands when `checkLinuxSandboxPrerequisites` passes; behavioural attestation then checks the namespaced network shape (`SandboxBehaviorNamespacedNetworkConfinementCheckResult`) instead of Seatbelt's loopback checks. Commands run under bubblewrap with a read-only root, private network, PID and user namespaces and no capabilities, and under `apply-seccomp`, which stops them creating unix sockets. Loopback is private to the sandbox, so commands cannot reach services on the host's localhost.
 
 It needs `/usr/bin/bwrap` (0.4+), `socat` in `/usr/bin` or `/bin`, ripgrep (`/usr/bin/rg`, or a host binary passed as `ripgrepPath` to `createNodeSandboxHelperTransportFactory`), and `vendor/seccomp/<arch>/apply-seccomp` in the staged runtime. Nothing is looked up on `PATH`, and a launch is refused when any of them is missing. `checkLinuxSandboxPrerequisites` reports each requirement with a distribution-specific fix. It also runs a real bubblewrap and `apply-seccomp` probe, because Ubuntu 23.10 and later restrict unprivileged user namespaces through AppArmor. There the sandbox cannot run until the host relaxes `kernel.apparmor_restrict_unprivileged_userns`, a machine-wide change AgentLink never makes itself.
 

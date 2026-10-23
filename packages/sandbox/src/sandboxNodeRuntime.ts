@@ -40,6 +40,7 @@ export interface ResolveSandboxNodeRuntimeOptions {
     executable: string,
     nodePtyRoot: string,
     architecture: string,
+    platform: "darwin" | "linux",
   ) => Promise<SandboxNodeRuntimeProbeResult>;
 }
 
@@ -105,12 +106,14 @@ async function defaultProbe(
   executable: string,
   nodePtyRoot: string,
   architecture: string,
+  platform: "darwin" | "linux",
 ): Promise<SandboxNodeRuntimeProbeResult> {
   const script = String.raw`
 const nodePtyRoot = process.argv[1];
 const expectedArchitecture = process.argv[2];
+const expectedPlatform = process.argv[3];
 if (process.versions.electron) throw new Error("Electron is not a standalone Node runtime");
-if (process.platform !== "darwin") throw new Error("expected a macOS Node runtime");
+if (process.platform !== expectedPlatform) throw new Error("expected a " + expectedPlatform + " Node runtime");
 if (process.arch !== expectedArchitecture) {
   throw new Error("expected architecture " + expectedArchitecture + ", received " + process.arch);
 }
@@ -139,7 +142,7 @@ terminal.onExit(({ exitCode, signal }) => {
     const output = await new Promise<string>((resolve, reject) => {
       execFile(
         executable,
-        ["-e", script, nodePtyRoot, architecture],
+        ["-e", script, nodePtyRoot, architecture, platform],
         {
           timeout: DEFAULT_PROBE_TIMEOUT_MS,
           maxBuffer: MAX_PROBE_OUTPUT_BYTES,
@@ -203,9 +206,9 @@ export async function resolveSandboxNodeRuntime(
 ): Promise<ResolvedSandboxNodeRuntime> {
   const platform = options.platform ?? process.platform;
   const architecture = options.architecture ?? process.arch;
-  if (platform !== "darwin") {
+  if (platform !== "darwin" && platform !== "linux") {
     throw new SandboxNodeRuntimeUnavailableError(
-      "AgentLink Terminal currently supports local macOS only.",
+      "AgentLink Terminal currently supports local macOS and Linux only.",
       [],
     );
   }
@@ -241,7 +244,7 @@ export async function resolveSandboxNodeRuntime(
       continue;
     }
 
-    const result = await probe(canonical, nodePtyRoot, architecture);
+    const result = await probe(canonical, nodePtyRoot, architecture, platform);
     if (result.ok) return { executable: canonical, source: candidate.source };
     attempts.push(
       `${canonical}: ${result.detail ?? "compatibility probe failed"}`,
@@ -252,7 +255,7 @@ export async function resolveSandboxNodeRuntime(
   throw new SandboxNodeRuntimeUnavailableError(
     configured
       ? `The configured AgentLink Terminal Node runtime is unavailable or incompatible: ${configured}`
-      : "AgentLink Terminal requires a compatible standalone Node.js runtime. No compatible runtime was found in VS Code's environment or standard macOS locations.",
+      : `AgentLink Terminal requires a compatible standalone Node.js runtime. No compatible runtime was found in VS Code's environment or standard ${platform === "linux" ? "Linux" : "macOS"} locations.`,
     attempts,
   );
 }

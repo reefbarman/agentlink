@@ -76,6 +76,22 @@ export interface SandboxBehaviorNetworkConfinementCheckResult {
   proxyEndpointsLoopbackOnly: boolean;
 }
 
+/**
+ * Network checks for a backend that gives each command its own network
+ * namespace (bubblewrap). Loopback there is private: the host's listeners are
+ * unreachable and the command's listeners are invisible to the host, so the
+ * checks prove the host is unreachable instead of reaching a host fixture.
+ */
+export interface SandboxBehaviorNamespacedNetworkConfinementCheckResult {
+  hostLoopbackUnreachable: boolean;
+  privateConnectDenied: boolean;
+  publicConnectDenied: boolean;
+  listenerCapabilityBindAllowed: boolean;
+  listenerCapabilityPrivateConnectDenied: boolean;
+  listenerCapabilityPublicConnectDenied: boolean;
+  proxyEndpointsLoopbackOnly: boolean;
+}
+
 export interface SandboxBehaviorDenialEvidenceCheckResult {
   expectedDenialsObserved: boolean;
   evidenceBounded: boolean;
@@ -89,19 +105,46 @@ export interface SandboxBehaviorSyntheticCheckResult {
   protectedMetadata: SandboxBehaviorProtectedMetadataCheckResult;
   processInheritance: SandboxBehaviorProcessInheritanceCheckResult;
   privateEnvironment: SandboxBehaviorPrivateEnvironmentCheckResult;
-  networkConfinement: SandboxBehaviorNetworkConfinementCheckResult;
+  /** Seatbelt shape on macOS; namespaced shape for bubblewrap on Linux. */
+  networkConfinement:
+    | SandboxBehaviorNetworkConfinementCheckResult
+    | SandboxBehaviorNamespacedNetworkConfinementCheckResult;
   denialEvidence: SandboxBehaviorDenialEvidenceCheckResult;
 }
 
-export interface SandboxBehaviorFingerprintMetadata {
+export type SandboxBehaviorFingerprintMetadata = {
   extensionVersion: string;
   policyVersion: string;
   profileId: string;
   helperProtocolVersion: number;
-  backend: "seatbelt";
-  platform: "darwin";
   architecture: "arm64" | "x64";
-}
+} & (
+  | { backend: "seatbelt"; platform: "darwin" }
+  | { backend: "bubblewrap"; platform: "linux" }
+);
+
+const SEATBELT_NETWORK_CHECKS = [
+  "baselineIpv4LoopbackConnectAllowed",
+  "baselineIpv6LoopbackConnectAllowedOrUnavailable",
+  "baselineListenerBindDenied",
+  "privateConnectDenied",
+  "publicConnectDenied",
+  "listenerCapabilityBindAllowed",
+  "listenerCapabilityPrivateConnectDenied",
+  "listenerCapabilityPublicConnectDenied",
+  "loopbackFixtureReached",
+  "proxyEndpointsLoopbackOnly",
+] as const satisfies readonly (keyof SandboxBehaviorNetworkConfinementCheckResult)[];
+
+const NAMESPACED_NETWORK_CHECKS = [
+  "hostLoopbackUnreachable",
+  "privateConnectDenied",
+  "publicConnectDenied",
+  "listenerCapabilityBindAllowed",
+  "listenerCapabilityPrivateConnectDenied",
+  "listenerCapabilityPublicConnectDenied",
+  "proxyEndpointsLoopbackOnly",
+] as const satisfies readonly (keyof SandboxBehaviorNamespacedNetworkConfinementCheckResult)[];
 
 export interface SandboxBehaviorRuntimeFingerprint {
   readonly digest: string;
@@ -298,9 +341,11 @@ function normalizeFingerprint(
   ) {
     throw new Error("helperProtocolVersion must be a positive integer");
   }
+  const supportedBackend =
+    (metadata.backend === "seatbelt" && metadata.platform === "darwin") ||
+    (metadata.backend === "bubblewrap" && metadata.platform === "linux");
   if (
-    metadata.backend !== "seatbelt" ||
-    metadata.platform !== "darwin" ||
+    !supportedBackend ||
     (metadata.architecture !== "arm64" && metadata.architecture !== "x64")
   ) {
     throw new Error("Sandbox runtime fingerprint metadata is unsupported");
@@ -346,6 +391,7 @@ function hasExplicitTrueFields(
 
 function checkFailureCode(
   checks: SandboxBehaviorSyntheticCheckResult,
+  backend: SandboxBehaviorFingerprintMetadata["backend"],
 ): SandboxBehaviorAttestationFailureCode | undefined {
   const helper = checks?.helperLifecycle;
   if (
@@ -409,18 +455,12 @@ function checkFailureCode(
     return "private_environment_failed";
   }
   if (
-    !hasExplicitTrueFields(checks.networkConfinement, [
-      "baselineIpv4LoopbackConnectAllowed",
-      "baselineIpv6LoopbackConnectAllowedOrUnavailable",
-      "baselineListenerBindDenied",
-      "privateConnectDenied",
-      "publicConnectDenied",
-      "listenerCapabilityBindAllowed",
-      "listenerCapabilityPrivateConnectDenied",
-      "listenerCapabilityPublicConnectDenied",
-      "loopbackFixtureReached",
-      "proxyEndpointsLoopbackOnly",
-    ])
+    !hasExplicitTrueFields(
+      checks.networkConfinement,
+      backend === "bubblewrap"
+        ? NAMESPACED_NETWORK_CHECKS
+        : SEATBELT_NETWORK_CHECKS,
+    )
   ) {
     return "network_block_failed";
   }
@@ -657,7 +697,10 @@ export class SandboxBehaviorAttestationService {
             : "helper_protocol_failed",
         );
       } else {
-        const failureCode = checkFailureCode(probeResult.checks);
+        const failureCode = checkFailureCode(
+          probeResult.checks,
+          fingerprint.metadata.backend,
+        );
         result = failureCode
           ? failed(failureCode)
           : this.verifiedResult(fingerprint);

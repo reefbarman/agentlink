@@ -83,6 +83,8 @@ const nativeAgentRoute: TerminalExecutionRouteContext = {
 function harness() {
   let enabled = false;
   let sandboxAvailable = true;
+  let sandboxBackend: "seatbelt" | "bubblewrap" = "seatbelt";
+  let unavailableDiagnostic: { category: string } | undefined;
   let host = {
     platform: "darwin" as NodeJS.Platform,
     remoteName: undefined as string | undefined,
@@ -110,10 +112,10 @@ function harness() {
             attestationVersion: "sandbox-behavior-v2",
             policyVersion: "policy-v1",
             profileId: "workspace-write",
-            backend: "seatbelt" as const,
+            backend: sandboxBackend,
             architecture: "arm64" as const,
             capabilities: {
-              backend: "seatbelt",
+              backend: sandboxBackend,
               processTree: true,
               filesystemRead: "isolated" as const,
               filesystemWrite: "strict" as const,
@@ -126,7 +128,12 @@ function harness() {
             },
           },
         }
-      : { status: "runtime-unavailable" as const },
+      : {
+          status: "runtime-unavailable" as const,
+          ...(unavailableDiagnostic
+            ? { diagnostic: unavailableDiagnostic }
+            : {}),
+        },
   );
   const log = vi.fn();
   const audit = vi.fn();
@@ -158,8 +165,12 @@ function harness() {
     setEnabled(value: boolean) {
       enabled = value;
     },
-    setSandboxAvailable(value: boolean) {
+    setSandboxAvailable(value: boolean, diagnostic?: { category: string }) {
       sandboxAvailable = value;
+      unavailableDiagnostic = diagnostic;
+    },
+    setSandboxBackend(value: "seatbelt" | "bubblewrap") {
+      sandboxBackend = value;
     },
     setHost(value: Partial<typeof host>) {
       host = { ...host, ...value };
@@ -346,9 +357,9 @@ describe("AgentTerminalProviderRouter", () => {
   });
 
   it.each([
-    ["linux", undefined],
     ["win32", undefined],
     ["darwin", "ssh-remote"],
+    ["linux", "wsl"],
   ] as const)(
     "keeps unsupported host %s/%s on native without loading sandbox assets",
     async (platform, remoteName) => {
@@ -400,8 +411,9 @@ describe("AgentTerminalProviderRouter", () => {
   );
 
   it.each([
-    ["linux", undefined, "unsupported_host"],
+    ["win32", undefined, "unsupported_host"],
     ["darwin", "ssh-remote", "remote_host"],
+    ["linux", "ssh-remote", "remote_host"],
   ] as const)(
     "keeps required sandbox authority on %s/%s unavailable",
     async (platform, remoteName, category) => {
@@ -818,10 +830,61 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.getSandboxAvailability).not.toHaveBeenCalled();
   });
 
-  it("keeps required sandbox authority unavailable on Linux even with node-pty", async () => {
+  it.each([undefined, sandboxRoute])(
+    "routes Linux commands to a verified bubblewrap sandbox (route %#)",
+    async (route) => {
+      const test = harness();
+      test.setEnabled(true);
+      test.setHost({ platform: "linux", nodePtyAvailable: true });
+      test.setSandboxBackend("bubblewrap");
+
+      const prepared = await test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        route,
+      );
+
+      expect(prepared.security).toMatchObject({
+        route: "sandbox",
+        executionSurface: "verified-sandbox",
+        confinement: "verified-baseline",
+        routeReason: "verified-local-linux",
+        sandbox: { backend: "bubblewrap" },
+      });
+      expect(test.getSandboxAvailability).toHaveBeenCalled();
+      expect(test.createSandboxProvider).toHaveBeenCalledTimes(1);
+      expect(test.createNativeProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  it("falls back to the VS Code terminal when Linux sandbox prerequisites are missing", async () => {
     const test = harness();
     test.setEnabled(true);
     test.setHost({ platform: "linux", nodePtyAvailable: true });
+    test.setSandboxAvailable(false, {
+      category: "linux_sandbox_prerequisites_missing",
+    });
+
+    const prepared = await test.router.prepareExecution(
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
+      undefined,
+    );
+
+    expect(prepared.security).toMatchObject({
+      route: "native",
+      executionSurface: "vscode-compatibility",
+      confinement: "native-unsandboxed",
+      routeReason: "runtime-unavailable",
+    });
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it("keeps required sandbox authority unavailable when Linux prerequisites are missing", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setHost({ platform: "linux", nodePtyAvailable: true });
+    test.setSandboxAvailable(false, {
+      category: "linux_sandbox_prerequisites_missing",
+    });
 
     await expect(
       test.router.prepareExecution(
@@ -830,9 +893,10 @@ describe("AgentTerminalProviderRouter", () => {
       ),
     ).rejects.toMatchObject({
       reason: "runtime-unavailable",
-      diagnostic: { category: "unsupported_host" },
+      diagnostic: { category: "linux_sandbox_prerequisites_missing" },
     });
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
   });
 
   it.each([

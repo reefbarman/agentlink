@@ -39,6 +39,9 @@ export const DEFAULT_SANDBOX_PRIVATE_DIRECTORY_PREFIX = "/tmp/al-sbx-";
 const DEFAULT_PATH =
   "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const MACOS_TEMPORARY_ROOTS = ["/tmp", "/private/tmp"] as const;
+// Linux has no /private alias; listing a missing path would only add a
+// bind the backend cannot create.
+const LINUX_TEMPORARY_ROOTS = ["/tmp"] as const;
 const PROTECTED_WORKSPACE_ENTRIES = [
   ".agents",
   ".claude",
@@ -58,10 +61,11 @@ const AGENTLINK_RUNTIME_ENTRIES = new Set([
 ]);
 const PROTECTED_POLICY_SUBTREE_RE = /^(?:commands|rules|skills)(?:-|$)/;
 
-const RUNTIME_COMPATIBILITY_WRITE_ROOTS = [
+const MACOS_RUNTIME_COMPATIBILITY_WRITE_ROOTS = [
   "/tmp/claude",
   "/private/tmp/claude",
 ] as const;
+const LINUX_RUNTIME_COMPATIBILITY_WRITE_ROOTS = ["/tmp/claude"] as const;
 const RESERVED_ENVIRONMENT_NAMES = new Set([
   "HOME",
   "TMPDIR",
@@ -157,7 +161,7 @@ export function sandboxBackendFor(
   return platform === "linux" ? "bubblewrap" : "seatbelt";
 }
 
-const LINUX_SANDBOX_WARNINGS = [
+export const LINUX_SANDBOX_WARNINGS = [
   "Loopback is private to the sandbox's network namespace: commands cannot reach services listening on the host's localhost, and their listeners are not reachable from the host.",
   "Unix socket creation is blocked by seccomp, so host sockets such as the Docker socket are unreachable.",
 ] as const;
@@ -506,6 +510,8 @@ export async function prepareWorkspaceSandboxLaunch(
   options: PrepareWorkspaceSandboxLaunchOptions,
 ): Promise<PreparedWorkspaceSandboxLaunch> {
   const { capability } = options;
+  const backend = sandboxBackendFor(options.platform ?? process.platform);
+  const linux = backend === "bubblewrap";
   const shareHostTemporaryDirectories =
     options.shareHostTemporaryDirectories ?? true;
   const workspaceRoots = uniqueSandboxRoots(
@@ -556,7 +562,10 @@ export async function prepareWorkspaceSandboxLaunch(
       options.hostTemporaryDirectory,
     );
     const developmentTemporaryRoots = shareHostTemporaryDirectories
-      ? uniqueSandboxRoots([...MACOS_TEMPORARY_ROOTS, hostTemporaryDirectory])
+      ? uniqueSandboxRoots([
+          ...(linux ? LINUX_TEMPORARY_ROOTS : MACOS_TEMPORARY_ROOTS),
+          hostTemporaryDirectory,
+        ])
       : [];
     const environmentResult = buildEnvironment(
       options.explicitEnvironment,
@@ -580,7 +589,9 @@ export async function prepareWorkspaceSandboxLaunch(
     const deniedWriteRoots = uniqueSandboxRoots([
       ...gitProtection.flatMap((item) => item.deniedWrite),
       ...policyWriteDenials,
-      ...RUNTIME_COMPATIBILITY_WRITE_ROOTS,
+      ...(linux
+        ? LINUX_RUNTIME_COMPATIBILITY_WRITE_ROOTS
+        : MACOS_RUNTIME_COMPATIBILITY_WRITE_ROOTS),
       path.join(options.homeDirectory, ".npm", "_logs"),
       path.join(options.homeDirectory, ".claude", "debug"),
     ]);
@@ -676,7 +687,6 @@ export async function prepareWorkspaceSandboxLaunch(
         allowedUnixSockets: [],
       },
     };
-    const backend = sandboxBackendFor(options.platform ?? process.platform);
     const metadata: SandboxExecutionMetadata = {
       policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
       profileId: WORKSPACE_SANDBOX_PROFILE_ID,
@@ -723,7 +733,9 @@ export async function prepareWorkspaceSandboxLaunch(
             ? "npm cache environment uses the explicit per-command env override; CLI --cache precedence and filesystem write restrictions still apply."
             : "npm cache environment uses writable per-command sandbox storage, overriding inherited environment, shell-policy and npmrc cache settings only. CLI --cache precedence and other npm configuration are unchanged.",
           shareHostTemporaryDirectories
-            ? "Host temporary directories and POSIX IPC are available for development toolchain compatibility."
+            ? linux
+              ? "Host temporary directories are available for development toolchain compatibility."
+              : "Host temporary directories and POSIX IPC are available for development toolchain compatibility."
             : "TMPDIR is a private per-command directory; host temporary directories are read-only.",
           "CPU, memory, process-count, and disk quotas are not fully enforced.",
           ...(backend === "bubblewrap" ? LINUX_SANDBOX_WARNINGS : []),

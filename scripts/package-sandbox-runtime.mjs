@@ -74,8 +74,8 @@ const PACKAGE_ENTRIES = [
   },
 ];
 
-// node-pty backs the AgentLink terminal (macOS and glibc Linux) and sandbox PTY
-// launches (macOS only). Each target gets only the prebuilds it can load: both
+// node-pty backs the AgentLink terminal and sandbox PTY launches (macOS and
+// glibc Linux). Each target gets only the prebuilds it can load: both
 // Darwin architectures on macOS, the matching one on Linux, and none on Alpine
 // or other targets, which keep the VS Code terminal.
 const NODE_PTY_COMMON_ENTRIES = [

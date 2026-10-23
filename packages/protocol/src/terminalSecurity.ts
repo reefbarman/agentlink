@@ -150,7 +150,7 @@ export interface TerminalSandboxAttestationSummary {
   attestationVersion: string;
   policyVersion: string;
   profileId: string;
-  backend: "seatbelt";
+  backend: "seatbelt" | "bubblewrap";
   architecture: "arm64" | "x64";
   capabilities: SandboxExecutionMetadata["capabilities"];
   grant?: SandboxExecutionMetadata["grant"];

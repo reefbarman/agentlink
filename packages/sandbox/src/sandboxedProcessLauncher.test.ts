@@ -188,6 +188,59 @@ describe("launchSandboxedProcess", () => {
     await handle.exited;
   });
 
+  it.each([
+    ["linux", ["/tmp"], ["/tmp/claude"]],
+    [
+      "darwin",
+      ["/tmp", "/private/tmp"],
+      ["/tmp/claude", "/private/tmp/claude"],
+    ],
+  ] as const)(
+    "shares only %s temporary roots that exist there",
+    async (platform, writable, denied) => {
+      const root = await temporaryDirectory("al-sbx-launch-");
+      const hostTmp = await temporaryDirectory("al-sbx-hosttmp-");
+      const fake = fakeRuntime();
+      const handle = launchSandboxedProcess(
+        {
+          runtime: fake.runtime,
+          writableRoots: [root],
+          platform,
+          shareHostTemporaryDirectories: true,
+          hostTemporaryDirectory: hostTmp,
+        },
+        {
+          sessionId: `session-tmp-${platform}`,
+          command: "true",
+          shell: "/bin/sh",
+          cwd: root,
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+        () => {},
+      );
+      await handle.started;
+      const [request] = fake.launches;
+      for (const entry of writable) {
+        expect(request!.filesystem.allowWrite).toContain(entry);
+      }
+      for (const entry of denied) {
+        expect(request!.filesystem.denyWrite).toContain(entry);
+      }
+      if (platform === "linux") {
+        // The private per-command root may resolve under /private/tmp when
+        // this test runs on macOS; only the shared roots matter here.
+        const shared = [
+          ...request!.filesystem.allowWrite,
+          ...request!.filesystem.denyWrite,
+        ];
+        expect(shared).not.toContain("/private/tmp");
+        expect(shared).not.toContain("/private/tmp/claude");
+      }
+      fake.finish({ exitCode: 0, timedOut: false });
+      await handle.exited;
+    },
+  );
+
   it("hides denied read roots except the workspace and private directories", async () => {
     const home = await temporaryDirectory("al-sbx-home-");
     const root = path.join(home, "work");

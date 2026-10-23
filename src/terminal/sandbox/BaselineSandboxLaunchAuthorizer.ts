@@ -92,7 +92,10 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
       );
     }
     this.workspaceRoots = [...options.workspaceRoots];
-    this.shell = options.shell ?? "/bin/zsh";
+    // Every macOS release ships zsh; Linux distributions reliably ship bash.
+    this.shell =
+      options.shell ??
+      (process.platform === "linux" ? "/bin/bash" : "/bin/zsh");
     this.privateDirectoryPrefix =
       options.privateDirectoryPrefix ??
       DEFAULT_SANDBOX_PRIVATE_DIRECTORY_PREFIX;

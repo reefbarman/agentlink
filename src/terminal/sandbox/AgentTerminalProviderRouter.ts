@@ -74,7 +74,8 @@ export type SandboxAvailabilityDiagnosticCategory =
   | "runtime_node_unavailable"
   | "feature_disabled"
   | "remote_host"
-  | "unsupported_host";
+  | "unsupported_host"
+  | "linux_sandbox_prerequisites_missing";
 
 const SANDBOX_AVAILABILITY_DIAGNOSTIC_CATEGORIES = new Set<string>([
   "runtime_unavailable",
@@ -95,7 +96,16 @@ const SANDBOX_AVAILABILITY_DIAGNOSTIC_CATEGORIES = new Set<string>([
   "feature_disabled",
   "remote_host",
   "unsupported_host",
+  "linux_sandbox_prerequisites_missing",
 ]);
+
+/** Local hosts with a sandbox backend: Seatbelt on macOS, bubblewrap on Linux. */
+function hasLocalSandboxBackend(host: AgentTerminalProviderHost): boolean {
+  return (
+    !host.remoteName &&
+    (host.platform === "darwin" || host.platform === "linux")
+  );
+}
 
 export interface SandboxAvailabilityDiagnostic {
   readonly category: SandboxAvailabilityDiagnosticCategory;
@@ -436,7 +446,10 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
             route: "sandbox",
             executionSurface: "verified-sandbox",
             confinement: "verified-baseline",
-            routeReason: "verified-local-macos",
+            routeReason:
+              decision.attestation.backend === "bubblewrap"
+                ? "verified-local-linux"
+                : "verified-local-macos",
             ...frozenRouteContext,
             executionPolicy: "sandbox-baseline-v2",
             preparedAt: this.now(),
@@ -854,7 +867,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           diagnostic: { category: "feature_disabled" },
         };
       }
-      if (host.remoteName || host.platform !== "darwin") {
+      if (!hasLocalSandboxBackend(host)) {
         return {
           route: "unavailable",
           reason: "required-sandbox-unavailable",
@@ -879,7 +892,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         executionSurface: "vscode-compatibility",
       };
     }
-    if (host.platform !== "darwin") {
+    if (!hasLocalSandboxBackend(host)) {
       return {
         route: "native",
         reason: "unsupported-host",
@@ -889,6 +902,8 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     if (!host.workspaceTrusted) {
       return { route: "unavailable", reason: "untrusted" };
     }
+    // On Linux the host reports missing bubblewrap prerequisites as
+    // runtime-unavailable, which falls back to the VS Code terminal here.
     return this.decideSandboxRoute(true, generation);
   }
 

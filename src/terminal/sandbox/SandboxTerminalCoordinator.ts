@@ -256,7 +256,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
               ...security.sandbox,
               policyVersion: prepared.preparedLaunch.metadata.policyVersion,
               profileId: prepared.preparedLaunch.metadata.profileId,
-              backend: prepared.preparedLaunch.metadata.backend as "seatbelt",
+              backend:
+                prepared.preparedLaunch.metadata.backend === "bubblewrap"
+                  ? "bubblewrap"
+                  : "seatbelt",
               capabilities: Object.freeze({
                 ...prepared.preparedLaunch.metadata.capabilities,
                 warnings: Object.freeze([
