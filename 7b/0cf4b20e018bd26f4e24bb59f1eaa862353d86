@@ -1,0 +1,91 @@
+src/core/sandboxPolicy.ts
+  h_e08a86bb3a33a2 1,13-31
+packages/sandbox/build-cjs.mjs
+  h_e08a86bb3a33a2 1-51
+src/terminal/sandbox/sandboxNodeRuntime.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/tsconfig.json
+  h_e08a86bb3a33a2 1-26
+scripts/release-plan.mjs
+  h_e08a86bb3a33a2 35
+src/terminal/sandbox/gitMetadataProtection.ts
+  h_e08a86bb3a33a2 1-2
+package.json
+  h_e08a86bb3a33a2 1228,1280
+src/terminal/sandbox/SandboxHelperClient.ts
+  h_e08a86bb3a33a2 1-2
+src/terminal/sandbox/sandboxHelperProtocol.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/src/sandboxHelperProtocol.ts
+  h_e08a86bb3a33a2 1-537
+packages/sandbox/src/index.ts
+  h_e08a86bb3a33a2 1-14
+packages/sandbox/README.md
+  h_e08a86bb3a33a2 1-14
+packages/sandbox/src/sandboxPolicyCompiler.ts
+  h_e08a86bb3a33a2 1-263
+src/terminal/sandbox/SandboxCapabilityAuthority.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/package.json
+  h_e08a86bb3a33a2 1-42
+src/terminal/sandbox/sandboxPolicyCompiler.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/src/SandboxCapabilityAuthority.test.ts
+  h_e08a86bb3a33a2 1-218
+src/terminal/sandbox/SandboxPreparationError.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/src/sandboxPolicyCompiler.test.ts
+  h_e08a86bb3a33a2 1-431
+src/terminal/sandbox/SandboxBehaviorAttestationService.ts
+  h_e08a86bb3a33a2 1-2
+src/terminal/sandbox/SandboxRuntimeProvider.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/src/packageBoundary.test.ts
+  h_e08a86bb3a33a2 1-40
+packages/sandbox/vitest.config.ts
+  h_e08a86bb3a33a2 1-8
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 28
+src/terminal/sandbox/sandboxEnvironmentPolicy.ts
+  h_e08a86bb3a33a2 1-2
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 41-43
+  h_e08a86bb3a33a2 37-40
+src/terminal/sandbox/NodeSandboxHelperTransport.ts
+  h_e08a86bb3a33a2 1-2
+packages/sandbox/src/SandboxCapabilityAuthority.ts
+  h_e08a86bb3a33a2 1-246
+packages/sandbox/tsconfig.test.json
+  h_e08a86bb3a33a2 1-12
+package-lock.json
+  h_e08a86bb3a33a2 20,205-208,14508-14519
+packages/sandbox/src/NodeSandboxHelperTransport.ts
+  h_e08a86bb3a33a2 1-317
+packages/sandbox/src/SandboxBehaviorAttestationService.ts
+  h_e08a86bb3a33a2 1-706
+packages/sandbox/src/SandboxHelperClient.ts
+  h_e08a86bb3a33a2 1-402
+packages/sandbox/src/SandboxPreparationError.ts
+  h_e08a86bb3a33a2 1-19
+packages/sandbox/src/SandboxRuntimeProvider.ts
+  h_e08a86bb3a33a2 1-135
+packages/sandbox/src/gitMetadataProtection.ts
+  h_e08a86bb3a33a2 1-228
+packages/sandbox/src/sandboxEnvironmentPolicy.ts
+  h_e08a86bb3a33a2 1-264
+packages/sandbox/src/sandboxNodeRuntime.ts
+  h_e08a86bb3a33a2 1-258
+packages/sandbox/src/sandboxPolicy.ts
+  h_e08a86bb3a33a2 1-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b0cf4b20e018bd26f4e24bb59f1eaa862353d86",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
