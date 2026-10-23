@@ -1,0 +1,25 @@
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.test.ts
+  h_e08a86bb3a33a2 21,192,195,198-200
+  s_3a0e2396642ca0::t_167a880a307f30 194,196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e5dd48dd525b672c5ebdd75f6699c27fc3034b0",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_3a0e2396642ca0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6390fbf-9626-4db1-b02a-5576ef28fdc4",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
