@@ -32,6 +32,7 @@ export const RELEASE_UNITS = {
       "packages/protocol/package.json",
       "packages/core/package.json",
       "packages/node-host/package.json",
+      "packages/sandbox/package.json",
       "packages/workspace-host/package.json",
     ],
     changelog: "packages/core/CHANGELOG.md",

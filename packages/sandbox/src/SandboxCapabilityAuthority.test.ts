@@ -1,7 +1,7 @@
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
   type SandboxLaunchBindingInput,
-} from "../../core/sandboxPolicy.js";
+} from "./sandboxPolicy.js";
 import { describe, expect, it } from "vitest";
 
 import {

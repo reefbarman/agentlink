@@ -34,9 +34,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE_DIR = ".release";
 const LAST_PLAN = `${RELEASE_DIR}/last-plan.json`;
 const OVERRIDES = `${RELEASE_DIR}/overrides.json`;
-const SDK_PACKAGES = ["protocol", "core", "node-host", "workspace-host"].map(
-  (name) => `@agentlink/${name}`,
-);
+const SDK_PACKAGES = [
+  "protocol",
+  "core",
+  "node-host",
+  "sandbox",
+  "workspace-host",
+].map((name) => `@agentlink/${name}`);
 
 const git = (...args) =>
   execFileSync("git", args, {

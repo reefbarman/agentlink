@@ -25,7 +25,7 @@ const UNIT_CONTRACTS = {
   desktop:
     "Standalone macOS Desktop app preview (0.x). Users rely on its UI, settings, and stored data.",
   cli: "Standalone macOS CLI preview (0.x). Users rely on its commands, flags, and stored sessions.",
-  sdk: "Node SDK libraries (@agentlink/protocol, core, node-host, workspace-host, 0.x). Consumers rely on exported entry points, types, and runtime behaviour.",
+  sdk: "Node SDK libraries (@agentlink/protocol, core, node-host, sandbox, workspace-host, 0.x). Consumers rely on exported entry points, types, and runtime behaviour.",
 };
 
 const SYSTEM_PROMPT = `You classify commits for semantic versioning of independent AgentLink release units.

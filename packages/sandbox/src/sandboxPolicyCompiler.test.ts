@@ -1,7 +1,7 @@
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
   type SandboxLaunchAuthorization,
-} from "../../core/sandboxPolicy.js";
+} from "./sandboxPolicy.js";
 import { describe, expect, it } from "vitest";
 
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
