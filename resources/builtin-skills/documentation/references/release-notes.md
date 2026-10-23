@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `search_workspace_sessions` can now search past sessions from other git worktrees of the same repository with `include_worktrees: true`. Sibling worktree history is read without being modified and has its own index, so default searches are unchanged. Matches show the worktree root as `origin`, and `read_workspace_session_excerpt` reads them directly.
+
 ## 1.65.1
 
 - Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.

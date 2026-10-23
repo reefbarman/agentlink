@@ -28,12 +28,18 @@ export class WorkspaceSessionHistoryIndexStore {
 
   readonly forProject = (
     scope: SessionProjectScope,
+    variant?: "worktrees",
   ): WorkspaceSessionHistoryIndex => {
     this.repository ??= new LanceDbRetrievalRepository({ root: this.root });
     this.service ??= new DerivedSessionRetrievalService(this.repository);
     return createDerivedSessionWorkspaceHistoryIndex({
       service: this.service,
-      scope: { kind: "workspace", id: scope.projectId },
+      // Index records are keyed by scope, so the worktree-inclusive index
+      // never overwrites or leaks into the project-only index.
+      scope: {
+        kind: "workspace",
+        id: variant ? `${scope.projectId}#${variant}` : scope.projectId,
+      },
     });
   };
 

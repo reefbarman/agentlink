@@ -707,6 +707,12 @@ export const searchWorkspaceSessionsSchema = {
     .max(5)
     .optional()
     .describe("Maximum sessions to return (default 5, maximum 5)."),
+  include_worktrees: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also search saved sessions from other git worktrees of this repository (default false). Matches from other worktrees include an origin path.",
+    ),
 };
 
 export const readWorkspaceSessionExcerptSchema = {

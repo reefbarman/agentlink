@@ -213,7 +213,14 @@ import {
   type CheckpointManagerLike,
 } from "./AgentSessionManagerHost.js";
 import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
-import { WorkspaceSessionHistory } from "@agentlink/core/workspace-session-history";
+import {
+  WorkspaceSessionHistory,
+  type WorkspaceSessionWorktreeHistory,
+} from "@agentlink/core/workspace-session-history";
+import {
+  createWorktreeInclusiveHistorySource,
+  discoverSiblingWorktreeHistories,
+} from "./worktreeSessionHistorySource.js";
 import { isWorkspaceHistoryIndexableText } from "../core/session/workspaceSessionHistoryIndex.js";
 import { createPersistedWorkspaceSessionHistorySource } from "./workspaceSessionHistorySource.js";
 import {
@@ -923,6 +930,14 @@ export class AgentSessionManager {
     string,
     WorkspaceSessionHistory
   >();
+  /** Opt-in project-plus-sibling-worktree history, created on first use. */
+  private readonly worktreeSessionHistories = new Map<
+    string,
+    WorkspaceSessionWorktreeHistory
+  >();
+  private readonly discoverSiblingWorktreeHistories: NonNullable<
+    AgentSessionManagerOptions["discoverSiblingWorktreeHistories"]
+  >;
   private readonly agentPluginCatalogProvider:
     | NonNullable<AgentSessionManagerOptions["agentPluginCatalogProvider"]>
     | undefined;
@@ -1233,6 +1248,9 @@ export class AgentSessionManager {
     this.skillCatalogFallbackProvider = opts?.skillCatalogFallbackProvider;
     this.workspaceSessionHistoryIndexFactory =
       opts?.workspaceSessionHistoryIndexFactory;
+    this.discoverSiblingWorktreeHistories =
+      opts?.discoverSiblingWorktreeHistories ??
+      ((rootPath) => discoverSiblingWorktreeHistories(rootPath));
     this.agentPluginCatalogProvider = opts?.agentPluginCatalogProvider;
     this.hookRuntimeProvider = opts?.hookRuntimeProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
@@ -1906,12 +1924,55 @@ export class AgentSessionManager {
       // Backfill in the background; searches wait only a bounded time for it.
       void history.synchronize();
     }
+    const rootPath = scope.rootPath;
     return {
       workspaceSessionHistory: Object.freeze({
         history,
         currentSessionId: session.id,
+        ...(rootPath
+          ? {
+              worktreeHistory: async () =>
+                this.worktreeSessionHistory(key, scope, rootPath),
+            }
+          : {}),
       }),
     };
+  }
+
+  /**
+   * Lazily build history over this project plus sibling git worktrees. It
+   * has its own index so worktree sessions never appear in default searches.
+   */
+  private worktreeSessionHistory(
+    projectKey: string,
+    scope: SessionProjectScope,
+    rootPath: string,
+  ): WorkspaceSessionWorktreeHistory | undefined {
+    if (!this.persistence || !this.workspaceSessionHistoryIndexFactory) {
+      return undefined;
+    }
+    const key = `${projectKey}\u0000${rootPath}`;
+    let entry = this.worktreeSessionHistories.get(key);
+    if (!entry) {
+      const discover = this.discoverSiblingWorktreeHistories;
+      const source = createWorktreeInclusiveHistorySource({
+        primary: createPersistedWorkspaceSessionHistorySource({
+          persistence: this.persistence,
+          projectScope: scope,
+        }),
+        discoverSiblings: () => discover(rootPath),
+      });
+      entry = {
+        history: new WorkspaceSessionHistory({
+          source,
+          index: this.workspaceSessionHistoryIndexFactory(scope, "worktrees"),
+          isIndexableText: isWorkspaceHistoryIndexableText,
+        }),
+        listWorktreeRoots: () => source.listSiblingRoots(),
+      };
+      this.worktreeSessionHistories.set(key, entry);
+    }
+    return entry;
   }
 
   private bindCapturedEngineToSession(

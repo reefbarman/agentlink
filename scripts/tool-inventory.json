@@ -740,7 +740,7 @@
     },
     {
       "name": "search_workspace_sessions",
-      "parameters": ["limit", "query"],
+      "parameters": ["include_worktrees", "limit", "query"],
       "cluster": "session",
       "sideEffect": "read",
       "devOnly": false,
@@ -905,5 +905,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "8e0b324f08ff4fc099cc041574022c948611d7cc4076273ece39530ad1557f87"
+  "revision": "913d91284b3b618d52681e10e90758c9995355fe0e54e3e50539f1c568c6ee09"
 }

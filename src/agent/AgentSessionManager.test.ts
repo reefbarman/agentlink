@@ -3587,6 +3587,139 @@ describe("AgentSessionManager host injection", () => {
     }
   });
 
+  it("binds opt-in sibling worktree history through the production wiring", async () => {
+    const workspace = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-ws-history-")),
+    );
+    const sibling = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-ws-sibling-")),
+    );
+    try {
+      const siblingHistory = path.join(sibling, ".agentlink", "history");
+      fs.mkdirSync(path.join(siblingHistory, "sibling-session"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(siblingHistory, "sessions.json"),
+        JSON.stringify([
+          {
+            schemaVersion: 1,
+            id: "sibling-session",
+            mode: "code",
+            model: "m",
+            title: "Sibling",
+            messageCount: 1,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            createdAt: 1,
+            lastActiveAt: 2,
+          },
+        ]),
+      );
+      fs.writeFileSync(
+        path.join(siblingHistory, "sibling-session", "metadata.json"),
+        JSON.stringify({ mode: "code", model: "m" }),
+      );
+      fs.writeFileSync(
+        path.join(siblingHistory, "sibling-session", "messages.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          messages: [{ role: "user", content: "zebra-worktree-marker" }],
+        }),
+      );
+      const store = new SessionStore(workspace);
+      const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+      const engine = {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* () {}),
+        condenseSession: vi.fn(async function* () {}),
+        isOverCondenseThreshold: vi.fn(() => false),
+      };
+      const indexes = new Map<string, Map<string, any>>();
+      const indexFactory = vi.fn((_scope: unknown, variant?: string) => {
+        const docs = new Map<string, any>();
+        indexes.set(variant ?? "project", docs);
+        return {
+          listIndexed: async () =>
+            new Map([...docs.values()].map((d) => [d.sessionId, d.revision])),
+          publish: async (document: any) => {
+            docs.set(document.sessionId, document);
+          },
+          remove: async (sessionId: string) => {
+            docs.delete(sessionId);
+          },
+          query: async ({ text }: { text: string }) =>
+            [...docs.values()]
+              .filter((d) =>
+                d.chunks.some((c: any) => c.text.includes(text.trim())),
+              )
+              .map((d) => ({ sessionId: d.sessionId, score: 1 })),
+        };
+      });
+      const discover = vi.fn(async () => [
+        { rootPath: sibling, historyDirectory: siblingHistory },
+      ]);
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        store,
+        undefined,
+        { maxConcurrent: 3 },
+        {
+          host: {
+            providers: new ProviderRegistry(),
+            createEngine: vi.fn(() => engine) as any,
+            createToolRuntime: createToolRuntime as any,
+            createCheckpointManager: vi.fn(() => ({
+              baseCommit: null,
+              initialize: vi.fn(async () => true),
+              createCheckpoint: vi.fn(async () => null),
+              previewRevert: vi.fn(async () => null),
+              revertToCheckpoint: vi.fn(async () => false),
+              getDiffBetween: vi.fn(async () => ""),
+            })) as any,
+          },
+          workspaceSessionHistoryIndexFactory: indexFactory,
+          discoverSiblingWorktreeHistories: discover,
+        },
+      );
+      const session = await mgr.createSession("code");
+      mgr.setToolContext({
+        approvalManager: { bindSessionProject: vi.fn() } as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: { getToolDefs: vi.fn(() => []), getServerConfig: vi.fn() },
+      } as any);
+      const interactive = (mgr as any).createInteractiveEngine(session.id);
+      const request = (mgr as any).bindEngineToSession(interactive, session);
+      const context = (createToolRuntime.mock.calls[0] as unknown[])[0] as any;
+
+      expect(session.projectScope.rootPath).toBeTruthy();
+      const worktrees = await context.workspaceSessionHistory.worktreeHistory();
+      expect(indexFactory).toHaveBeenCalledWith(
+        session.projectScope,
+        "worktrees",
+      );
+      await expect(
+        worktrees.history.search({ query: "zebra-worktree-marker" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        sessions: [{ session_id: "sibling-session", origin: sibling }],
+      });
+      expect(discover).toHaveBeenCalledWith(session.projectScope.rootPath);
+      expect(indexes.get("project")?.has("sibling-session")).toBe(false);
+
+      (mgr as any).releaseSessionToolContext(session.id, request);
+      (mgr as any).releaseInteractiveEngine(session.id, interactive);
+    } finally {
+      removeTempWorkspace(workspace);
+      fs.rmSync(sibling, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an unknown explicit session instead of creating a fallback session", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const createCallsBeforeSend = mocks.createSession.mock.calls.length;

@@ -49,6 +49,11 @@ export interface WorkspaceSessionCatalogEntry {
   lastActiveAt: number;
   /** Cheap host change token. A different value causes reindexing. */
   revision: string;
+  /**
+   * Host label for where the session was recorded when it is outside the
+   * executing project, for example another git worktree root.
+   */
+  origin?: string;
 }
 
 export interface WorkspaceSessionRecord extends WorkspaceSessionCatalogEntry {
@@ -152,6 +157,7 @@ export type WorkspaceSessionHistoryErrorCode =
   | "current_session"
   | "session_unavailable"
   | "index_unavailable"
+  | "worktrees_unavailable"
   | "workspace_session_history_unavailable";
 
 export interface WorkspaceSessionHistoryError {
@@ -176,6 +182,8 @@ export interface WorkspaceSessionSearchSession {
   last_active_at: string;
   snapshot_message_count: number;
   snapshot_revision: string;
+  /** Present when the session comes from outside the executing project. */
+  origin?: string;
   hits: WorkspaceSessionSearchHit[];
 }
 
@@ -191,12 +199,15 @@ export interface WorkspaceSessionSearchResult {
     complete: boolean;
     note?: string;
   };
+  /** Present when the search included other git worktrees of the project. */
+  worktrees?: { searched: string[]; note?: string };
 }
 
 export interface WorkspaceSessionExcerptResult {
   ok: true;
   session_id: string;
   title: string;
+  origin?: string;
   snapshot_message_count: number;
   snapshot_revision: string;
   start_message_index: number;
@@ -393,6 +404,7 @@ export class WorkspaceSessionHistory {
         last_active_at: isoTime(record.lastActiveAt),
         snapshot_message_count: snapshot.messages.length,
         snapshot_revision: getSessionTranscriptRevision(snapshot.messages),
+        ...(record.origin ? { origin: record.origin } : {}),
         hits,
       });
     }
@@ -452,6 +464,7 @@ export class WorkspaceSessionHistory {
       ok: true,
       session_id: record.sessionId,
       title: record.title,
+      ...(record.origin ? { origin: record.origin } : {}),
       snapshot_message_count: result.snapshotMessageCount,
       snapshot_revision: result.snapshotRevision,
       start_message_index: result.startMessageIndex,
@@ -582,6 +595,17 @@ export interface WorkspaceSessionHistoryBinding {
   history: Pick<WorkspaceSessionHistory, "search" | "readExcerpt">;
   /** The executing session, excluded from past-session results. */
   currentSessionId?: string;
+  /**
+   * Optional history over this project plus its other git worktrees. Hosts
+   * omit it when worktree discovery is unsupported.
+   */
+  worktreeHistory?: () => Promise<WorkspaceSessionWorktreeHistory | undefined>;
+}
+
+export interface WorkspaceSessionWorktreeHistory {
+  history: Pick<WorkspaceSessionHistory, "search" | "readExcerpt">;
+  /** Roots of the other worktrees whose saved history is included. */
+  listWorktreeRoots(): Promise<readonly string[]>;
 }
 
 export async function handleSearchWorkspaceSessions(
@@ -589,11 +613,39 @@ export async function handleSearchWorkspaceSessions(
   binding: WorkspaceSessionHistoryBinding | undefined,
 ): Promise<SessionTranscriptToolResult> {
   if (!binding) return unavailableResult(WORKSPACE_SESSION_SEARCH_MAX_CHARS);
-  const result = await binding.history.search({
+  const request = {
     query: typeof params.query === "string" ? params.query : "",
     limit: numberValue(params.limit),
     excludeSessionId: binding.currentSessionId,
-  });
+  };
+  let result: WorkspaceSessionSearchResult | WorkspaceSessionHistoryError;
+  if (booleanValue(params.include_worktrees)) {
+    const worktrees = await binding.worktreeHistory?.();
+    if (!worktrees) {
+      result = historyError(
+        "worktrees_unavailable",
+        "Searching other git worktrees is unavailable for this session. Search again without include_worktrees.",
+      );
+    } else {
+      result = await worktrees.history.search(request);
+      if (result.ok) {
+        const searched = [...(await worktrees.listWorktreeRoots())];
+        result = {
+          ...result,
+          worktrees: {
+            searched,
+            ...(searched.length === 0
+              ? {
+                  note: "No other git worktrees of this project have saved AgentLink history.",
+                }
+              : {}),
+          },
+        };
+      }
+    }
+  } else {
+    result = await binding.history.search(request);
+  }
   return textResult(
     formatBoundedHistoricalEvidence(
       result,
@@ -608,7 +660,7 @@ export async function handleReadWorkspaceSessionExcerpt(
   binding: WorkspaceSessionHistoryBinding | undefined,
 ): Promise<SessionTranscriptToolResult> {
   if (!binding) return unavailableResult(WORKSPACE_SESSION_EXCERPT_MAX_CHARS);
-  const result = await binding.history.readExcerpt({
+  const request = {
     sessionId: typeof params.session_id === "string" ? params.session_id : "",
     startMessageIndex: numberValue(params.start_message_index) ?? Number.NaN,
     endMessageIndex: numberValue(params.end_message_index) ?? Number.NaN,
@@ -619,7 +671,17 @@ export async function handleReadWorkspaceSessionExcerpt(
         ? params.snapshot_revision
         : "",
     excludeSessionId: binding.currentSessionId,
-  });
+  };
+  let result = await binding.history.readExcerpt(request);
+  // Sessions found through include_worktrees live in sibling worktrees.
+  if (
+    !result.ok &&
+    result.error.code === "session_unavailable" &&
+    binding.worktreeHistory
+  ) {
+    const worktrees = await binding.worktreeHistory();
+    if (worktrees) result = await worktrees.history.readExcerpt(request);
+  }
   return textResult(
     formatBoundedHistoricalEvidence(
       result,
@@ -773,6 +835,10 @@ function isoTime(value: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function booleanValue(value: unknown): boolean {
+  return value === true || value === "true";
 }
 
 function numberValue(value: unknown): number | undefined {

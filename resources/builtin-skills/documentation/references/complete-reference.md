@@ -1058,20 +1058,23 @@ The range may span at most 10 message positions, and the formatted output is cap
 
 Search earlier saved foreground sessions that belong to the executing session's own project. The project is fixed by the host when the turn starts; tool input cannot select another project, storage path or scope. The executing session (use `search_session_history`), background and fleet sessions, sessions of other projects and sessions without a durable project identity are excluded. Available only to foreground VS Code sessions with saved history; not offered to background agents or bounded profiles, and not exempt from a skill's `allowed-tools`.
 
-| Parameter | Type    | Description                                                  |
-| --------- | ------- | ------------------------------------------------------------ |
-| `query`   | string  | Required words to look for, 1-500 characters.                |
-| `limit`   | number? | Maximum sessions to return (default: 5, minimum: 1, max: 5). |
+| Parameter           | Type     | Description                                                              |
+| ------------------- | -------- | ------------------------------------------------------------------------ |
+| `query`             | string   | Required words to look for, 1-500 characters.                            |
+| `limit`             | number?  | Maximum sessions to return (default: 5, minimum: 1, max: 5).             |
+| `include_worktrees` | boolean? | Also search other git worktrees of the same repository (default: false). |
+
+With `include_worktrees: true`, AgentLink runs `git worktree list` in the project root and also searches the saved history of each other worktree that was opened as a single-folder workspace. Sibling history is read without writing to it and uses a separate index, so default searches never include it. Matches from another worktree include `origin` (that worktree's root path), and the response adds `worktrees.searched` with the worktree roots that were included (plus a `note` when none have saved history). Outside a git repository the search covers only the current project.
 
 A disposable local lexical index (in VS Code global storage, separate from code search and Ask Agent memory) ranks candidate sessions. Existing history is indexed in the background; a search waits briefly for indexing and continues it afterwards. Changed sessions are reindexed and deleted ones removed. Credential-like text is not indexed. Every candidate is re-read from canonical history before it is returned.
 
 **Response includes:** `sessions[]` with `session_id`, `title`, `created_at`, `last_active_at`, `snapshot_message_count`, `snapshot_revision` and up to two `hits` (`message_index`, `role`, `condensed`, `match` of `exact`/`partial`/`indexed`, `excerpt`, `truncated`); `truncated`; and `index` coverage (`eligible_sessions`, `indexed_sessions`, `pending_sessions`, `failed_sessions`, `complete`, optional `note`). While `complete` is false, no match does not prove a topic was never discussed. Output is capped at 8,000 characters in non-instructional `<workspace-session-history>` framing.
 
-**Errors:** `invalid_query`, `index_unavailable`, and `workspace_session_history_unavailable` when the session has no project-scoped saved history.
+**Errors:** `invalid_query`, `index_unavailable`, `worktrees_unavailable` when `include_worktrees` is set but the session has no local project root, and `workspace_session_history_unavailable` when the session has no project-scoped saved history.
 
 ### read_workspace_session_excerpt
 
-Read a bounded exact excerpt from a session returned by `search_workspace_sessions`, using its `session_id`, inclusive zero-based `start_message_index`/`end_message_index` (at most 10 positions), and that session's `snapshot_message_count` and `snapshot_revision`. The session is re-validated against the project on every read. Append-only continuation stays valid; a rewritten, reverted or shortened transcript returns `stale_snapshot`. Rendering and exclusions match `read_session_excerpt`; output is capped at 12,000 characters.
+Read a bounded exact excerpt from a session returned by `search_workspace_sessions`, using its `session_id`, inclusive zero-based `start_message_index`/`end_message_index` (at most 10 positions), and that session's `snapshot_message_count` and `snapshot_revision`. The session is re-validated against the project on every read. Sessions found with `include_worktrees` are read from their worktree's history and include `origin`. Append-only continuation stays valid; a rewritten, reverted or shortened transcript returns `stale_snapshot`. Rendering and exclusions match `read_session_excerpt`; output is capped at 12,000 characters.
 
 **Errors:** `invalid_session_id`, `invalid_range`, `stale_snapshot`, `current_session` (use `read_session_excerpt`), `session_unavailable` (deleted, moved or no longer eligible) and `workspace_session_history_unavailable`.
 

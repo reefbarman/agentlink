@@ -176,7 +176,18 @@ export interface AgentSessionManagerOptions {
    */
   workspaceSessionHistoryIndexFactory?: (
     scope: import("@agentlink/protocol/workspace-project").SessionProjectScope,
+    /** "worktrees" selects the separate project-plus-worktrees index. */
+    variant?: "worktrees",
   ) => import("@agentlink/core/workspace-session-history").WorkspaceSessionHistoryIndex;
+  /**
+   * Finds other git worktrees with saved history for include_worktrees.
+   * Defaults to running `git worktree list` in the project root.
+   */
+  discoverSiblingWorktreeHistories?: (
+    rootPath: string,
+  ) => Promise<
+    readonly import("./worktreeSessionHistorySource.js").SiblingWorktreeHistory[]
+  >;
   agentPluginCatalogProvider?: AgentPluginCatalogProvider;
   hookRuntimeProvider?: import("./HookService.js").HookRuntimeProvider;
   browserPreferredProjectId?: string;

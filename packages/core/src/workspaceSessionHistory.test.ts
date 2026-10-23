@@ -384,4 +384,80 @@ describe("workspace session history tool handlers", () => {
       },
     ]);
   });
+
+  it("searches sibling worktrees only when include_worktrees is set", async () => {
+    const project = setup();
+    project.source.add(record("here", [["user", "tailscale onboarding"]]));
+    const combined = setup();
+    combined.source.add(record("here", [["user", "tailscale onboarding"]]));
+    combined.source.add(
+      record("there", [["user", "tailscale build session"]], {
+        origin: "/work/repo-feature",
+      }),
+    );
+    const binding = {
+      history: project.history,
+      worktreeHistory: async () => ({
+        history: combined.history,
+        listWorktreeRoots: async () => ["/work/repo-feature"],
+      }),
+    };
+
+    const plain = await handleSearchWorkspaceSessions(
+      { query: "tailscale" },
+      binding,
+    );
+    expect(plain.content[0].text).not.toContain("repo-feature");
+
+    const wide = await handleSearchWorkspaceSessions(
+      { query: "tailscale", include_worktrees: true },
+      binding,
+    );
+    const text = wide.content[0].text;
+    expect(text).toContain('"origin": "/work/repo-feature"');
+    expect(text).toContain('"searched": [\n      "/work/repo-feature"');
+    expect(text).toContain('"session_id": "there"');
+  });
+
+  it("reports unavailable worktree search instead of silently narrowing", async () => {
+    const { history } = setup();
+    const result = await handleSearchWorkspaceSessions(
+      { query: "x", include_worktrees: true },
+      { history },
+    );
+    expect(result.content[0].text).toContain("worktrees_unavailable");
+  });
+
+  it("falls back to sibling worktrees for excerpts of their sessions", async () => {
+    const project = setup();
+    const combined = setup();
+    combined.source.add(
+      record("there", [["user", "tailscale build session"]], {
+        origin: "/work/repo-feature",
+      }),
+    );
+    const binding = {
+      history: project.history,
+      worktreeHistory: async () => ({
+        history: combined.history,
+        listWorktreeRoots: async () => ["/work/repo-feature"],
+      }),
+    };
+    const found = await combined.history.search({ query: "tailscale" });
+    if (!found.ok) throw new Error("search failed");
+    const session = found.sessions[0]!;
+
+    const excerpt = await handleReadWorkspaceSessionExcerpt(
+      {
+        session_id: "there",
+        start_message_index: 0,
+        end_message_index: 0,
+        snapshot_message_count: session.snapshot_message_count,
+        snapshot_revision: session.snapshot_revision,
+      },
+      binding,
+    );
+    expect(excerpt.content[0].text).toContain("tailscale build session");
+    expect(excerpt.content[0].text).toContain('"origin": "/work/repo-feature"');
+  });
 });
