@@ -1,0 +1,24 @@
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 202-203
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2255
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  h_e08a86bb3a33a2 370-438
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 169
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_e08a86bb3a33a2 809-825
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 7919-8116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
