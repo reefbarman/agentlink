@@ -1,0 +1,84 @@
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 4,21,25,1736-1851
+  s_06a6d7f1a33263::t_757b210e2ee59a 1852
+packages/sandbox/src/sandboxedProcessLauncher.ts
+  h_e08a86bb3a33a2 1-216
+packages/workspace-host/src/index.ts
+  h_e08a86bb3a33a2 19
+packages/workspace-host/src/sandboxedProcessLauncher.ts
+  h_e08a86bb3a33a2 1-99
+packages/workspace-host/package.json
+  h_e08a86bb3a33a2 30
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 1-258
+packages/sandbox/tsconfig.json
+  h_e08a86bb3a33a2 24-26
+packages/sandbox/src/sandboxPolicyCompiler.ts
+  h_e08a86bb3a33a2 39-40,260
+packages/workspace-host/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 1-120
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.ts
+  h_e08a86bb3a33a2 4-6,63-65,98,156-160,165-185
+  s_04f8c5e28e896c::t_d95659b51343a5 7,16,97,161-164
+packages/sandbox/src/index.ts
+  h_e08a86bb3a33a2 15-16
+packages/sandbox/package.json
+  h_e08a86bb3a33a2 36
+packages/sandbox/src/sandboxHelperProtocol.ts
+  h_e08a86bb3a33a2 65,67-71,74-75,99-103,418,420,449-453
+  s_06a6d7f1a33263::t_1090c5abd67998 104
+scripts/sandbox-interactive-helper.mjs
+  h_e08a86bb3a33a2 21,25,146-147,161,163,363-422,479,671,828,856,904-909,911,931-937,947,952,1023,1026
+packages/sandbox/src/SandboxHelperClient.ts
+  h_e08a86bb3a33a2 275-276
+  s_06a6d7f1a33263::t_6224b715251fcb 273-274,277
+packages/sandbox/src/SandboxRuntimeProvider.ts
+  h_e08a86bb3a33a2 105
+packages/sandbox/README.md
+  h_e08a86bb3a33a2 8-10,14,17-18
+packages/sandbox/src/packageBoundary.test.ts
+  h_e08a86bb3a33a2 11
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 1-698
+packages/workspace-host/tsconfig.json
+  s_179d6512dafa24::t_c1146f1fc340b5 30-32
+package-lock.json
+  h_e08a86bb3a33a2 14513,14529
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d7dbcab702453c91922e3f8bb21c927922ace16",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_04f8c5e28e896c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "adb32690-cf00-499a-bae3-2173b1b3c9cd",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_06a6d7f1a33263": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dfc22f30-6868-48d7-9de7-ec57ec8be03c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_179d6512dafa24": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f2932c2-f648-41c8-832a-94e7c9eab251",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
