@@ -1,10 +1,13 @@
 import { access, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import {
+  resolveSandboxRuntimeTarget,
+  stageSandboxRuntime,
+} from "./package-sandbox-runtime.mjs";
 
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { stageSandboxRuntime } from "./package-sandbox-runtime.mjs";
 import test from "node:test";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -24,7 +27,11 @@ test("stages runtime dependencies and Darwin node-pty prebuilds without source o
   );
   const destinationRoot = path.join(temporaryRoot, "sandbox-runtime");
   try {
-    const staged = await stageSandboxRuntime({ repoRoot, destinationRoot });
+    const staged = await stageSandboxRuntime({
+      repoRoot,
+      destinationRoot,
+      target: "darwin-arm64",
+    });
 
     for (const runtimePath of [
       "scripts/sandbox-interactive-helper.mjs",
@@ -99,4 +106,62 @@ test("stages runtime dependencies and Darwin node-pty prebuilds without source o
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+for (const target of ["linux-x64", "linux-arm64", "alpine-x64", "win32-x64"]) {
+  test(`stages the sandbox runtime without Darwin node-pty for ${target}`, async () => {
+    const temporaryRoot = await mkdtemp(
+      path.join(os.tmpdir(), "agentlink-runtime-stage-"),
+    );
+    const destinationRoot = path.join(temporaryRoot, "sandbox-runtime");
+    try {
+      const staged = await stageSandboxRuntime({
+        repoRoot,
+        destinationRoot,
+        target,
+      });
+
+      assert.equal(staged.target, target);
+      assert.deepEqual(staged.spawnHelpers, []);
+      assert.equal(
+        await exists(path.join(destinationRoot, "node_modules/node-pty")),
+        false,
+      );
+      assert.equal(
+        staged.staged.some((entry) => entry.path.includes("node-pty")),
+        false,
+      );
+      for (const runtimePath of [
+        "scripts/sandbox-interactive-helper.mjs",
+        "node_modules/@anthropic-ai/sandbox-runtime/dist/index.js",
+      ]) {
+        assert.equal(
+          await exists(path.join(destinationRoot, runtimePath)),
+          true,
+          runtimePath,
+        );
+      }
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("resolves the packaging target from AGENTLINK_VSCE_TARGET before the host", () => {
+  assert.equal(
+    resolveSandboxRuntimeTarget({
+      target: "linux-x64",
+      platform: "darwin",
+      architecture: "arm64",
+    }),
+    "linux-x64",
+  );
+  assert.equal(
+    resolveSandboxRuntimeTarget({
+      target: undefined,
+      platform: "darwin",
+      architecture: "arm64",
+    }),
+    "darwin-arm64",
+  );
 });

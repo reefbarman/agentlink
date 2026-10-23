@@ -5,6 +5,9 @@
 ## 1.67.1
 
 - AgentLink Assistant: a background agent in a chat that is waiting for your approval now raises "needs your approval" in the Inbox too, so the Assistant tab badge, desktop notifications and phone pushes tell you.
+- Agent commands now run in the VS Code terminal on Linux, Windows and remote hosts (Remote-SSH, WSL, dev containers) instead of failing before launch. Requests that need the sandbox are still macOS-only.
+- Linux and Windows VSIXs no longer include the macOS-only node-pty terminal binaries.
+- On Linux, AgentLink's OS credential storage (used by the CLI, Desktop and SDK hosts, not the VS Code extension) now requires Secret Service, such as GNOME Keyring or KWallet. It no longer falls back silently to the kernel keyring, which loses credentials on reboot. Without a session bus or a running keyring it fails with `LinuxCredentialStoreUnavailableError` and never stores credentials in plain text. Pass `linuxStore: "keyutils"` to opt into the kernel keyring.
 
 ## 1.67.0
 

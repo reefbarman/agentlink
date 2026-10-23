@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- On Linux, `createKeychainSecretStorage(...)` and everything built on it now default to `linuxStore: "secret-service"` instead of the native default that silently fell back to the reboot-volatile kernel keyring. A missing session bus or Secret Service fails with the new `LinuxCredentialStoreUnavailableError` (`code: "linux_credential_store_unavailable"`, `reason: "no_session_bus" | "secret_service_unavailable"`). Pass `linuxStore: "keyutils"` to keep using the kernel keyring. macOS and Windows are unchanged.
+
 ## 0.29.0 — 2026-10-23
 
 - Adds piped sandboxed process launches (launchSandboxedProcess, prepareWorkspaceSandboxLaunch, createSandboxedWorkspaceProcessLauncher) so hosts without a terminal can run commands through the macOS sandbox, with VS Code terminal behavior unchanged.

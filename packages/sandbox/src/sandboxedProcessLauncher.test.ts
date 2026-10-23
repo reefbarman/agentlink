@@ -195,11 +195,13 @@ describe("launchSandboxedProcess", () => {
         stageSandboxRuntime(options: {
           repoRoot: string;
           destinationRoot: string;
+          target: string;
         }): Promise<unknown>;
       };
       await stageSandboxRuntime({
         repoRoot: REPO_ROOT,
         destinationRoot: path.join(extensionRoot, "dist", "sandbox-runtime"),
+        target: `darwin-${process.arch}`,
       });
 
       const base = await temporaryDirectory("al-sbx-real-");

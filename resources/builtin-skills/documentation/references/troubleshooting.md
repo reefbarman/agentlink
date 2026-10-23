@@ -61,6 +61,13 @@ The prompt names the copy, so it says which surface is asking. The item it asks 
 - Builds without the helper (unsigned previews, Linux, Windows, source runs) use the Keychain directly, as before, and can still prompt after another surface writes.
 - If prompts continue from **AgentLink Credentials** after **Always Allow**, check whether the copy was rebuilt with a different signing certificate.
 
+### Credentials on Linux
+
+The VS Code extension keeps its credentials in VS Code's own secret storage on Linux. AgentLink's shared OS credential storage (used by standalone and SDK hosts) requires a Secret Service keyring such as GNOME Keyring or KWallet. It never falls back to plain text or to the kernel keyring, which loses credentials on reboot. A `LinuxCredentialStoreUnavailableError` means:
+
+- `no_session_bus`: there is no D-Bus session for this user, which is common on headless machines and plain SSH logins. Sign in to a desktop session, or start a session bus and keyring for the user.
+- `secret_service_unavailable`: a session exists but no keyring is running or unlocked. Start or unlock GNOME Keyring or KWallet (on a Steam Deck, use Desktop Mode), then retry.
+
 ## A GPT-6 model is selected but the request fails
 
 AgentLink lists GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves the selected model unchanged and shows the provider's normal error instead of silently changing models or credentials.

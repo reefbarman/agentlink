@@ -9,13 +9,17 @@ import {
   SHARED_STANDALONE_MCP_OAUTH_KEYCHAIN_ACCOUNT,
   createStandaloneMcpCredentialRepository,
 } from "./keychainMcpCredentialRepository.js";
+import {
+  LinuxCredentialStoreUnavailableError,
+  createKeychainSecretStorage,
+} from "./keychainSecretStorage.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexOAuthRuntime } from "./codexOAuthRuntime.js";
-import { createKeychainSecretStorage } from "./keychainSecretStorage.js";
 
 const values = new Map<string, string>();
 let getPasswordCalls = 0;
+let getPasswordError: Error | undefined;
 let setPasswordCalls = 0;
 const constructorCalls: unknown[][] = [];
 const failSetOnce = new Set<string>();
@@ -32,6 +36,7 @@ vi.mock("@napi-rs/keyring", () => ({
 
     async getPassword(): Promise<string | undefined> {
       getPasswordCalls += 1;
+      if (getPasswordError) throw getPasswordError;
       return values.get(`${this.service}:${this.account}`);
     }
 
@@ -53,6 +58,8 @@ const temporaryRoots: string[] = [];
 afterEach(async () => {
   values.clear();
   getPasswordCalls = 0;
+  getPasswordError = undefined;
+  vi.unstubAllEnvs();
   setPasswordCalls = 0;
   constructorCalls.length = 0;
   failSetOnce.clear();
@@ -615,6 +622,99 @@ process.stdout.write(JSON.stringify(reply));
     expect(constructorCalls).toEqual([
       ["test-service", "test-account", { linux: { store: "secret-service" } }],
     ]);
+  });
+
+  describe("on Linux", () => {
+    const originalPlatform = process.platform;
+
+    async function linuxStorage(linuxStore?: "secret-service" | "keyutils") {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const lockRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-keychain-linux-"),
+      );
+      temporaryRoots.push(lockRoot);
+      return await createKeychainSecretStorage({
+        service: "test-service",
+        account: "test-account",
+        lockRoot,
+        ...(linuxStore ? { linuxStore } : {}),
+      });
+    }
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    it("requires Secret Service by default instead of the kernel keyring fallback", async () => {
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+      values.set("test-service:test-account", "stored");
+      const storage = await linuxStorage();
+
+      await expect(storage.get()).resolves.toBe("stored");
+      expect(constructorCalls).toEqual([
+        [
+          "test-service",
+          "test-account",
+          { linux: { store: "secret-service" } },
+        ],
+      ]);
+    });
+
+    it("fails headless sessions with a typed error before calling the store", async () => {
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "");
+      const runtimeDirectory = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-xdg-"),
+      );
+      temporaryRoots.push(runtimeDirectory);
+      vi.stubEnv("XDG_RUNTIME_DIR", runtimeDirectory);
+      const storage = await linuxStorage();
+
+      const failure = await storage.get().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(LinuxCredentialStoreUnavailableError);
+      expect(failure).toMatchObject({
+        code: "linux_credential_store_unavailable",
+        reason: "no_session_bus",
+      });
+      await expect(storage.store("secret")).rejects.toBeInstanceOf(
+        LinuxCredentialStoreUnavailableError,
+      );
+      expect(getPasswordCalls).toBe(0);
+      expect(setPasswordCalls).toBe(0);
+    });
+
+    it("reports a missing Secret Service provider with the native cause", async () => {
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+      const cause = new Error(
+        "Platform secure storage failure: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.secrets was not provided by any .service files",
+      );
+      getPasswordError = cause;
+      const storage = await linuxStorage();
+
+      await expect(storage.get()).rejects.toMatchObject({
+        reason: "secret_service_unavailable",
+        cause,
+      });
+    });
+
+    it("passes unrelated native errors through unchanged", async () => {
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+      const cause = new Error("Attribute value too long");
+      getPasswordError = cause;
+      const storage = await linuxStorage();
+
+      await expect(storage.get()).rejects.toBe(cause);
+    });
+
+    it("keeps an explicit keyutils opt-in without the Secret Service check", async () => {
+      vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "");
+      vi.stubEnv("XDG_RUNTIME_DIR", "/nonexistent-agentlink-runtime");
+      const storage = await linuxStorage("keyutils");
+
+      await expect(storage.get()).resolves.toBeUndefined();
+      expect(constructorCalls).toEqual([
+        ["test-service", "test-account", { linux: { store: "keyutils" } }],
+      ]);
+    });
   });
 
   it("forwards the Linux store from the Codex OAuth runtime composition", async () => {

@@ -67,6 +67,12 @@ const PACKAGE_ENTRIES = [
     source: "node_modules/node-forge/package.json",
     destination: "node_modules/node-forge/package.json",
   },
+];
+
+// node-pty backs the AgentLink terminal and sandbox PTY launches, which only
+// run on macOS. Its packaged prebuilds are Darwin-only, so other targets get
+// none of it.
+const DARWIN_NODE_PTY_ENTRIES = [
   {
     source: "node_modules/node-pty/lib",
     destination: "node_modules/node-pty/lib",
@@ -93,10 +99,42 @@ const PACKAGE_ENTRIES = [
   },
 ];
 
-export const SANDBOX_RUNTIME_STAGE_PATHS = [
-  ...HELPER_FILES.map((file) => `scripts/${file}`),
-  ...PACKAGE_ENTRIES.map((entry) => entry.destination),
-];
+const DARWIN_SPAWN_HELPER_ARCHITECTURES = ["darwin-arm64", "darwin-x64"];
+
+/**
+ * The VSIX target being packaged: AGENTLINK_VSCE_TARGET when set (for example
+ * `linux-x64` built on a Mac), otherwise the current host.
+ */
+export function resolveSandboxRuntimeTarget({
+  target = process.env.AGENTLINK_VSCE_TARGET,
+  platform = process.platform,
+  architecture = process.arch,
+} = {}) {
+  return target || `${platform}-${architecture}`;
+}
+
+export function includesNodePty(target) {
+  return target.startsWith("darwin-");
+}
+
+export function sandboxRuntimeStagePaths(
+  target = resolveSandboxRuntimeTarget(),
+) {
+  return [
+    ...HELPER_FILES.map((file) => `scripts/${file}`),
+    ...packageEntriesFor(target).map((entry) => entry.destination),
+  ];
+}
+
+/** Stage paths for a macOS target, the superset staged for any target. */
+export const SANDBOX_RUNTIME_STAGE_PATHS =
+  sandboxRuntimeStagePaths("darwin-arm64");
+
+function packageEntriesFor(target) {
+  return includesNodePty(target)
+    ? [...PACKAGE_ENTRIES, ...DARWIN_NODE_PTY_ENTRIES]
+    : PACKAGE_ENTRIES;
+}
 
 function isNonRuntimeArtifact(fileName) {
   return (
@@ -117,7 +155,7 @@ async function pruneNonRuntimeArtifacts(directory) {
   }
 }
 
-async function pruneNonRuntimeFiles(destinationRoot) {
+async function pruneNonRuntimeFiles(destinationRoot, withNodePty) {
   await pruneNonRuntimeArtifacts(destinationRoot);
   await rm(
     path.join(
@@ -126,6 +164,7 @@ async function pruneNonRuntimeFiles(destinationRoot) {
     ),
     { recursive: true, force: true },
   );
+  if (!withNodePty) return;
 
   const nodePtyLib = path.join(destinationRoot, "node_modules/node-pty/lib");
   let nodePtyLibMetadata;
@@ -179,7 +218,9 @@ async function copyEntry(source, destination) {
 export async function stageSandboxRuntime({
   repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
   destinationRoot = path.join(repoRoot, "dist", "sandbox-runtime"),
+  target = resolveSandboxRuntimeTarget(),
 } = {}) {
+  const withNodePty = includesNodePty(target);
   await rm(destinationRoot, { recursive: true, force: true });
   await mkdir(destinationRoot, { recursive: true });
 
@@ -189,15 +230,17 @@ export async function stageSandboxRuntime({
       path.join(destinationRoot, "scripts", file),
     );
   }
-  for (const entry of PACKAGE_ENTRIES) {
+  for (const entry of packageEntriesFor(target)) {
     await copyEntry(
       await resolveEntrySource(repoRoot, entry.source),
       path.join(destinationRoot, entry.destination),
     );
   }
-  await pruneNonRuntimeFiles(destinationRoot);
+  await pruneNonRuntimeFiles(destinationRoot, withNodePty);
 
-  const spawnHelpers = ["darwin-arm64", "darwin-x64"].map((architecture) =>
+  const spawnHelpers = (
+    withNodePty ? DARWIN_SPAWN_HELPER_ARCHITECTURES : []
+  ).map((architecture) =>
     path.join(
       destinationRoot,
       "node_modules/node-pty/prebuilds",
@@ -210,7 +253,7 @@ export async function stageSandboxRuntime({
   }
 
   const staged = [];
-  for (const relativePath of SANDBOX_RUNTIME_STAGE_PATHS) {
+  for (const relativePath of sandboxRuntimeStagePaths(target)) {
     const metadata = await stat(path.join(destinationRoot, relativePath));
     staged.push({
       path: relativePath,
@@ -225,7 +268,7 @@ export async function stageSandboxRuntime({
     }
   }
 
-  return { destinationRoot, staged, spawnHelpers };
+  return { target, destinationRoot, staged, spawnHelpers };
 }
 
 const isMain =

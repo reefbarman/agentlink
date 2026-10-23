@@ -17,14 +17,49 @@ export const AGENTLINK_SHARED_KEYCHAIN_SERVICE =
 /** Linux credential stores supported by `@napi-rs/keyring`. */
 export type KeychainLinuxStore = "secret-service" | "keyutils";
 
+/**
+ * AgentLink's Linux store when the caller doesn't choose one. The native
+ * library's own default silently falls back to the kernel keyring, which
+ * loses credentials on reboot, so AgentLink always asks for Secret Service.
+ */
+export const DEFAULT_KEYCHAIN_LINUX_STORE: KeychainLinuxStore =
+  "secret-service";
+
+export type LinuxCredentialStoreUnavailableReason =
+  | "no_session_bus"
+  | "secret_service_unavailable";
+
+/**
+ * Linux has no reachable Secret Service, typically a headless machine or SSH
+ * session without a desktop keyring. AgentLink never falls back to plaintext
+ * or to the reboot-volatile kernel keyring.
+ */
+export class LinuxCredentialStoreUnavailableError extends Error {
+  readonly code = "linux_credential_store_unavailable";
+
+  constructor(
+    readonly reason: LinuxCredentialStoreUnavailableReason,
+    options?: ErrorOptions,
+  ) {
+    super(
+      reason === "no_session_bus"
+        ? "No D-Bus session is available, so AgentLink cannot reach a Secret Service credential store (such as GNOME Keyring or KWallet). Sign in to a desktop session, or start a session bus and keyring for this user. AgentLink does not store credentials in plain text."
+        : "No Secret Service credential store (such as GNOME Keyring or KWallet) is running or unlocked for this user. Start and unlock one, then retry. AgentLink does not store credentials in plain text.",
+      options,
+    );
+    this.name = "LinuxCredentialStoreUnavailableError";
+  }
+}
+
 export interface KeychainSecretStorageOptions {
   service?: string;
   account: string;
   /**
-   * Require a specific Linux credential store. When omitted, the native
-   * library's default applies: Secret Service, silently falling back to the
-   * kernel keyring, which does not survive a reboot. When set, an unavailable
-   * store fails instead of falling back. Ignored on other platforms.
+   * The Linux credential store to require. Defaults to
+   * `DEFAULT_KEYCHAIN_LINUX_STORE` (Secret Service). An unavailable store
+   * fails with `LinuxCredentialStoreUnavailableError` instead of falling
+   * back. Pass `"keyutils"` to opt into the kernel keyring, which does not
+   * survive a reboot. Ignored on other platforms.
    */
   linuxStore?: KeychainLinuxStore;
   /**
@@ -57,11 +92,17 @@ export async function createKeychainSecretStorage(
   const service = options.service ?? AGENTLINK_SHARED_KEYCHAIN_SERVICE;
   const account = requireSegment(options.account, "account");
   const { AsyncEntry } = await import("@napi-rs/keyring");
-  const nativeEntry = options.linuxStore
-    ? new AsyncEntry(service, account, {
-        linux: { store: options.linuxStore },
-      })
+  const linuxStore =
+    process.platform === "linux"
+      ? (options.linuxStore ?? DEFAULT_KEYCHAIN_LINUX_STORE)
+      : options.linuxStore;
+  const asyncEntry = linuxStore
+    ? new AsyncEntry(service, account, { linux: { store: linuxStore } })
     : new AsyncEntry(service, account);
+  const nativeEntry: KeychainEntry =
+    process.platform === "linux" && linuxStore === "secret-service"
+      ? withSecretServiceDiagnostics(asyncEntry)
+      : asyncEntry;
   const helperPath =
     options.credentialsHelperPath === null
       ? undefined
@@ -225,6 +266,58 @@ function withDirectFallback(
     setPassword: (value) => run((entry) => entry.setPassword(value)),
     deletePassword: () => run((entry) => entry.deletePassword()),
   };
+}
+
+/**
+ * Report a missing Secret Service as one typed, actionable error. Without a
+ * session bus the native call can only fail, so skip it. Other native errors
+ * that name the Secret Service or D-Bus are wrapped with their cause kept.
+ */
+function withSecretServiceDiagnostics(entry: KeychainEntry): KeychainEntry {
+  const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (!(await hasSessionBus())) {
+      throw new LinuxCredentialStoreUnavailableError("no_session_bus");
+    }
+    try {
+      return await operation();
+    } catch (error) {
+      if (isSecretServiceUnavailable(error)) {
+        throw new LinuxCredentialStoreUnavailableError(
+          "secret_service_unavailable",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  };
+  return {
+    getPassword: () => run(() => entry.getPassword()),
+    setPassword: (value) => run(() => entry.setPassword(value)),
+    deletePassword: () => run(() => entry.deletePassword()),
+  };
+}
+
+async function hasSessionBus(): Promise<boolean> {
+  if (process.env.DBUS_SESSION_BUS_ADDRESS?.trim()) return true;
+  const runtimeDirectory =
+    process.env.XDG_RUNTIME_DIR?.trim() ||
+    (typeof process.getuid === "function"
+      ? `/run/user/${process.getuid()}`
+      : undefined);
+  if (!runtimeDirectory) return false;
+  try {
+    return (await fs.stat(path.join(runtimeDirectory, "bus"))).isSocket();
+  } catch {
+    return false;
+  }
+}
+
+const SECRET_SERVICE_UNAVAILABLE_PATTERN =
+  /org\.freedesktop\.(secrets|DBus\.Error)|ServiceUnknown|secret service|D-?Bus|Couldn't access platform secure storage/i;
+
+function isSecretServiceUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return SECRET_SERVICE_UNAVAILABLE_PATTERN.test(message);
 }
 
 async function readRevision(revisionPath: string): Promise<string | null> {
