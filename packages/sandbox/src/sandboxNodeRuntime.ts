@@ -11,6 +11,12 @@ const NODE_PTY_RELATIVE_PATH = path.join(
 );
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
+/**
+ * The oldest Node.js the sandbox helpers run on. Node 18 lacks
+ * `Array.prototype.toReversed` (Ubuntu 24.04 still packages 18). The sandbox
+ * runtime declares 22.12 or later; 20 is the oldest verified end to end.
+ */
+export const MIN_SANDBOX_NODE_MAJOR_VERSION = 20;
 const STANDARD_NODE_PATHS = [
   "/opt/homebrew/bin/node",
   "/usr/local/bin/node",
@@ -112,7 +118,11 @@ async function defaultProbe(
 const nodePtyRoot = process.argv[1];
 const expectedArchitecture = process.argv[2];
 const expectedPlatform = process.argv[3];
+const minimumMajor = Number(process.argv[4]);
 if (process.versions.electron) throw new Error("Electron is not a standalone Node runtime");
+if (Number(process.versions.node.split(".")[0]) < minimumMajor) {
+  throw new Error("Node.js " + minimumMajor + " or later is required, found " + process.version);
+}
 if (process.platform !== expectedPlatform) throw new Error("expected a " + expectedPlatform + " Node runtime");
 if (process.arch !== expectedArchitecture) {
   throw new Error("expected architecture " + expectedArchitecture + ", received " + process.arch);
@@ -142,7 +152,14 @@ terminal.onExit(({ exitCode, signal }) => {
     const output = await new Promise<string>((resolve, reject) => {
       execFile(
         executable,
-        ["-e", script, nodePtyRoot, architecture, platform],
+        [
+          "-e",
+          script,
+          nodePtyRoot,
+          architecture,
+          platform,
+          String(MIN_SANDBOX_NODE_MAJOR_VERSION),
+        ],
         {
           timeout: DEFAULT_PROBE_TIMEOUT_MS,
           maxBuffer: MAX_PROBE_OUTPUT_BYTES,
@@ -255,7 +272,7 @@ export async function resolveSandboxNodeRuntime(
   throw new SandboxNodeRuntimeUnavailableError(
     configured
       ? `The configured AgentLink Terminal Node runtime is unavailable or incompatible: ${configured}`
-      : `AgentLink Terminal requires a compatible standalone Node.js runtime. No compatible runtime was found in VS Code's environment or standard ${platform === "linux" ? "Linux" : "macOS"} locations.`,
+      : `AgentLink Terminal requires a compatible standalone Node.js ${MIN_SANDBOX_NODE_MAJOR_VERSION} or later. No compatible runtime was found in VS Code's environment or standard ${platform === "linux" ? "Linux" : "macOS"} locations.`,
     attempts,
   );
 }

@@ -205,11 +205,15 @@ On local Linux x64 and arm64 hosts (glibc, not Alpine), the AgentLink Terminal r
 
 On local Linux x64 and arm64 hosts (glibc), sandboxed commands (Approve for Me commands and requests that need the sandbox) run under bubblewrap when the host passes AgentLink's sandbox check. The result reports `route: "sandbox"`, `backend: "bubblewrap"` and `routeReason` `verified-local-linux`. The check needs:
 
-- `/usr/bin/bwrap` (bubblewrap 0.4 or newer), `socat` in `/usr/bin` or `/bin`, and ripgrep (VS Code's bundled `rg`, or `/usr/bin/rg`).
+- `/usr/bin/bwrap` (bubblewrap 0.4 or newer), `socat` in `/usr/bin` or `/bin`, and ripgrep (VS Code's bundled `rg`, or `/usr/bin/rg`). Symlinked installs such as Debian 13's `socat` are fine.
+- The `which` command (`/usr/bin/which` or `/bin/which`), which the sandbox uses to find ripgrep. Minimal Fedora and Arch installs leave it out: install the `which` package.
 - The `apply-seccomp` helper that ships in Linux VSIXs.
+- A standalone Node.js 20 or later for the sandbox helper (see `agentlink.terminal.nodePath`). Ubuntu 24.04 packages Node 18, which is too old, so install a newer Node there.
 - Unprivileged user namespaces. Ubuntu 23.10 and later restrict them through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), which stops the sandbox. Only a host-wide sysctl change lifts that, so AgentLink reports it and leaves the decision to you.
 
 The check runs once per window and logs each result, with a fix, to the AgentLink output channel. When it fails, commands fall back as if there were no sandbox: Approve for Me commands need a one-shot native approval and run in a VS Code terminal (`routeReason` `runtime-unavailable`), and sandbox-only requests are blocked with `sandbox_diagnostic.category` `linux_sandbox_prerequisites_missing`. Reload the window after fixing the host.
+
+Tested on arm64 with Debian 13, Ubuntu 24.04 (with Node 22), Fedora 42 and Arch Linux ARM: each passed the attestation and confinement checks once unprivileged user namespaces were allowed, and refused cleanly while Ubuntu's AppArmor restriction was on.
 
 The Linux sandbox differs from macOS:
 

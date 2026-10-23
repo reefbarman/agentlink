@@ -2,14 +2,57 @@ import {
   LINUX_BWRAP_PATH,
   LinuxSandboxUnavailableError,
   bindLinuxProxyCredentials,
+  isLinuxSandboxExecutableFile,
   isLinuxSandboxRuntimeDescriptor,
   linuxApplySeccompPath,
   linuxSandboxRuntimeConfig,
   resolveLinuxSandboxTools,
 } from "./sandbox-linux-runtime.mjs";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+
+test("tool check follows symlinks to executable files only", async () => {
+  // Debian 13 installs /usr/bin/socat as a symlink to socat1.
+  const root = await mkdtemp(path.join(os.tmpdir(), "linux-tools-"));
+  try {
+    const tool = path.join(root, "socat1");
+    await writeFile(tool, "#!/bin/sh\n");
+    await chmod(tool, 0o755);
+    await symlink("socat1", path.join(root, "socat"));
+    const plain = path.join(root, "plain");
+    await writeFile(plain, "data");
+    await chmod(plain, 0o644);
+    await symlink("plain", path.join(root, "plain-link"));
+    await mkdir(path.join(root, "dir"));
+    await symlink("missing", path.join(root, "dangling"));
+
+    assert.equal(isLinuxSandboxExecutableFile(tool), true);
+    assert.equal(isLinuxSandboxExecutableFile(path.join(root, "socat")), true);
+    assert.equal(isLinuxSandboxExecutableFile(plain), false);
+    assert.equal(
+      isLinuxSandboxExecutableFile(path.join(root, "plain-link")),
+      false,
+    );
+    assert.equal(isLinuxSandboxExecutableFile(path.join(root, "dir")), false);
+    assert.equal(
+      isLinuxSandboxExecutableFile(path.join(root, "dangling")),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 const runtimeRoot = "/ext/dist/sandbox-runtime";
 const tools = Object.freeze({
@@ -66,6 +109,7 @@ test("resolves fixed tool paths and the staged apply-seccomp", () => {
     LINUX_BWRAP_PATH,
     "/bin/socat",
     "/usr/bin/rg",
+    "/bin/which",
     linuxApplySeccompPath(runtimeRoot, "arm64"),
   ]);
   const resolved = resolveLinuxSandboxTools({
@@ -119,9 +163,10 @@ test("refuses when any tool, including apply-seccomp, is missing", () => {
       }),
     (error) =>
       error instanceof LinuxSandboxUnavailableError &&
-      error.missing.length === 3 &&
+      error.missing.length === 4 &&
       /socat/.test(error.message) &&
       /ripgrep/.test(error.message) &&
+      /which/.test(error.message) &&
       /apply-seccomp/.test(error.message),
   );
   assert.throws(

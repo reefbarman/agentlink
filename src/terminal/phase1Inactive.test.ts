@@ -117,7 +117,7 @@ describe("Phase 1 gated activation boundary", () => {
       scope: "machine",
       default: "",
       description:
-        "Optional absolute path to a standalone Node.js executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS installation locations. Electron is not supported.",
+        "Optional absolute path to a standalone Node.js 20 or later executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS and Linux installation locations. Electron is not supported.",
     });
     expect(properties["agentlink.terminal.environmentPolicy"]).toMatchObject({
       type: "object",

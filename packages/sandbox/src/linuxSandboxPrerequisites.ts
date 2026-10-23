@@ -1,4 +1,4 @@
-import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -14,6 +14,7 @@ export type LinuxSandboxCheckId =
   | "bubblewrap"
   | "socat"
   | "ripgrep"
+  | "which"
   | "seccomp-helper"
   | "namespaces";
 
@@ -57,6 +58,9 @@ export interface CheckLinuxSandboxPrerequisitesOptions {
 export const LINUX_SANDBOX_BWRAP_PATH = "/usr/bin/bwrap";
 const SOCAT_CANDIDATES = ["/usr/bin/socat", "/bin/socat"] as const;
 const RIPGREP_CANDIDATES = ["/usr/bin/rg"] as const;
+// The sandbox runtime finds ripgrep by running `which`, which minimal Fedora
+// and Arch installs leave out.
+const WHICH_CANDIDATES = ["/usr/bin/which", "/bin/which"] as const;
 const PROBE_TIMEOUT_MS = 10_000;
 const MAX_PROBE_OUTPUT_BYTES = 16 * 1024;
 
@@ -73,9 +77,11 @@ export function linuxSandboxApplySeccompPath(
   );
 }
 
+// Follows symlinks like scripts/sandbox-linux-runtime.mjs: Debian 13 installs
+// `/usr/bin/socat` as a link to `socat1`.
 function defaultIsExecutableFile(filePath: string): boolean {
   try {
-    if (!lstatSync(filePath).isFile()) return false;
+    if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, constants.X_OK);
     return true;
   } catch {
@@ -283,6 +289,21 @@ export async function checkLinuxSandboxPrerequisites(
           status: "fail",
           detail: "ripgrep is not available.",
           fix: installFix(manager, ids, ["ripgrep"]),
+        },
+  );
+
+  const whichPath = WHICH_CANDIDATES.find(isExecutableFile);
+  checks.push(
+    whichPath
+      ? { id: "which", status: "pass", detail: whichPath }
+      : {
+          id: "which",
+          status: "fail",
+          detail:
+            "The `which` command is not installed. The sandbox uses it to find ripgrep.",
+          fix: installFix(manager, ids, [
+            manager === "apt" ? "debianutils" : "which",
+          ]),
         },
   );
 

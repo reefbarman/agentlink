@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  MIN_SANDBOX_NODE_MAJOR_VERSION,
   SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
   SandboxHelperClient,
   checkLinuxSandboxPrerequisites,
@@ -312,6 +313,18 @@ export class AskAgentSandboxWorkspace {
       const check =
         this.options.checkLinuxPrerequisites ?? checkLinuxSandboxPrerequisites;
       const requestedRipgrep = this.options.ripgrepPath;
+      // The helper runs on this process's Node unless one is configured;
+      // Electron's is new enough, but distro Node (Ubuntu 24.04: 18) may not be.
+      const nodeMajor = Number(process.versions.node.split(".")[0]);
+      if (
+        !this.options.nodeExecutable &&
+        nodeMajor < MIN_SANDBOX_NODE_MAJOR_VERSION
+      ) {
+        this.options.log?.(
+          `[ask-agent-sandbox] Linux sandbox needs Node.js ${MIN_SANDBOX_NODE_MAJOR_VERSION} or later; this helper runs ${process.version}.`,
+        );
+        return { available: false, ripgrepPath: undefined };
+      }
       try {
         const result = await check({
           runtimeRoot: path.join(

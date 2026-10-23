@@ -14,6 +14,7 @@ const allTools = [
   LINUX_SANDBOX_BWRAP_PATH,
   "/usr/bin/socat",
   "/usr/bin/rg",
+  "/usr/bin/which",
   applySeccomp,
 ];
 
@@ -62,6 +63,7 @@ describe("checkLinuxSandboxPrerequisites", () => {
       "bubblewrap",
       "socat",
       "ripgrep",
+      "which",
       "seccomp-helper",
       "namespaces",
     ]);
@@ -101,6 +103,12 @@ describe("checkLinuxSandboxPrerequisites", () => {
       "Run `sudo dnf install bubblewrap`.",
     );
     expect(check(fedora, "namespaces")?.status).toBe("skipped");
+    // Minimal Fedora and Arch leave out `which`, which the runtime uses to
+    // find ripgrep. Debian ships it in debianutils.
+    expect(check(fedora, "which")?.fix).toBe("Run `sudo dnf install which`.");
+    expect(check(ubuntu, "which")?.fix).toBe(
+      "Run `sudo apt install debianutils`.",
+    );
 
     const steamos = await checkLinuxSandboxPrerequisites(
       harness({
@@ -119,6 +127,7 @@ describe("checkLinuxSandboxPrerequisites", () => {
         executables: [
           LINUX_SANDBOX_BWRAP_PATH,
           "/usr/bin/socat",
+          "/bin/which",
           applySeccomp,
           hostRipgrep,
         ],

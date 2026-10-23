@@ -6,7 +6,7 @@
 // command creating unix sockets). Every tool path is fixed or host-provided:
 // nothing is looked up on PATH, and a missing tool refuses the launch.
 
-import { accessSync, constants, lstatSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 
 import path from "node:path";
 
@@ -16,6 +16,11 @@ export const LINUX_SOCAT_CANDIDATES = Object.freeze([
   "/bin/socat",
 ]);
 export const LINUX_RIPGREP_CANDIDATES = Object.freeze(["/usr/bin/rg"]);
+/** The sandbox runtime finds ripgrep by running `which`. */
+export const LINUX_WHICH_CANDIDATES = Object.freeze([
+  "/usr/bin/which",
+  "/bin/which",
+]);
 /** Host-provided ripgrep, for example VS Code's bundled `rg`. */
 export const LINUX_RIPGREP_ENVIRONMENT_KEY = "AGENTLINK_SANDBOX_RIPGREP_PATH";
 
@@ -54,9 +59,15 @@ export class LinuxSandboxUnavailableError extends Error {
   }
 }
 
-function defaultIsExecutableFile(filePath) {
+/**
+ * True for an executable regular file. Symlinks are followed because distros
+ * install tools that way (Debian 13's `/usr/bin/socat` links to `socat1`); the
+ * attestation fingerprint binds the resolved target, so a retargeted link
+ * changes it.
+ */
+export function isLinuxSandboxExecutableFile(filePath) {
   try {
-    const metadata = lstatSync(filePath);
+    const metadata = statSync(filePath);
     if (!metadata.isFile()) return false;
     accessSync(filePath, constants.X_OK);
     return true;
@@ -84,7 +95,7 @@ export function resolveLinuxSandboxTools({
   runtimeRoot,
   architecture = process.arch,
   environment = process.env,
-  isExecutableFile = defaultIsExecutableFile,
+  isExecutableFile = isLinuxSandboxExecutableFile,
 }) {
   const missing = [];
   if (architecture !== "x64" && architecture !== "arm64") {
@@ -105,6 +116,9 @@ export function resolveLinuxSandboxTools({
       ? hostRipgrep
       : LINUX_RIPGREP_CANDIDATES.find(isExecutableFile);
   if (!ripgrepPath) missing.push("ripgrep is not available");
+  if (!LINUX_WHICH_CANDIDATES.some(isExecutableFile)) {
+    missing.push("the which command is not installed");
+  }
   const applySeccompPath = linuxApplySeccompPath(runtimeRoot, architecture);
   if (!isExecutableFile(applySeccompPath)) {
     missing.push(
