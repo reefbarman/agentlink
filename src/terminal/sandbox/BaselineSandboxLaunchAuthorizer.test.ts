@@ -190,13 +190,14 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         await realpath(test.hostTemporaryDirectory),
       );
       // Linux has no /private alias for /tmp.
+      const macos = process.platform === "darwin";
+      const temporaryRoots = macos ? ["/tmp", "/private/tmp"] : ["/tmp"];
       expect(policy.writableRoots).toEqual(
-        expect.arrayContaining(
-          process.platform === "darwin" ? ["/tmp", "/private/tmp"] : ["/tmp"],
-        ),
+        expect.arrayContaining(temporaryRoots),
       );
-      if (process.platform !== "darwin") {
+      if (!macos) {
         expect(policy.writableRoots).not.toContain("/private/tmp");
+        expect(policy.deniedWriteRoots).not.toContain("/private/tmp/claude");
       }
       expect(policy.readableRoots).toEqual(["/"]);
       expect(policy.deniedWriteRoots).toEqual(
@@ -210,8 +211,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
           path.join(canonicalWorkspace, "AGENTS.md"),
           path.join(canonicalWorkspace, "AGENTS.local.md"),
           path.join(canonicalWorkspace, "CLAUDE.md"),
-          "/private/tmp/claude",
-          "/tmp/claude",
+          ...temporaryRoots.map((root) => `${root}/claude`),
         ]),
       );
       expect(policy.protectedReadOnlyRoots).toEqual(
