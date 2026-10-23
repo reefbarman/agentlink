@@ -62,8 +62,16 @@ export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
   network: SandboxNetworkPolicy;
   protectedRoots: string[];
   structurallyProtectedRoots: string[];
+  /** PTY size; ignored for `stdio: "pipe"` launches. */
   dimensions: TerminalDimensions;
+  /**
+   * Run with stdin closed and separate stdout/stderr pipes instead of a PTY.
+   * Omitted for terminal launches.
+   */
+  stdio?: "pipe";
 }
+
+export type SandboxOutputStream = "stdout" | "stderr";
 
 export type SandboxHelperControlFrame =
   | SandboxHelperLaunchRequest
@@ -88,7 +96,12 @@ export type SandboxHelperEventFrame =
       backend: string;
       backendVersion?: string;
     })
-  | (SandboxCommandIdentity & { type: "data"; data: string })
+  | (SandboxCommandIdentity & {
+      type: "data";
+      data: string;
+      /** Present only for `stdio: "pipe"` launches. */
+      stream?: SandboxOutputStream;
+    })
   | (SandboxCommandIdentity & {
       type: "cwd";
       cwd: string;
@@ -402,7 +415,9 @@ export function isSandboxHelperControlFrame(
       "protectedRoots",
       "structurallyProtectedRoots",
       "dimensions",
+      "stdio",
     ]) &&
+    (value.stdio === undefined || value.stdio === "pipe") &&
     value.version === SANDBOX_HELPER_PROTOCOL_VERSION &&
     isBoundedString(value.command, MAX_SANDBOX_HELPER_DATA_BYTES) &&
     value.command.length > 0 &&
@@ -431,8 +446,11 @@ export function isSandboxHelperEventFrame(
   const identityKeys = ["type", "channelId", "commandId", "generation"];
   if (value.type === "data") {
     return (
-      hasOnlyKeys(value, [...identityKeys, "data"]) &&
-      isBoundedString(value.data, MAX_SANDBOX_HELPER_DATA_BYTES)
+      hasOnlyKeys(value, [...identityKeys, "data", "stream"]) &&
+      isBoundedString(value.data, MAX_SANDBOX_HELPER_DATA_BYTES) &&
+      (value.stream === undefined ||
+        value.stream === "stdout" ||
+        value.stream === "stderr")
     );
   }
   if (value.type === "cwd") {

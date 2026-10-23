@@ -12,3 +12,5 @@ export * from "./gitMetadataProtection.js";
 export * from "./sandboxNodeRuntime.js";
 export * from "./SandboxBehaviorAttestationService.js";
 export * from "./SandboxCapabilityAuthority.js";
+export * from "./workspaceSandboxPolicy.js";
+export * from "./sandboxedProcessLauncher.js";

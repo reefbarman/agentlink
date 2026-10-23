@@ -1,6 +1,7 @@
 import {
   createSandboxInteractiveHelper,
   parseSandboxInteractiveControl,
+  spawnPipedProcess,
 } from "./sandbox-interactive-helper.mjs";
 import {
   link,
@@ -17,9 +18,11 @@ import {
   validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
 
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import assert from "node:assert/strict";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import { tmpdir } from "node:os";
 
@@ -1729,4 +1732,121 @@ test("closes public-proxy when runtime initialization fails", async (t) => {
   assert.equal(harness.calls.cleanup, 1);
   assert.equal(harness.calls.reset, 1);
   assert.equal(harness.calls.proxyClose, 1);
+});
+
+test("accepts only the pipe value for the optional stdio launch field", () => {
+  assert.deepEqual(
+    parseSandboxInteractiveControl(launch({ stdio: "pipe" })),
+    launch({ stdio: "pipe" }),
+  );
+  for (const stdio of ["pty", "inherit", undefined]) {
+    assert.throws(
+      () => parseSandboxInteractiveControl(launch({ stdio })),
+      /invalid sandbox helper launch frame/,
+    );
+  }
+});
+
+function fakePipedChild(pid) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = [];
+  child.kill = (signal) => child.killed.push(signal);
+  child.finish = (code, signal) => {
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", code, signal);
+  };
+  return child;
+}
+
+test("piped launches spawn without a PTY and tag output streams", async (t) => {
+  const spawned = [];
+  const harness = createHarness({
+    dependencyOverrides: {
+      async loadNodePty() {
+        throw new Error("piped launches must not load node-pty");
+      },
+      spawnProcess(command, args, options) {
+        const child = fakePipedChild(5151);
+        spawned.push({ command, args, options, child });
+        return child;
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch({ stdio: "pipe" }));
+  await harness.waitFor(() => spawned.length === 1, "piped spawn");
+  const [{ command, args, options, child }] = spawned;
+  assert.equal(command, "/bin/bash");
+  assert.equal(args[0], "-c");
+  assert.match(args[1], /sandbox-exec/);
+  assert.equal(options.detached, true);
+  assert.deepEqual(options.stdio, ["ignore", "pipe", "pipe"]);
+  assert.equal(options.cwd, "/private/tmp/agentlink-interactive");
+  assert.equal(harness.calls.initialize[0].allowPty, false);
+
+  child.stdout.write("out\n");
+  child.stderr.write("err\n");
+  await harness.waitFor(
+    () =>
+      harness.frames().filter((frame) => frame.type === "data").length === 2,
+    "tagged data frames",
+  );
+  const data = harness.frames().filter((frame) => frame.type === "data");
+  assert.deepEqual(
+    data.map(({ data: text, stream }) => [stream, text]).sort(),
+    [
+      ["stderr", "err\n"],
+      ["stdout", "out\n"],
+    ],
+  );
+  assert.equal(harness.frames()[0].type, "ready");
+  assert.equal(harness.frames()[0].pgid, 5151);
+
+  harness.send({ ...identity, type: "terminate" });
+  await harness.waitFor(() => harness.signals.length > 0, "terminate");
+  assert.deepEqual(harness.signals[0], [-5151, "SIGTERM", "group"]);
+
+  child.finish(null, "SIGTERM");
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "exit"),
+    "exit frame",
+  );
+  const exit = harness.frames().find((frame) => frame.type === "exit");
+  assert.equal(exit.exitCode, undefined);
+  assert.equal(exit.signal, 15);
+});
+
+test("PTY data frames carry no stream tag", async (t) => {
+  const harness = createHarness({ initialData: "pty output" });
+  t.after(() => harness.helper.close());
+  harness.send(launch());
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "data"),
+  );
+  const frame = harness.frames().find((entry) => entry.type === "data");
+  assert.equal(Object.hasOwn(frame, "stream"), false);
+});
+
+test("spawnPipedProcess keeps stdout and stderr separate with stdin closed", async () => {
+  const piped = spawnPipedProcess(
+    spawn,
+    [
+      "/bin/sh",
+      "-c",
+      'printf out; printf err >&2; read line || printf " eof" >&2; exit 7',
+    ],
+    { cwd: tmpdir(), env: { PATH: "/usr/bin:/bin" } },
+  );
+  const output = { stdout: "", stderr: "" };
+  piped.onData((data, stream) => {
+    output[stream] += data;
+  });
+  const exit = await new Promise((resolve) => piped.onExit(resolve));
+  assert.deepEqual(output, { stdout: "out", stderr: "err eof" });
+  assert.deepEqual(exit, { exitCode: 7 });
 });

@@ -18,9 +18,11 @@ import {
 
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
 const PROTOCOL_VERSION = 3;
@@ -141,6 +143,8 @@ export function parseSandboxInteractiveControl(
     throw new Error("invalid sandbox helper control frame");
   }
   if (value.type === "launch") {
+    // `stdio: "pipe"` is optional: without it the command runs on a PTY.
+    const hasStdio = Object.hasOwn(value, "stdio");
     if (
       !hasExactKeys(value, [
         ...IDENTITY_KEYS,
@@ -154,7 +158,9 @@ export function parseSandboxInteractiveControl(
         "protectedRoots",
         "structurallyProtectedRoots",
         "dimensions",
+        ...(hasStdio ? ["stdio"] : []),
       ]) ||
+      (hasStdio && value.stdio !== "pipe") ||
       value.version !== PROTOCOL_VERSION ||
       !isBoundedString(value.command) ||
       value.command.length === 0 ||
@@ -354,6 +360,66 @@ function* splitData(data) {
   if (chunk) yield chunk;
 }
 
+/**
+ * Present a piped child process through the subset of the node-pty terminal
+ * interface the helper uses. stdin is closed, so commands that prompt get EOF
+ * instead of waiting; stdout and stderr stay separate.
+ */
+export function spawnPipedProcess(spawnProcess, argv, { cwd, env }) {
+  const child = spawnProcess(argv[0], argv.slice(1), {
+    cwd,
+    env,
+    detached: true,
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  // Spawn failures surface as a missing pid below; never crash the helper.
+  child.on("error", () => undefined);
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  return {
+    get pid() {
+      return child.pid;
+    },
+    onData(listener) {
+      const stdout = (data) => listener(data, "stdout");
+      const stderr = (data) => listener(data, "stderr");
+      child.stdout.on("data", stdout);
+      child.stderr.on("data", stderr);
+      return {
+        dispose() {
+          child.stdout.off("data", stdout);
+          child.stderr.off("data", stderr);
+        },
+      };
+    },
+    onExit(listener) {
+      // `close` waits for both output pipes, so no output follows the exit.
+      const onClose = (exitCode, signal) =>
+        listener({
+          ...(exitCode === null ? {} : { exitCode }),
+          ...(signal ? { signal: osConstants.signals[signal] } : {}),
+        });
+      child.once("close", onClose);
+      return { dispose: () => child.off("close", onClose) };
+    },
+    pause() {
+      child.stdout.pause();
+      child.stderr.pause();
+    },
+    resume() {
+      child.stdout.resume();
+      child.stderr.resume();
+    },
+    write() {},
+    resize() {},
+    kill(signal) {
+      child.kill(signal);
+    },
+  };
+}
+
 function signalProcessGroup(kill, pgid, signal, terminal) {
   try {
     kill(-pgid, signal);
@@ -410,6 +476,7 @@ function defaultDependencies() {
     async loadNodePty() {
       return import("node-pty");
     },
+    spawnProcess: spawn,
   };
 }
 
@@ -601,6 +668,7 @@ export function createSandboxInteractiveHelper(options = {}) {
       structurallyProtectedRoots: frame.structurallyProtectedRoots,
     });
     const identity = identityOf(frame);
+    const piped = frame.stdio === "pipe";
     const environment = buildSandboxEnvironment(request.environment);
     let networkProxies;
     const session = {
@@ -757,7 +825,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         // sandbox-exec profile: large skill/rule trees can otherwise exceed
         // macOS's argv limit before the command starts.
         filesystem,
-        allowPty: true,
+        allowPty: !piped,
         allowAppleEvents: false,
         // Go TLS clients on macOS (gh, gcloud, terraform, kubectl) verify
         // certificates through com.apple.trustd.agent. Allow that lookup only
@@ -785,7 +853,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         request,
         networkProxies,
       );
-      const nodePty = await dependencies.loadNodePty();
+      const nodePty = piped ? undefined : await dependencies.loadNodePty();
       const protectedRoots = await dependencies.prepareProtectedRoots(
         request.protectedRoots,
       );
@@ -833,9 +901,14 @@ export function createSandboxInteractiveHelper(options = {}) {
         });
       let terminal;
       try {
-        terminal = spawnTerminal();
+        terminal = piped
+          ? spawnPipedProcess(dependencies.spawnProcess, authenticatedArgv, {
+              cwd,
+              env: environment,
+            })
+          : spawnTerminal();
       } catch (error) {
-        if (!isLegacyPosixSpawnError(error)) throw error;
+        if (piped || !isLegacyPosixSpawnError(error)) throw error;
         await dependencies.delay(LEGACY_POSIX_SPAWN_RETRY_DELAY_MS);
         if (session.terminationRequested) {
           throw new Error("sandbox helper launch cancelled before PTY retry");
@@ -855,7 +928,13 @@ export function createSandboxInteractiveHelper(options = {}) {
       }
       session.terminal = terminal;
       session.pgid = terminal.pid;
-      session.dataSubscription = terminal.onData((data) => {
+      // Piped launches tag each chunk with its stream; PTY frames are unchanged.
+      const dataFrame = (chunk, stream) => ({
+        type: "data",
+        data: chunk,
+        ...(stream ? { stream } : {}),
+      });
+      session.dataSubscription = terminal.onData((data, stream) => {
         if (session.exited || session.failed) return;
         if (!session.ready) {
           const dataBytes = Buffer.byteLength(data, "utf8");
@@ -865,12 +944,12 @@ export function createSandboxInteractiveHelper(options = {}) {
             );
             return;
           }
-          session.pendingData.push(data);
+          session.pendingData.push({ data, stream });
           session.pendingDataBytes += dataBytes;
           return;
         }
         for (const chunk of splitData(data)) {
-          writeFrame(identity, { type: "data", data: chunk });
+          writeFrame(identity, dataFrame(chunk, stream));
         }
       });
       const violationStore = runtime.getSandboxViolationStore?.();
@@ -941,10 +1020,10 @@ export function createSandboxInteractiveHelper(options = {}) {
         backend: "seatbelt",
       });
       session.ready = true;
-      for (const data of session.pendingData.splice(0)) {
+      for (const { data, stream } of session.pendingData.splice(0)) {
         session.pendingDataBytes -= Buffer.byteLength(data, "utf8");
         for (const chunk of splitData(data)) {
-          if (!writeFrame(identity, { type: "data", data: chunk })) break;
+          if (!writeFrame(identity, dataFrame(chunk, stream))) break;
         }
         if (session.failed) break;
       }

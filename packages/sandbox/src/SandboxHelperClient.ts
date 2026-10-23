@@ -270,7 +270,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
 
     const commandEvent: SandboxCommandEvent =
       event.type === "data"
-        ? { type: "data", data: event.data }
+        ? {
+            type: "data",
+            data: event.data,
+            ...(event.stream ? { stream: event.stream } : {}),
+          }
         : event.type === "cwd"
           ? { type: "cwd", cwd: event.cwd, nonce: event.nonce }
           : event.type === "network-request"

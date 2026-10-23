@@ -102,7 +102,7 @@ export interface SandboxCommandExit {
 }
 
 export type SandboxCommandEvent =
-  | { type: "data"; data: string }
+  | { type: "data"; data: string; stream?: "stdout" | "stderr" }
   | { type: "cwd"; cwd: string; nonce: string }
   | { type: "violation"; violation: SandboxViolation }
   | { type: "network-request"; request: SandboxManagedNetworkDestination };

@@ -16,6 +16,7 @@ export * from "./projectIdentity.js";
 export * from "./promptProfile.js";
 export * from "./sessionInteractionTools.js";
 export * from "./sharedMcpTools.js";
+export * from "./sandboxedProcessLauncher.js";
 export * from "./turnFailureDetail.js";
 export * from "./webTools.js";
 export * from "./workspaceExecutionBackend.js";

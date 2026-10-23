@@ -8,6 +8,7 @@ const SOURCE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const IMPORT_SPECIFIER =
   /(?:^|\n)\s*(?:import|export)\s[^"']*?from\s+["']([^"']+)["']/gu;
 const ALLOWED_PACKAGES = new Set([
+  "@agentlink/node-host",
   "@agentlink/protocol",
   "picomatch",
   "vitest",

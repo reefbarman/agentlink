@@ -21,6 +21,9 @@
   "references": [
     {
       "path": "../protocol"
+    },
+    {
+      "path": "../node-host"
     }
   ]
 }

@@ -36,6 +36,8 @@ export interface SandboxPolicyCompileRequest extends SandboxCommandIdentity {
   shell: string;
   dimensions: TerminalDimensions;
   authorization: SandboxLaunchAuthorization;
+  /** Launch on pipes instead of a PTY; see `SandboxHelperLaunchRequest`. */
+  stdio?: "pipe";
 }
 
 function canonicalAbsolutePath(value: string, label: string): string {
@@ -255,6 +257,7 @@ export function compileSandboxHelperLaunchRequest(
     protectedRoots,
     structurallyProtectedRoots,
     dimensions: request.dimensions,
+    ...(request.stdio ? { stdio: request.stdio } : {}),
   };
   if (!isSandboxHelperControlFrame(launch)) {
     throw new Error("Compiled sandbox helper launch request is invalid");

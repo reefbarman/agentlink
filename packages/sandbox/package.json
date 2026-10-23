@@ -33,6 +33,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@agentlink/node-host": "0.28.1",
     "@agentlink/protocol": "0.28.1",
     "picomatch": "^4.0.5"
   },
