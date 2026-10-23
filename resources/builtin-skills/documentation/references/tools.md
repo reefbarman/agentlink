@@ -186,6 +186,18 @@ Output-filter checks distinguish balanced `$()` command substitutions used to co
 
 Exact command-tool parameters: [terminal tools](complete-reference.md#execute_command).
 
+### Ask Agent scratch folder (Desktop on macOS)
+
+Each Ask Agent chat in Desktop (and the Browser Ask Agent served by the same helper) has a private scratch folder at `~/.agentlink/ask-agent-sandboxes/<chat>/work`. It lets the agent analyse data, convert files and make charts without a project:
+
+- `execute_command` runs a non-interactive command in the scratch folder through the macOS sandbox. Commands can write only inside that chat's folder, cannot read your home folder or other chats, and have no network access, so `pip install` and similar installs fail. Background commands are not supported; `timeoutMs` defaults to 120 seconds (maximum 10 minutes). The parameters follow the standalone CLI's command tools rather than VS Code's terminal tools. No approval is asked because the sandbox is the boundary.
+- `get_command_output` reads a previous command's output by `commandId`.
+- `write_file` creates or replaces a file in the scratch folder (up to 5 MiB per write, 1 GiB per chat). It cannot write anywhere else or through links.
+- `present_files` gives you files from the scratch folder: PNG, JPEG, GIF and WebP images show inline, and other files (CSV, PDF, Markdown and so on) appear as file chips with a download button. Up to 10 files, 8 MiB each and 20 MiB per call.
+- `read_file`, `list_files` and `search_files` also read the scratch folder; relative paths resolve inside it.
+
+Files you attach to the chat are copied into `inputs/`. Deleting the chat deletes its folder. The tools are not offered on Linux or Windows, or when the packaged sandbox helper is missing. This is not a local shell: it cannot touch your projects or run with your normal permissions.
+
 ## Work with people and the session
 
 - `ask_user` asks structured questions. Host-authenticated human answers in VS Code and mirrored browser workspace chat can inform Guardian review of the matching session. The host binds the literal question, options, answer and note to its request and tool call; agent-authored question text is context, not independent human instructions. Coordinator replies, relays to another session and arbitrary tool output cannot create human authority. Rules, risk review and approvals remain in force. While a question card is open, **Chat input** sets it aside so the composer works as the normal chat input (for example to run `/mcp`); the question stays pending with its selections and draft kept, and **Back to question** returns to it.

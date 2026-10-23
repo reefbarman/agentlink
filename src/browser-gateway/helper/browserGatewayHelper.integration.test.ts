@@ -46,6 +46,7 @@ import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
 } from "./browserGatewayHelper.js";
+import { AskAgentSandboxWorkspace } from "./askAgentSandboxWorkspace.js";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
 import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
@@ -325,6 +326,8 @@ async function makeAskAgentToolLoopTestHarness(params: {
   standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
   /** Defaults to null so tests never read the developer's home folder. */
   askAgentInstructionsHomeDir?: string | null;
+  /** Defaults to null so tests never create real scratch folders. */
+  askAgentSandbox?: AskAgentSandboxWorkspace | null;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -375,6 +378,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       streamingMetrics: params.streamingMetrics,
       beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
       askAgentInstructionsHomeDir: params.askAgentInstructionsHomeDir ?? null,
+      askAgentSandbox: params.askAgentSandbox ?? null,
     },
   );
   helperServer.on("request", helper.handleRequest);
@@ -11213,6 +11217,98 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(assistant?.content).toContain("Attempting a forbidden action.");
     expect(assistant?.finalMarker).toBeUndefined();
     expect(receivedToolMessages.length).toBe(1);
+  });
+
+  it("runs commands in the chat's scratch folder and delivers presented files", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      // Unsandboxed launcher so the composition runs on every platform.
+      createProcessLauncher: () =>
+        workspaceHost.createLocalWorkspaceExecutionBackend(),
+    });
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (completionParams.length === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "sandbox-write",
+              name: "write_file",
+              input: { path: "notes.txt", content: "distinctive-sandbox-42" },
+            },
+            {
+              id: "sandbox-run",
+              name: "execute_command",
+              input: { command: "tr a-z A-Z < notes.txt > shout.txt" },
+            },
+            {
+              id: "sandbox-present",
+              name: "present_files",
+              input: { paths: ["shout.txt"] },
+            },
+          ],
+        };
+      }
+      return { text: "Here is your file.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    try {
+      const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({ text: "Shout my notes" }),
+      });
+      const body = (await send.json()) as {
+        snapshot: {
+          session: { foreground: { projectedMessages: ChatMessage[] } };
+        };
+      };
+      expect(send.ok).toBe(true);
+      expect(completionParams[0]?.tools?.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["execute_command", "write_file"]),
+      );
+      expect(completionParams[0]?.additionalInstructions).toContain(
+        "Sandboxed scratch folder",
+      );
+      const blocks = body.snapshot.session.foreground.projectedMessages.flatMap(
+        (message) => message.blocks ?? [],
+      );
+      const presented = blocks.find(
+        (block) => block.type === "tool_call" && block.id === "sandbox-present",
+      ) as { resultDocuments?: Array<{ name: string; data?: string }> };
+      expect(presented?.resultDocuments?.[0]?.name).toBe("shout.txt");
+      const run = blocks.find(
+        (block) => block.type === "tool_call" && block.id === "sandbox-run",
+      ) as { result?: string };
+      expect(run?.result).not.toContain("not_available");
+      const shouted = await fs.readFile(
+        path.join(
+          sandbox.workDirectory(
+            harness.helper["askAgentSessionStore"].getActiveSessionId(),
+          ),
+          "shout.txt",
+        ),
+        "utf8",
+      );
+      expect(shouted).toBe("DISTINCTIVE-SANDBOX-42");
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
   });
 
   it("requires approval before launching an Ask Agent project handoff", async () => {

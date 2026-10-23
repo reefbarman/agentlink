@@ -119,10 +119,11 @@ export function includesNodePty(target) {
 
 export function sandboxRuntimeStagePaths(
   target = resolveSandboxRuntimeTarget(),
+  withNodePty = includesNodePty(target),
 ) {
   return [
     ...HELPER_FILES.map((file) => `scripts/${file}`),
-    ...packageEntriesFor(target).map((entry) => entry.destination),
+    ...packageEntriesFor(withNodePty).map((entry) => entry.destination),
   ];
 }
 
@@ -130,8 +131,8 @@ export function sandboxRuntimeStagePaths(
 export const SANDBOX_RUNTIME_STAGE_PATHS =
   sandboxRuntimeStagePaths("darwin-arm64");
 
-function packageEntriesFor(target) {
-  return includesNodePty(target)
+function packageEntriesFor(withNodePty) {
+  return withNodePty
     ? [...PACKAGE_ENTRIES, ...DARWIN_NODE_PTY_ENTRIES]
     : PACKAGE_ENTRIES;
 }
@@ -219,8 +220,11 @@ export async function stageSandboxRuntime({
   repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
   destinationRoot = path.join(repoRoot, "dist", "sandbox-runtime"),
   target = resolveSandboxRuntimeTarget(),
+  // Hosts that only make piped sandbox launches (the Desktop Ask Agent
+  // helper) leave node-pty out; it is loaded only for PTY launches.
+  includeNodePty = includesNodePty(target),
 } = {}) {
-  const withNodePty = includesNodePty(target);
+  const withNodePty = includeNodePty && includesNodePty(target);
   await rm(destinationRoot, { recursive: true, force: true });
   await mkdir(destinationRoot, { recursive: true });
 
@@ -230,7 +234,7 @@ export async function stageSandboxRuntime({
       path.join(destinationRoot, "scripts", file),
     );
   }
-  for (const entry of packageEntriesFor(target)) {
+  for (const entry of packageEntriesFor(withNodePty)) {
     await copyEntry(
       await resolveEntrySource(repoRoot, entry.source),
       path.join(destinationRoot, entry.destination),
@@ -253,7 +257,7 @@ export async function stageSandboxRuntime({
   }
 
   const staged = [];
-  for (const relativePath of sandboxRuntimeStagePaths(target)) {
+  for (const relativePath of sandboxRuntimeStagePaths(target, withNodePty)) {
     const metadata = await stat(path.join(destinationRoot, relativePath));
     staged.push({
       path: relativePath,

@@ -133,6 +133,13 @@ export interface PrepareWorkspaceSandboxLaunchOptions {
    */
   readonly shareHostTemporaryDirectories?: boolean;
   /**
+   * Roots hidden from sandbox reads, such as the user's home folder. When
+   * set, only the workspace roots, the private per-command directories and
+   * `trustedRuntimeRoots` stay readable inside them. Defaults to none, which
+   * keeps the whole host readable.
+   */
+  readonly deniedReadRoots?: readonly string[];
+  /**
    * Verify caller-staged inline files. Runs after the private directories
    * exist, so a failure still cleans them up. Defaults to no inline files.
    */
@@ -570,7 +577,31 @@ export async function prepareWorkspaceSandboxLaunch(
     const structurallyProtectedRoots = uniqueSandboxRoots(
       gitProtection.flatMap((item) => item.structural),
     );
-    const readableRoots = ["/"];
+    const deniedReadRoots = uniqueSandboxRoots(
+      await Promise.all(
+        (options.deniedReadRoots ?? []).map(async (root) => {
+          if (!path.isAbsolute(root) || root.includes("\0")) {
+            throw new Error(
+              "Denied sandbox read roots must be absolute without NUL",
+            );
+          }
+          return await realpath(root).catch(() => path.resolve(root));
+        }),
+      ),
+    );
+    // The runtime re-allows `allowRead` entries inside denied roots, so a
+    // denied launch lists only what must stay readable there; everything
+    // outside the denied roots is readable by default.
+    const readableRoots =
+      deniedReadRoots.length > 0
+        ? uniqueSandboxRoots([
+            ...workspaceRoots,
+            directories.root,
+            ...(await Promise.all(
+              options.trustedRuntimeRoots.map((root) => realpath(root)),
+            )),
+          ])
+        : ["/"];
     const binding: SandboxLaunchBindingInput = {
       command: options.command,
       cwd,
@@ -608,7 +639,7 @@ export async function prepareWorkspaceSandboxLaunch(
           ...developmentTemporaryRoots,
           directories.root,
         ]),
-        deniedRoots: [],
+        deniedRoots: deniedReadRoots,
         deniedWriteRoots,
         protectedReadOnlyRoots,
         structurallyProtectedRoots,
@@ -652,7 +683,8 @@ export async function prepareWorkspaceSandboxLaunch(
       capabilities: {
         backend: "seatbelt",
         processTree: true,
-        filesystemRead: "host-visible",
+        filesystemRead:
+          deniedReadRoots.length > 0 ? "isolated" : "host-visible",
         filesystemWrite: "strict",
         network: capability.localBinding
           ? capability.publicNetwork
@@ -666,9 +698,11 @@ export async function prepareWorkspaceSandboxLaunch(
         hostIpcBlocked: false,
         resourceLimits: "partial",
         warnings: [
-          options.temporaryHome
-            ? "HOME is a fresh writable per-command directory; normal user configuration and credentials are absent, while the host home remains readable by absolute path."
-            : "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
+          deniedReadRoots.length > 0
+            ? "Denied read roots are hidden except for the workspace, private per-command directories and trusted runtime roots."
+            : options.temporaryHome
+              ? "HOME is a fresh writable per-command directory; normal user configuration and credentials are absent, while the host home remains readable by absolute path."
+              : "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
           "Go and GolangCI caches use writable per-command sandbox directories unless explicitly overridden.",
           environmentResult.provenance.npm_config_cache === "per-command"
             ? "npm cache environment uses the explicit per-command env override; CLI --cache precedence and filesystem write restrictions still apply."

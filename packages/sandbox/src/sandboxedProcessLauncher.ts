@@ -50,6 +50,13 @@ export interface SandboxedProcessLauncherOptions {
    * gives each command a private `TMPDIR` instead.
    */
   readonly shareHostTemporaryDirectories?: boolean;
+  /**
+   * Roots hidden from reads (for example the user's home folder). Inside
+   * them only `writableRoots`, the private per-command directories and
+   * `trustedRuntimeRoots` stay readable. Requires `temporaryHome` when the
+   * host home is denied. Defaults to none.
+   */
+  readonly deniedReadRoots?: readonly string[];
 }
 
 export interface SandboxedProcessRequest {
@@ -152,6 +159,9 @@ export function launchSandboxedProcess(
       temporaryHome: options.temporaryHome ?? false,
       shareHostTemporaryDirectories:
         options.shareHostTemporaryDirectories ?? false,
+      ...(options.deniedReadRoots
+        ? { deniedReadRoots: options.deniedReadRoots }
+        : {}),
     });
     let launched: SandboxCommandProcess;
     try {

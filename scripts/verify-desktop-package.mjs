@@ -23,6 +23,8 @@ const REQUIRED_RUNTIME_PATHS = [
   "dist/monaco-ts.worker.js",
   "dist/codicon.css",
   "dist/codicon.ttf",
+  "dist/sandbox-runtime/scripts/sandbox-interactive-helper.mjs",
+  "dist/sandbox-runtime/node_modules/@anthropic-ai/sandbox-runtime/package.json",
   "resources/builtin-skills/documentation/SKILL.md",
   "media/icon.png",
   "media/agentlink-terminal.svg",

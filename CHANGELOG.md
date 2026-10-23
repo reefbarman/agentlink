@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Desktop Ask Agent on macOS now has a private scratch folder per chat. It can write files there, run commands in the macOS sandbox (no network, no access to your home folder or other chats) to analyse data or make charts, and hand you the results: images show inline and other files get a download button. Attached files are copied into the folder's `inputs/`, and deleting the chat deletes the folder. `@agentlink/sandbox` adds a `deniedReadRoots` launch option and a `helperEnvironment` transport option to support this.
 - Linux and Windows VSIXs no longer include the macOS-only node-pty terminal binaries.
 - On Linux, AgentLink's OS credential storage (used by the CLI, Desktop and SDK hosts, not the VS Code extension) now requires Secret Service, such as GNOME Keyring or KWallet. It no longer falls back silently to the kernel keyring, which loses credentials on reboot. Without a session bus or a running keyring it fails with `LinuxCredentialStoreUnavailableError` and never stores credentials in plain text. Pass `linuxStore: "keyutils"` to opt into the kernel keyring.
 

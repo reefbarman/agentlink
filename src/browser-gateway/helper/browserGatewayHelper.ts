@@ -291,6 +291,13 @@ import {
   manageMemorySchema,
 } from "../../shared/toolSchemas.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
+import {
+  ASK_AGENT_SANDBOX_PROMPT,
+  ASK_AGENT_SANDBOX_TOOLS,
+  AskAgentSandboxWorkspace,
+  isAskAgentSandboxToolName,
+  type AskAgentSandboxToolName,
+} from "./askAgentSandboxWorkspace.js";
 import { isProviderSafeToolName } from "../../core/tools/providerToolNames.js";
 import {
   ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
@@ -942,6 +949,7 @@ type AskAgentToolExecutionResult = {
     data: string;
     attribution?: ImageAttribution;
   }>;
+  resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
   stop: boolean;
   outcome?: AskAgentToolLoopOutcome;
   toolMessage?: CoreModelMessage;
@@ -1125,6 +1133,8 @@ export class BrowserGatewayHelper {
   private readonly askAgentLogPath: string;
   private readonly askAgentPreferencesStore: BrowserGatewayAskAgentPreferencesStore;
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
+  /** Per-chat sandboxed scratch folders; null when disabled. */
+  private readonly askAgentSandbox: AskAgentSandboxWorkspace | null;
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -1215,6 +1225,8 @@ export class BrowserGatewayHelper {
       askAgentMemorySummaryDebounceMs?: number;
       askAgentPreferencesStore?: BrowserGatewayAskAgentPreferencesStore;
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
+      /** Null disables the per-chat sandbox tools. */
+      askAgentSandbox?: AskAgentSandboxWorkspace | null;
       standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
       standaloneMcpOAuthRuntime?: StandaloneMcpOAuthRuntime;
       createStandaloneMcpRuntime?: (
@@ -1484,6 +1496,17 @@ export class BrowserGatewayHelper {
     this.askAgentHistoryStore =
       injectables.askAgentHistoryStore ??
       new BrowserGatewayAskAgentHistoryStore();
+    this.askAgentSandbox =
+      injectables.askAgentSandbox !== undefined
+        ? injectables.askAgentSandbox
+        : new AskAgentSandboxWorkspace({
+            rootDirectory: path.join(
+              os.homedir(),
+              ".agentlink",
+              "ask-agent-sandboxes",
+            ),
+            extensionRoot: options.extensionRootPath,
+          });
 
     this.sharedCodexOAuth =
       process.platform === "darwin" && !injectables.askAgentModelClient
@@ -2538,6 +2561,11 @@ export class BrowserGatewayHelper {
       if (!this.askAgentSessionStore.deleteSession(sessionId)) {
         throw new Error("ask_agent_session_delete_race");
       }
+      await this.askAgentSandbox
+        ?.deleteChat(sessionId)
+        .catch((error: unknown) =>
+          logHelper(`ask-agent sandbox delete failed: ${String(error)}`),
+        );
       await this.standaloneMcpRuntime?.retireSession?.(sessionId);
       await this.persistAskAgentHistory();
       this.askAgentController.clearMemoryCandidateNudgeForSession(sessionId);
@@ -6180,9 +6208,23 @@ export class BrowserGatewayHelper {
             return undefined;
           })
         : undefined;
-      const additionalInstructions = instructionSnapshot?.prompt || undefined;
+      const sandboxTools =
+        completeWithToolCalls && this.askAgentSandbox?.isAvailable() === true;
+      const additionalInstructions =
+        [
+          instructionSnapshot?.prompt,
+          sandboxTools ? ASK_AGENT_SANDBOX_PROMPT : undefined,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join("\n\n") || undefined;
+      if (sandboxTools) {
+        await this.syncAskAgentSandboxInputs(
+          this.askAgentSessionStore.getActiveSessionId(),
+        );
+      }
       const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
         ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+        ...(sandboxTools ? ASK_AGENT_SANDBOX_TOOLS : []),
         ...(instructionSnapshot
           ? (this.askAgentInstructions.toolDefinitions(
               instructionSnapshot,
@@ -6491,6 +6533,9 @@ export class BrowserGatewayHelper {
             input: canonicalCall.input,
             result: executed.modelResult ?? executed.content,
             resultImages: executed.resultImages,
+            ...(executed.resultDocuments
+              ? { resultDocuments: executed.resultDocuments }
+              : {}),
             durationMs: Date.now() - toolStartedAt,
           });
           await publishTurnSnapshot();
@@ -8406,6 +8451,19 @@ export class BrowserGatewayHelper {
     }
 
     if (
+      isAskAgentSandboxToolName(toolCall.name) &&
+      mcpInvocation &&
+      this.askAgentSandbox?.isAvailable()
+    ) {
+      return await this.executeAskAgentSandboxTool(
+        toolCall,
+        toolCall.name,
+        mcpInvocation,
+        signal,
+      );
+    }
+
+    if (
       !ASK_AGENT_SAFE_PROJECTLESS_TOOL_NAMES.includes(
         toolCall.name as (typeof ASK_AGENT_SAFE_PROJECTLESS_TOOL_NAMES)[number],
       )
@@ -8536,6 +8594,59 @@ export class BrowserGatewayHelper {
     );
   }
 
+  private async executeAskAgentSandboxTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    toolName: AskAgentSandboxToolName,
+    invocation: { readonly sessionId: string; readonly turnId: string },
+    signal: AbortSignal,
+  ): Promise<AskAgentToolExecutionResult> {
+    const result = await this.askAgentSandbox!.execute({
+      sessionId: invocation.sessionId,
+      turnId: invocation.turnId,
+      toolName,
+      input: toolCall.input,
+      signal,
+    });
+    this.logAskAgentEvent(`ask-agent.tool.${toolName}`, {
+      ok: !result.isError,
+      ...(result.resultImages ? { images: result.resultImages.length } : {}),
+      ...(result.resultDocuments
+        ? { documents: result.resultDocuments.length }
+        : {}),
+    });
+    return {
+      content: result.content,
+      stop: false,
+      ...(result.resultImages ? { resultImages: result.resultImages } : {}),
+      ...(result.resultDocuments
+        ? { resultDocuments: result.resultDocuments }
+        : {}),
+      toolMessage: this.buildAskAgentToolResultMessage(
+        toolCall,
+        result.content,
+        result.isError,
+      ),
+    };
+  }
+
+  /** Copy this chat's attached files into its scratch folder's inputs/. */
+  private async syncAskAgentSandboxInputs(sessionId: string): Promise<void> {
+    const files = this.askAgentSessionStore
+      .getHistorySnapshot()
+      .sessions.find((session) => session.id === sessionId)
+      ?.messages.flatMap((message) => [
+        ...(message.media?.images ?? []),
+        ...(message.media?.documents ?? []),
+      ])
+      .map(({ name, base64 }) => ({ name, base64 }));
+    if (!files?.length) return;
+    await this.askAgentSandbox
+      ?.syncInputs(sessionId, files)
+      .catch((error: unknown) =>
+        logHelper(`ask-agent sandbox inputs unavailable: ${String(error)}`),
+      );
+  }
+
   private async executeAskAgentAutonomousMemoryTool(
     toolCall: BrowserGatewayAskAgentToolCall,
   ): Promise<AskAgentToolExecutionResult> {
@@ -8580,9 +8691,27 @@ export class BrowserGatewayHelper {
     rootPath: string;
   } | null> {
     if (typeof inputPath !== "string" || !inputPath.trim()) return null;
-    const requested = path.resolve(inputPath.trim());
+    // The chat's sandboxed scratch folder is implicitly readable, and
+    // relative paths resolve inside it.
+    const scratchRoot = this.askAgentSandbox?.isAvailable()
+      ? await this.askAgentSandbox.existingWorkDirectory(
+          this.askAgentSessionStore.getActiveSessionId(),
+        )
+      : undefined;
+    const trimmed = inputPath.trim();
+    const requested =
+      scratchRoot && !path.isAbsolute(trimmed)
+        ? path.resolve(scratchRoot, trimmed)
+        : path.resolve(trimmed);
     const requestedRealPath = await fs.realpath(requested).catch(() => null);
     if (!requestedRealPath) return null;
+    if (scratchRoot && this.isPathInsideRoot(requestedRealPath, scratchRoot)) {
+      return {
+        path: requestedRealPath,
+        grantId: "sandbox-scratch",
+        rootPath: scratchRoot,
+      };
+    }
     const grants = this.askAgentSessionStore.getReadGrants();
     for (const grant of grants) {
       const root = await fs.realpath(grant.rootPath).catch(() => null);
@@ -9980,6 +10109,7 @@ export class BrowserGatewayHelper {
     }
     this.askAgentConversationStates.clear();
     await this.standaloneMcpRuntime?.dispose?.();
+    await this.askAgentSandbox?.dispose().catch(() => undefined);
     this.standaloneMcpOAuthRuntime?.dispose();
     await this.askAgentController.dispose();
     await this.askAgentOwnerAdapter.dispose();

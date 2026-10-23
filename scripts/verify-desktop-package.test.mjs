@@ -23,6 +23,8 @@ function desktopInventory(...extra) {
     "dist/monaco-ts.worker.js",
     "dist/codicon.css",
     "dist/codicon.ttf",
+    "dist/sandbox-runtime/scripts/sandbox-interactive-helper.mjs",
+    "dist/sandbox-runtime/node_modules/@anthropic-ai/sandbox-runtime/package.json",
     "dist/node_modules/@lancedb/lancedb/package.json",
     "dist/node_modules/apache-arrow/package.json",
     "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",

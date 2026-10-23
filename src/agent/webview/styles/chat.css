@@ -2041,7 +2041,20 @@ body.chat-activity-shelf-resizing * {
 }
 
 .tool-result-document .codicon {
+  color: var(--vscode-descriptionForeground);
+}
+
+.tool-result-document .codicon-file-pdf {
   color: #e44d26;
+}
+
+.tool-result-document-download {
+  flex: none;
+  text-decoration: none;
+}
+
+.tool-result-document-download .codicon {
+  color: inherit;
 }
 
 .tool-result-document span {

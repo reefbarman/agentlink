@@ -1281,9 +1281,31 @@ export function ToolCallBlock({
                       key={`${document.name}-${document.mimeType}-${index}`}
                       title={document.mimeType}
                     >
-                      <i class="codicon codicon-file-pdf" aria-hidden="true" />
+                      <i
+                        class={`codicon ${
+                          document.mimeType === "application/pdf"
+                            ? "codicon-file-pdf"
+                            : "codicon-file"
+                        }`}
+                        aria-hidden="true"
+                      />
                       <span>{document.name}</span>
                       <code>{document.mimeType}</code>
+                      {document.data && (
+                        <a
+                          class="icon-button tool-result-document-download"
+                          href={`data:${document.mimeType};base64,${document.data}`}
+                          download={document.name}
+                          rel="noopener"
+                          title={`Download ${document.name}`}
+                          aria-label={`Download ${document.name}`}
+                        >
+                          <i
+                            class="codicon codicon-desktop-download"
+                            aria-hidden="true"
+                          />
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>

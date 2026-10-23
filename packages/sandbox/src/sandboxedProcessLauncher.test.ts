@@ -11,6 +11,7 @@ import {
   readFile,
   realpath,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -153,6 +154,42 @@ describe("launchSandboxedProcess", () => {
     expect(await exists(privateDirectory!)).toBe(false);
   });
 
+  it("hides denied read roots except the workspace and private directories", async () => {
+    const home = await temporaryDirectory("al-sbx-home-");
+    const root = path.join(home, "work");
+    await mkdir(root);
+    const fake = fakeRuntime();
+    const handle = launchSandboxedProcess(
+      {
+        runtime: fake.runtime,
+        writableRoots: [root],
+        temporaryHome: true,
+        deniedReadRoots: [home],
+      },
+      {
+        sessionId: "session-1",
+        command: "true",
+        shell: "/bin/sh",
+        cwd: root,
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+      () => undefined,
+    );
+    const metadata = await handle.started;
+    expect(metadata.capabilities.filesystemRead).toBe("isolated");
+    const [request] = fake.launches;
+    expect(request!.filesystem.denyRead).toEqual([home]);
+    expect(request!.filesystem.allowRead).not.toContain("/");
+    expect(request!.filesystem.allowRead).toContain(root);
+    expect(
+      request!.filesystem.allowRead.some((entry) =>
+        request!.environment.HOME!.startsWith(entry),
+      ),
+    ).toBe(true);
+    fake.finish({ exitCode: 0, timedOut: false });
+    await handle.exited;
+  });
+
   it("resolves exited with an error when the cwd is outside the writable roots", async () => {
     const root = await temporaryDirectory("al-sbx-launch-");
     const outside = await temporaryDirectory("al-sbx-outside-");
@@ -254,6 +291,90 @@ describe("launchSandboxedProcess", () => {
       expect(output.stderr).toContain("host-tmp-denied");
       expect(output.stdout).toContain("tmp-ok");
       expect(output.stdout).toContain("stdin-closed");
+    },
+    60_000,
+  );
+
+  it.runIf(
+    process.platform === "darwin" &&
+      process.env.AGENTLINK_RUN_PRODUCTION_SANDBOX_ATTESTATION === "1",
+  )(
+    "hides denied read roots through the production helper",
+    async () => {
+      const extensionRoot = await temporaryDirectory("al-sbx-runtime-");
+      const { stageSandboxRuntime } = (await import(
+        pathToFileURL(
+          path.join(REPO_ROOT, "scripts", "package-sandbox-runtime.mjs"),
+        ).href
+      )) as {
+        stageSandboxRuntime(options: {
+          repoRoot: string;
+          destinationRoot: string;
+          target: string;
+          includeNodePty: boolean;
+        }): Promise<unknown>;
+      };
+      await stageSandboxRuntime({
+        repoRoot: REPO_ROOT,
+        destinationRoot: path.join(extensionRoot, "dist", "sandbox-runtime"),
+        target: `darwin-${process.arch}`,
+        includeNodePty: false,
+      });
+
+      const home = await temporaryDirectory("al-sbx-fake-home-");
+      const root = path.join(home, "chat", "work");
+      const sibling = path.join(home, "other-chat");
+      await Promise.all([
+        mkdir(root, { recursive: true }),
+        mkdir(sibling, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(path.join(home, "secret.txt"), "home-secret"),
+        writeFile(path.join(sibling, "data.txt"), "sibling-secret"),
+        writeFile(path.join(root, "input.txt"), "work-input"),
+      ]);
+      const runtime = new SandboxHelperClient(
+        createNodeSandboxHelperTransportFactory({
+          extensionRoot,
+          nodeExecutable: process.execPath,
+        }),
+      );
+      cleanups.push(async () => runtime.dispose());
+
+      const output = { stdout: "", stderr: "" };
+      const handle = launchSandboxedProcess(
+        {
+          runtime,
+          writableRoots: [root],
+          temporaryHome: true,
+          deniedReadRoots: [home],
+        },
+        {
+          sessionId: "sandboxed-process-read-denial-test",
+          command: [
+            "cat input.txt",
+            `cat ${JSON.stringify(path.join(home, "secret.txt"))} || echo home-denied >&2`,
+            `cat ${JSON.stringify(path.join(sibling, "data.txt"))} || echo sibling-denied >&2`,
+            "printf made > out.txt",
+          ].join("; "),
+          shell: "/bin/sh",
+          cwd: root,
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+        (stream, text) => {
+          output[stream] += text;
+        },
+      );
+
+      await handle.started;
+      const exit = await handle.exited;
+      expect(exit.error).toBeUndefined();
+      expect(output.stdout).toContain("work-input");
+      expect(output.stdout).not.toContain("home-secret");
+      expect(output.stdout).not.toContain("sibling-secret");
+      expect(output.stderr).toContain("home-denied");
+      expect(output.stderr).toContain("sibling-denied");
+      expect(await readFile(path.join(root, "out.txt"), "utf8")).toBe("made");
     },
     60_000,
   );

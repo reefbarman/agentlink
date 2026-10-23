@@ -39,6 +39,12 @@ export interface NodeSandboxHelperTransportOptions {
   platform?: NodeJS.Platform;
   architecture?: string;
   nodeExecutable: string;
+  /**
+   * Extra variables for the helper process itself, for example
+   * `ELECTRON_RUN_AS_NODE=1` when `nodeExecutable` is an Electron binary.
+   * Sandboxed commands never inherit them.
+   */
+  helperEnvironment?: Readonly<Record<string, string>>;
   lstat?: (filePath: string) => Stats;
   realpath?: (filePath: string) => string;
   spawn?: (
@@ -303,6 +309,7 @@ export function createNodeSandboxHelperTransportFactory(
       const child = spawnChild(nodeExecutable, [realHelperPath], {
         cwd: runtimeRoot,
         env: {
+          ...options.helperEnvironment,
           PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
           LANG: "en_US.UTF-8",
           LC_ALL: "en_US.UTF-8",

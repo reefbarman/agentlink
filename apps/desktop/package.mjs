@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { stageKeychainRuntime } from "../../scripts/package-keychain-runtime.mjs";
 import { stageRetrievalRuntime } from "../../scripts/package-retrieval-runtime.mjs";
+import { stageSandboxRuntime } from "../../scripts/package-sandbox-runtime.mjs";
 import { verifyDesktopRuntimeFiles } from "../../scripts/verify-desktop-package.mjs";
 
 const desktopRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -170,6 +171,14 @@ async function stageNativeRuntime() {
     repoRoot,
     destinationRoot: path.join(stageRoot, "node_modules"),
     target,
+  });
+  // The Ask Agent helper runs commands in the macOS sandbox on pipes only,
+  // so node-pty (and its unsigned native prebuilds) stays out of the app.
+  await stageSandboxRuntime({
+    repoRoot,
+    destinationRoot: path.join(runtimeRoot, "dist", "sandbox-runtime"),
+    target,
+    includeNodePty: false,
   });
 }
 

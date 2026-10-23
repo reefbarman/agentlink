@@ -176,3 +176,27 @@ describe("ToolCallBlock remote details", () => {
     expect(screen.getByText("local result")).toBeTruthy();
   });
 });
+
+describe("ToolCallBlock result documents", () => {
+  it("offers presented files as downloads", () => {
+    render(
+      <ToolCallBlock
+        toolCall={{
+          type: "tool_call",
+          id: "present",
+          name: "present_files",
+          inputJson: '{"paths":["report.csv"]}',
+          result: "{}",
+          complete: true,
+          resultDocuments: [
+            { name: "report.csv", mimeType: "text/csv", data: "YSxi" },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /present_files/i }));
+    const link = screen.getByRole("link", { name: "Download report.csv" });
+    expect(link.getAttribute("href")).toBe("data:text/csv;base64,YSxi");
+    expect(link.getAttribute("download")).toBe("report.csv");
+  });
+});
