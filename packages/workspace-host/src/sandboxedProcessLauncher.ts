@@ -1,5 +1,6 @@
 import {
   launchSandboxedProcess,
+  type SandboxManagedNetworkDestination,
   type SandboxedProcessHandle,
   type SandboxedProcessLauncherOptions,
   type SandboxedProcessRequest,
@@ -8,12 +9,25 @@ import {
 import {
   WorkspaceProcessLaunchError,
   type WorkspaceProcessExit,
+  type WorkspaceProcessLaunchRequest,
   type WorkspaceProcessLauncher,
 } from "./workspaceExecutionBackend.js";
 
 export interface SandboxedWorkspaceProcessLauncherOptions extends SandboxedProcessLauncherOptions {
   /** Shell for launches that are not already `<shell> -c <command>`. */
   readonly fallbackShell?: string;
+  /**
+   * Run every launch through the sandbox's public proxy, asking about each
+   * public destination (with the launch it came from). Creating a launcher
+   * with this set is the approval to use the proxy; private, local and
+   * metadata addresses stay blocked.
+   */
+  readonly publicNetwork?: {
+    readonly onNetworkRequest: (
+      destination: SandboxManagedNetworkDestination,
+      request: WorkspaceProcessLaunchRequest,
+    ) => Promise<"allow-once" | "reject">;
+  };
   /** Test seam; defaults to `launchSandboxedProcess`. */
   readonly launch?: (
     options: SandboxedProcessLauncherOptions,
@@ -60,6 +74,17 @@ export function createSandboxedWorkspaceProcessLauncher(
           ...shellCommand,
           cwd: request.cwd,
           environment: request.environment,
+          ...(options.publicNetwork
+            ? {
+                publicNetwork: {
+                  onNetworkRequest: (destination) =>
+                    options.publicNetwork!.onNetworkRequest(
+                      destination,
+                      request,
+                    ),
+                },
+              }
+            : {}),
         },
         (stream, text) => onOutput(stream, Buffer.from(text, "utf8")),
       );

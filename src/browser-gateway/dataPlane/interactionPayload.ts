@@ -127,7 +127,15 @@ function approvalRequest(value: unknown): ApprovalRequest {
     const sandbox = recordValue(item);
     return {
       writableRoot: stringValue(sandbox.writableRoot),
-      network: enumValue(sandbox.network, ["none", "loopback"] as const),
+      network: enumValue(sandbox.network, [
+        "none",
+        "loopback",
+        "approved-destinations",
+        "full",
+      ] as const),
+      ...(sandbox.unsandboxed === undefined
+        ? {}
+        : { unsandboxed: booleanValue(sandbox.unsandboxed) }),
     };
   });
   copyOptional(result, "commandReview", source.commandReview, commandReview);

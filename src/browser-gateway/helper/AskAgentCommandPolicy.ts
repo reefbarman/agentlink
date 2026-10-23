@@ -28,6 +28,10 @@ import { writeTextFileAtomic } from "../atomicFile.js";
  * folder and `global` is every granted folder (both saved). VS Code's own
  * rules are never read. Approve for Me runs commands without a card unless a
  * Prompt or Forbidden rule matches; every command still runs in the sandbox.
+ *
+ * Destination rules let a command that asked for the network connect to an
+ * exact `protocol://host:port` without a card, with the same scopes. They
+ * never make a command itself run, or run outside the sandbox.
  */
 
 export type AskAgentCommandRuleScope = "session" | "project" | "global";
@@ -43,10 +47,27 @@ export interface AskAgentSavedCommandRule {
   readonly createdAt: number;
 }
 
+export interface AskAgentNetworkDestination {
+  readonly protocol: "http" | "https" | "tcp";
+  /** Lower-case host name or address. */
+  readonly host: string;
+  readonly port: number;
+}
+
+export interface AskAgentSavedDestinationRule extends AskAgentNetworkDestination {
+  readonly id: string;
+  readonly scope: AskAgentCommandRuleScope;
+  /** The granted folder a `project` rule belongs to. */
+  readonly root?: string;
+  readonly createdAt: number;
+}
+
 export interface AskAgentCommandPolicySnapshot {
   readonly approveForMe: boolean;
   /** Saved rules plus the given chat's rules. */
   readonly rules: readonly AskAgentSavedCommandRule[];
+  /** Saved destination rules plus the given chat's. */
+  readonly destinations: readonly AskAgentSavedDestinationRule[];
 }
 
 export type AskAgentCommandPolicyDecision =
@@ -62,12 +83,15 @@ interface PolicyFile {
   readonly schemaVersion: 1;
   readonly approveForMe: boolean;
   readonly rules: readonly AskAgentSavedCommandRule[];
+  readonly destinations: readonly AskAgentSavedDestinationRule[];
 }
 
 const MODES = new Set(["prefix", "exact", "regex"]);
 const DECISIONS = new Set(["allow", "prompt", "forbidden"]);
 const MAX_PATTERN_LENGTH = 2_000;
 const MAX_RULES = 500;
+const PROTOCOLS = new Set(["http", "https", "tcp"]);
+const HOST = /^[a-z0-9.:_-]{1,253}$/;
 
 export function getAskAgentCommandPolicyPath(): string {
   return path.join(os.homedir(), ".agentlink", "ask-agent-command-policy.json");
@@ -91,6 +115,55 @@ function validRule(value: unknown): value is AskAgentSavedCommandRule {
     typeof rule.createdAt === "number" &&
     (rule.mode !== "regex" || compiles(rule.pattern))
   );
+}
+
+function validDestination(
+  value: unknown,
+): value is AskAgentSavedDestinationRule {
+  if (!value || typeof value !== "object") return false;
+  const rule = value as Record<string, unknown>;
+  return (
+    typeof rule.id === "string" &&
+    PROTOCOLS.has(rule.protocol as string) &&
+    typeof rule.host === "string" &&
+    HOST.test(rule.host) &&
+    Number.isInteger(rule.port) &&
+    (rule.port as number) >= 1 &&
+    (rule.port as number) <= 65_535 &&
+    (rule.scope === "global" ||
+      rule.scope === "session" ||
+      (rule.scope === "project" &&
+        typeof rule.root === "string" &&
+        path.isAbsolute(rule.root))) &&
+    typeof rule.createdAt === "number"
+  );
+}
+
+function sameDestination(
+  left: AskAgentNetworkDestination & { scope?: string; root?: string },
+  right: AskAgentNetworkDestination & { scope?: string; root?: string },
+): boolean {
+  return (
+    left.protocol === right.protocol &&
+    left.host === right.host &&
+    left.port === right.port &&
+    left.scope === right.scope &&
+    (left.root ?? "") === (right.root ?? "")
+  );
+}
+
+function removeSessionEntry<T extends { readonly id: string }>(
+  sessions: Map<string, T[]>,
+  id: string,
+): boolean {
+  for (const [sessionId, entries] of sessions) {
+    const remaining = entries.filter((entry) => entry.id !== id);
+    if (remaining.length !== entries.length) {
+      sessions.set(sessionId, remaining);
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Whether a value is a well-formed rule row sent back by the approval card. */
@@ -194,8 +267,13 @@ export class AskAgentCommandPolicy {
     schemaVersion: 1,
     approveForMe: false,
     rules: [],
+    destinations: [],
   };
   private readonly sessionRules = new Map<string, AskAgentSavedCommandRule[]>();
+  private readonly sessionDestinations = new Map<
+    string,
+    AskAgentSavedDestinationRule[]
+  >();
   private pending: Promise<void> = Promise.resolve();
 
   constructor(options: { readonly filePath?: string } = {}) {
@@ -210,7 +288,72 @@ export class AskAgentCommandPolicy {
         ...(sessionId ? (this.sessionRules.get(sessionId) ?? []) : []),
         ...state.rules,
       ].map((rule) => ({ ...rule })),
+      destinations: [
+        ...(sessionId ? (this.sessionDestinations.get(sessionId) ?? []) : []),
+        ...state.destinations,
+      ].map((rule) => ({ ...rule })),
     };
+  }
+
+  /** Whether a destination rule lets a command in `root` connect. */
+  async isDestinationAllowed(
+    request: AskAgentNetworkDestination & {
+      readonly sessionId: string;
+      readonly root: string;
+    },
+  ): Promise<boolean> {
+    const state = await this.load();
+    const host = request.host.toLowerCase();
+    const matches = (rule: AskAgentSavedDestinationRule) =>
+      rule.protocol === request.protocol &&
+      rule.host === host &&
+      rule.port === request.port;
+    return (
+      (this.sessionDestinations.get(request.sessionId) ?? []).some(matches) ||
+      state.destinations.some(
+        (rule) =>
+          matches(rule) &&
+          (rule.scope === "global" ||
+            (rule.scope === "project" && rule.root === request.root)),
+      )
+    );
+  }
+
+  /** Save an exact destination rule chosen on a network approval card. */
+  async saveDestination(
+    request: AskAgentNetworkDestination & {
+      readonly sessionId: string;
+      readonly root: string;
+      readonly scope: AskAgentCommandRuleScope;
+    },
+  ): Promise<void> {
+    const rule = {
+      id: `ask-agent-destination-rule-${randomUUID()}`,
+      protocol: request.protocol,
+      host: request.host.toLowerCase(),
+      port: request.port,
+      scope: request.scope,
+      ...(request.scope === "project" ? { root: request.root } : {}),
+      createdAt: Date.now(),
+    } satisfies AskAgentSavedDestinationRule;
+    if (!validDestination(rule)) throw new Error("destination_rule_invalid");
+    if (rule.scope === "session") {
+      const current = this.sessionDestinations.get(request.sessionId) ?? [];
+      this.sessionDestinations.set(request.sessionId, [
+        ...current.filter((existing) => !sameDestination(existing, rule)),
+        rule,
+      ]);
+      return;
+    }
+    await this.mutate((state) => ({
+      ...state,
+      destinations: [
+        ...state.destinations.filter(
+          (existing) => !sameDestination(existing, rule),
+        ),
+        rule,
+      ].slice(-MAX_RULES),
+    }));
   }
 
   /** Decide whether a command in `root` runs, is refused, or asks first. */
@@ -304,19 +447,18 @@ export class AskAgentCommandPolicy {
     }
   }
 
+  /** Remove a command or destination rule by ID. */
   async removeRule(id: string): Promise<boolean> {
-    for (const [sessionId, rules] of this.sessionRules) {
-      const remaining = rules.filter((rule) => rule.id !== id);
-      if (remaining.length !== rules.length) {
-        this.sessionRules.set(sessionId, remaining);
-        return true;
-      }
-    }
+    if (removeSessionEntry(this.sessionRules, id)) return true;
+    if (removeSessionEntry(this.sessionDestinations, id)) return true;
     let removed = false;
     await this.mutate((state) => {
       const rules = state.rules.filter((rule) => rule.id !== id);
-      removed = rules.length !== state.rules.length;
-      return { ...state, rules };
+      const destinations = state.destinations.filter((rule) => rule.id !== id);
+      removed =
+        rules.length !== state.rules.length ||
+        destinations.length !== state.destinations.length;
+      return { ...state, rules, destinations };
     });
     return removed;
   }
@@ -328,6 +470,7 @@ export class AskAgentCommandPolicy {
   /** Forget a chat's session rules (for example when it is deleted). */
   clearSession(sessionId: string): void {
     this.sessionRules.delete(sessionId);
+    this.sessionDestinations.delete(sessionId);
   }
 
   private scopedRules(
@@ -362,6 +505,11 @@ export class AskAgentCommandPolicy {
             rules: Array.isArray(parsed.rules)
               ? parsed.rules.filter(
                   (rule) => validRule(rule) && rule.scope !== "session",
+                )
+              : [],
+            destinations: Array.isArray(parsed.destinations)
+              ? parsed.destinations.filter(
+                  (rule) => validDestination(rule) && rule.scope !== "session",
                 )
               : [],
           };

@@ -199,6 +199,7 @@ describe("AskAgentCommandPolicy", () => {
     await expect(policy.snapshot()).resolves.toEqual({
       approveForMe: false,
       rules: [],
+      destinations: [],
     });
     expect(
       isAskAgentCardRuleEntry({ pattern: "(", mode: "regex", scope: "global" }),
@@ -257,9 +258,101 @@ describe("AskAgentCommandPolicy", () => {
     await expect(policy.snapshot("chat-1")).resolves.toEqual({
       approveForMe: false,
       rules: [],
+      destinations: [],
     });
     await expect(
       policy.evaluate({ sessionId: "chat-1", root: ROOT, command: "npm test" }),
     ).resolves.toMatchObject({ decision: "ask" });
+  });
+
+  it("allows exact destinations by chat, folder and all folders", async () => {
+    const filePath = await policyFile();
+    const policy = new AskAgentCommandPolicy({ filePath });
+    const npm = {
+      protocol: "https" as const,
+      host: "Registry.NPMjs.org",
+      port: 443,
+    };
+    const allowed = (sessionId: string, root: string, destination = npm) =>
+      policy.isDestinationAllowed({ sessionId, root, ...destination });
+
+    await expect(allowed("chat-1", ROOT)).resolves.toBe(false);
+    await policy.saveDestination({
+      sessionId: "chat-1",
+      root: ROOT,
+      ...npm,
+      scope: "session",
+    });
+    await expect(allowed("chat-1", OTHER)).resolves.toBe(true);
+    await expect(allowed("chat-2", ROOT)).resolves.toBe(false);
+
+    await policy.saveDestination({
+      sessionId: "chat-1",
+      root: ROOT,
+      protocol: "https",
+      host: "pypi.org",
+      port: 443,
+      scope: "project",
+    });
+    const pypi = { protocol: "https" as const, host: "pypi.org", port: 443 };
+    await expect(allowed("chat-2", ROOT, pypi)).resolves.toBe(true);
+    await expect(allowed("chat-2", OTHER, pypi)).resolves.toBe(false);
+    // Port and protocol must match exactly.
+    await expect(
+      allowed("chat-2", ROOT, { ...pypi, port: 8443 }),
+    ).resolves.toBe(false);
+
+    await policy.saveDestination({
+      sessionId: "chat-1",
+      root: ROOT,
+      ...npm,
+      scope: "global",
+    });
+    await expect(allowed("chat-9", OTHER)).resolves.toBe(true);
+
+    // Saved rules survive a restart; chat rules do not.
+    const reloaded = new AskAgentCommandPolicy({ filePath });
+    const snapshot = await reloaded.snapshot("chat-1");
+    expect(snapshot.destinations.map((rule) => rule.scope).sort()).toEqual([
+      "global",
+      "project",
+    ]);
+    expect(snapshot.destinations[0]!.host).toBe("pypi.org");
+    const global = snapshot.destinations.find(
+      (rule) => rule.scope === "global",
+    )!;
+    expect(global.host).toBe("registry.npmjs.org");
+    await expect(reloaded.removeRule(global.id)).resolves.toBe(true);
+    await expect(
+      reloaded.isDestinationAllowed({
+        sessionId: "chat-9",
+        root: OTHER,
+        ...npm,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("refuses malformed destinations", async () => {
+    const policy = new AskAgentCommandPolicy({ filePath: await policyFile() });
+    await expect(
+      policy.saveDestination({
+        sessionId: "chat-1",
+        root: ROOT,
+        protocol: "https",
+        host: "bad host/path",
+        port: 443,
+        scope: "global",
+      }),
+    ).rejects.toThrow("destination_rule_invalid");
+    await expect(
+      policy.saveDestination({
+        sessionId: "chat-1",
+        root: ROOT,
+        protocol: "https",
+        host: "example.com",
+        port: 70_000,
+        scope: "global",
+      }),
+    ).rejects.toThrow("destination_rule_invalid");
   });
 });

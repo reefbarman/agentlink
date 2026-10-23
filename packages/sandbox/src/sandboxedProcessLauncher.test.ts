@@ -55,6 +55,7 @@ function fakeRuntime() {
   let listener: ((event: SandboxCommandEvent) => void) | undefined;
   let finish!: (exit: SandboxCommandExit) => void;
   const terminations: string[] = [];
+  const networkDecisions: Array<[string, string]> = [];
   const runtime: SandboxRuntimeProvider = {
     launch(request) {
       launches.push(request);
@@ -79,6 +80,10 @@ function fakeRuntime() {
           terminations.push("terminate");
           return true;
         },
+        respondToNetworkRequest: (requestId, decision) => {
+          networkDecisions.push([requestId, decision]);
+          return true;
+        },
         dispose() {},
       };
       return process;
@@ -89,6 +94,7 @@ function fakeRuntime() {
     runtime,
     launches,
     terminations,
+    networkDecisions,
     emit: (event: SandboxCommandEvent) => listener?.(event),
     finish: (exit: SandboxCommandExit) => finish(exit),
   };
@@ -152,6 +158,97 @@ describe("launchSandboxedProcess", () => {
       ["stderr", "err"],
     ]);
     expect(await exists(privateDirectory!)).toBe(false);
+  });
+
+  it("opts into the public proxy with a consumed grant and asks per destination", async () => {
+    const root = await temporaryDirectory("al-sbx-launch-");
+    const privateRoot = await temporaryDirectory("al-sbx-private-");
+    const fake = fakeRuntime();
+    const asked: string[] = [];
+    const handle = launchSandboxedProcess(
+      {
+        runtime: fake.runtime,
+        writableRoots: [root],
+        privateDirectoryPrefix: path.join(privateRoot, "p-"),
+      },
+      {
+        sessionId: "session-net",
+        command: "npm view left-pad",
+        shell: "/bin/sh",
+        cwd: root,
+        environment: { PATH: "/usr/bin:/bin" },
+        publicNetwork: {
+          onNetworkRequest: async (destination) => {
+            asked.push(destination.host);
+            return destination.host === "registry.npmjs.org"
+              ? "allow-once"
+              : "reject";
+          },
+        },
+      },
+      () => undefined,
+    );
+    const metadata = await handle.started;
+    expect(fake.launches[0]!.network).toEqual({ mode: "public-proxy" });
+    expect(metadata.capabilities.network).toBe("proxy-only");
+    const destination = (requestId: string, host: string) => ({
+      type: "network-request" as const,
+      request: {
+        requestId,
+        host,
+        protocol: "https" as const,
+        port: 443,
+        address: "104.16.0.1",
+        family: 4 as const,
+        dnsAnswers: [{ address: "104.16.0.1", family: 4 as const }],
+        destinationClass: "public" as const,
+      },
+    });
+    fake.emit(destination("n-1", "registry.npmjs.org"));
+    fake.emit(destination("n-2", "evil.example"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(asked).toEqual(["registry.npmjs.org", "evil.example"]);
+    expect(fake.networkDecisions).toEqual([
+      ["n-1", "allow-once"],
+      ["n-2", "reject"],
+    ]);
+    fake.finish({ exitCode: 0, timedOut: false });
+    await handle.exited;
+  });
+
+  it("rejects network requests from a launch without the public proxy", async () => {
+    const root = await temporaryDirectory("al-sbx-launch-");
+    const fake = fakeRuntime();
+    const handle = launchSandboxedProcess(
+      { runtime: fake.runtime, writableRoots: [root] },
+      {
+        sessionId: "session-offline",
+        command: "true",
+        shell: "/bin/sh",
+        cwd: root,
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+      () => undefined,
+    );
+    await handle.started;
+    expect(fake.launches[0]!.network).toEqual({ mode: "loopback" });
+    fake.emit({
+      type: "network-request",
+      request: {
+        requestId: "n-1",
+        host: "example.com",
+        protocol: "https",
+        port: 443,
+        address: "93.184.216.34",
+        family: 4,
+        dnsAnswers: [{ address: "93.184.216.34", family: 4 }],
+        destinationClass: "public",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fake.networkDecisions).toEqual([["n-1", "reject"]]);
+    fake.finish({ exitCode: 0, timedOut: false });
+    await handle.exited;
   });
 
   it("reports the bubblewrap backend and its limits on Linux", async () => {

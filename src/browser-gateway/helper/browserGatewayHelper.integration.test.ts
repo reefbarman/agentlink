@@ -11777,6 +11777,239 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
   });
 
+  it("approves unsandboxed commands only on this machine and asks per network destination", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const networkAnswers: string[] = [];
+    const launchModes: Array<string | undefined> = [];
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: ({ mode, onNetworkRequest }) => {
+        const local = workspaceHost.createLocalWorkspaceExecutionBackend();
+        return {
+          launchProcess: (launch) => {
+            launchModes.push(mode);
+            if (!onNetworkRequest) return local.launchProcess(launch);
+            // Hold the command until the proxy's destination is answered.
+            const answered = onNetworkRequest(
+              {
+                requestId: "net-1",
+                host: "registry.npmjs.org",
+                protocol: "https",
+                port: 443,
+                address: "104.16.0.1",
+                family: 4,
+                dnsAnswers: [{ address: "104.16.0.1", family: 4 }],
+                destinationClass: "public",
+              },
+              launch.request,
+            ).then((answer) => {
+              networkAnswers.push(answer);
+              return local.launchProcess(launch);
+            });
+            return {
+              pid: undefined,
+              started: answered.then((handle) => handle.started),
+              exited: answered.then((handle) => handle.exited),
+              signal: (signal) => {
+                void answered.then((handle) => handle.signal(signal));
+                return true;
+              },
+            };
+          },
+        };
+      },
+    });
+    const calls: Array<Record<string, unknown>> = [
+      {
+        command: "touch escalated.txt",
+        cwd: project,
+        sandbox_permissions: "require_escalated",
+        reason: "needs host access",
+      },
+      {
+        command: "touch fetched.txt",
+        cwd: project,
+        sandbox_permissions: "require_managed_network",
+        reason: "download",
+      },
+    ];
+    let call = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      if (toolMessages?.length) return { text: "Done.", toolCalls: [] };
+      call += 1;
+      return {
+        text: "",
+        toolCalls: [
+          { id: `esc-${call}`, name: "execute_command", input: calls.shift()! },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+    const fromLan = async (handler: string, body: unknown) => {
+      const written: { status?: number; body?: string } = {};
+      const req = Object.assign(Readable.from([JSON.stringify(body)]), {
+        socket: { remoteAddress: "192.168.50.20" },
+        headers: { "content-type": "application/json" },
+      });
+      await (
+        harness.helper as unknown as Record<
+          string,
+          (req: unknown, res: unknown) => Promise<void>
+        >
+      )[handler]!.call(harness.helper, req, {
+        writeHead: (status: number) => {
+          written.status = status;
+        },
+        end: (text: string) => {
+          written.body = text;
+        },
+      });
+      return written;
+    };
+    const pendingApproval = async (kind: string) => {
+      let approval: Record<string, unknown> | null = null;
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval?.kind).toBe(kind);
+        approval = body.snapshot.ui.approval;
+      });
+      return approval!;
+    };
+
+    try {
+      expect(
+        (
+          await post("/api/ask-agent/read-grants", {
+            path: project,
+            confirm: true,
+            access: "commands",
+          })
+        ).ok,
+      ).toBe(true);
+      // Approve for Me never approves running outside the sandbox.
+      expect(
+        (await post("/api/ask-agent/command-policy", { approveForMe: true }))
+          .ok,
+      ).toBe(true);
+
+      const escalated = post("/api/ask-agent/send", { text: "Escalate" });
+      const card = await pendingApproval("command");
+      expect(card).toMatchObject({
+        reason: "needs host access",
+        commandSandbox: {
+          writableRoot: project,
+          network: "full",
+          unsandboxed: true,
+        },
+      });
+      expect(card.subCommands).toBeUndefined();
+      // A phone or LAN client sees the card but cannot run it.
+      const lanRun = await fromLan("handleAskAgentApprovalRequest", {
+        id: card.id,
+        decision: "run-once",
+      });
+      expect(lanRun.status).toBe(403);
+      expect(lanRun.body).toContain(
+        "unsandboxed_command_requires_this_machine",
+      );
+      const lanEdit = await fromLan("handleAskAgentApprovalRequest", {
+        id: card.id,
+        decision: "edit",
+        editedCommand: "touch other.txt",
+      });
+      expect(lanEdit.status).toBe(403);
+      // Nor can a relayed (data-plane) approve.
+      const dataPlane = harness.helper as unknown as {
+        executeAskAgentApprovalCommand(params: {
+          requestId: string;
+          decision: "approve" | "reject";
+        }): Promise<void>;
+      };
+      await expect(
+        dataPlane.executeAskAgentApprovalCommand({
+          requestId: String(card.id),
+          decision: "approve",
+        }),
+      ).rejects.toThrow("unsandboxed_command_requires_this_machine");
+      await expect(
+        fs.stat(path.join(project, "escalated.txt")),
+      ).rejects.toThrow();
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: card.id,
+            decision: "run-once",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await escalated).ok).toBe(true);
+      await expect(
+        fs.stat(path.join(project, "escalated.txt")),
+      ).resolves.toBeTruthy();
+      expect(launchModes).toEqual(["unsandboxed"]);
+
+      // Approve for Me runs the network command; its destination still asks.
+      const fetched = post("/api/ask-agent/send", { text: "Fetch" });
+      const network = await pendingApproval("network");
+      expect(network.managedNetwork).toMatchObject({
+        host: "registry.npmjs.org",
+        port: 443,
+        command: "touch fetched.txt",
+        cwd: project,
+        reason: "download",
+      });
+      const lanRule = await fromLan("handleAskAgentApprovalRequest", {
+        id: network.id,
+        decision: "allow-global",
+      });
+      expect(lanRule.status).toBe(403);
+      expect(lanRule.body).toContain("destination_rules_require_this_machine");
+      expect(
+        (network.managedNetwork as { commandId: string }).commandId,
+      ).not.toBe("net-1");
+      // A relayed phone approve allows this one connection.
+      await dataPlane.executeAskAgentApprovalCommand({
+        requestId: String(network.id),
+        decision: "approve",
+      });
+      expect((await fetched).ok).toBe(true);
+      expect(networkAnswers).toEqual(["allow-once"]);
+      expect(launchModes).toEqual(["unsandboxed", "network"]);
+      await expect(
+        fs.stat(path.join(project, "fetched.txt")),
+      ).resolves.toBeTruthy();
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
   it("requires approval before launching an Ask Agent project handoff", async () => {
     const upstreamRequests: Array<{
       url: string;

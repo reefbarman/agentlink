@@ -17,6 +17,8 @@ interface CommandExecutionContextProps {
   edited?: boolean;
   nativeEscalation?: boolean;
   approvalRulesSupported?: boolean;
+  /** Only the computer running AgentLink can approve this command. */
+  thisMachineOnly?: boolean;
 }
 
 export function CommandExecutionContext({
@@ -29,6 +31,7 @@ export function CommandExecutionContext({
   edited = false,
   nativeEscalation = false,
   approvalRulesSupported = false,
+  thisMachineOnly = false,
 }: CommandExecutionContextProps) {
   const hostSandbox =
     !security && !nativeEscalation ? commandSandbox : undefined;
@@ -58,7 +61,9 @@ export function CommandExecutionContext({
       : hostSandbox
         ? hostSandbox.network === "none"
           ? "Writes only in this folder · no network"
-          : "Writes only in this folder · no internet"
+          : hostSandbox.network === "approved-destinations"
+            ? "Writes only in this folder · internet asks per destination"
+            : "Writes only in this folder · no internet"
         : protectedTerminal
           ? managedNetwork
             ? "Workspace access · mediated network"
@@ -72,7 +77,9 @@ export function CommandExecutionContext({
       ? `Runs once in a sandbox. It can read files on this computer, but can only write inside ${hostSandbox.writableRoot} and temporary folders. Git metadata and agent instruction files at the top of that folder stay read-only. ${
           hostSandbox.network === "none"
             ? "It has no network access."
-            : "It cannot reach the internet, but can connect to services running on this computer."
+            : hostSandbox.network === "approved-destinations"
+              ? "Each new internet destination it connects to waits for your approval. Private network and cloud metadata addresses stay blocked."
+              : "It cannot reach the internet, but can connect to services running on this computer."
         }`
       : protectedTerminal
         ? managedNetwork
@@ -148,6 +155,19 @@ export function CommandExecutionContext({
           )}
         </div>
       </details>
+
+      {thisMachineOnly && (
+        <div class="command-context-detail-row command-recovery-warning">
+          <span aria-hidden="true" class="codicon codicon-lock" />
+          <div>
+            <strong>Approve on the computer running AgentLink</strong>
+            <div>
+              Running a command outside the sandbox can only be approved there.
+              From another device you can only reject it.
+            </div>
+          </div>
+        </div>
+      )}
 
       {recoveryAttempt && (
         <div class="command-context-detail-row command-recovery-warning">

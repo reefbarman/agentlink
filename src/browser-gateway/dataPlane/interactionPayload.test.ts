@@ -27,6 +27,22 @@ describe("projectBrowserGatewayOwnerInteractionPayload", () => {
     ).toEqual({ writableRoot: "/work/app", network: "loopback" });
   });
 
+  it("keeps the unsandboxed flag so relay clients see full access", () => {
+    expect(
+      projectBrowserGatewayOwnerInteractionPayload(
+        payload({
+          writableRoot: "/work/app",
+          network: "full",
+          unsandboxed: true,
+        }),
+      )?.approval?.commandSandbox,
+    ).toEqual({
+      writableRoot: "/work/app",
+      network: "full",
+      unsandboxed: true,
+    });
+  });
+
   it("rejects a malformed sandbox description", () => {
     expect(
       projectBrowserGatewayOwnerInteractionPayload(

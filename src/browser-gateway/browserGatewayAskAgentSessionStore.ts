@@ -175,6 +175,16 @@ export interface BrowserGatewayAskAgentCommandPolicy {
     root?: string;
     createdAt: number;
   }>;
+  /** Exact destinations commands that asked for the network may reach. */
+  destinations: Array<{
+    id: string;
+    protocol: "http" | "https" | "tcp";
+    host: string;
+    port: number;
+    scope: "session" | "project" | "global";
+    root?: string;
+    createdAt: number;
+  }>;
 }
 
 export interface BrowserGatewayAskAgentQueuedMessage {
@@ -426,6 +436,7 @@ export class BrowserGatewayAskAgentSessionStore {
   private commandPolicy: BrowserGatewayAskAgentCommandPolicy = {
     approveForMe: false,
     rules: [],
+    destinations: [],
   };
 
   constructor(
@@ -1218,10 +1229,12 @@ export class BrowserGatewayAskAgentSessionStore {
   setCommandPolicy(policy: {
     readonly approveForMe: boolean;
     readonly rules: readonly BrowserGatewayAskAgentCommandPolicy["rules"][number][];
+    readonly destinations: readonly BrowserGatewayAskAgentCommandPolicy["destinations"][number][];
   }): void {
     this.commandPolicy = {
       approveForMe: policy.approveForMe,
       rules: policy.rules.map((rule) => ({ ...rule })),
+      destinations: policy.destinations.map((rule) => ({ ...rule })),
     };
   }
 
@@ -1668,6 +1681,9 @@ export class BrowserGatewayAskAgentSessionStore {
           commandPolicy: {
             approveForMe: this.commandPolicy.approveForMe,
             rules: this.commandPolicy.rules.map((rule) => ({ ...rule })),
+            destinations: this.commandPolicy.destinations.map((rule) => ({
+              ...rule,
+            })),
           },
         },
         session: {

@@ -363,7 +363,12 @@ export function CommandCard({
   const commandReview = request.commandReview;
   const humanOnlyReason = request.humanOnlyReason;
   const security = request.security;
-  const nativeEscalation = security?.permissionIntent === "native-escalation";
+  // Ask Agent describes an unsandboxed command with commandSandbox instead
+  // of a security summary; it reads like a native escalation.
+  const hostUnsandboxed =
+    !security && request.commandSandbox?.unsandboxed === true;
+  const nativeEscalation =
+    security?.permissionIntent === "native-escalation" || hostUnsandboxed;
   const inlineFiles = request.inlineFiles ?? [];
 
   return (
@@ -463,7 +468,10 @@ export function CommandCard({
           recoveryAttempt={recoveryAttempt}
           edited={isEdited}
           nativeEscalation={nativeEscalation}
-          approvalRulesSupported={nativeEscalation && !recoveryAttempt}
+          approvalRulesSupported={
+            nativeEscalation && !hostUnsandboxed && !recoveryAttempt
+          }
+          thisMachineOnly={hostUnsandboxed}
         />
       )}
     </ApprovalLayout>

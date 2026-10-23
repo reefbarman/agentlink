@@ -305,6 +305,7 @@ import {
   findNestedRepository,
   type AskAgentCommandApprovalDecision,
   type AskAgentCommandApprovalProposal,
+  type AskAgentNetworkApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
 import { isProviderSafeToolName } from "../../core/tools/providerToolNames.js";
 import {
@@ -476,6 +477,19 @@ export interface HelperRuntimeOptions {
 
 /** Approval ids for Ask Agent commands in folders granted for commands. */
 const ASK_AGENT_COMMAND_APPROVAL_PREFIX = "ask-agent-command-";
+/** Approval ids for public destinations those commands connect to. */
+const ASK_AGENT_NETWORK_APPROVAL_PREFIX = "ask-agent-network-";
+
+/**
+ * Whether an HTTP request came from this computer. In-process calls (relay
+ * and data-plane commands) have no socket and never count.
+ */
+function isFromThisMachine(req: http.IncomingMessage): boolean {
+  const socket = req.socket as http.IncomingMessage["socket"] | undefined;
+  return (
+    classifyBrowserGatewayClientOrigin(socket?.remoteAddress) === "loopback"
+  );
+}
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
 const DEFAULT_HELPER_VERSION = "dev";
 const DEFAULT_MDNS_NAME = "agentlink";
@@ -1147,6 +1161,8 @@ export class BrowserGatewayHelper {
   private readonly askAgentSandbox: AskAgentSandboxWorkspace | null;
   /** Rules and Approve for Me for commands in folders granted for commands. */
   private readonly askAgentCommandPolicy: AskAgentCommandPolicy;
+  /** Network destination cards, shown one at a time. */
+  private askAgentNetworkApprovals: Promise<unknown> = Promise.resolve();
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -2350,10 +2366,28 @@ export class BrowserGatewayHelper {
     requestId: string;
     decision: "approve" | "reject";
   }): Promise<void> {
+    const pending = this.askAgentController.getPendingApproval();
+    const current = pending?.id === params.requestId ? pending : undefined;
+    if (
+      params.decision === "approve" &&
+      current?.commandSandbox?.unsandboxed === true
+    ) {
+      throw new Error("unsandboxed_command_requires_this_machine");
+    }
+    // Ask Agent's own cards read their usual decision names; approving
+    // from here never saves a rule.
+    const approve =
+      current?.kind === "network" &&
+      current.id.startsWith(ASK_AGENT_NETWORK_APPROVAL_PREFIX)
+        ? "allow-once"
+        : current?.kind === "command" &&
+            current.id.startsWith(ASK_AGENT_COMMAND_APPROVAL_PREFIX)
+          ? "run-once"
+          : "accept";
     const request = this.askAgentController.submitApproval({
       type: "decision",
       id: params.requestId,
-      decision: params.decision === "approve" ? "accept" : "reject",
+      decision: params.decision === "approve" ? approve : "reject",
     });
     if (!request) throw new Error("approval_not_found");
     const response = await this.buildAskAgentResponse();
@@ -5401,6 +5435,38 @@ export class BrowserGatewayHelper {
       if (
         pendingCommand?.id === body.id &&
         pendingCommand.kind === "command" &&
+        pendingCommand.id.startsWith(ASK_AGENT_COMMAND_APPROVAL_PREFIX) &&
+        pendingCommand.commandSandbox?.unsandboxed === true &&
+        body.decision !== "reject" &&
+        !isFromThisMachine(req)
+      ) {
+        // Running outside the sandbox is approved only at the computer
+        // itself; other devices can still reject.
+        writeJson(res, 403, {
+          error: "unsandboxed_command_requires_this_machine",
+          message:
+            "Approve running this command outside the sandbox on the computer running AgentLink. From here you can only reject it.",
+        });
+        return;
+      }
+      if (
+        pendingCommand?.id === body.id &&
+        pendingCommand.kind === "network" &&
+        pendingCommand.id.startsWith(ASK_AGENT_NETWORK_APPROVAL_PREFIX) &&
+        body.decision.startsWith("allow-") &&
+        body.decision !== "allow-once" &&
+        !isFromThisMachine(req)
+      ) {
+        writeJson(res, 403, {
+          error: "destination_rules_require_this_machine",
+          message:
+            "Save destination rules from AgentLink Desktop or a browser on the same computer, or choose Allow Once.",
+        });
+        return;
+      }
+      if (
+        pendingCommand?.id === body.id &&
+        pendingCommand.kind === "command" &&
         pendingCommand.id.startsWith(ASK_AGENT_COMMAND_APPROVAL_PREFIX)
       ) {
         const savedRules = (Array.isArray(body.rules) ? body.rules : []).filter(
@@ -5415,11 +5481,7 @@ export class BrowserGatewayHelper {
         }
         // Saved rules widen what later runs without a card, so only this
         // machine can add them. Remote clients can still Run once.
-        if (
-          savedRules.length > 0 &&
-          classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
-            "loopback"
-        ) {
+        if (savedRules.length > 0 && !isFromThisMachine(req)) {
           writeJson(res, 403, {
             error: "command_rules_require_this_machine",
             message:
@@ -8834,6 +8896,8 @@ export class BrowserGatewayHelper {
       commandRoots: await this.askAgentCommandRoots(),
       requestApproval: (proposal) =>
         this.requestAskAgentCommandApproval(proposal, signal),
+      requestNetworkApproval: (proposal) =>
+        this.requestAskAgentNetworkApproval(proposal, signal),
       isCommandRootGranted: async (root) =>
         (await this.askAgentCommandRoots()).includes(root),
     });
@@ -8899,11 +8963,16 @@ export class BrowserGatewayHelper {
    * for Me can run or refuse it without a card; otherwise the user sees a
    * Run / Reject card, which any signed-in client can answer. Saving rules
    * from the card is limited to this machine by the approval route.
+   *
+   * A command asking to run outside the sandbox always shows a card (only
+   * Forbidden rules apply), without rule rows, and the approval route only
+   * accepts Run from this machine.
    */
   private async requestAskAgentCommandApproval(
     proposal: AskAgentCommandApprovalProposal,
     signal: AbortSignal,
   ): Promise<AskAgentCommandApprovalDecision> {
+    const unsandboxed = proposal.sandbox === "unsandboxed";
     const policy = await this.askAgentCommandPolicy.evaluate({
       sessionId: proposal.sessionId,
       root: proposal.root,
@@ -8919,11 +8988,12 @@ export class BrowserGatewayHelper {
         reason: "Command forbidden by a saved Ask Agent command rule",
       };
     }
-    if (policy.decision === "allow") {
+    if (policy.decision === "allow" && !unsandboxed) {
       this.logAskAgentEvent("ask-agent.command-approval", {
         ok: true,
         decision: "allow",
         by: policy.by,
+        network: proposal.network,
       });
       return { decision: "run" };
     }
@@ -8938,19 +9008,28 @@ export class BrowserGatewayHelper {
       id: `${ASK_AGENT_COMMAND_APPROVAL_PREFIX}${randomUUID()}`,
       command: proposal.command,
       cwd: proposal.cwd,
-      subCommands: policy.subCommands,
+      // Rules never approve running outside the sandbox, so offer none.
+      ...(unsandboxed || policy.decision !== "ask"
+        ? {}
+        : { subCommands: policy.subCommands }),
+      ...(proposal.reason ? { reason: proposal.reason } : {}),
       commandSandbox: {
         writableRoot: proposal.root,
         network: proposal.network,
+        ...(unsandboxed ? { unsandboxed: true } : {}),
       },
     };
     const decision = this.askAgentController.requestApproval(request, signal);
     const response = await this.buildAskAgentResponse();
     await this.publishAskAgentSnapshot(response.snapshot);
-    const result = await decision;
+    const answer = await decision;
+    // Defence in depth: the card has no rule rows for an escalation.
+    const result = unsandboxed ? { ...answer, rules: undefined } : answer;
     this.logAskAgentEvent("ask-agent.command-approval", {
       ok: true,
       decision: result.decision,
+      sandbox: proposal.sandbox,
+      network: proposal.network,
       rules: result.rules?.filter((rule) => rule.scope !== "skip").length ?? 0,
     });
     if (result.decision !== "run-once" && result.decision !== "edit") {
@@ -8992,6 +9071,121 @@ export class BrowserGatewayHelper {
       };
     }
     return edited ? { decision: "edit", command: edited } : { decision: "run" };
+  }
+
+  /**
+   * Decide one public destination for a granted-folder command that asked
+   * for the network. Destination rules allow it without a card; otherwise
+   * destination cards are queued and shown one at a time. Any signed-in
+   * client can allow once; saving a rule is limited to this machine by the
+   * approval route. A destination is refused when another kind of approval
+   * (such as a command card) is open, and its card is withdrawn when the
+   * command ends.
+   */
+  private requestAskAgentNetworkApproval(
+    proposal: AskAgentNetworkApprovalProposal,
+    turnSignal: AbortSignal,
+  ): Promise<"allow-once" | "reject"> {
+    const signal = AbortSignal.any([turnSignal, proposal.signal]);
+    const run = () => this.decideAskAgentNetworkDestination(proposal, signal);
+    const next = this.askAgentNetworkApprovals.then(run, run);
+    this.askAgentNetworkApprovals = next.catch(() => undefined);
+    return next.catch(() => "reject" as const);
+  }
+
+  private async decideAskAgentNetworkDestination(
+    proposal: AskAgentNetworkApprovalProposal,
+    signal: AbortSignal,
+  ): Promise<"allow-once" | "reject"> {
+    if (signal.aborted) return "reject";
+    const { destination } = proposal;
+    const target = {
+      sessionId: proposal.sessionId,
+      root: proposal.root,
+      protocol: destination.protocol,
+      host: destination.host,
+      port: destination.port,
+    };
+    // Checked after queueing, so a rule saved on an earlier card applies.
+    if (await this.askAgentCommandPolicy.isDestinationAllowed(target)) {
+      this.logAskAgentEvent("ask-agent.network-approval", {
+        ok: true,
+        decision: "allow",
+        by: "rule",
+      });
+      return "allow-once";
+    }
+    if (
+      this.askAgentMemoryProposalBridge.getPendingApproval() ||
+      this.askAgentController.getPendingApproval()
+    ) {
+      this.logAskAgentEvent("ask-agent.network-approval", {
+        ok: false,
+        decision: "reject",
+        error: "approval_pending",
+      });
+      return "reject";
+    }
+    const requestId = `${ASK_AGENT_NETWORK_APPROVAL_PREFIX}${randomUUID()}`;
+    const request: ApprovalRequest = {
+      kind: "network",
+      id: requestId,
+      managedNetwork: {
+        requestId: destination.requestId,
+        sessionId: proposal.sessionId,
+        auditId: requestId,
+        terminalId: "ask-agent",
+        commandId: proposal.commandId,
+        generation: 1,
+        command: proposal.command,
+        cwd: proposal.cwd,
+        ...(proposal.reason ? { reason: proposal.reason } : {}),
+        host: destination.host,
+        protocol: destination.protocol,
+        port: destination.port,
+        address: destination.address,
+        family: destination.family,
+        dnsAnswers: destination.dnsAnswers.map((answer) => ({ ...answer })),
+        destinationClass: "public",
+      },
+    };
+    const decision = this.askAgentController.requestApproval(request, signal);
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    let result: DecisionMessage;
+    try {
+      result = await decision;
+    } catch {
+      // The command ended or the turn stopped: withdraw the card.
+      const withdrawn = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(withdrawn.snapshot);
+      this.logAskAgentEvent("ask-agent.network-approval", {
+        ok: true,
+        decision: "withdrawn",
+      });
+      return "reject";
+    }
+    // An answer that lands after the command ended allows and saves nothing.
+    if (signal.aborted) return "reject";
+    const scope =
+      result.decision === "allow-session"
+        ? "session"
+        : result.decision === "allow-project"
+          ? "project"
+          : result.decision === "allow-global"
+            ? "global"
+            : undefined;
+    this.logAskAgentEvent("ask-agent.network-approval", {
+      ok: true,
+      decision: result.decision,
+    });
+    if (result.decision !== "allow-once" && !scope) return "reject";
+    // The approval route only lets rules through from this machine.
+    if (scope) {
+      await this.askAgentCommandPolicy.saveDestination({ ...target, scope });
+      await this.publishAskAgentCommandPolicy();
+    }
+    return "allow-once";
   }
 
   /**

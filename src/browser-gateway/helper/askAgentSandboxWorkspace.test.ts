@@ -9,6 +9,7 @@ import {
   findNestedRepository,
   type AskAgentCommandApprovalDecision,
   type AskAgentCommandApprovalProposal,
+  type AskAgentNetworkApprovalProposal,
 } from "./askAgentSandboxWorkspace.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -40,7 +41,11 @@ async function localWorkspace(
     workDirectory: string;
     denied: readonly string[];
     grantedRoot?: string;
+    mode?: string;
   }> = [];
+  /** Decisions for the destination each network-mode launch reports. */
+  const networkDecisions: string[] = [];
+  const launchedModes: Array<string | undefined> = [];
   const workspace = new AskAgentSandboxWorkspace({
     rootDirectory,
     extensionRoot: rootDirectory,
@@ -51,17 +56,42 @@ async function localWorkspace(
       workDirectory,
       deniedReadRoots,
       grantedRoot,
+      mode,
+      onNetworkRequest,
     }) => {
       launches.push({
         workDirectory,
         denied: deniedReadRoots,
         ...(grantedRoot ? { grantedRoot } : {}),
+        ...(mode ? { mode } : {}),
       });
-      return host.createLocalWorkspaceExecutionBackend();
+      const local = host.createLocalWorkspaceExecutionBackend();
+      return {
+        launchProcess: (launch) => {
+          launchedModes.push(mode);
+          if (onNetworkRequest) {
+            // Stand in for the sandbox proxy pausing one destination.
+            void onNetworkRequest(
+              {
+                requestId: `net-${launch.request.operationId}`,
+                host: "registry.npmjs.org",
+                protocol: "https",
+                port: 443,
+                address: "104.16.0.1",
+                family: 4,
+                dnsAnswers: [{ address: "104.16.0.1", family: 4 }],
+                destinationClass: "public",
+              },
+              launch.request,
+            ).then((decision) => networkDecisions.push(decision));
+          }
+          return local.launchProcess(launch);
+        },
+      };
     },
   });
   cleanups.push(() => workspace.dispose());
-  return { workspace, launches };
+  return { workspace, launches, launchedModes, networkDecisions };
 }
 
 function parse(content: string): Record<string, unknown> {
@@ -517,6 +547,175 @@ describe("AskAgentSandboxWorkspace", () => {
         requestApproval,
       });
       expect(requestApproval.mock.calls[0]![0].network).toBe("loopback");
+    });
+
+    it("asks per destination for a command that asked for the network", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace, launchedModes, networkDecisions } =
+        await localWorkspace(root);
+      const requestApproval = approver({ decision: "run" });
+      const requestNetworkApproval = vi.fn(
+        async (
+          _proposal: AskAgentNetworkApprovalProposal,
+        ): Promise<"allow-once" | "reject"> => "allow-once",
+      );
+
+      const ran = await workspace.execute({
+        sessionId: "chat-net",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: {
+          command: "true",
+          cwd: project,
+          sandbox_permissions: "require_managed_network",
+          reason: "install dependencies",
+        },
+        commandRoots: [project],
+        requestApproval,
+        requestNetworkApproval,
+      });
+      expect(ran.isError).toBe(false);
+      expect(requestApproval.mock.calls[0]![0]).toMatchObject({
+        network: "approved-destinations",
+        sandbox: "workspace-write",
+        reason: "install dependencies",
+      });
+      expect(launchedModes).toEqual(["network"]);
+      await vi.waitFor(() => expect(networkDecisions).toEqual(["allow-once"]));
+      expect(requestNetworkApproval.mock.calls[0]![0]).toMatchObject({
+        sessionId: "chat-net",
+        command: "true",
+        cwd: project,
+        root: project,
+        reason: "install dependencies",
+        destination: { host: "registry.npmjs.org", port: 443 },
+      });
+
+      // A later default command uses the offline launcher again.
+      await workspace.execute({
+        sessionId: "chat-net",
+        turnId: "turn-2",
+        toolName: "execute_command",
+        input: { command: "true", cwd: project },
+        commandRoots: [project],
+        requestApproval,
+        requestNetworkApproval,
+      });
+      expect(launchedModes).toEqual(["network", undefined]);
+      expect(requestNetworkApproval).toHaveBeenCalledTimes(1);
+    });
+
+    it("withdraws a destination question when its command has finished", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace, networkDecisions } = await localWorkspace(root);
+      const proposals: AskAgentNetworkApprovalProposal[] = [];
+      // Answers "allow" only after the command is gone.
+      const requestNetworkApproval = (
+        proposal: AskAgentNetworkApprovalProposal,
+      ) => {
+        proposals.push(proposal);
+        return new Promise<"allow-once" | "reject">((resolve) =>
+          proposal.signal.addEventListener("abort", () =>
+            resolve("allow-once"),
+          ),
+        );
+      };
+      const ran = await workspace.execute({
+        sessionId: "chat-net",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: {
+          command: "true",
+          cwd: project,
+          sandbox_permissions: "require_managed_network",
+        },
+        commandRoots: [project],
+        requestApproval: approver({ decision: "run" }),
+        requestNetworkApproval,
+      });
+      expect(ran.isError).toBe(false);
+      await vi.waitFor(() => expect(networkDecisions).toEqual(["reject"]));
+      expect(proposals[0]!.signal.aborted).toBe(true);
+      const commandId = (parse(ran.content).record as { commandId: string })
+        .commandId;
+      expect(proposals[0]!.commandId).toBe(commandId);
+    });
+
+    it("runs an escalated command outside the sandbox only after approval", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace, launchedModes } = await localWorkspace(root);
+
+      const declined = await workspace.execute({
+        sessionId: "chat-esc",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: {
+          command: "touch declined",
+          cwd: project,
+          sandbox_permissions: "require_escalated",
+        },
+        commandRoots: [project],
+        requestApproval: approver({ decision: "reject" }),
+      });
+      expect(parse(declined.content).status).toBe("rejected_by_user");
+      expect(launchedModes).toEqual([]);
+
+      const requestApproval = approver({ decision: "run" });
+      const ran = await workspace.execute({
+        sessionId: "chat-esc",
+        turnId: "turn-2",
+        toolName: "execute_command",
+        input: {
+          command: "touch escalated",
+          cwd: project,
+          sandbox_permissions: "require_escalated",
+          reason: "needs the keychain",
+        },
+        commandRoots: [project],
+        requestApproval,
+      });
+      expect(ran.isError).toBe(false);
+      expect(requestApproval.mock.calls[0]![0]).toMatchObject({
+        sandbox: "unsandboxed",
+        network: "full",
+        reason: "needs the keychain",
+      });
+      expect(launchedModes).toEqual(["unsandboxed"]);
+      await expect(
+        fs.stat(path.join(project, "escalated")),
+      ).resolves.toBeTruthy();
+    });
+
+    it("keeps scratch-folder commands sandboxed whatever they ask for", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const { workspace } = await localWorkspace(root);
+      for (const sandbox_permissions of [
+        "require_escalated",
+        "require_managed_network",
+      ]) {
+        const result = await workspace.execute({
+          sessionId: "chat-scratch",
+          turnId: "turn-1",
+          toolName: "execute_command",
+          input: { command: "true", sandbox_permissions },
+          requestApproval: approver({ decision: "run" }),
+          requestNetworkApproval: async () => "allow-once",
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain(
+          "sandbox_permissions_need_granted_folder",
+        );
+      }
+      const invalid = await workspace.execute({
+        sessionId: "chat-scratch",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "true", sandbox_permissions: "root" },
+      });
+      expect(invalid.content).toContain("sandbox_permissions must be one of");
     });
 
     it("finds repositories nested in a folder", async () => {

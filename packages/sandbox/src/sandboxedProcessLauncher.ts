@@ -8,7 +8,11 @@ import {
   type SandboxShellEnvironmentPolicy,
 } from "./sandboxEnvironmentPolicy.js";
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
-import type { SandboxOutputStream } from "./sandboxHelperProtocol.js";
+import { CURRENT_SANDBOX_POLICY_VERSION } from "./sandboxPolicy.js";
+import type {
+  SandboxManagedNetworkDestination,
+  SandboxOutputStream,
+} from "./sandboxHelperProtocol.js";
 import type {
   SandboxCommandExit,
   SandboxCommandProcess,
@@ -23,8 +27,9 @@ import {
  * Non-interactive sandboxed process launches for hosts without a terminal UI
  * (the Ask Agent helper, workspace-host backends). Each launch runs on pipes
  * through the packaged sandbox helper: stdin is closed, stdout and stderr stay
- * separate, network is loopback-only, and only `writableRoots` plus private
- * per-command directories are writable.
+ * separate, network is loopback-only unless a request opts into the public
+ * proxy, and only `writableRoots` plus private per-command directories are
+ * writable.
  */
 export interface SandboxedProcessLauncherOptions {
   /** Usually `new SandboxHelperClient(createNodeSandboxHelperTransportFactory(...))`. */
@@ -72,6 +77,18 @@ export interface SandboxedProcessRequest {
   readonly cwd: string;
   /** Source environment, filtered by the shell environment policy. */
   readonly environment: Readonly<Record<string, string | undefined>>;
+  /**
+   * Route the command's network through the sandbox's public proxy. Each
+   * public destination pauses until `onNetworkRequest` answers; private,
+   * local and metadata addresses stay blocked. Launching with this set is
+   * itself the caller's approval: the launcher issues and consumes the
+   * one-launch capability grant the compiler requires.
+   */
+  readonly publicNetwork?: {
+    readonly onNetworkRequest: (
+      destination: SandboxManagedNetworkDestination,
+    ) => Promise<"allow-once" | "reject">;
+  };
 }
 
 export interface SandboxedProcessExit {
@@ -144,7 +161,10 @@ export function launchSandboxedProcess(
       cwd: request.cwd,
       command: request.command,
       sessionId: request.sessionId,
-      capability: { publicNetwork: false, localBinding: false },
+      capability: {
+        publicNetwork: request.publicNetwork !== undefined,
+        localBinding: false,
+      },
       hostEnvironment: request.environment,
       agentEnvironment: options.agentEnvironment ?? {},
       environmentPolicy: options.environmentPolicy ?? {
@@ -166,6 +186,22 @@ export function launchSandboxedProcess(
         : {}),
       ...(options.platform ? { platform: options.platform } : {}),
     });
+    const now = Date.now();
+    const authorization = request.publicNetwork
+      ? {
+          ...prepared.authorization,
+          grant: {
+            grantId: randomUUID(),
+            bindingDigest: prepared.bindingDigest,
+            policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
+            sessionId: request.sessionId,
+            issuedAt: now,
+            expiresAt: now + 60_000,
+            auditId: randomUUID(),
+            consumedAt: now,
+          },
+        }
+      : prepared.authorization;
     let launched: SandboxCommandProcess;
     try {
       launched = options.runtime.launch(
@@ -177,7 +213,7 @@ export function launchSandboxedProcess(
           cwd: prepared.cwd,
           shell: request.shell,
           dimensions: { ...UNUSED_PIPE_DIMENSIONS },
-          authorization: prepared.authorization,
+          authorization,
           stdio: "pipe",
         }),
       );
@@ -186,8 +222,26 @@ export function launchSandboxedProcess(
       throw error;
     }
     process = launched;
+    const publicNetwork = request.publicNetwork;
     const subscription = launched.onEvent((event) => {
       if (event.type === "data") onOutput(event.stream ?? "stdout", event.data);
+      if (event.type !== "network-request") return;
+      const answer = publicNetwork
+        ? publicNetwork
+            .onNetworkRequest({
+              ...event.request,
+              dnsAnswers: event.request.dnsAnswers.map((entry) => ({
+                ...entry,
+              })),
+            })
+            .catch(() => "reject" as const)
+        : Promise.resolve("reject" as const);
+      void answer.then((decision) =>
+        launched.respondToNetworkRequest?.(
+          event.request.requestId,
+          decision === "allow-once" ? "allow-once" : "reject",
+        ),
+      );
     });
     void launched.completion
       .then(toExit, (error: unknown) => ({

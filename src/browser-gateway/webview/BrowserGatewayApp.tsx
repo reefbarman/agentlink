@@ -495,6 +495,16 @@ type AskAgentCommandPolicy = {
     root?: string;
     createdAt: number;
   }>;
+  /** Older helpers do not send destination rules. */
+  destinations?: Array<{
+    id: string;
+    protocol: "http" | "https" | "tcp";
+    host: string;
+    port: number;
+    scope: "session" | "project" | "global";
+    root?: string;
+    createdAt: number;
+  }>;
 };
 
 type BrowserGatewayInstanceOption = {
@@ -3660,6 +3670,7 @@ export function BrowserGatewayApp({
   const askAgentCommandPolicy: AskAgentCommandPolicy = (isAskAgentSelected
     ? snapshot?.ui.commandPolicy
     : undefined) ?? { approveForMe: false, rules: [] };
+  const askAgentCommandDestinations = askAgentCommandPolicy.destinations ?? [];
   const askAgentHasCommandGrant = askAgentReadGrants.some(
     (grant) => grant.access === "commands",
   );
@@ -10202,7 +10213,8 @@ export function BrowserGatewayApp({
                   )}
                   {(askAgentHasCommandGrant ||
                     askAgentCommandPolicy.approveForMe ||
-                    askAgentCommandPolicy.rules.length > 0) && (
+                    askAgentCommandPolicy.rules.length > 0 ||
+                    askAgentCommandDestinations.length > 0) && (
                     <div class="ask-agent-command-policy">
                       <label class="ask-agent-handoff-field ask-agent-grant-commands">
                         <input
@@ -10231,6 +10243,41 @@ export function BrowserGatewayApp({
                                 <strong>{rule.pattern}</strong>
                                 <span>
                                   {rule.decision} · {rule.mode} ·{" "}
+                                  {rule.scope === "global"
+                                    ? "all granted folders"
+                                    : rule.scope === "project"
+                                      ? (rule.root ?? "one folder")
+                                      : "this chat"}
+                                </span>
+                              </div>
+                              <button
+                                class="secondary"
+                                disabled={askAgentReadGrantPending}
+                                onClick={() =>
+                                  void updateAskAgentCommandPolicy({
+                                    kind: "remove-rule",
+                                    id: rule.id,
+                                  })
+                                }
+                                type="button"
+                              >
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {askAgentCommandDestinations.length > 0 && (
+                        <ul
+                          aria-label="Allowed network destinations"
+                          class="ask-agent-read-grants-list"
+                        >
+                          {askAgentCommandDestinations.map((rule) => (
+                            <li key={rule.id}>
+                              <div>
+                                <strong>{`${rule.protocol}://${rule.host}:${rule.port}`}</strong>
+                                <span>
+                                  network ·{" "}
                                   {rule.scope === "global"
                                     ? "all granted folders"
                                     : rule.scope === "project"

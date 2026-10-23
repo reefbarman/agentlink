@@ -13,6 +13,7 @@ import {
   linuxSandboxApplySeccompPath,
   type CheckLinuxSandboxPrerequisitesOptions,
   type LinuxSandboxPrerequisites,
+  type SandboxManagedNetworkDestination,
   type SandboxRuntimeProvider,
 } from "@agentlink/sandbox";
 import type { CoreModelToolDefinition } from "@agentlink/core/model-runtime";
@@ -35,6 +36,7 @@ type WorkspaceProcessLaunch = Parameters<
 type WorkspaceProcessHandle = ReturnType<
   WorkspaceProcessLauncher["launchProcess"]
 >;
+type WorkspaceProcessLaunchRequest = WorkspaceProcessLaunch["request"];
 
 /**
  * Per-chat sandboxed scratch folders for the Ask Agent helper (Desktop and
@@ -51,6 +53,12 @@ type WorkspaceProcessHandle = ReturnType<
  * as VS Code (host readable, writes only inside the granted folder and
  * temporary directories, Git and agent policy files protected, no network)
  * and every one waits for an approval card, because the folder is real work.
+ *
+ * A command there can ask for more with `sandbox_permissions`:
+ * `require_managed_network` keeps the sandbox but routes the network through
+ * its proxy, pausing each public destination for approval; and
+ * `require_escalated` runs outside the sandbox as the user. The helper
+ * decides who may approve each (escalations only on this computer).
  */
 
 export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
@@ -68,6 +76,14 @@ export function isAskAgentSandboxToolName(
   return (ASK_AGENT_SANDBOX_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+export const ASK_AGENT_SANDBOX_PERMISSIONS = [
+  "use_default",
+  "require_managed_network",
+  "require_escalated",
+] as const;
+export type AskAgentSandboxPermission =
+  (typeof ASK_AGENT_SANDBOX_PERMISSIONS)[number];
+const ASK_AGENT_SANDBOX_MAX_REASON_LENGTH = 1_000;
 export const ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS = 120_000;
 export const ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS = 600_000;
 export const ASK_AGENT_SANDBOX_MAX_WORKSPACE_BYTES = 1024 * 1024 * 1024;
@@ -108,6 +124,18 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
             minimum: 1,
             maximum: ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS,
             description: `Defaults to ${ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS} ms.`,
+          },
+          sandbox_permissions: {
+            type: "string",
+            enum: [...ASK_AGENT_SANDBOX_PERMISSIONS],
+            description:
+              "Only for commands in a folder granted for commands. use_default (the default): sandboxed with no internet. require_managed_network: sandboxed, but each public internet destination waits for the user's approval (for package installs, downloads, git fetch). require_escalated: runs outside the sandbox with the user's full permissions; only the user at their computer can approve it, so use it only when the sandbox blocks something essential. Give a reason with either.",
+          },
+          reason: {
+            type: "string",
+            maxLength: ASK_AGENT_SANDBOX_MAX_REASON_LENGTH,
+            description:
+              "Short reason shown to the user when the command needs the network or runs outside the sandbox.",
           },
         },
         required: ["command"],
@@ -177,6 +205,8 @@ export function askAgentCommandFoldersPrompt(
     ...roots.map((root) => `- ${root}`),
     "",
     "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. write_file and present_files still only work in the scratch folder.",
+    "",
+    'When a command in a granted folder needs the internet (installing packages, downloading, git fetch), pass sandbox_permissions: "require_managed_network" with a reason; each new destination then waits for the user\'s approval. Only when the sandbox blocks something essential, pass sandbox_permissions: "require_escalated" with a reason to run it outside the sandbox with the user\'s full permissions. The user must approve that on their computer, so they may not be able to from a phone.',
   ].join("\n");
 }
 
@@ -192,9 +222,51 @@ export interface AskAgentCommandApprovalProposal {
   /**
    * `loopback` on macOS, where the sandbox still allows connections to
    * services on this computer; `none` on Linux, where each command has a
-   * private network namespace.
+   * private network namespace; `approved-destinations` when the command
+   * asked for the network and each public destination asks first; `full`
+   * outside the sandbox.
    */
-  readonly network: "none" | "loopback";
+  readonly network: "none" | "loopback" | "approved-destinations" | "full";
+  /**
+   * `unsandboxed` runs as the user with full access. Saved rules and
+   * Approve for Me never approve it, and only this computer can.
+   */
+  readonly sandbox: "workspace-write" | "unsandboxed";
+  /** The model's reason, when it asked for the network or to escalate. */
+  readonly reason?: string;
+}
+
+/** A public destination a granted-folder command is connecting to. */
+export interface AskAgentNetworkApprovalProposal {
+  readonly sessionId: string;
+  /** The workspace command ID of the command connecting. */
+  readonly commandId: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly root: string;
+  readonly reason?: string;
+  readonly destination: SandboxManagedNetworkDestination;
+  /**
+   * Aborted when the command's tool call returns (it exited, timed out or
+   * was stopped). An answer after that must not allow or save anything.
+   */
+  readonly signal: AbortSignal;
+}
+
+type GrantedLaunchMode = "network" | "unsandboxed";
+
+/** How an approved command in a granted folder launches, keyed by command ID. */
+interface GrantedLaunchContext {
+  readonly mode: GrantedLaunchMode;
+  readonly root: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly reason?: string;
+  readonly requestNetworkApproval?: (
+    proposal: AskAgentNetworkApprovalProposal,
+  ) => Promise<"allow-once" | "reject">;
+  /** Aborted when the context is removed. */
+  readonly ended: AbortController;
 }
 
 const NESTED_REPOSITORY_SCAN_MAX_DIRECTORIES = 20_000;
@@ -306,12 +378,25 @@ export interface AskAgentSandboxWorkspaceOptions {
     readonly deniedReadRoots: readonly string[];
     readonly trustedRuntimeRoots: readonly string[];
     readonly grantedRoot?: string;
+    /**
+     * For a granted folder: `network` sandboxes with the public proxy and
+     * passes `onNetworkRequest`; `unsandboxed` runs outside the sandbox.
+     */
+    readonly mode?: GrantedLaunchMode;
+    readonly onNetworkRequest?: (
+      destination: SandboxManagedNetworkDestination,
+      request: WorkspaceProcessLaunchRequest,
+    ) => Promise<"allow-once" | "reject">;
   }) => WorkspaceProcessLauncher | Promise<WorkspaceProcessLauncher>;
 }
 
 interface GrantedFolder {
   readonly launcher: WorkspaceProcessLauncher;
   readonly commandTools: WorkspaceCommandTools;
+  /** Launchers for commands approved with more access, created on use. */
+  readonly launcherFor: (
+    mode: GrantedLaunchMode,
+  ) => Promise<WorkspaceProcessLauncher>;
 }
 
 interface ChatSandbox {
@@ -322,6 +407,12 @@ interface ChatSandbox {
   readonly commandTools: WorkspaceCommandTools;
   /** Keyed by canonical granted root; removed when the grant is revoked. */
   readonly granted: Map<string, Promise<GrantedFolder>>;
+  /**
+   * Commands approved for the network or to run unsandboxed, keyed by
+   * command ID while their tool call runs. Any other launch is sandboxed
+   * without internet.
+   */
+  readonly launchModes: Map<string, GrantedLaunchContext>;
 }
 
 const OWNER_ID = "ask-agent-sandbox";
@@ -333,6 +424,12 @@ const MODEL = {
 /** Helper-process variables that must not leak into user commands. */
 const HELPER_ONLY_ENVIRONMENT =
   /^(ELECTRON_|NODE_PATH$|NODE_OPTIONS$|AGENTLINK_)/;
+
+/** Forget an approved launch mode and withdraw its open network requests. */
+function endLaunch(chat: ChatSandbox, launchId: string): void {
+  chat.launchModes.get(launchId)?.ended.abort();
+  chat.launchModes.delete(launchId);
+}
 
 function refusedLaunch(error: Error): WorkspaceProcessHandle {
   const started = Promise.reject(error);
@@ -360,6 +457,10 @@ interface SandboxToolRequest {
   readonly requestApproval?: (
     proposal: AskAgentCommandApprovalProposal,
   ) => Promise<AskAgentCommandApprovalDecision>;
+  /** Ask the user about a public destination an approved command connects to. */
+  readonly requestNetworkApproval?: (
+    proposal: AskAgentNetworkApprovalProposal,
+  ) => Promise<"allow-once" | "reject">;
   /**
    * Whether a folder is still granted for commands, checked again just
    * before launch so a grant revoked during the call is not used.
@@ -872,23 +973,70 @@ export class AskAgentSandboxWorkspace {
         );
       }
     }
+    let permission: AskAgentSandboxPermission = "use_default";
+    let reason: string | undefined;
+    let input = request.input;
+    if (request.toolName === "execute_command") {
+      const {
+        sandbox_permissions: requestedPermission,
+        reason: requestedReason,
+        ...rest
+      } = request.input;
+      input = rest;
+      if (requestedPermission !== undefined) {
+        if (
+          !(ASK_AGENT_SANDBOX_PERMISSIONS as readonly unknown[]).includes(
+            requestedPermission,
+          )
+        ) {
+          return errorResult(
+            `sandbox_permissions must be one of ${ASK_AGENT_SANDBOX_PERMISSIONS.join(", ")}`,
+          );
+        }
+        permission = requestedPermission as AskAgentSandboxPermission;
+      }
+      if (requestedReason !== undefined) {
+        if (
+          typeof requestedReason !== "string" ||
+          requestedReason.length > ASK_AGENT_SANDBOX_MAX_REASON_LENGTH
+        ) {
+          return errorResult(
+            `reason must be a string of at most ${ASK_AGENT_SANDBOX_MAX_REASON_LENGTH} characters`,
+          );
+        }
+        reason = requestedReason.trim() || undefined;
+      }
+    }
     const startedAt = this.revocationClock;
     const sandbox = await this.chatSandbox(request.sessionId);
     let grantedRoot: string | undefined;
-    let input = request.input;
     if (request.toolName === "execute_command") {
       const granted = await this.grantedRootFor(
         sandbox.workDirectory,
-        request.input.cwd,
+        input.cwd,
         request.commandRoots ?? [],
       );
       if (granted.error) return errorResult(granted.error);
       grantedRoot = granted.root;
       if (grantedRoot) {
         // Workspace command tools take a cwd relative to their project.
-        input = { ...request.input, cwd: granted.relativeCwd };
+        input = { ...input, cwd: granted.relativeCwd };
       } else {
         await this.assertUnderQuota(sandbox.workDirectory);
+      }
+      if (permission !== "use_default") {
+        if (!grantedRoot) {
+          return errorResult(
+            "sandbox_permissions_need_granted_folder: scratch-folder commands always run in the sandbox without internet; network access and running outside the sandbox are only available in folders the user granted for commands",
+          );
+        }
+        if (
+          !request.requestApproval ||
+          (permission === "require_managed_network" &&
+            !request.requestNetworkApproval)
+        ) {
+          return errorResult("command_requires_approval");
+        }
       }
     }
     const commandTools = grantedRoot
@@ -920,6 +1068,7 @@ export class AskAgentSandboxWorkspace {
     }
     const model = MODEL;
     let executable = validation.input;
+    let launchId: string | undefined;
     if (request.toolName === "execute_command") {
       const authorize = (candidate: Readonly<Record<string, unknown>>) =>
         commandTools.authorizeToolCall({
@@ -935,6 +1084,10 @@ export class AskAgentSandboxWorkspace {
         return errorResult(authorization.reason ?? "command_denied");
       }
       if (authorization.decision === "allow") {
+        // More access than the default sandbox is always the helper's call.
+        if (grantedRoot && permission !== "use_default") {
+          return errorResult("command_requires_approval");
+        }
         executable = { ...(authorization.preparedInput ?? validation.input) };
       } else if (
         authorization.decision === "require_user" &&
@@ -946,6 +1099,8 @@ export class AskAgentSandboxWorkspace {
           root: grantedRoot,
           commandTools,
           authorization,
+          permission,
+          reason,
           reauthorize: (command) => authorize({ ...validation.input, command }),
         });
         if ("result" in approved) return approved.result;
@@ -953,24 +1108,59 @@ export class AskAgentSandboxWorkspace {
       } else {
         return errorResult("command_requires_approval");
       }
+      if (permission !== "use_default" && grantedRoot) {
+        const launch = executable.launch as
+          | {
+              readonly commandId?: unknown;
+              readonly command?: unknown;
+              readonly cwd?: unknown;
+            }
+          | undefined;
+        if (typeof launch?.commandId !== "string") {
+          return errorResult("command_requires_approval");
+        }
+        launchId = launch.commandId;
+        sandbox.launchModes.set(launchId, {
+          mode: permission === "require_escalated" ? "unsandboxed" : "network",
+          root: grantedRoot,
+          command:
+            typeof launch.command === "string"
+              ? launch.command
+              : String(input.command),
+          cwd: typeof launch.cwd === "string" ? launch.cwd : grantedRoot,
+          ...(reason ? { reason } : {}),
+          ...(request.requestNetworkApproval
+            ? { requestNetworkApproval: request.requestNetworkApproval }
+            : {}),
+          ended: new AbortController(),
+        });
+      }
       if (
         grantedRoot &&
         !(await this.isStillGranted(grantedRoot, startedAt, request))
       ) {
         // Drop a launcher this stale call may have recreated.
         sandbox.granted.delete(grantedRoot);
+        if (launchId) endLaunch(sandbox, launchId);
         return errorResult(
           "cwd_not_granted: this folder's command grant was revoked",
         );
       }
     }
-    const result = await tool.executeValidated(executable, {
-      principal,
-      sessionId: request.sessionId,
-      turnId: request.turnId,
-      model,
-      signal: request.signal,
-    });
+    let result: Awaited<ReturnType<typeof tool.executeValidated>>;
+    try {
+      result = await tool.executeValidated(executable, {
+        principal,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        model,
+        signal: request.signal,
+      });
+    } finally {
+      // Later network requests from a command still running after this
+      // call returned are refused, and open ones are withdrawn.
+      if (launchId) endLaunch(sandbox, launchId);
+    }
     return {
       content:
         typeof result.modelContent === "string"
@@ -1025,9 +1215,11 @@ export class AskAgentSandboxWorkspace {
         });
     const locale = this.platform === "linux" ? "C.UTF-8" : "en_US.UTF-8";
     const granted = new Map<string, Promise<GrantedFolder>>();
+    const launchModes = new Map<string, GrantedLaunchContext>();
     // One supervisor per chat, so get_command_output finds commands from the
     // scratch folder and granted folders alike. Each launch goes to the
     // launcher for the root its cwd is in; a revoked grant has no launcher.
+    // A command approved for more access uses that root's matching launcher.
     const routingLauncher: WorkspaceProcessLauncher = {
       launchProcess: (launch: WorkspaceProcessLaunch) => {
         const cwd = launch.request.cwd;
@@ -1043,8 +1235,13 @@ export class AskAgentSandboxWorkspace {
             new host.WorkspaceProcessLaunchError("cwd_not_granted"),
           );
         }
-        const started = folder.then((resolved) =>
-          resolved.launcher.launchProcess(launch),
+        const context = launchModes.get(launch.request.operationId);
+        const mode = context?.root === root ? context.mode : undefined;
+        const started = folder.then(async (resolved) =>
+          (mode
+            ? await resolved.launcherFor(mode)
+            : resolved.launcher
+          ).launchProcess(launch),
         );
         return {
           get pid() {
@@ -1096,7 +1293,45 @@ export class AskAgentSandboxWorkspace {
       supervisor,
       commandTools,
       granted,
+      launchModes,
     };
+  }
+
+  /**
+   * Answer a public destination from a granted-folder command: only a
+   * command whose tool call is still running and was approved for the
+   * network can ask; anything else is refused.
+   */
+  private answerNetworkRequest(
+    chat: ChatSandbox,
+    root: string,
+    destination: SandboxManagedNetworkDestination,
+    launch: WorkspaceProcessLaunchRequest,
+  ): Promise<"allow-once" | "reject"> {
+    const context = chat.launchModes.get(launch.operationId);
+    if (
+      !context ||
+      context.mode !== "network" ||
+      context.root !== root ||
+      !context.requestNetworkApproval ||
+      context.ended.signal.aborted
+    ) {
+      return Promise.resolve("reject");
+    }
+    const signal = context.ended.signal;
+    return context
+      .requestNetworkApproval({
+        sessionId: chat.sessionId,
+        commandId: launch.operationId,
+        command: context.command,
+        cwd: context.cwd,
+        root,
+        ...(context.reason ? { reason: context.reason } : {}),
+        destination,
+        signal,
+      })
+      .then((answer) => (signal.aborted ? "reject" : answer))
+      .catch(() => "reject" as const);
   }
 
   private async isStillGranted(
@@ -1143,23 +1378,55 @@ export class AskAgentSandboxWorkspace {
     // VS Code's workspace-write profile: the host stays readable (so tools
     // installed under the home folder run), writes are limited to the folder
     // and temporary directories, and Git and agent policy files are protected.
-    const launcher = this.options.createProcessLauncher
-      ? await this.options.createProcessLauncher({
+    const onNetworkRequest = (
+      destination: SandboxManagedNetworkDestination,
+      launch: WorkspaceProcessLaunchRequest,
+    ) => this.answerNetworkRequest(chat, root, destination, launch);
+    const createLauncher = async (
+      mode?: GrantedLaunchMode,
+    ): Promise<WorkspaceProcessLauncher> => {
+      if (this.options.createProcessLauncher) {
+        return await this.options.createProcessLauncher({
           workDirectory: root,
           deniedReadRoots: [],
           trustedRuntimeRoots,
           grantedRoot: root,
-        })
-      : host.createSandboxedWorkspaceProcessLauncher({
-          runtime: this.sandboxRuntime(ripgrepPath),
-          platform: this.platform,
-          writableRoots: [root],
-          trustedRuntimeRoots,
-          temporaryHome: false,
-          shareHostTemporaryDirectories: true,
-          homeDirectory: this.homeDirectory,
-          fallbackShell: "/bin/sh",
+          ...(mode ? { mode } : {}),
+          ...(mode === "network" ? { onNetworkRequest } : {}),
         });
+      }
+      // Runs as the user: only for a command approved on this computer.
+      if (mode === "unsandboxed") {
+        return host.createLocalWorkspaceExecutionBackend();
+      }
+      return host.createSandboxedWorkspaceProcessLauncher({
+        runtime: this.sandboxRuntime(ripgrepPath),
+        platform: this.platform,
+        writableRoots: [root],
+        trustedRuntimeRoots,
+        temporaryHome: false,
+        shareHostTemporaryDirectories: true,
+        homeDirectory: this.homeDirectory,
+        fallbackShell: "/bin/sh",
+        ...(mode === "network" ? { publicNetwork: { onNetworkRequest } } : {}),
+      });
+    };
+    const launcher = await createLauncher();
+    const modeLaunchers = new Map<
+      GrantedLaunchMode,
+      Promise<WorkspaceProcessLauncher>
+    >();
+    const launcherFor = (mode: GrantedLaunchMode) => {
+      let pending = modeLaunchers.get(mode);
+      if (!pending) {
+        pending = createLauncher(mode);
+        modeLaunchers.set(mode, pending);
+        pending.catch(() => {
+          if (modeLaunchers.get(mode) === pending) modeLaunchers.delete(mode);
+        });
+      }
+      return pending;
+    };
     const stateDirectory = path.join(
       chat.stateDirectory,
       "granted",
@@ -1180,7 +1447,7 @@ export class AskAgentSandboxWorkspace {
       hasSessionGrant: () => false,
       requiresApproval: () => true,
     });
-    return { launcher, commandTools };
+    return { launcher, commandTools, launcherFor };
   }
 
   /**
@@ -1195,6 +1462,8 @@ export class AskAgentSandboxWorkspace {
       readonly displayContent?: unknown;
       readonly preparedInput?: Readonly<Record<string, unknown>>;
     };
+    readonly permission: AskAgentSandboxPermission;
+    readonly reason: string | undefined;
     readonly reauthorize: (
       command: string,
     ) => ReturnType<WorkspaceCommandTools["authorizeToolCall"]>;
@@ -1217,7 +1486,19 @@ export class AskAgentSandboxWorkspace {
         cwd: display.cwd,
         root,
         timeoutMs: display.timeoutMs,
-        network: this.platform === "linux" ? "none" : "loopback",
+        network:
+          options.permission === "require_escalated"
+            ? "full"
+            : options.permission === "require_managed_network"
+              ? "approved-destinations"
+              : this.platform === "linux"
+                ? "none"
+                : "loopback",
+        sandbox:
+          options.permission === "require_escalated"
+            ? "unsandboxed"
+            : "workspace-write",
+        ...(options.reason ? { reason: options.reason } : {}),
       });
     } catch (error) {
       const message = errorMessage(error);

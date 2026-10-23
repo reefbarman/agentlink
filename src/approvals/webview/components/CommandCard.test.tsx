@@ -121,6 +121,53 @@ describe("CommandCard terminal presentation", () => {
     ).toBeTruthy();
   });
 
+  it("says each internet destination asks when the command has the network", () => {
+    renderCard({
+      kind: "command",
+      id: "ask-agent-command-3",
+      command: "npm install",
+      cwd: "/work/app",
+      commandSandbox: {
+        writableRoot: "/work/app",
+        network: "approved-destinations",
+      },
+    });
+
+    expect(
+      screen.getByText(
+        "Writes only in this folder · internet asks per destination",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Each new internet destination it connects to waits/),
+    ).toBeTruthy();
+  });
+
+  it("presents an unsandboxed host command as full access approved on this computer", () => {
+    renderCard({
+      kind: "command",
+      id: "ask-agent-command-4",
+      command: "security find-generic-password",
+      cwd: "/work/app",
+      reason: "needs the keychain",
+      commandSandbox: {
+        writableRoot: "/work/app",
+        network: "full",
+        unsandboxed: true,
+      },
+    });
+
+    expect(screen.getByText("Full terminal access")).toBeTruthy();
+    expect(screen.getByText("One run · normal user permissions")).toBeTruthy();
+    expect(screen.queryByText("Sandboxed command")).toBeNull();
+    expect(
+      screen.getByText("Approve on the computer running AgentLink"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/From another device you can only reject it/),
+    ).toBeTruthy();
+  });
+
   it("presents normal-shell execution as the AgentLink Terminal", () => {
     const { container } = renderCard(request("native"));
 

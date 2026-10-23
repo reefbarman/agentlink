@@ -106,8 +106,15 @@ export interface ApprovalRequest {
     /**
      * `none`: no network at all. `loopback`: no internet, but connections to
      * services on this computer (macOS sandbox) still work.
+     * `approved-destinations`: each public destination asks first; private
+     * and local addresses stay blocked. `full`: unsandboxed, like the user.
      */
-    network: "none" | "loopback";
+    network: "none" | "loopback" | "approved-destinations" | "full";
+    /**
+     * The command runs outside the sandbox as the user, with full access.
+     * Only the computer running AgentLink can approve it.
+     */
+    unsandboxed?: boolean;
   };
   /** For commands: expanded sub-commands with existing rule info */
   subCommands?: SubCommandEntry[];
