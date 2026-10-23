@@ -49,6 +49,47 @@ jobs:
           path: cli-releases/*.tar.gz
           if-no-files-found: error
 
+  # Desktop for Linux: the AppImage and deb, built natively per architecture
+  # (LanceDB and the keyring come from the runner's node_modules), then the
+  # deb installed and launched with Ubuntu's userns restriction on to check
+  # its AppArmor profile keeps Chromium's renderer sandbox. Unpublished.
+  desktop-linux:
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: Install apply-seccomp build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libseccomp-dev
+      - run: npm ci
+      - run: node scripts/build-apply-seccomp.mjs --target ${{ matrix.target }}
+      - name: Package AppImage and deb
+        env:
+          AGENTLINK_APPLY_SECCOMP_REQUIRED: "1"
+        run: npm run desktop:package -- --target ${{ matrix.target }}
+      - name: Install and launch the deb
+        run: bash scripts/smoke-desktop-deb.sh desktop-releases/AgentLink-Desktop-*-${{ matrix.target }}.deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agentlink-desktop-${{ matrix.target }}-unsigned
+          path: |
+            desktop-releases/AgentLink-Desktop-*.AppImage
+            desktop-releases/AgentLink-Desktop-*.deb
+          if-no-files-found: error
+
   # The standalone assistant server on Linux, where it is deployed: its own
   # lint and tests (including the real-process and command-worker tests),
   # then both container images built and smoke-tested under Docker Compose.

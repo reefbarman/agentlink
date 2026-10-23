@@ -1,6 +1,7 @@
 import {
   desktopResourcesPath,
   verifyDesktopRuntimeFiles,
+  verifyLinuxAppArmorProfile,
 } from "./verify-desktop-package.mjs";
 import {
   verifyVsixExcludesDesktop,
@@ -92,6 +93,32 @@ test("rejects a Linux desktop runtime without apply-seccomp", () => {
   assert.throws(
     () => verifyDesktopRuntimeFiles(linuxInventory(), "alpine-x64"),
     /Unsupported desktop target: alpine-x64/u,
+  );
+});
+
+// electron-builder's apparmor-profile.tpl rendered for this app.
+const APPARMOR_PROFILE = `abi <abi/4.0>,
+include <tunables/global>
+
+profile "agentlink" "/opt/AgentLink/agentlink" flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/agentlink>
+}`;
+
+test("accepts the deb's AppArmor profile only when it allows userns for the app", () => {
+  assert.doesNotThrow(() => verifyLinuxAppArmorProfile(APPARMOR_PROFILE));
+  assert.throws(
+    () => verifyLinuxAppArmorProfile(APPARMOR_PROFILE.replace("userns,", "")),
+    /userns rule/u,
+  );
+  assert.throws(
+    () =>
+      verifyLinuxAppArmorProfile(
+        APPARMOR_PROFILE.replace("/opt/AgentLink/agentlink", "/opt/Other/app"),
+      ),
+    /profile for \/opt\/AgentLink\/agentlink/u,
   );
 });
 

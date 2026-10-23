@@ -2,7 +2,7 @@ import {
   getRetrievalNativePackage,
   resolveRetrievalRuntimeTarget,
 } from "./package-retrieval-runtime.mjs";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 
 import { DESKTOP_KEYCHAIN_NATIVE_PACKAGES } from "./package-keychain-runtime.mjs";
 import { applySeccompStagePath } from "./package-sandbox-runtime.mjs";
@@ -128,6 +128,52 @@ async function listFiles(root) {
   }
   await visit(root);
   return files.sort().join("\n");
+}
+
+/**
+ * Checks a Linux AppArmor profile from electron-builder's deb: it must allow
+ * user namespaces for the installed Electron binary, or Chromium falls back
+ * to no renderer sandbox under Ubuntu 23.10+'s restriction.
+ */
+export function verifyLinuxAppArmorProfile(profile) {
+  const problems = [];
+  if (!/^abi <abi\/4\.0>,/mu.test(profile)) problems.push("abi 4.0");
+  if (!/profile\s+"agentlink"\s+"\/opt\/AgentLink\/agentlink"/u.test(profile)) {
+    problems.push("profile for /opt/AgentLink/agentlink");
+  }
+  if (!/^\s*userns,\s*$/mu.test(profile)) problems.push("userns rule");
+  if (problems.length > 0) {
+    throw new Error(
+      `Desktop AppArmor profile is missing: ${problems.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * The AppImage and deb exist for this Linux target, and the deb's AppArmor
+ * profile (copied into the unpacked resources while building it) is valid.
+ */
+export async function verifyLinuxDesktopArtifacts({
+  outputDir,
+  unpackedDir,
+  version,
+  arch,
+}) {
+  const names = new Set(await readdir(outputDir));
+  const expected = ["AppImage", "deb"].map(
+    (ext) => `AgentLink-Desktop-${version}-linux-${arch}.${ext}`,
+  );
+  const missing = expected.filter((name) => !names.has(name));
+  if (missing.length > 0) {
+    throw new Error(`Missing Linux desktop artifacts: ${missing.join(", ")}`);
+  }
+  verifyLinuxAppArmorProfile(
+    await readFile(
+      path.join(unpackedDir, "resources", "apparmor-profile"),
+      "utf8",
+    ),
+  );
+  return { artifacts: expected };
 }
 
 /** `Contents/Resources` in a macOS bundle, `resources` in a Linux unpacked app. */

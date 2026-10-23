@@ -1,6 +1,7 @@
 import {
   DESKTOP_TARGETS,
   verifyDesktopRuntimeFiles,
+  verifyLinuxDesktopArtifacts,
 } from "../../scripts/verify-desktop-package.mjs";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import {
@@ -92,6 +93,20 @@ execFileSync(
   ],
   { cwd: repoRoot, stdio: "inherit" },
 );
+if (linux) {
+  process.stdout.write(
+    `${JSON.stringify(
+      await verifyLinuxDesktopArtifacts({
+        outputDir,
+        unpackedDir: unpackedOutputDir,
+        version: desktopManifest.version,
+        arch,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+}
 
 async function copyDesktopShell() {
   await cp(path.join(desktopRoot, "dist"), path.join(stageRoot, "dist"), {
@@ -108,6 +123,8 @@ async function copyDesktopShell() {
         description: desktopManifest.description,
         license: "MIT",
         main: "dist/main.cjs",
+        // Required by the Linux deb metadata.
+        homepage: "https://github.com/reefbarman/agentlink",
         // Linux window association with the AppImage's desktop entry.
         desktopName: "agentlink.desktop",
         dependencies: {

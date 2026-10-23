@@ -84,9 +84,11 @@ Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. With multiple s
 
 For the equivalent signed CLI task and dedicated Node runtime, see [Signed local installation](standalone-cli.md#signed-local-installation).
 
-### Desktop on Linux (AppImage, source build)
+### Desktop on Linux (AppImage or deb, source build)
 
-Desktop also runs on Linux x64 and arm64 (glibc distributions) as an AppImage. No Linux release is published yet: build it on a Linux machine of the same architecture with `npm ci`, `node scripts/build-apply-seccomp.mjs --target linux-x64` (or `linux-arm64`), then `npm run desktop:package -- --target linux-x64`. The AppImage lands in `desktop-releases/` as `AgentLink-Desktop-<version>-linux-<arch>.AppImage`. Building a Linux AppImage on macOS, or for the other architecture, is refused because the native LanceDB and keyring packages come from the build machine's `node_modules`. The AppImage uses the static AppImage runtime, so it needs no `libfuse2`.
+Desktop also runs on Linux x64 and arm64 (glibc distributions) as an AppImage or, on Debian and Ubuntu, a deb package. No Linux release is published yet: build both on a Linux machine of the same architecture with `npm ci`, `node scripts/build-apply-seccomp.mjs --target linux-x64` (or `linux-arm64`), then `npm run desktop:package -- --target linux-x64`. They land in `desktop-releases/` as `AgentLink-Desktop-<version>-linux-<arch>.AppImage` and `.deb`. Building for Linux on macOS, or for the other architecture, is refused because the native LanceDB and keyring packages come from the build machine's `node_modules`. The AppImage uses the static AppImage runtime, so it needs no `libfuse2`.
+
+Install the deb with `sudo apt install ./AgentLink-Desktop-<version>-linux-<arch>.deb`. It installs to `/opt/AgentLink`, adds an `agentlink` command and a launcher entry, and recommends `bubblewrap`, `socat`, and `ripgrep` for the Ask Agent scratch-folder sandbox. On AppArmor 4 hosts (Ubuntu 24.04 and later) it also installs an AppArmor profile that lets Desktop create user namespaces, so Chromium keeps its renderer sandbox without any host-wide change. Removing the package unloads and deletes the profile. Prefer the deb on Ubuntu.
 
 On Linux, Desktop differs from macOS:
 
@@ -97,8 +99,8 @@ On Linux, Desktop differs from macOS:
 - The Quick Ask shortcut uses Electron's global shortcuts, which work on X11. Most Wayland sessions do not allow them, so Settings warns that the shortcut could not be registered.
 - MCP servers that need OAuth sign-in cannot be connected from Desktop on Linux yet; servers without sign-in work.
 - The Ask Agent scratch folder runs commands under bubblewrap when the host passes the [Linux command sandbox](capabilities.md#linux-command-sandbox) check, and is not offered otherwise.
-- In-app updates are macOS only. Replace the AppImage to update.
-- On Ubuntu 23.10 and later, where AppArmor restricts unprivileged user namespaces, the AppImage starts with Chromium's renderer sandbox turned off (`--no-sandbox`), because Chromium cannot create its sandbox there. Desktop's windows only load its own local service and the Assistant address you configure. Allowing unprivileged user namespaces (the same host-wide change the command sandbox needs) turns the renderer sandbox back on.
+- In-app updates are macOS only. Replace the AppImage, or install the newer deb, to update.
+- On Ubuntu 23.10 and later, where AppArmor restricts unprivileged user namespaces, the AppImage starts with Chromium's renderer sandbox turned off (`--no-sandbox`), because Chromium cannot create its sandbox there and an AppImage cannot install an AppArmor profile. Desktop's windows only load its own local service and the Assistant address you configure. Use the deb, or allow unprivileged user namespaces (the same host-wide change the command sandbox needs), to keep the renderer sandbox on. The deb's profile covers Desktop itself only; the Ask Agent scratch-folder sandbox still needs the [Linux command sandbox](capabilities.md#linux-command-sandbox) check to pass.
 
 ## Update notifications
 
