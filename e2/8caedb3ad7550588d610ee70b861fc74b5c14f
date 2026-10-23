@@ -1,0 +1,103 @@
+scripts/package-sandbox-runtime.test.mjs
+  h_e08a86bb3a33a2 111-173,175
+  s_054252fc792af2::t_92a5bad9b389b8 174
+CHANGELOG.md
+  h_e08a86bb3a33a2 8-9
+src/terminal/vscodeTerminalConfiguration.test.ts
+  h_e08a86bb3a33a2 5,9,96-105
+  s_1469afbd957feb::t_356044fbb675b1 106-108
+src/extension.ts
+  h_e08a86bb3a33a2 236-237,565-566,661,680,1034,1058
+  s_054252fc792af2::t_c4a9e8369ef408 235,238,567-568
+src/terminal/customTerminalSupport.test.ts
+  h_e08a86bb3a33a2 25,31-45
+  s_06a6b5f090fcca::t_00a3be95ec17a7 46
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 202-204
+src/terminal/hostShellLaunchPolicy.test.ts
+  h_e08a86bb3a33a2 124,138-153
+  s_1469afbd957feb::t_29f3fc98da9ce0 154
+packages/protocol/src/terminalSecurity.ts
+  h_e08a86bb3a33a2 123
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_e08a86bb3a33a2 50-51,168,812-815,823-825,840-842
+  s_054252fc792af2::t_7808aa52b0b933 167
+src/terminal/vscodeTerminalConfiguration.ts
+  h_e08a86bb3a33a2 72-84,101,108,112-114,116,132
+  s_054252fc792af2::t_b07168fe7605db 106-107,109,115,129-131
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_e08a86bb3a33a2 346
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 176
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 118
+packages/protocol/src/terminalSecurity.test.ts
+  h_e08a86bb3a33a2 43
+src/terminal/deferredNodePtyLoader.test.ts
+  h_e08a86bb3a33a2 7,73-74,79,157-205,207
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  h_e08a86bb3a33a2 90,797-837
+scripts/package-sandbox-runtime.mjs
+  h_e08a86bb3a33a2 72-76,95-96,98-103,118,127,135-137,139-144,244,252,255-257
+  s_054252fc792af2::t_91587095dee088 97,138,254,258
+src/terminal/deferredNodePtyLoader.ts
+  h_e08a86bb3a33a2 86-110,117,119,141-144
+  s_49d760ec942567::t_801c25c7877ab9 118,120
+src/terminal/customTerminalSupport.ts
+  h_e08a86bb3a33a2 9-13,16,18-20
+resources/builtin-skills/documentation/references/release-notes.md
+  s_20d532365f1e2f::t_5e696301bab554 8-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_054252fc792af2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b14d512-8b4c-463c-81ba-e0d49df56a20",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_06a6b5f090fcca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "35e58d0b-8dd3-417f-86ff-94c9ace0fc49",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1469afbd957feb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "227d98b2-a58c-4ee1-967b-feba365075d1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_20d532365f1e2f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d46eeef0-9c94-44ab-9537-ce436d978b5d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_49d760ec942567": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e24b939-bd15-4c93-9e10-26f9f532508f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
