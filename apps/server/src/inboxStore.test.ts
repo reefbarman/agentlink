@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inboxEntryForBackupProblem,
+  inboxEntryForChat,
   inboxEntryForInterruptedChat,
   inboxEntryForRestore,
   inboxEntryForRun,
@@ -692,5 +693,43 @@ describe("inboxEntryForSessionAlert", () => {
     ).toBeDefined();
     await store.markRead("all");
     expect(await store.add(entry, 4)).toBeDefined();
+  });
+});
+
+describe("inboxEntryForChat", () => {
+  const chat = { projectId: "home", sessionId: "chat-1" };
+
+  it("says a chat needs an approval, or replied", () => {
+    expect(
+      inboxEntryForChat({ ...chat, reason: "approval" }, "Plan the trip"),
+    ).toEqual({
+      ...chat,
+      kind: "needs_approval",
+      title: '"Plan the trip" needs your approval',
+      body: "The chat is paused until you allow or deny its request.",
+    });
+    expect(inboxEntryForChat({ ...chat, reason: "replied" }, " ")).toEqual({
+      ...chat,
+      kind: "chat_replied",
+      title: "A chat replied",
+      body: "It finished and is waiting for you.",
+    });
+  });
+
+  it("keeps one unread notice per chat and kind, apart from runs", async () => {
+    const store = await openInboxStore({ directory: await tempDir() });
+    const replied = inboxEntryForChat({ ...chat, reason: "replied" }, "Chat");
+    const approval = inboxEntryForChat({ ...chat, reason: "approval" }, "Chat");
+    expect(await store.add(replied, 1)).toBeDefined();
+    expect(await store.add(replied, 2)).toBeUndefined();
+    expect(await store.add(approval, 3)).toBeDefined();
+    expect(await store.add(approval, 4)).toBeUndefined();
+    // A run's approval in the same chat is its own entry.
+    expect(
+      await store.add({ ...approval, runId: "run-1", jobId: "job-1" }, 5),
+    ).toBeDefined();
+    await store.markSessionRead(chat);
+    expect(store.unreadCount()).toBe(0);
+    expect(await store.add(replied, 6)).toBeDefined();
   });
 });

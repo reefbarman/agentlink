@@ -161,6 +161,7 @@ export interface InboxEntry {
     | "backup_failed"
     | "restored"
     | "chat_interrupted"
+    | "chat_replied"
     | "audit_checkpoint"
     | "mcp_changed"
     | "watch_changed"
@@ -224,6 +225,7 @@ const INBOX_ICONS: Record<InboxEntry["kind"], string> = {
   backup_failed: "warning",
   restored: "history",
   chat_interrupted: "debug-pause",
+  chat_replied: "comment",
   audit_checkpoint: "shield",
   mcp_changed: "plug",
   watch_changed: "eye",

@@ -116,6 +116,7 @@ import { createQuietPush } from "./quietPush.js";
 import { openPushLog } from "./pushLog.js";
 import {
   inboxEntryForBackupProblem,
+  inboxEntryForChat,
   inboxEntryForCheckpointProblem,
   inboxEntryForInterruptedChat,
   inboxEntryForMcpChange,
@@ -1138,6 +1139,8 @@ export async function startAssistantService(
   // Bound to the inbox once it is ready (before any server is refreshed).
   let mcpInbox: (entry: NewInboxEntry) => Promise<unknown> = async () =>
     undefined;
+  // Bound to the inbox once it is ready (chats cannot run before then).
+  let chatInbox: (entry: NewInboxEntry) => void = () => undefined;
   /** Test a server, and tell the owner when tools changed (they ask again). */
   const refreshMcpServer = async (serverId: string) => {
     const result = await mcpRegistry.refresh(serverId);
@@ -1671,6 +1674,20 @@ export async function startAssistantService(
           await inbox.remove({ projectId, sessionId: workspaceSessionId });
           assistantChanged();
         },
+        // A chat that stops for the owner goes to the Inbox, for its badge
+        // and notifications.
+        chatNeedsYou: (chat) => {
+          chatInbox(
+            inboxEntryForChat(
+              {
+                projectId: chat.projectId,
+                sessionId: chat.workspaceSessionId,
+                reason: chat.reason,
+              },
+              chat.title,
+            ),
+          );
+        },
         // Opening a chat reads what the Inbox says about it.
         chatViewed: (chat) => {
           void inbox
@@ -1740,21 +1757,45 @@ export async function startAssistantService(
         return bridge;
       },
     });
-    /** Add an inbox entry and notify about it; never throws. */
-    const addToInbox = async (entry: NewInboxEntry | undefined) => {
+    /**
+     * Add an inbox entry and notify about it. With `pushAfterMs` the push
+     * waits that long and is dropped if the entry was read meanwhile (the
+     * owner was looking at the chat).
+     */
+    const addToInbox = async (
+      entry: NewInboxEntry | undefined,
+      pushAfterMs?: number,
+    ) => {
       const added = entry ? await inbox.add(entry, Date.now()) : undefined;
       // Best effort, never awaited: the inbox entry is the record. Pushes
       // wait out quiet hours.
-      if (added) {
+      if (!added) return;
+      const deliver = () =>
         quietPush.deliver(
           added,
           pushMessageForEntry(added, {
             includeSummary: config.notifications?.includeSummary === true,
           }),
         );
+      if (pushAfterMs === undefined) {
+        deliver();
+        return;
       }
+      const timer = setTimeout(() => {
+        if (inbox.list().some((item) => item.id === added.id && !item.read)) {
+          deliver();
+        }
+      }, pushAfterMs);
+      timer.unref();
     };
     mcpInbox = (entry) => addToInbox(entry);
+    chatInbox = (entry) => {
+      addToInbox(entry, CHAT_PUSH_DELAY_MS)
+        .then(() => assistantChanged())
+        .catch((error: unknown) => {
+          log(`Could not update the inbox: ${message(error)}`);
+        });
+    };
     // The runaway guard: tells the owner when a chat or task has worked a
     // long time or looks stuck. Notices only; it never stops anything.
     const sessionWatch = createSessionWatch({
@@ -3031,6 +3072,12 @@ export async function startAssistantService(
     throw error;
   }
 }
+
+/**
+ * How long a chat's push waits: an open window viewing the chat reads its
+ * entry first, so the owner's phone does not buzz for what they watch.
+ */
+const CHAT_PUSH_DELAY_MS = 30_000;
 
 const RECOVERY_RETRY_MS = 2_000;
 const RECOVERY_MAX_ATTEMPTS = 60;

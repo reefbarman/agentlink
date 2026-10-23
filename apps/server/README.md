@@ -843,6 +843,7 @@ Only the owner can use these routes (`403 github_forbidden`). Errors: `400 conne
 
 Each new [Inbox](#scheduled-jobs) entry is also sent as a Web Push notification to every device that turned notifications on, so you hear about a finished run or a waiting approval with no tab open. Tapping a notification opens the run's chat.
 
+- **Chats.** A chat that stops for you goes to the Inbox too: one waiting on an approval card ("needs your approval"), or one that finished its reply and is not carrying on by itself ("replied"). Opening the chat, or having it open in a window that is in front, reads them, so a reply you watch arrives does not badge. Their push waits 30 seconds and is dropped if the entry was read by then. Task and scheduled-run chats report through their own entries instead.
 - **Turning them on.** In the web app open **Inbox** → **Turn on** and allow notifications when the browser asks. **Send test** checks delivery. Each device decides for itself; turn one off there, or on `/devices` (**Turn off notifications**) for any device.
 - **iPhone and iPad.** Safari delivers Web Push only to an app on the Home Screen: open the Assistant in Safari, **Share** → **Add to Home Screen**, then open it from there and turn notifications on. The web app says so when this is needed.
 - **Desktop app.** The desktop app's Assistant view has no push service, so it shows a notification for new Inbox entries only while it is open.

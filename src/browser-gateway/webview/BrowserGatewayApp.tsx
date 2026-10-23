@@ -2288,6 +2288,40 @@ export function BrowserGatewayApp({
     if (!desktopEmbed || assistantInboxUnread === undefined) return;
     desktopEmbed.setUnread?.(assistantInboxUnread);
   }, [desktopEmbed, assistantInboxUnread]);
+  // Looking at an Assistant chat reads its Inbox entries, so a reply or
+  // approval the owner is watching does not badge or notify. Only while
+  // the window is in front: a hidden or background page is not looking.
+  // The session read marks the open chat viewed on the server.
+  const assistantRevision = snapshot?.assistant?.revision;
+  useEffect(() => {
+    if (product !== "assistant" || !isAskAgentSelected) return;
+    const markViewed = () => {
+      if (
+        !assistantInboxUnread ||
+        document.visibilityState !== "visible" ||
+        !document.hasFocus()
+      ) {
+        return;
+      }
+      void fetch("/api/ask-agent/session", {
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => undefined);
+    };
+    markViewed();
+    window.addEventListener("focus", markViewed);
+    document.addEventListener("visibilitychange", markViewed);
+    return () => {
+      window.removeEventListener("focus", markViewed);
+      document.removeEventListener("visibilitychange", markViewed);
+    };
+  }, [
+    product,
+    isAskAgentSelected,
+    assistantInboxUnread,
+    assistantRevision,
+    authToken,
+  ]);
   const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
     null,
   );

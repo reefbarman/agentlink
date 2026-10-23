@@ -9,8 +9,9 @@ import { writeFileAtomic } from "./atomicFile.js";
 
 /**
  * The owner's inbox: things the Assistant did or needs while nobody was
- * watching (finished, failed or blocked job runs and coding tasks, and runs
- * or tasks waiting for an approval). Kept in `<dataRoot>/inbox/inbox.json`,
+ * watching (finished, failed or blocked job runs and coding tasks, runs,
+ * tasks or chats waiting for an approval, and chats that replied). Kept in
+ * `<dataRoot>/inbox/inbox.json`,
  * replaced atomically.
  * The inbox is the record of these events; notifications are best effort.
  */
@@ -41,6 +42,8 @@ export type InboxEntryKind =
   | "restored"
   /** A chat's turn was stopped (for an upgrade); asking again continues. */
   | "chat_interrupted"
+  /** A chat finished its reply and is waiting for the owner. */
+  | "chat_replied"
   /** Audit checkpoints are not reaching the witness, or the log no longer matches them. */
   | "audit_checkpoint"
   /** An MCP server's tools changed, so they ask again. */
@@ -478,9 +481,9 @@ export async function openInboxStore(options: {
       ) {
         return undefined;
       }
-      // One unread runaway notice per chat and kind.
+      // One unread runaway or "needs you" notice per chat and kind.
       if (
-        isSessionAlertKind(input.kind) &&
+        isPerChatKind(input) &&
         entries.some(
           (entry) =>
             !entry.read &&
@@ -642,6 +645,36 @@ export function inboxEntryForInterruptedChat(chat: {
   };
 }
 
+/**
+ * The inbox entry for an ordinary chat that stopped for the owner: an
+ * approval card, or a finished reply. Opening the chat reads it. `name` is
+ * the chat's title.
+ */
+export function inboxEntryForChat(
+  chat: {
+    readonly projectId: string;
+    readonly sessionId: string;
+    readonly reason: "approval" | "replied";
+  },
+  name: string | undefined,
+): NewInboxEntry {
+  const label = name?.trim() ? `"${truncate(name, 80)}"` : "A chat";
+  const base = { projectId: chat.projectId, sessionId: chat.sessionId };
+  return chat.reason === "approval"
+    ? {
+        ...base,
+        kind: "needs_approval",
+        title: `${label} needs your approval`,
+        body: "The chat is paused until you allow or deny its request.",
+      }
+    : {
+        ...base,
+        kind: "chat_replied",
+        title: `${label} replied`,
+        body: "It finished and is waiting for you.",
+      };
+}
+
 /** The inbox entry for a checkpoint that failed, or a log that no longer matches. */
 export function inboxEntryForCheckpointProblem(
   problem:
@@ -722,6 +755,14 @@ export function inboxEntryForWatchNoise(
 
 export function isSessionAlertKind(kind: InboxEntryKind): boolean {
   return kind === "session_long_running" || kind === "session_stuck";
+}
+
+/** Kinds kept to one unread entry per chat: runaway and chat notices. */
+function isPerChatKind(entry: NewInboxEntry): boolean {
+  if (isSessionAlertKind(entry.kind)) return true;
+  // A run's or task's approval is kept once per run or task instead.
+  if (entry.runId || entry.taskId || !entry.sessionId) return false;
+  return entry.kind === "chat_replied" || entry.kind === "needs_approval";
 }
 
 function isEntry(value: unknown): value is InboxEntry {

@@ -279,6 +279,9 @@ async function startBridge(
     readonly chatViewed?: Parameters<
       typeof createAskAgentBridge
     >[0]["chatViewed"];
+    readonly chatNeedsYou?: Parameters<
+      typeof createAskAgentBridge
+    >[0]["chatNeedsYou"];
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
@@ -313,6 +316,9 @@ async function startBridge(
     ...(options.stopRun ? { stopRun: options.stopRun } : {}),
     ...(options.chatDeleted ? { chatDeleted: options.chatDeleted } : {}),
     ...(options.chatViewed ? { chatViewed: options.chatViewed } : {}),
+    ...(options.chatNeedsYou
+      ? { chatNeedsYou: options.chatNeedsYou, replyNoticeDelayMs: 5 }
+      : {}),
   });
   const signedIn = {
     principal: { tenantId: "agentlink-server" as const, subjectId: "owner" },
@@ -1792,6 +1798,62 @@ describe("Ask Agent bridge", () => {
     await call("/api/ask-agent/approval", { id: "int-9", decision: "accept" });
     await expect(asking).resolves.toMatchObject({ status: 200 });
     expect((await activityOf())[first]).not.toBe("needs-you");
+  });
+
+  it("tells the server when a chat needs the owner: an approval, then its reply", async () => {
+    const chatNeedsYou = vi.fn();
+    const { fake, call } = await startBridge(undefined, { chatNeedsYou });
+    fake.setScript((sessionId, taskId) => {
+      fake.turn(sessionId, {
+        type: "interaction.required",
+        interaction: {
+          interactionId: "int-9",
+          toolName: "write_file",
+          summary: "Write note.txt",
+          displayInput: { path: "note.txt" },
+        },
+        interactionRevision: "rev-9",
+      });
+      fake.publish(sessionId, {
+        kind: "task",
+        state: "finished",
+        taskId,
+        status: "suspended",
+      });
+      fake.setScript((resumed, resumeTask) => {
+        fake.turn(resumed, { type: "turn.completed", result: { text: "ok" } });
+        fake.publish(resumed, {
+          kind: "task",
+          state: "finished",
+          taskId: resumeTask,
+          status: "completed",
+        });
+      });
+    });
+    const asking = call("/api/ask-agent/send", { text: "write a note" });
+    await vi.waitFor(() =>
+      expect(chatNeedsYou).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "home", reason: "approval" }),
+      ),
+    );
+    const { workspaceSessionId } = chatNeedsYou.mock.calls[0]![0] as {
+      workspaceSessionId: string;
+    };
+    expect(workspaceSessionId).toEqual(expect.any(String));
+    // Not reported as replied while it waits for the answer.
+    expect(chatNeedsYou).toHaveBeenCalledTimes(1);
+
+    await call("/api/ask-agent/approval", { id: "int-9", decision: "accept" });
+    await expect(asking).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(() =>
+      expect(chatNeedsYou).toHaveBeenLastCalledWith({
+        projectId: "home",
+        workspaceSessionId,
+        reason: "replied",
+        title: expect.any(String),
+      }),
+    );
+    expect(chatNeedsYou).toHaveBeenCalledTimes(2);
   });
 
   it("starts a new chat while another waits for an approval, whose card stays in its own chat", async () => {

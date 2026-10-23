@@ -191,6 +191,8 @@ export interface AskAgentBridgeOptions {
   readonly now?: () => number;
   /** Background agent refresh interval while one is active (tests). */
   readonly agentRefreshMs?: number;
+  /** How long a finished chat must stay settled before it is reported (tests). */
+  readonly replyNoticeDelayMs?: number;
   /** The Assistant's inbox and jobs status, carried in every snapshot. */
   readonly assistantStatus?: () => {
     readonly inboxUnread: number;
@@ -235,6 +237,20 @@ export interface AskAgentBridgeOptions {
   readonly chatViewed?: (chat: {
     readonly projectId: string;
     readonly workspaceSessionId: string;
+  }) => void;
+  /**
+   * An ordinary chat (not a task's or a scheduled run's, which report
+   * their own outcomes) stopped for the owner: it shows an approval card,
+   * or finished its reply and is not carrying on by itself. The server
+   * raises it in the Inbox, so the Assistant's badge and notifications
+   * tell the owner; `chatViewed` clears it. Fired whether or not a window
+   * shows the chat: an open page may be hidden or in the background.
+   */
+  readonly chatNeedsYou?: (chat: {
+    readonly projectId: string;
+    readonly workspaceSessionId: string;
+    readonly reason: "approval" | "replied";
+    readonly title: string | undefined;
   }) => void;
   /**
    * A message the owner wrote in a linked chat (a coding task's). The task
@@ -412,6 +428,9 @@ interface QueuedSend {
 
 /** Approval IDs of followed runs: `run:<session>:<interaction>`. */
 const RUN_APPROVAL_PREFIX = "run:";
+
+/** Long enough for Auto Continue to start its next turn first. */
+const REPLY_NOTICE_DELAY_MS = 3_000;
 
 export function modelKey(model: AgentModelReference): string {
   return `${model.providerId}/${model.modelId}`;
@@ -1150,11 +1169,15 @@ export async function createAskAgentBridge(
     return "delivered";
   };
 
-  /** Flag a chat that finished a turn nobody was viewing. */
+  /**
+   * Flag a chat that finished a turn nobody was viewing, and tell the
+   * owner it replied once it has settled.
+   */
   const flagUnread = async (
     storeSessionId: string,
     workspaceSessionId: string,
   ) => {
+    noteReplied(storeSessionId, workspaceSessionId);
     if (
       (store.getActiveSessionId() !== storeSessionId || sse.size === 0) &&
       !state.unread.includes(workspaceSessionId)
@@ -1162,6 +1185,47 @@ export async function createAskAgentBridge(
       state.unread.push(workspaceSessionId);
       await saveState().catch(() => undefined);
     }
+  };
+
+  /** Replies waiting to be reported, by workspace session. */
+  const replyNotices = new Map<string, ReturnType<typeof setTimeout>>();
+  const tellNeedsYou = (
+    storeSessionId: string,
+    workspaceSessionId: string,
+    reason: "approval" | "replied",
+  ) => {
+    if (closed || kindOf(workspaceSessionId) !== "chat") return;
+    try {
+      options.chatNeedsYou?.({
+        projectId: projectOf(workspaceSessionId),
+        workspaceSessionId,
+        reason,
+        title: store
+          .listSessions()
+          .find((session) => session.id === storeSessionId)?.title,
+      });
+    } catch {
+      // Telling the owner is best effort.
+    }
+  };
+  /**
+   * A chat's turn ended. Reported after a moment, and only if the chat has
+   * settled: Auto Continue may start its next turn straight away, and an
+   * approval card is reported by itself. Not when the owner stopped it.
+   */
+  const noteReplied = (storeSessionId: string, workspaceSessionId: string) => {
+    if (!options.chatNeedsYou || kindOf(workspaceSessionId) !== "chat") return;
+    const previous = replyNotices.get(workspaceSessionId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      replyNotices.delete(workspaceSessionId);
+      if (closed || delivery.stopped.has(workspaceSessionId)) return;
+      const activity = activityOf(storeSessionId);
+      if (activity === "running" || activity === "needs-you") return;
+      tellNeedsYou(storeSessionId, workspaceSessionId, "replied");
+    }, options.replyNoticeDelayMs ?? REPLY_NOTICE_DELAY_MS);
+    timer.unref?.();
+    replyNotices.set(workspaceSessionId, timer);
   };
 
   /** The watched chat's agent with this ID, or a 404. */
@@ -1623,6 +1687,7 @@ export async function createAskAgentBridge(
               },
             };
             void publishNow();
+            tellNeedsYou(storeSessionId, workspaceSessionId, "approval");
             return;
           }
           pendingInteraction = {
@@ -1634,6 +1699,7 @@ export async function createAskAgentBridge(
             .requestApproval(approvalFor(event), turn.signal)
             .catch(() => undefined);
           void publishNow();
+          tellNeedsYou(storeSessionId, workspaceSessionId, "approval");
           return;
         }
         case "turn.completed":
@@ -3076,6 +3142,8 @@ export async function createAskAgentBridge(
     },
     async close() {
       closed = true;
+      for (const timer of replyNotices.values()) clearTimeout(timer);
+      replyNotices.clear();
       for (const entry of parked.values()) entry.close();
       for (const id of followed.keys()) unfollowRun(id);
       for (const id of mirrors.keys()) detachMirror(id);
