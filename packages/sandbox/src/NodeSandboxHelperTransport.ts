@@ -21,6 +21,9 @@ export const SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH = path.join(
   "sandbox-interactive-helper.mjs",
 );
 const MAX_STDERR_BYTES = 64 * 1024;
+/** Matches LINUX_RIPGREP_ENVIRONMENT_KEY in scripts/sandbox-linux-runtime.mjs. */
+export const LINUX_SANDBOX_RIPGREP_ENVIRONMENT_KEY =
+  "AGENTLINK_SANDBOX_RIPGREP_PATH";
 
 export interface SandboxHelperChildProcess {
   stdin: ChildProcessWithoutNullStreams["stdin"];
@@ -45,6 +48,11 @@ export interface NodeSandboxHelperTransportOptions {
    * Sandboxed commands never inherit them.
    */
   helperEnvironment?: Readonly<Record<string, string>>;
+  /**
+   * Linux only: an absolute ripgrep the bubblewrap sandbox uses to expand
+   * deny paths, such as VS Code's bundled `rg`. Defaults to `/usr/bin/rg`.
+   */
+  ripgrepPath?: string;
   lstat?: (filePath: string) => Stats;
   realpath?: (filePath: string) => string;
   spawn?: (
@@ -81,8 +89,10 @@ function assertSupportedHost(
   platform: NodeJS.Platform,
   architecture: string,
 ): void {
-  if (platform !== "darwin") {
-    throw new Error("The interactive sandbox helper supports local macOS only");
+  if (platform !== "darwin" && platform !== "linux") {
+    throw new Error(
+      "The interactive sandbox helper supports local macOS and Linux only",
+    );
   }
   if (architecture !== "arm64" && architecture !== "x64") {
     throw new Error(
@@ -295,6 +305,10 @@ export function createNodeSandboxHelperTransportFactory(
     );
   }
   const runtimeRoot = path.dirname(path.dirname(realHelperPath));
+  const ripgrepPath =
+    platform === "linux" && options.ripgrepPath
+      ? assertAbsolutePath(options.ripgrepPath, "ripgrepPath")
+      : undefined;
 
   const spawnChild =
     options.spawn ??
@@ -310,6 +324,9 @@ export function createNodeSandboxHelperTransportFactory(
         cwd: runtimeRoot,
         env: {
           ...options.helperEnvironment,
+          ...(ripgrepPath
+            ? { [LINUX_SANDBOX_RIPGREP_ENVIRONMENT_KEY]: ripgrepPath }
+            : {}),
           PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
           LANG: "en_US.UTF-8",
           LC_ALL: "en_US.UTF-8",

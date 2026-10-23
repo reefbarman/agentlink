@@ -14,3 +14,4 @@ export * from "./SandboxBehaviorAttestationService.js";
 export * from "./SandboxCapabilityAuthority.js";
 export * from "./workspaceSandboxPolicy.js";
 export * from "./sandboxedProcessLauncher.js";
+export * from "./linuxSandboxPrerequisites.js";

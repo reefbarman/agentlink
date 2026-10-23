@@ -1,4 +1,11 @@
 import {
+  LINUX_EXEC_SIZE_LIMIT_BYTES,
+  bindLinuxProxyCredentials,
+  isLinuxSandboxRuntimeDescriptor,
+  linuxSandboxRuntimeConfig,
+  resolveLinuxSandboxTools,
+} from "./sandbox-linux-runtime.mjs";
+import {
   ProtectedRootSnapshotDriftError,
   StructuralProtectionError,
   prepareProtectedRoots,
@@ -448,9 +455,18 @@ function managedNetworkProtocol(protocol) {
   throw new Error("unsupported managed network protocol");
 }
 
+// The staged runtime root (`dist/sandbox-runtime`), which holds vendor/seccomp.
+const RUNTIME_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+
 function defaultDependencies() {
   return {
     platform: process.platform,
+    geteuid: () => process.geteuid?.(),
+    resolveLinuxSandboxTools: () =>
+      resolveLinuxSandboxTools({ runtimeRoot: RUNTIME_ROOT }),
     realpath,
     prepareProtectedRoots,
     revalidateProtectedRoots,
@@ -466,7 +482,10 @@ function defaultDependencies() {
     clearTimeout,
     delay: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
-    execSizeLimitBytes: MACOS_EXEC_SIZE_LIMIT_BYTES,
+    execSizeLimitBytes:
+      process.platform === "linux"
+        ? LINUX_EXEC_SIZE_LIMIT_BYTES
+        : MACOS_EXEC_SIZE_LIMIT_BYTES,
     execSizeHeadroomBytes: EXEC_SIZE_HEADROOM_BYTES,
     execPointerBytes: EXEC_POINTER_BYTES,
     async loadRuntime() {
@@ -643,11 +662,18 @@ export function createSandboxInteractiveHelper(options = {}) {
   const launch = async (frame) => {
     if (active)
       throw new Error("sandbox helper accepts exactly one launch frame");
-    if (dependencies.platform !== "darwin") {
+    const linux = dependencies.platform === "linux";
+    if (dependencies.platform !== "darwin" && !linux) {
       throw new Error(
-        "the interactive sandbox helper supports local macOS only",
+        "the interactive sandbox helper supports local macOS and Linux only",
       );
     }
+    // Refuse before any setup when bwrap, socat, ripgrep or apply-seccomp is
+    // missing: a Linux sandbox without them would not confine the command.
+    const linuxTools = linux
+      ? dependencies.resolveLinuxSandboxTools()
+      : undefined;
+    const descriptorOptions = { euid: dependencies.geteuid?.() };
     const allowedDomains =
       frame.network.mode === "public-proxy"
         ? PUBLIC_NETWORK_ALLOWED_DOMAINS
@@ -831,6 +857,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         // certificates through com.apple.trustd.agent. Allow that lookup only
         // when the command has network access, matching Codex CLI's policy.
         enableWeakerNetworkIsolation: request.network.allowedDomains.length > 0,
+        ...(linuxTools ? linuxSandboxRuntimeConfig(linuxTools) : {}),
       });
       const descriptor = await runtime.wrapWithSandboxArgv(
         request.command,
@@ -839,20 +866,34 @@ export function createSandboxInteractiveHelper(options = {}) {
         undefined,
         cwd,
       );
-      if (!isSandboxRuntimeDescriptor(descriptor.argv, request)) {
+      const expectedDescriptor = linuxTools
+        ? isLinuxSandboxRuntimeDescriptor(
+            descriptor.argv,
+            request,
+            linuxTools,
+            descriptorOptions,
+          )
+        : isSandboxRuntimeDescriptor(descriptor.argv, request);
+      if (!expectedDescriptor) {
         throw new Error(
           "sandbox runtime returned an unexpected launch descriptor",
         );
       }
-      const constrainedArgv = constrainLoopbackRuntimeDescriptor(
-        descriptor.argv,
-        request,
-      );
-      const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
-        constrainedArgv,
-        request,
-        networkProxies,
-      );
+      // Linux loopback is private to the sandbox's network namespace, so
+      // there is no host listener rule to remove there.
+      const authenticatedArgv = linuxTools
+        ? bindLinuxProxyCredentials(
+            descriptor.argv,
+            request,
+            linuxTools,
+            networkProxies,
+            descriptorOptions,
+          )
+        : bindProxyCredentialsToRuntimeDescriptor(
+            constrainLoopbackRuntimeDescriptor(descriptor.argv, request),
+            request,
+            networkProxies,
+          );
       const nodePty = piped ? undefined : await dependencies.loadNodePty();
       const protectedRoots = await dependencies.prepareProtectedRoots(
         request.protectedRoots,
@@ -1017,7 +1058,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         type: "ready",
         pid: terminal.pid,
         pgid: terminal.pid,
-        backend: "seatbelt",
+        backend: linuxTools ? "bubblewrap" : "seatbelt",
       });
       session.ready = true;
       for (const { data, stream } of session.pendingData.splice(0)) {

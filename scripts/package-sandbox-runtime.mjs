@@ -1,3 +1,7 @@
+import {
+  APPLY_SECCOMP_TARGETS,
+  applySeccompBuildPath,
+} from "./build-apply-seccomp.mjs";
 import { chmod, cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 
 import { fileURLToPath } from "node:url";
@@ -5,6 +9,7 @@ import path from "node:path";
 
 const HELPER_FILES = [
   "sandbox-interactive-helper.mjs",
+  "sandbox-linux-runtime.mjs",
   "sandbox-network-policy.mjs",
   "sandbox-network-proxy.mjs",
   "sandbox-process-reaper.mjs",
@@ -112,6 +117,15 @@ export function resolveSandboxRuntimeTarget({
   architecture = process.arch,
 } = {}) {
   return target || `${platform}-${architecture}`;
+}
+
+/**
+ * Where the Linux sandbox helper finds `apply-seccomp`, relative to the staged
+ * runtime root. Returns undefined for targets that do not get one.
+ */
+export function applySeccompStagePath(target) {
+  const entry = APPLY_SECCOMP_TARGETS[target];
+  return entry ? `vendor/seccomp/${entry.arch}/apply-seccomp` : undefined;
 }
 
 export function includesNodePty(target) {
@@ -230,6 +244,13 @@ export async function stageSandboxRuntime({
   // Hosts that only make piped sandbox launches (the Desktop Ask Agent
   // helper) leave node-pty out; it is loaded only for PTY launches.
   includeNodePty = includesNodePty(target),
+  // Built by scripts/build-apply-seccomp.mjs. CI sets
+  // AGENTLINK_APPLY_SECCOMP_REQUIRED so a Linux package cannot ship without
+  // it; local builds stage it when present and the sandbox refuses otherwise.
+  applySeccompSource = APPLY_SECCOMP_TARGETS[target]
+    ? applySeccompBuildPath(target, repoRoot)
+    : undefined,
+  requireApplySeccomp = process.env.AGENTLINK_APPLY_SECCOMP_REQUIRED === "1",
 } = {}) {
   const withNodePty = includeNodePty && includesNodePty(target);
   await rm(destinationRoot, { recursive: true, force: true });
@@ -268,6 +289,26 @@ export async function stageSandboxRuntime({
     await chmod(spawnHelper, 0o755);
   }
 
+  let applySeccomp;
+  const applySeccompRelative = applySeccompStagePath(target);
+  if (applySeccompRelative && applySeccompSource) {
+    let sourceMetadata;
+    try {
+      sourceMetadata = await stat(applySeccompSource);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    if (sourceMetadata?.isFile()) {
+      applySeccomp = path.join(destinationRoot, applySeccompRelative);
+      await copyEntry(applySeccompSource, applySeccomp);
+      await chmod(applySeccomp, 0o755);
+    } else if (requireApplySeccomp) {
+      throw new Error(
+        `apply-seccomp is required for ${target} but missing at ${applySeccompSource}; run node scripts/build-apply-seccomp.mjs --target ${target}`,
+      );
+    }
+  }
+
   const staged = [];
   for (const relativePath of sandboxRuntimeStagePaths(target, withNodePty)) {
     const metadata = await stat(path.join(destinationRoot, relativePath));
@@ -284,7 +325,7 @@ export async function stageSandboxRuntime({
     }
   }
 
-  return { target, destinationRoot, staged, spawnHelpers };
+  return { target, destinationRoot, staged, spawnHelpers, applySeccomp };
 }
 
 const isMain =

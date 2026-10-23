@@ -107,9 +107,15 @@ jobs:
       - name: Verify packed core SDK consumer
         run: npm run test:core-sdk-consumer
 
+      - name: Build apply-seccomp
+        run: |
+          sudo apt-get install -y --no-install-recommends gcc libseccomp-dev
+          node scripts/build-apply-seccomp.mjs --target linux-x64
+
       - name: Package and verify a Linux VSIX
         env:
           AGENTLINK_VSCE_TARGET: linux-x64
+          AGENTLINK_APPLY_SECCOMP_REQUIRED: "1"
         run: |
           mkdir -p releases
           npm run package -- "releases/agentlink-ci-${AGENTLINK_VSCE_TARGET}.vsix"

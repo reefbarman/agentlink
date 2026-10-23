@@ -1821,6 +1821,135 @@ test("piped launches spawn without a PTY and tag output streams", async (t) => {
   assert.equal(exit.signal, 15);
 });
 
+const linuxTools = Object.freeze({
+  bwrapPath: "/usr/bin/bwrap",
+  socatPath: "/usr/bin/socat",
+  ripgrepPath: "/usr/bin/rg",
+  applySeccompPath:
+    "/ext/dist/sandbox-runtime/vendor/seccomp/x64/apply-seccomp",
+});
+
+function linuxWrapper() {
+  const httpProxy = "http://localhost:3128";
+  const socksProxy = "socks5h://localhost:1080";
+  return [
+    "/bin/bash",
+    "-c",
+    [
+      "/usr/bin/bwrap --new-session --die-with-parent --unshare-net",
+      ...Array.from({ length: 10 }, () => `--setenv HTTP_PROXY ${httpProxy}`),
+      ...Array.from({ length: 2 }, () => `--setenv FTP_PROXY ${socksProxy}`),
+      "--ro-bind / / --unshare-pid --unshare-user --cap-drop ALL --proc /proc",
+      `-- /bin/bash -c '${linuxTools.applySeccompPath} /bin/bash -c /usr/bin/true'`,
+    ].join(" "),
+  ];
+}
+
+test("Linux launches run under bubblewrap with seccomp and proxy credentials", async (t) => {
+  const spawned = [];
+  const harness = createHarness({
+    runtimeOverrides: {
+      async wrapWithSandboxArgv() {
+        return { argv: linuxWrapper() };
+      },
+    },
+    dependencyOverrides: {
+      platform: "linux",
+      geteuid: () => 1000,
+      resolveLinuxSandboxTools: () => linuxTools,
+      spawnProcess(command, args, options) {
+        const child = fakePipedChild(6262);
+        spawned.push({ command, args, options, child });
+        return child;
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch({ stdio: "pipe" }));
+  await harness.waitFor(() => spawned.length === 1, "piped Linux spawn");
+  const [config] = harness.calls.initialize;
+  assert.equal(config.bwrapPath, "/usr/bin/bwrap");
+  assert.equal(config.socatPath, "/usr/bin/socat");
+  assert.deepEqual(config.ripgrep, { command: "/usr/bin/rg" });
+  assert.deepEqual(config.seccomp, { applyPath: linuxTools.applySeccompPath });
+  assert.equal(config.enableWeakerNestedSandbox, false);
+  const wrapper = spawned[0].args[1];
+  assert.equal(
+    wrapper.split(`http://agentlink:${"a".repeat(64)}@localhost:3128`).length -
+      1,
+    10,
+  );
+  assert.equal(wrapper.includes("http://localhost:3128"), false);
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "ready"),
+    "ready frame",
+  );
+  assert.equal(
+    harness.frames().find((frame) => frame.type === "ready").backend,
+    "bubblewrap",
+  );
+  spawned[0].child.finish(0, null);
+});
+
+test("Linux launches refuse before setup when sandbox tools are missing", async (t) => {
+  const harness = createHarness({
+    dependencyOverrides: {
+      platform: "linux",
+      resolveLinuxSandboxTools() {
+        throw new Error(
+          "The Linux sandbox is unavailable: socat is not installed",
+        );
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch({ stdio: "pipe" }));
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "refusal",
+  );
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /socat is not installed/,
+  );
+  assert.equal(harness.calls.initialize.length, 0);
+  assert.equal(harness.calls.proxyAllowlist.length, 0);
+});
+
+test("Linux launches reject an unreviewed runtime descriptor", async (t) => {
+  const harness = createHarness({
+    runtimeOverrides: {
+      async wrapWithSandboxArgv() {
+        const [shell, flag, wrapper] = linuxWrapper();
+        return {
+          argv: [shell, flag, wrapper.replace(" --unshare-net", "")],
+        };
+      },
+    },
+    dependencyOverrides: {
+      platform: "linux",
+      geteuid: () => 1000,
+      resolveLinuxSandboxTools: () => linuxTools,
+      spawnProcess() {
+        throw new Error("an unreviewed launch must not spawn");
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch({ stdio: "pipe" }));
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "descriptor rejection",
+  );
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /unexpected launch descriptor/,
+  );
+});
+
 test("PTY data frames carry no stream tag", async (t) => {
   const harness = createHarness({ initialData: "pty output" });
   t.after(() => harness.helper.close());

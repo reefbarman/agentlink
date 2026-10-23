@@ -146,7 +146,21 @@ export interface PrepareWorkspaceSandboxLaunchOptions {
   readonly verifyInlineFiles?: () => Promise<
     SandboxLaunchBindingInput["inlineFiles"]
   >;
+  /** Host platform; picks the reported backend. Defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
 }
+
+/** The sandbox backend the packaged helper uses on `platform`. */
+export function sandboxBackendFor(
+  platform: NodeJS.Platform,
+): "seatbelt" | "bubblewrap" {
+  return platform === "linux" ? "bubblewrap" : "seatbelt";
+}
+
+const LINUX_SANDBOX_WARNINGS = [
+  "Loopback is private to the sandbox's network namespace: commands cannot reach services listening on the host's localhost, and their listeners are not reachable from the host.",
+  "Unix socket creation is blocked by seccomp, so host sockets such as the Docker socket are unreachable.",
+] as const;
 
 export interface PreparedWorkspaceSandboxLaunch {
   /** Canonical working directory. */
@@ -662,10 +676,11 @@ export async function prepareWorkspaceSandboxLaunch(
         allowedUnixSockets: [],
       },
     };
+    const backend = sandboxBackendFor(options.platform ?? process.platform);
     const metadata: SandboxExecutionMetadata = {
       policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
       profileId: WORKSPACE_SANDBOX_PROFILE_ID,
-      backend: "seatbelt",
+      backend,
       environmentPolicy: {
         ...environmentPolicySummary,
         exclude: [...environmentPolicySummary.exclude],
@@ -681,7 +696,7 @@ export async function prepareWorkspaceSandboxLaunch(
         })),
       },
       capabilities: {
-        backend: "seatbelt",
+        backend,
         processTree: true,
         filesystemRead:
           deniedReadRoots.length > 0 ? "isolated" : "host-visible",
@@ -711,6 +726,7 @@ export async function prepareWorkspaceSandboxLaunch(
             ? "Host temporary directories and POSIX IPC are available for development toolchain compatibility."
             : "TMPDIR is a private per-command directory; host temporary directories are read-only.",
           "CPU, memory, process-count, and disk quotas are not fully enforced.",
+          ...(backend === "bubblewrap" ? LINUX_SANDBOX_WARNINGS : []),
           ...policyWarnings,
         ],
       },

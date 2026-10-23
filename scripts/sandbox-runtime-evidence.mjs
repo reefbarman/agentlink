@@ -37,6 +37,7 @@ const packagedPath = (relativePath) => `${PACKAGE_PREFIX}/${relativePath}`;
 export const REQUIRED_PACKAGE_PATHS = {
   sandboxHelper: [
     "scripts/sandbox-interactive-helper.mjs",
+    "scripts/sandbox-linux-runtime.mjs",
     "scripts/sandbox-network-policy.mjs",
     "scripts/sandbox-network-proxy.mjs",
     "scripts/sandbox-process-reaper.mjs",

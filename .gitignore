@@ -16,4 +16,5 @@ plans/*
 /AGENTS.md
 benchmarks/
 tmp/
+native-builds/
 .agentlink-smoke/

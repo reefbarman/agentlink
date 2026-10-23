@@ -57,6 +57,8 @@ export interface SandboxedProcessLauncherOptions {
    * host home is denied. Defaults to none.
    */
   readonly deniedReadRoots?: readonly string[];
+  /** Host platform; picks the reported backend. Defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
 }
 
 export interface SandboxedProcessRequest {
@@ -162,6 +164,7 @@ export function launchSandboxedProcess(
       ...(options.deniedReadRoots
         ? { deniedReadRoots: options.deniedReadRoots }
         : {}),
+      ...(options.platform ? { platform: options.platform } : {}),
     });
     let launched: SandboxCommandProcess;
     try {

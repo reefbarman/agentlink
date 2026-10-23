@@ -125,9 +125,20 @@ jobs:
             extract_package "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
           fi
 
+      # The Linux sandbox refuses to run without apply-seccomp, which blocks
+      # unix sockets. Built from the pinned sandbox-runtime source.
+      - name: Build apply-seccomp
+        if: matrix.target == 'linux-x64' || matrix.target == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc libseccomp-dev gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          node scripts/build-apply-seccomp.mjs --target "${{ matrix.target }}"
+
       - name: Build target bundle
         env:
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+          AGENTLINK_APPLY_SECCOMP_REQUIRED: ${{ (matrix.target == 'linux-x64' || matrix.target == 'linux-arm64') && '1' || '0' }}
         run: npm run build
 
       - name: Verify package inventory

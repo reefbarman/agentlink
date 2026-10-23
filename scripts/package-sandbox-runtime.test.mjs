@@ -1,5 +1,13 @@
-import { access, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import {
+  access,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import {
+  applySeccompStagePath,
   resolveSandboxRuntimeTarget,
   stageSandboxRuntime,
 } from "./package-sandbox-runtime.mjs";
@@ -144,6 +152,66 @@ for (const target of ["linux-x64", "linux-arm64"]) {
     }
   });
 }
+
+test("stages apply-seccomp for Linux targets and requires it when asked", async () => {
+  const temporaryRoot = await mkdtemp(
+    path.join(os.tmpdir(), "agentlink-runtime-stage-"),
+  );
+  try {
+    const source = path.join(temporaryRoot, "apply-seccomp");
+    await writeFile(source, "#!/bin/sh\n", { mode: 0o644 });
+    const staged = await stageSandboxRuntime({
+      repoRoot,
+      destinationRoot: path.join(temporaryRoot, "linux"),
+      target: "linux-arm64",
+      includeNodePty: false,
+      applySeccompSource: source,
+    });
+    assert.equal(
+      staged.applySeccomp,
+      path.join(temporaryRoot, "linux", applySeccompStagePath("linux-arm64")),
+    );
+    assert.equal(
+      applySeccompStagePath("linux-arm64"),
+      "vendor/seccomp/arm64/apply-seccomp",
+    );
+    assert.equal((await stat(staged.applySeccomp)).mode & 0o777, 0o755);
+
+    const missing = path.join(temporaryRoot, "missing");
+    const optional = await stageSandboxRuntime({
+      repoRoot,
+      destinationRoot: path.join(temporaryRoot, "optional"),
+      target: "linux-x64",
+      includeNodePty: false,
+      applySeccompSource: missing,
+      requireApplySeccomp: false,
+    });
+    assert.equal(optional.applySeccomp, undefined);
+    await assert.rejects(
+      stageSandboxRuntime({
+        repoRoot,
+        destinationRoot: path.join(temporaryRoot, "required"),
+        target: "linux-x64",
+        includeNodePty: false,
+        applySeccompSource: missing,
+        requireApplySeccomp: true,
+      }),
+      /apply-seccomp is required for linux-x64/,
+    );
+
+    const darwin = await stageSandboxRuntime({
+      repoRoot,
+      destinationRoot: path.join(temporaryRoot, "darwin"),
+      target: "darwin-arm64",
+      includeNodePty: false,
+      requireApplySeccomp: true,
+    });
+    assert.equal(darwin.applySeccomp, undefined);
+    assert.equal(applySeccompStagePath("alpine-x64"), undefined);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 
 test("does not stage node-pty when the Linux host only needs piped launches", async () => {
   const temporaryRoot = await mkdtemp(

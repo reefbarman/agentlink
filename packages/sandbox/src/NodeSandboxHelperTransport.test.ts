@@ -96,6 +96,46 @@ describe("NodeSandboxHelperTransport", () => {
     expect(test.child.stdin.end).toHaveBeenCalledTimes(1);
   });
 
+  it("passes a host ripgrep to the Linux helper only", () => {
+    const linux = harness({
+      platform: "linux",
+      architecture: "x64",
+      ripgrepPath:
+        "/opt/vscode/resources/app/node_modules/@vscode/ripgrep/bin/rg",
+    });
+    linux.factory.create();
+    expect(linux.spawn).toHaveBeenCalledWith(
+      nodeExecutable,
+      [helperPath],
+      expect.objectContaining({
+        env: {
+          AGENTLINK_SANDBOX_RIPGREP_PATH:
+            "/opt/vscode/resources/app/node_modules/@vscode/ripgrep/bin/rg",
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+          LANG: "en_US.UTF-8",
+          LC_ALL: "en_US.UTF-8",
+        },
+      }),
+    );
+
+    const darwin = harness({ ripgrepPath: "/opt/homebrew/bin/rg" });
+    darwin.factory.create();
+    expect(darwin.spawn).toHaveBeenCalledWith(
+      nodeExecutable,
+      [helperPath],
+      expect.objectContaining({
+        env: {
+          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+          LANG: "en_US.UTF-8",
+          LC_ALL: "en_US.UTF-8",
+        },
+      }),
+    );
+    expect(
+      () => harness({ platform: "linux", ripgrepPath: "rg" }).factory,
+    ).toThrow("ripgrepPath must be an absolute path");
+  });
+
   it("closes gracefully before forcing a wedged helper", () => {
     vi.useFakeTimers();
     try {
@@ -249,8 +289,8 @@ describe("NodeSandboxHelperTransport", () => {
   });
 
   it("rejects unsupported hosts, missing/symlinked helpers, and path escape", () => {
-    expect(() => harness({ platform: "linux" }).factory).toThrow(
-      "supports local macOS only",
+    expect(() => harness({ platform: "win32" }).factory).toThrow(
+      "supports local macOS and Linux only",
     );
     expect(() => harness({ architecture: "riscv64" }).factory).toThrow(
       "does not support architecture riscv64",

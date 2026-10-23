@@ -154,6 +154,40 @@ describe("launchSandboxedProcess", () => {
     expect(await exists(privateDirectory!)).toBe(false);
   });
 
+  it("reports the bubblewrap backend and its limits on Linux", async () => {
+    const root = await temporaryDirectory("al-sbx-launch-");
+    const privateRoot = await temporaryDirectory("al-sbx-private-");
+    const fake = fakeRuntime();
+    const handle = launchSandboxedProcess(
+      {
+        runtime: fake.runtime,
+        writableRoots: [root],
+        privateDirectoryPrefix: path.join(privateRoot, "p-"),
+        platform: "linux",
+      },
+      {
+        sessionId: "session-linux",
+        command: "true",
+        shell: "/bin/sh",
+        cwd: root,
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+      () => {},
+    );
+
+    const metadata = await handle.started;
+    expect(metadata.backend).toBe("bubblewrap");
+    expect(metadata.capabilities.backend).toBe("bubblewrap");
+    expect(metadata.capabilities.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Loopback is private to the sandbox"),
+        expect.stringContaining("Unix socket creation is blocked"),
+      ]),
+    );
+    fake.finish({ exitCode: 0, timedOut: false });
+    await handle.exited;
+  });
+
   it("hides denied read roots except the workspace and private directories", async () => {
     const home = await temporaryDirectory("al-sbx-home-");
     const root = path.join(home, "work");

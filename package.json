@@ -1268,7 +1268,7 @@
     "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
     "test:browser-gateway-phase3-gate": "node scripts/run-browser-gateway-phase3-gate.mjs",
     "test:browser-gateway-phase3-load-gate": "node scripts/run-browser-gateway-phase3-gate.mjs --sustained",
-    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-runtime-evidence.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
+    "test:sandbox-runtime": "node --test scripts/build-apply-seccomp.test.mjs scripts/package-sandbox-runtime.test.mjs scripts/sandbox-linux-runtime.test.mjs scripts/sandbox-runtime-evidence.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
     "probe:sandbox-runtime": "node scripts/sandbox-runtime-behavior.mjs",
     "benchmark:sandbox-runtime": "node scripts/sandbox-runtime-evidence.mjs"
   },

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - On Linux, `createKeychainSecretStorage(...)` and everything built on it now default to `linuxStore: "secret-service"` instead of the native default that silently fell back to the reboot-volatile kernel keyring. A missing session bus or Secret Service fails with the new `LinuxCredentialStoreUnavailableError` (`code: "linux_credential_store_unavailable"`, `reason: "no_session_bus" | "secret_service_unavailable"`). Pass `linuxStore: "keyutils"` to keep using the kernel keyring. macOS and Windows are unchanged.
+- `@agentlink/sandbox` can now run piped launches under bubblewrap on Linux x64 and arm64: `createNodeSandboxHelperTransportFactory` accepts `platform: "linux"` and an optional `ripgrepPath`, launch metadata reports `backend: "bubblewrap"`, and the new `checkLinuxSandboxPrerequisites` reports whether bubblewrap, socat, ripgrep, `apply-seccomp` and user namespaces are usable. The helper refuses Linux launches when any of them is missing. No AgentLink surface enables it yet.
 
 ## 0.29.0 — 2026-10-23
 
