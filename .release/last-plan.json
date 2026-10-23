@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
-  "createdAt": "2026-10-22T06:57:09.727Z",
+  "sourceSha": "2b691a8919ec21e913d91c5669ca93827c7363ff",
+  "createdAt": "2026-10-23T00:22:13.418Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,49 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.64.0",
-      "baselineRef": "v1.64.0",
-      "reserved": "1.64.0",
-      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
+      "published": "1.65.0",
+      "baselineRef": "v1.65.0",
+      "reserved": "1.65.0",
+      "commits": ["23ff34dfa6f0822d84f54377058f097d6eba3881"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.65.0",
-      "effectiveBump": "minor",
+      "version": "1.65.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.65.0",
+      "tag": "v1.65.1",
       "notes": [
         {
-          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
-          "subject": "feat(agent): restore detected question cards when reloading a session",
-          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
+          "sha": "23ff34dfa6f0822d84f54377058f097d6eba3881",
+          "subject": "fix(browser-gateway): keep Ask Agent question card mounted while typing",
+          "summary": "Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.50.0",
-      "baselineRef": "desktop-v0.50.0",
-      "reserved": "0.50.0",
-      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
+      "published": "0.51.0",
+      "baselineRef": "desktop-v0.51.0",
+      "reserved": "0.51.0",
+      "commits": ["23ff34dfa6f0822d84f54377058f097d6eba3881"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.51.0",
-      "effectiveBump": "minor",
+      "version": "0.51.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.51.0",
+      "tag": "desktop-v0.51.1",
       "notes": [
         {
-          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
-          "subject": "feat(agent): restore detected question cards when reloading a session",
-          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
+          "sha": "23ff34dfa6f0822d84f54377058f097d6eba3881",
+          "subject": "fix(browser-gateway): keep Ask Agent question card mounted while typing",
+          "summary": "Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.",
           "breaking": false
         }
       ]
@@ -82,25 +82,34 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.22.0",
-      "baselineRef": "assistant-v0.22.0",
-      "reserved": "0.22.0",
-      "commits": ["364175354dab1b442032a2b0d736263d4c4cd4a4"],
+      "published": "0.23.0",
+      "baselineRef": "assistant-v0.23.0",
+      "reserved": "0.23.0",
+      "commits": [
+        "23ff34dfa6f0822d84f54377058f097d6eba3881",
+        "2b691a8919ec21e913d91c5669ca93827c7363ff"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.23.0",
-      "effectiveBump": "minor",
+      "version": "0.23.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.23.0",
+      "tag": "assistant-v0.23.1",
       "notes": [
         {
-          "sha": "364175354dab1b442032a2b0d736263d4c4cd4a4",
-          "subject": "feat(agent): restore detected question cards when reloading a session",
-          "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
+          "sha": "23ff34dfa6f0822d84f54377058f097d6eba3881",
+          "subject": "fix(browser-gateway): keep Ask Agent question card mounted while typing",
+          "summary": "Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.",
+          "breaking": false
+        },
+        {
+          "sha": "2b691a8919ec21e913d91c5669ca93827c7363ff",
+          "subject": "build(server): pin backup witness to rest-server 0.14.0 by digest",
+          "summary": "Updates the backup witness container image to restic rest-server 0.14.0, pinned by digest, with no changes to flags, data layout or API.",
           "breaking": false
         }
       ]
@@ -135,6 +144,22 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "23ff34dfa6f0822d84f54377058f097d6eba3881": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "2b691a8919ec21e913d91c5669ca93827c7363ff": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Updates the backup witness container image to restic rest-server 0.14.0, pinned by digest, with no changes to flags, data layout or API.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

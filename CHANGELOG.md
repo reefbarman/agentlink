@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.65.1
+
+- Fixes the Ask Agent question card unmounting and stealing focus from the answer field on every keystroke when using the browser gateway relay.
+
 ## 1.65.0
 
 - Reloading a session now restores the detected question card when the last turn ended waiting for the user, and dismissed cards stay dismissed when the same session is reloaded.opt.
