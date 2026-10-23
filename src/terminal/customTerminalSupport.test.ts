@@ -22,11 +22,27 @@ describe("custom terminal support", () => {
   });
 
   it.each(["linux", "win32", "freebsd"])(
-    "falls back on a local %s extension host",
+    "falls back on a local %s extension host without node-pty",
     (platform: string) => {
       expect(isCustomTerminalSupported({ platform })).toBe(false);
     },
   );
+
+  it("supports a local Linux extension host with a staged node-pty", () => {
+    expect(
+      isCustomTerminalSupported({ platform: "linux", nodePtyAvailable: true }),
+    ).toBe(true);
+    expect(
+      isCustomTerminalSupported({
+        platform: "linux",
+        nodePtyAvailable: true,
+        remoteName: "wsl",
+      }),
+    ).toBe(false);
+    expect(
+      isCustomTerminalSupported({ platform: "win32", nodePtyAvailable: true }),
+    ).toBe(false);
+  });
 
   it.each(["wsl", "ssh-remote", "dev-container", "codespaces"])(
     "falls back in a %s remote window even when the extension host reports Darwin",

@@ -115,7 +115,7 @@ For guided setup, example connection files, and Claude Code authentication throu
 
 ## Terminal, worktrees, misc
 
-- `terminal.enabled`, `terminal.nodePath` — sandbox-backed AgentLink terminals (macOS hosts)
+- `terminal.enabled`, `terminal.nodePath` — AgentLink terminals (sandbox-backed on macOS; unsandboxed AgentLink Terminal on local glibc Linux)
 - `terminal.environmentPolicy` — sandbox command environment inheritance; the default inherits all host variables, including credential-like names, while helper-reserved variables remain host-controlled
 - `worktreeDirectorySuffix` — sibling worktree container naming for the manual `/worktree` flow
 - `diagnosticDelay` — ms to wait after save for diagnostics to settle

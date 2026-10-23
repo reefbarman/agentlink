@@ -343,6 +343,7 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
     ] as const),
     routeReason: enumValue(source.routeReason, [
       "verified-local-macos",
+      "verified-local-linux",
       "feature-disabled",
       "unsupported-host",
       "remote-host",

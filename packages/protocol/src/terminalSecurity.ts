@@ -120,6 +120,7 @@ export interface TerminalExecutionRouteContext {
 
 export type TerminalExecutionRouteReason =
   | "verified-local-macos"
+  | "verified-local-linux"
   | "feature-disabled"
   | "unsupported-host"
   | "remote-host"

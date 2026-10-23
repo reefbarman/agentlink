@@ -2,9 +2,11 @@ import * as vscode from "vscode";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  defaultFallbackShellPath,
   readVscodeTerminalSurfaceConfiguration,
   resolveVscodeTerminalCreateRequest,
   resolveVscodeTerminalFontFamily,
+  vscodeTerminalPlatformKey,
 } from "./vscodeTerminalConfiguration.js";
 
 function folder(name: string, fsPath: string, scheme = "file") {
@@ -88,6 +90,19 @@ describe("resolveVscodeTerminalCreateRequest", () => {
         cwd: "/workspace/b",
       }),
     ).resolves.toEqual({ ...profiledRequest, cwd: "/workspace/b" });
+  });
+});
+
+describe("platform terminal settings", () => {
+  it("reads the settings suffix VS Code uses for the host platform", () => {
+    expect(vscodeTerminalPlatformKey("darwin")).toBe("osx");
+    expect(vscodeTerminalPlatformKey("linux")).toBe("linux");
+    expect(vscodeTerminalPlatformKey("win32")).toBe("windows");
+  });
+
+  it("falls back to zsh on macOS and bash elsewhere", () => {
+    expect(defaultFallbackShellPath("darwin")).toBe("/bin/zsh");
+    expect(defaultFallbackShellPath("linux")).toBe("/bin/bash");
   });
 });
 

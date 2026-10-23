@@ -121,6 +121,7 @@ describe("host shell launch policy", () => {
     { platform: "darwin", remoteName: "wsl" },
     { platform: "darwin", remoteName: "ssh-remote" },
     { platform: "darwin", remoteName: "dev-container" },
+    { platform: "linux", remoteName: "ssh-remote", nodePtyAvailable: true },
   ])("gives unsupported host fallback precedence for %j", (host) => {
     const resolved = profile("/bin/zsh");
 
@@ -133,6 +134,23 @@ describe("host shell launch policy", () => {
       profile: resolved,
     });
   });
+
+  it.each([
+    ["/bin/bash", "custom-integrated"],
+    ["/usr/bin/zsh", "custom-integrated"],
+    ["/bin/dash", "custom-raw"],
+    ["/usr/bin/fish", "native-fallback"],
+  ] as const)(
+    "applies the same shell policy on local Linux with node-pty: %s",
+    (shellPath, mode) => {
+      expect(
+        decideHostShellLaunch({
+          host: { platform: "linux", nodePtyAvailable: true },
+          profile: profile(shellPath),
+        }),
+      ).toMatchObject({ mode });
+    },
+  );
 
   it("uses the resolved executable rather than the profile display name", () => {
     expect(

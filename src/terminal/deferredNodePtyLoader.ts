@@ -83,14 +83,41 @@ function assertOwnedEntry(
   }
 }
 
+/**
+ * Whether this install staged a node-pty prebuild for the host. Only cheap
+ * existence checks: the full validation runs when the module is loaded.
+ */
+export function hasStagedNodePty(options: {
+  extensionRoot: string;
+  platform?: NodeJS.Platform;
+  architecture?: string;
+  exists?: (filePath: string) => boolean;
+}): boolean {
+  const platform = options.platform ?? process.platform;
+  const architecture = options.architecture ?? process.arch;
+  if (platform !== "darwin" && platform !== "linux") return false;
+  if (architecture !== "arm64" && architecture !== "x64") return false;
+  return (options.exists ?? existsSync)(
+    path.join(
+      options.extensionRoot,
+      STAGED_NODE_PTY_RELATIVE_PATH,
+      "prebuilds",
+      `${platform}-${architecture}`,
+      "pty.node",
+    ),
+  );
+}
+
 function validateStagedPackage(options: {
   packageRoot: string;
   platform: NodeJS.Platform;
   architecture: string;
   operations: NodePtyLoaderFileOperations;
 }): string {
-  if (options.platform !== "darwin") {
-    throw new Error("The packaged node-pty loader is supported only on Darwin");
+  if (options.platform !== "darwin" && options.platform !== "linux") {
+    throw new Error(
+      "The packaged node-pty loader is supported only on macOS and Linux",
+    );
   }
   if (options.architecture !== "arm64" && options.architecture !== "x64") {
     throw new Error(
@@ -111,7 +138,10 @@ function validateStagedPackage(options: {
     path.join(options.packageRoot, "lib", "utils.js"),
     path.join(options.packageRoot, "lib", "unixTerminal.js"),
     path.join(prebuildRoot, "pty.node"),
-    path.join(prebuildRoot, "spawn-helper"),
+    // Linux node-pty forks directly; only macOS ships a spawn helper.
+    ...(options.platform === "darwin"
+      ? [path.join(prebuildRoot, "spawn-helper")]
+      : []),
   ]) {
     assertOwnedEntry(options.operations, filePath, "file");
   }

@@ -87,6 +87,7 @@ function harness() {
     platform: "darwin" as NodeJS.Platform,
     remoteName: undefined as string | undefined,
     workspaceTrusted: true,
+    nodePtyAvailable: undefined as boolean | undefined,
   };
   const native = provider("native");
   const nativeAgent = provider("native-agent");
@@ -790,6 +791,47 @@ describe("AgentTerminalProviderRouter", () => {
     });
     expect(test.createNativeAgentProvider).toHaveBeenCalledTimes(1);
     expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it("routes required Native Agent authority on local Linux with node-pty to the AgentLink terminal", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setHost({ platform: "linux", nodePtyAvailable: true });
+
+    const prepared = await test.router.prepareExecution(
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
+      nativeAgentRoute,
+    );
+    await expect(prepared.execute()).resolves.toMatchObject({
+      output: "native-agent",
+      security: {
+        route: "native",
+        executionSurface: "agentlink-native",
+        routeReason: "verified-local-linux",
+        requiredAuthority: "native-agent",
+      },
+    });
+    expect(test.createNativeAgentProvider).toHaveBeenCalledTimes(1);
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    expect(test.getSandboxAvailability).not.toHaveBeenCalled();
+  });
+
+  it("keeps required sandbox authority unavailable on Linux even with node-pty", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setHost({ platform: "linux", nodePtyAvailable: true });
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      reason: "runtime-unavailable",
+      diagnostic: { category: "unsupported_host" },
+    });
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
   });
 

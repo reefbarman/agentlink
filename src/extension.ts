@@ -232,7 +232,10 @@ import {
 } from "./telemetry/McpAuthTelemetry.js";
 import { createVscodeTerminalProvider } from "./adapters/vscode/terminalCapabilities.js";
 import { AgentTerminalViewProvider } from "./terminal/AgentTerminalViewProvider.js";
-import { createDeferredNodePtyLoader } from "./terminal/deferredNodePtyLoader.js";
+import {
+  createDeferredNodePtyLoader,
+  hasStagedNodePty,
+} from "./terminal/deferredNodePtyLoader.js";
 import { materializeHostShellBootstrap } from "./terminal/hostShellBootstrap.js";
 import { LiveHostTerminalSurfaceController } from "./terminal/LiveHostTerminalSurfaceController.js";
 import { NativeAgentTerminalCoordinator } from "./terminal/native/NativeAgentTerminalCoordinator.js";
@@ -559,6 +562,10 @@ export async function activate(
   const agentNodePtyLoader = createDeferredNodePtyLoader({
     extensionRoot: context.extensionPath,
   });
+  // Linux VSIXs without a node-pty prebuild (Alpine) keep the VS Code terminal.
+  const nodePtyAvailable = hasStagedNodePty({
+    extensionRoot: context.extensionPath,
+  });
   const sandboxTerminalChannelHub = new SandboxTerminalChannelHub();
   let resolvedSandboxNodeRuntime: ResolvedSandboxNodeRuntime | undefined;
   let sandboxBehaviorAttestationService:
@@ -651,6 +658,7 @@ export async function activate(
     getHost: () => ({
       platform: process.platform,
       remoteName: vscode.env.remoteName,
+      nodePtyAvailable,
     }),
     isEnabled: () =>
       vscode.workspace
@@ -669,6 +677,7 @@ export async function activate(
         host: {
           platform: process.platform,
           remoteName: vscode.env.remoteName,
+          nodePtyAvailable,
         },
         runtimeRoot: path.join(
           context.globalStorageUri.fsPath,
@@ -1022,6 +1031,7 @@ export async function activate(
       platform: process.platform,
       remoteName: vscode.env.remoteName,
       workspaceTrusted: vscode.workspace.isTrusted,
+      nodePtyAvailable,
     }),
     createNativeProvider: createVscodeTerminalProvider,
     revealCustomTerminal: (terminalId) =>
@@ -1045,6 +1055,7 @@ export async function activate(
             host: {
               platform: process.platform,
               remoteName: vscode.env.remoteName,
+              nodePtyAvailable,
             },
             runtimeRoot: path.join(
               context.globalStorageUri.fsPath,

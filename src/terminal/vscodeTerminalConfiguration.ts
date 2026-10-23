@@ -69,6 +69,19 @@ export async function resolveVscodeTerminalCreateRequest(
   };
 }
 
+/** The `terminal.integrated.*.<platform>` settings suffix VS Code reads. */
+export function vscodeTerminalPlatformKey(
+  platform: NodeJS.Platform,
+): "osx" | "linux" | "windows" {
+  if (platform === "win32") return "windows";
+  return platform === "darwin" ? "osx" : "linux";
+}
+
+/** Shell used when neither VS Code nor $SHELL names one. */
+export function defaultFallbackShellPath(platform: NodeJS.Platform): string {
+  return platform === "darwin" ? "/bin/zsh" : "/bin/bash";
+}
+
 export function readVscodeTerminalConfigurationSnapshot(
   options: {
     selectedProfileName?: string;
@@ -85,16 +98,23 @@ export function readVscodeTerminalConfigurationSnapshot(
       ? requestedCwd
       : activeLocalEditorDirectory();
 
+  const platformKey = vscodeTerminalPlatformKey(process.platform);
   return {
     isWorkspaceTrusted: vscode.workspace.isTrusted,
     platform: process.platform,
     selectedProfileName: options.selectedProfileName,
-    defaultProfile: inspect<string | null>(terminal, "defaultProfile.osx"),
+    defaultProfile: inspect<string | null>(
+      terminal,
+      `defaultProfile.${platformKey}`,
+    ),
     profiles: inspect<Record<string, HostShellProfileConfiguration | null>>(
       terminal,
-      "profiles.osx",
+      `profiles.${platformKey}`,
     ),
-    environment: inspect<Record<string, string | null>>(terminal, "env.osx"),
+    environment: inspect<Record<string, string | null>>(
+      terminal,
+      `env.${platformKey}`,
+    ),
     fontFamily: inspect<string>(terminal, "fontFamily"),
     fontSize: inspect<number>(terminal, "fontSize"),
     lineHeight: inspect<number>(terminal, "lineHeight"),
@@ -106,7 +126,10 @@ export function readVscodeTerminalConfigurationSnapshot(
     cursorBlink: inspect<boolean>(terminal, "cursorBlinking"),
     scrollback: inspect<number>(terminal, "scrollback"),
     baseEnvironment: processEnvironment(),
-    fallbackShellPath: vscode.env.shell || process.env.SHELL || "/bin/zsh",
+    fallbackShellPath:
+      vscode.env.shell ||
+      process.env.SHELL ||
+      defaultFallbackShellPath(process.platform),
     fallbackShellArgs: [],
     activeEditorDirectory,
     workspaceDirectories: localWorkspaceDirectories(),

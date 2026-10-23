@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createDeferredNodePtyLoader,
+  hasStagedNodePty,
   loadNodePtyForHostShellPlan,
   STAGED_NODE_PTY_RELATIVE_PATH,
   type NodePtyLoaderFileOperations,
@@ -69,10 +70,13 @@ function fakeFileOperations(overrides?: {
     path.join(packageRoot, "lib", "unixTerminal.js"),
     path.join(packageRoot, "prebuilds", "darwin-arm64", "pty.node"),
     path.join(packageRoot, "prebuilds", "darwin-arm64", "spawn-helper"),
+    // Linux prebuilds ship no spawn helper.
+    path.join(packageRoot, "prebuilds", "linux-x64", "pty.node"),
   ]);
   const directories = new Set([
     packageRoot,
     path.join(packageRoot, "prebuilds", "darwin-arm64"),
+    path.join(packageRoot, "prebuilds", "linux-x64"),
   ]);
   return {
     exists: (entryPath) => existing.has(entryPath),
@@ -150,8 +154,57 @@ describe("deferred node-pty loader", () => {
     expect(createRequire).not.toHaveBeenCalled();
   });
 
+  it("loads the Linux prebuild without requiring a spawn helper", () => {
+    const nodePty = { spawn: vi.fn() } as unknown as NodePtyModule;
+    const requireModule = vi.fn(() => nodePty);
+    const loader = createDeferredNodePtyLoader({
+      extensionRoot,
+      platform: "linux",
+      architecture: "x64",
+      fileOperations: fakeFileOperations({
+        missing: [
+          path.join(packageRoot, "prebuilds", "linux-x64", "spawn-helper"),
+        ],
+      }),
+      createRequire: () => requireModule,
+    });
+
+    expect(loader.load()).toBe(nodePty);
+    expect(requireModule).toHaveBeenCalledWith(packageRoot);
+  });
+
+  it("reports whether the host's node-pty prebuild is staged", () => {
+    const staged = path.join(packageRoot, "prebuilds", "linux-x64", "pty.node");
+    const exists = (entryPath: string) => entryPath === staged;
+
+    expect(
+      hasStagedNodePty({
+        extensionRoot,
+        platform: "linux",
+        architecture: "x64",
+        exists,
+      }),
+    ).toBe(true);
+    expect(
+      hasStagedNodePty({
+        extensionRoot,
+        platform: "linux",
+        architecture: "arm64",
+        exists,
+      }),
+    ).toBe(false);
+    expect(
+      hasStagedNodePty({
+        extensionRoot,
+        platform: "win32",
+        architecture: "x64",
+        exists: () => true,
+      }),
+    ).toBe(false);
+  });
+
   it.each([
-    ["unsupported platform", { platform: "linux" as const }],
+    ["unsupported platform", { platform: "win32" as const }],
     ["unsupported architecture", { architecture: "ia32" }],
   ])("rejects %s before require", (_name, override) => {
     const createRequire = vi.fn();

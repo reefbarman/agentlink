@@ -47,6 +47,8 @@ export interface AgentTerminalProviderHost {
   architecture?: string;
   remoteName?: string;
   workspaceTrusted: boolean;
+  /** Linux only: whether this install staged node-pty for the AgentLink terminal. */
+  nodePtyAvailable?: boolean;
 }
 
 export type SandboxAvailabilityFailureReason =
@@ -162,7 +164,8 @@ type RouteDecision =
         | "unsupported-host"
         | "remote-host"
         | "runtime-unavailable"
-        | "verified-local-macos";
+        | "verified-local-macos"
+        | "verified-local-linux";
       executionSurface: "agentlink-native" | "vscode-compatibility";
     }
   | { route: "sandbox"; attestation: TerminalSandboxAttestationSummary }
@@ -806,9 +809,10 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       if (!host.workspaceTrusted) {
         return { route: "unavailable", reason: "untrusted" };
       }
-      // The AgentLink terminal only exists on local macOS. Elsewhere the
-      // VS Code terminal has the same unsandboxed confinement, and approval
-      // has already been decided by the caller, so run there and say why.
+      // The AgentLink terminal exists on local macOS, and on local Linux when
+      // node-pty is staged. Elsewhere the VS Code terminal has the same
+      // unsandboxed confinement, and approval has already been decided by the
+      // caller, so run there and say why.
       if (host.remoteName) {
         return {
           route: "native",
@@ -816,7 +820,9 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           executionSurface: "vscode-compatibility",
         };
       }
-      if (host.platform !== "darwin") {
+      const linuxNativeAgent =
+        host.platform === "linux" && host.nodePtyAvailable === true;
+      if (host.platform !== "darwin" && !linuxNativeAgent) {
         return {
           route: "native",
           reason: "unsupported-host",
@@ -831,7 +837,9 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       }
       return {
         route: "native",
-        reason: "verified-local-macos",
+        reason: linuxNativeAgent
+          ? "verified-local-linux"
+          : "verified-local-macos",
         executionSurface: "agentlink-native",
       };
     }

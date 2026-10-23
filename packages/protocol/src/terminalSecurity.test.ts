@@ -40,6 +40,7 @@ it("pins terminal execution authority and policy unions", () => {
   >();
   expectTypeOf<TerminalExecutionRouteReason>().toEqualTypeOf<
     | "verified-local-macos"
+    | "verified-local-linux"
     | "feature-disabled"
     | "unsupported-host"
     | "remote-host"

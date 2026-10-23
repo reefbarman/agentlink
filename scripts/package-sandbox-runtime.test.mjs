@@ -108,8 +108,71 @@ test("stages runtime dependencies and Darwin node-pty prebuilds without source o
   }
 });
 
-for (const target of ["linux-x64", "linux-arm64", "alpine-x64", "win32-x64"]) {
-  test(`stages the sandbox runtime without Darwin node-pty for ${target}`, async () => {
+for (const target of ["linux-x64", "linux-arm64"]) {
+  test(`stages only the matching Linux node-pty prebuild for ${target}`, async () => {
+    const temporaryRoot = await mkdtemp(
+      path.join(os.tmpdir(), "agentlink-runtime-stage-"),
+    );
+    const destinationRoot = path.join(temporaryRoot, "sandbox-runtime");
+    try {
+      const staged = await stageSandboxRuntime({
+        repoRoot,
+        destinationRoot,
+        target,
+      });
+
+      assert.deepEqual(staged.spawnHelpers, []);
+      assert.deepEqual(
+        await readdir(
+          path.join(destinationRoot, "node_modules/node-pty/prebuilds"),
+        ),
+        [target],
+      );
+      for (const runtimePath of [
+        "node_modules/node-pty/lib/index.js",
+        "node_modules/node-pty/package.json",
+        `node_modules/node-pty/prebuilds/${target}/pty.node`,
+      ]) {
+        assert.equal(
+          await exists(path.join(destinationRoot, runtimePath)),
+          true,
+          runtimePath,
+        );
+      }
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("does not stage node-pty when the Linux host only needs piped launches", async () => {
+  const temporaryRoot = await mkdtemp(
+    path.join(os.tmpdir(), "agentlink-runtime-stage-"),
+  );
+  const destinationRoot = path.join(temporaryRoot, "sandbox-runtime");
+  try {
+    await stageSandboxRuntime({
+      repoRoot,
+      destinationRoot,
+      target: "linux-x64",
+      includeNodePty: false,
+    });
+    assert.equal(
+      await exists(path.join(destinationRoot, "node_modules/node-pty")),
+      false,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+for (const target of [
+  "alpine-x64",
+  "alpine-arm64",
+  "linux-armhf",
+  "win32-x64",
+]) {
+  test(`stages the sandbox runtime without node-pty for ${target}`, async () => {
     const temporaryRoot = await mkdtemp(
       path.join(os.tmpdir(), "agentlink-runtime-stage-"),
     );

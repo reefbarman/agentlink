@@ -69,10 +69,11 @@ const PACKAGE_ENTRIES = [
   },
 ];
 
-// node-pty backs the AgentLink terminal and sandbox PTY launches, which only
-// run on macOS. Its packaged prebuilds are Darwin-only, so other targets get
-// none of it.
-const DARWIN_NODE_PTY_ENTRIES = [
+// node-pty backs the AgentLink terminal (macOS and glibc Linux) and sandbox PTY
+// launches (macOS only). Each target gets only the prebuilds it can load: both
+// Darwin architectures on macOS, the matching one on Linux, and none on Alpine
+// or other targets, which keep the VS Code terminal.
+const NODE_PTY_COMMON_ENTRIES = [
   {
     source: "node_modules/node-pty/lib",
     destination: "node_modules/node-pty/lib",
@@ -89,17 +90,17 @@ const DARWIN_NODE_PTY_ENTRIES = [
     source: "node_modules/node-pty/package.json",
     destination: "node_modules/node-pty/package.json",
   },
-  {
-    source: "node_modules/node-pty/prebuilds/darwin-arm64",
-    destination: "node_modules/node-pty/prebuilds/darwin-arm64",
-  },
-  {
-    source: "node_modules/node-pty/prebuilds/darwin-x64",
-    destination: "node_modules/node-pty/prebuilds/darwin-x64",
-  },
 ];
 
-const DARWIN_SPAWN_HELPER_ARCHITECTURES = ["darwin-arm64", "darwin-x64"];
+const DARWIN_NODE_PTY_PREBUILDS = ["darwin-arm64", "darwin-x64"];
+const LINUX_NODE_PTY_PREBUILDS = ["linux-arm64", "linux-x64"];
+
+/** The node-pty prebuild directories staged for a VSIX target. */
+export function nodePtyPrebuildsFor(target) {
+  if (target.startsWith("darwin-")) return DARWIN_NODE_PTY_PREBUILDS;
+  if (LINUX_NODE_PTY_PREBUILDS.includes(target)) return [target];
+  return [];
+}
 
 /**
  * The VSIX target being packaged: AGENTLINK_VSCE_TARGET when set (for example
@@ -114,7 +115,7 @@ export function resolveSandboxRuntimeTarget({
 }
 
 export function includesNodePty(target) {
-  return target.startsWith("darwin-");
+  return nodePtyPrebuildsFor(target).length > 0;
 }
 
 export function sandboxRuntimeStagePaths(
@@ -123,7 +124,7 @@ export function sandboxRuntimeStagePaths(
 ) {
   return [
     ...HELPER_FILES.map((file) => `scripts/${file}`),
-    ...packageEntriesFor(withNodePty).map((entry) => entry.destination),
+    ...packageEntriesFor(target, withNodePty).map((entry) => entry.destination),
   ];
 }
 
@@ -131,10 +132,16 @@ export function sandboxRuntimeStagePaths(
 export const SANDBOX_RUNTIME_STAGE_PATHS =
   sandboxRuntimeStagePaths("darwin-arm64");
 
-function packageEntriesFor(withNodePty) {
-  return withNodePty
-    ? [...PACKAGE_ENTRIES, ...DARWIN_NODE_PTY_ENTRIES]
-    : PACKAGE_ENTRIES;
+function packageEntriesFor(target, withNodePty) {
+  if (!withNodePty) return PACKAGE_ENTRIES;
+  return [
+    ...PACKAGE_ENTRIES,
+    ...NODE_PTY_COMMON_ENTRIES,
+    ...nodePtyPrebuildsFor(target).map((prebuild) => ({
+      source: `node_modules/node-pty/prebuilds/${prebuild}`,
+      destination: `node_modules/node-pty/prebuilds/${prebuild}`,
+    })),
+  ];
 }
 
 function isNonRuntimeArtifact(fileName) {
@@ -234,7 +241,7 @@ export async function stageSandboxRuntime({
       path.join(destinationRoot, "scripts", file),
     );
   }
-  for (const entry of packageEntriesFor(withNodePty)) {
+  for (const entry of packageEntriesFor(target, withNodePty)) {
     await copyEntry(
       await resolveEntrySource(repoRoot, entry.source),
       path.join(destinationRoot, entry.destination),
@@ -242,8 +249,13 @@ export async function stageSandboxRuntime({
   }
   await pruneNonRuntimeFiles(destinationRoot, withNodePty);
 
+  // Linux node-pty forks directly; only the Darwin prebuilds ship a helper.
   const spawnHelpers = (
-    withNodePty ? DARWIN_SPAWN_HELPER_ARCHITECTURES : []
+    withNodePty
+      ? nodePtyPrebuildsFor(target).filter((prebuild) =>
+          prebuild.startsWith("darwin-"),
+        )
+      : []
   ).map((architecture) =>
     path.join(
       destinationRoot,
