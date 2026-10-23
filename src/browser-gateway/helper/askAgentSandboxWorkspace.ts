@@ -7,7 +7,10 @@ import * as path from "node:path";
 import {
   SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
   SandboxHelperClient,
+  checkLinuxSandboxPrerequisites,
   createNodeSandboxHelperTransportFactory,
+  type CheckLinuxSandboxPrerequisitesOptions,
+  type LinuxSandboxPrerequisites,
   type SandboxRuntimeProvider,
 } from "@agentlink/sandbox";
 import type { CoreModelToolDefinition } from "@agentlink/core/model-runtime";
@@ -28,8 +31,9 @@ type WorkspaceCommandSupervisor = Awaited<
 /**
  * Per-chat sandboxed scratch folders for the Ask Agent helper (Desktop and
  * the browser tab). Each chat gets `<root>/<chat>/work`, created on first
- * use. Commands run through the shared workspace-host command tools on the
- * macOS sandbox: they can write only to that folder and private per-command
+ * use. Commands run through the shared workspace-host command tools in the
+ * sandbox (Seatbelt on macOS, bubblewrap on Linux when the host passes
+ * `checkLinuxSandboxPrerequisites`): they can write only to that folder and private per-command
  * directories, cannot read the rest of the user's home or other chats, and
  * have loopback-only networking. The sandbox is the security boundary, so
  * calls run without an approval card.
@@ -65,7 +69,7 @@ export const ASK_AGENT_SANDBOX_PROMPT = [
   "",
   "This chat has a private scratch folder. Use write_file to create files there and execute_command to run non-interactive commands in it (for example python3, sqlite3, or shell tools) to analyse data, convert files, or make charts. Paths are relative to the scratch folder. Files the user attached to this chat are copied into inputs/.",
   "",
-  "Commands run in a macOS sandbox: they can only write inside the scratch folder, cannot read the user's home folder or other chats, and have no internet access, so package installs such as pip install fail. Prefer tools that are already installed. Read results with read_file, list_files or search_files using scratch-relative paths.",
+  "Commands run in a sandbox: they can only write inside the scratch folder, cannot read the user's home folder or other chats, and have no internet access, so package installs such as pip install fail. Prefer tools that are already installed. Read results with read_file, list_files or search_files using scratch-relative paths.",
   "",
   "The user cannot see the scratch folder. To give them a file (an image, CSV, PDF, report and so on), call present_files with its path; it then appears in the chat with a download button. Images are shown inline.",
 ].join("\n");
@@ -172,6 +176,17 @@ export interface AskAgentSandboxWorkspaceOptions {
   readonly platform?: NodeJS.Platform;
   readonly homeDirectory?: string;
   readonly maxWorkspaceBytes?: number;
+  /**
+   * Linux only: an absolute ripgrep the sandbox uses to expand deny paths.
+   * Used when executable; otherwise `/usr/bin/rg`.
+   */
+  readonly ripgrepPath?: string;
+  /** Linux only: log sink for the sandbox prerequisite check. */
+  readonly log?: (message: string) => void;
+  /** Test seam replacing the Linux sandbox doctor. */
+  readonly checkLinuxPrerequisites?: (
+    options: CheckLinuxSandboxPrerequisitesOptions,
+  ) => Promise<LinuxSandboxPrerequisites>;
   /** Test seam replacing the sandboxed launcher. */
   readonly createProcessLauncher?: (options: {
     readonly workDirectory: string;
@@ -256,6 +271,9 @@ export class AskAgentSandboxWorkspace {
   private readonly chats = new Map<string, Promise<ChatSandbox>>();
   private runtime: SandboxRuntimeProvider | undefined;
   private workspaceHost: Promise<WorkspaceHostModule> | undefined;
+  private linuxCheck:
+    | Promise<{ available: boolean; ripgrepPath: string | undefined }>
+    | undefined;
 
   constructor(private readonly options: AskAgentSandboxWorkspaceOptions) {
     this.platform = options.platform ?? process.platform;
@@ -264,16 +282,68 @@ export class AskAgentSandboxWorkspace {
       options.maxWorkspaceBytes ?? ASK_AGENT_SANDBOX_MAX_WORKSPACE_BYTES;
   }
 
-  /** macOS with the packaged sandbox helper staged next to the host. */
-  isAvailable(): boolean {
-    if (this.platform !== "darwin") return false;
-    if (this.options.createProcessLauncher) return true;
-    return existsSync(
-      path.join(
-        this.options.extensionRoot,
-        SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
-      ),
-    );
+  /**
+   * macOS, or Linux when the bubblewrap prerequisites pass, with the packaged
+   * sandbox helper staged next to the host. The Linux check runs once per
+   * process, so installing a missing tool takes effect after a restart.
+   */
+  async isAvailable(): Promise<boolean> {
+    if (this.platform !== "darwin" && this.platform !== "linux") return false;
+    if (
+      !this.options.createProcessLauncher &&
+      !existsSync(
+        path.join(
+          this.options.extensionRoot,
+          SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
+        ),
+      )
+    ) {
+      return false;
+    }
+    if (this.platform === "darwin") return true;
+    return (await this.checkLinuxHost()).available;
+  }
+
+  private checkLinuxHost(): Promise<{
+    available: boolean;
+    ripgrepPath: string | undefined;
+  }> {
+    this.linuxCheck ??= (async () => {
+      const check =
+        this.options.checkLinuxPrerequisites ?? checkLinuxSandboxPrerequisites;
+      const requestedRipgrep = this.options.ripgrepPath;
+      try {
+        const result = await check({
+          runtimeRoot: path.join(
+            this.options.extensionRoot,
+            "dist",
+            "sandbox-runtime",
+          ),
+          ...(requestedRipgrep ? { ripgrepPath: requestedRipgrep } : {}),
+        });
+        for (const item of result.checks) {
+          this.options.log?.(
+            `[ask-agent-sandbox] Linux sandbox check ${item.id}: ${item.status}, ${item.detail}${item.fix ? ` Fix: ${item.fix}` : ""}`,
+          );
+        }
+        // The doctor and the helper fall back to /usr/bin/rg; pass the
+        // requested ripgrep only when the doctor chose it.
+        const ripgrep = result.checks.find((item) => item.id === "ripgrep");
+        return {
+          available: result.available,
+          ripgrepPath:
+            requestedRipgrep && ripgrep?.detail === requestedRipgrep
+              ? requestedRipgrep
+              : undefined,
+        };
+      } catch (error) {
+        this.options.log?.(
+          `[ask-agent-sandbox] Linux sandbox check failed: ${errorMessage(error)}`,
+        );
+        return { available: false, ripgrepPath: undefined };
+      }
+    })();
+    return this.linuxCheck;
   }
 
   /** The chat's folder (not created). */
@@ -391,7 +461,12 @@ export class AskAgentSandboxWorkspace {
   }
 
   private deniedReadRoots(): string[] {
-    return [...new Set([this.homeDirectory, "/Users"])];
+    return [
+      ...new Set([
+        this.homeDirectory,
+        this.platform === "linux" ? "/home" : "/Users",
+      ]),
+    ];
   }
 
   private async resolveInside(
@@ -649,9 +724,13 @@ export class AskAgentSandboxWorkspace {
   }
 
   private async createChatSandbox(sessionId: string): Promise<ChatSandbox> {
-    if (!this.isAvailable()) {
+    if (!(await this.isAvailable())) {
       throw new Error("ask_agent_sandbox_unavailable");
     }
+    const ripgrepPath =
+      this.platform === "linux"
+        ? (await this.checkLinuxHost()).ripgrepPath
+        : undefined;
     const workDirectory = await this.ensureWorkDirectory(sessionId);
     const stateDirectory = path.join(this.chatDirectory(sessionId), "state");
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
@@ -664,7 +743,8 @@ export class AskAgentSandboxWorkspace {
           deniedReadRoots,
         })
       : host.createSandboxedWorkspaceProcessLauncher({
-          runtime: this.sandboxRuntime(),
+          runtime: this.sandboxRuntime(ripgrepPath),
+          platform: this.platform,
           writableRoots: [workDirectory],
           deniedReadRoots,
           temporaryHome: true,
@@ -673,6 +753,7 @@ export class AskAgentSandboxWorkspace {
           fallbackShell: "/bin/sh",
         });
     const ownerId = "ask-agent-sandbox";
+    const locale = this.platform === "linux" ? "C.UTF-8" : "en_US.UTF-8";
     const supervisor = await host.WorkspaceCommandSupervisor.create({
       stateDirectory,
       ownerId,
@@ -684,14 +765,15 @@ export class AskAgentSandboxWorkspace {
       supervisor,
       mutations: new host.WorkspaceMutationCoordinator(),
       stateDirectory,
-      shellExecutable: "/bin/zsh",
+      // macOS always ships zsh; Linux distributions reliably ship bash.
+      shellExecutable: this.platform === "linux" ? "/bin/bash" : "/bin/zsh",
       environmentDigestSecret: createHash("sha256")
         .update(`${process.pid}:${sessionId}:${Date.now()}`)
         .digest("hex"),
       resolveEnvironment: () => ({
         PATH: SANDBOX_PATH,
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
+        LANG: locale,
+        LC_ALL: locale,
         TERM: "dumb",
         MPLBACKEND: "Agg",
       }),
@@ -701,10 +783,12 @@ export class AskAgentSandboxWorkspace {
     return { workDirectory, supervisor, commandTools };
   }
 
-  private sandboxRuntime(): SandboxRuntimeProvider {
+  private sandboxRuntime(ripgrepPath?: string): SandboxRuntimeProvider {
     this.runtime ??= new SandboxHelperClient(
       createNodeSandboxHelperTransportFactory({
         extensionRoot: this.options.extensionRoot,
+        platform: this.platform,
+        ...(ripgrepPath ? { ripgrepPath } : {}),
         nodeExecutable: this.options.nodeExecutable ?? process.execPath,
         helperEnvironment:
           this.options.helperEnvironment ??

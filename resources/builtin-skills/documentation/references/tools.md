@@ -190,13 +190,13 @@ Exact command-tool parameters: [terminal tools](complete-reference.md#execute_co
 
 Each Ask Agent chat in Desktop (and the Browser Ask Agent served by the same helper) has a private scratch folder at `~/.agentlink/ask-agent-sandboxes/<chat>/work`. It lets the agent analyse data, convert files and make charts without a project:
 
-- `execute_command` runs a non-interactive command in the scratch folder through the macOS sandbox. Commands can write only inside that chat's folder, cannot read your home folder or other chats, and have no network access, so `pip install` and similar installs fail. Background commands are not supported; `timeoutMs` defaults to 120 seconds (maximum 10 minutes). The parameters follow the standalone CLI's command tools rather than VS Code's terminal tools. No approval is asked because the sandbox is the boundary.
+- `execute_command` runs a non-interactive command in the scratch folder through the sandbox (Seatbelt on macOS, bubblewrap on Linux; the shell is zsh on macOS and bash on Linux). Commands can write only inside that chat's folder, cannot read your home folder or other chats, and have no network access, so `pip install` and similar installs fail. Background commands are not supported; `timeoutMs` defaults to 120 seconds (maximum 10 minutes). The parameters follow the standalone CLI's command tools rather than VS Code's terminal tools. No approval is asked because the sandbox is the boundary.
 - `get_command_output` reads a previous command's output by `commandId`.
 - `write_file` creates or replaces a file in the scratch folder (up to 5 MiB per write, 1 GiB per chat). It cannot write anywhere else or through links.
 - `present_files` gives you files from the scratch folder: PNG, JPEG, GIF and WebP images show inline, and other files (CSV, PDF, Markdown and so on) appear as file chips with a download button. Up to 10 files, 8 MiB each and 20 MiB per call.
 - `read_file`, `list_files` and `search_files` also read the scratch folder; relative paths resolve inside it.
 
-Files you attach to the chat are copied into `inputs/`. Deleting the chat deletes its folder. The tools are not offered on Linux or Windows, or when the packaged sandbox helper is missing. This is not a local shell: it cannot touch your projects or run with your normal permissions.
+Files you attach to the chat are copied into `inputs/`. Deleting the chat deletes its folder. On Linux (the Browser Ask Agent; Desktop is macOS only) the tools are offered only when the host passes the same bubblewrap check as the VS Code sandbox (see [Linux command sandbox](capabilities.md#linux-command-sandbox)). The check runs once per browser gateway helper process, so after fixing the host restart the helper (for example by quitting every VS Code window). Ripgrep defaults to `/usr/bin/rg`; set `AGENTLINK_SANDBOX_RIPGREP_PATH` to use another one. The tools are not offered on Windows, or when the packaged sandbox helper is missing. This is not a local shell: it cannot touch your projects or run with your normal permissions.
 
 ## Work with people and the session
 

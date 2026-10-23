@@ -177,6 +177,11 @@ describe("launchSandboxedProcess", () => {
 
     const metadata = await handle.started;
     expect(metadata.backend).toBe("bubblewrap");
+    // glibc always ships C.UTF-8; en_US.UTF-8 is often missing on Linux.
+    expect(fake.launches[0]!.environment).toMatchObject({
+      LANG: "C.UTF-8",
+      LC_ALL: "C.UTF-8",
+    });
     expect(metadata.capabilities.backend).toBe("bubblewrap");
     expect(metadata.capabilities.warnings).toEqual(
       expect.arrayContaining([

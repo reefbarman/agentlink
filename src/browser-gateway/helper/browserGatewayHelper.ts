@@ -1506,6 +1506,12 @@ export class BrowserGatewayHelper {
               "ask-agent-sandboxes",
             ),
             extensionRoot: options.extensionRootPath,
+            // Linux: a host can point the sandbox at its own ripgrep, the
+            // same variable the sandbox helper reads; else /usr/bin/rg.
+            ...(process.env.AGENTLINK_SANDBOX_RIPGREP_PATH
+              ? { ripgrepPath: process.env.AGENTLINK_SANDBOX_RIPGREP_PATH }
+              : {}),
+            log: (message) => logHelper(message),
           });
 
     this.sharedCodexOAuth =
@@ -6209,7 +6215,8 @@ export class BrowserGatewayHelper {
           })
         : undefined;
       const sandboxTools =
-        completeWithToolCalls && this.askAgentSandbox?.isAvailable() === true;
+        completeWithToolCalls &&
+        (await this.askAgentSandbox?.isAvailable()) === true;
       const additionalInstructions =
         [
           instructionSnapshot?.prompt,
@@ -8453,7 +8460,7 @@ export class BrowserGatewayHelper {
     if (
       isAskAgentSandboxToolName(toolCall.name) &&
       mcpInvocation &&
-      this.askAgentSandbox?.isAvailable()
+      (await this.askAgentSandbox?.isAvailable()) === true
     ) {
       return await this.executeAskAgentSandboxTool(
         toolCall,
@@ -8693,11 +8700,12 @@ export class BrowserGatewayHelper {
     if (typeof inputPath !== "string" || !inputPath.trim()) return null;
     // The chat's sandboxed scratch folder is implicitly readable, and
     // relative paths resolve inside it.
-    const scratchRoot = this.askAgentSandbox?.isAvailable()
-      ? await this.askAgentSandbox.existingWorkDirectory(
-          this.askAgentSessionStore.getActiveSessionId(),
-        )
-      : undefined;
+    const scratchRoot =
+      this.askAgentSandbox && (await this.askAgentSandbox.isAvailable())
+        ? await this.askAgentSandbox.existingWorkDirectory(
+            this.askAgentSessionStore.getActiveSessionId(),
+          )
+        : undefined;
     const trimmed = inputPath.trim();
     const requested =
       scratchRoot && !path.isAbsolute(trimmed)

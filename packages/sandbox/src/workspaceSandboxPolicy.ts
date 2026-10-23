@@ -406,6 +406,7 @@ function buildEnvironment(
   temporaryHome: boolean,
   command: string,
   budgetBytes: number,
+  locale: string,
 ) {
   const resolved = buildSandboxPolicyEnvironment(hostEnvironment, policy);
   if (resolved.policy.useProfile) {
@@ -465,8 +466,8 @@ function buildEnvironment(
     CLAUDE_CODE_TMPDIR: directories.tmp,
     PATH: executablePath,
     TERM: "xterm-256color",
-    LANG: "en_US.UTF-8",
-    LC_ALL: "en_US.UTF-8",
+    LANG: locale,
+    LC_ALL: locale,
     ...(developerDirectory
       ? {
           DEVELOPER_DIR: developerDirectory,
@@ -579,6 +580,9 @@ export async function prepareWorkspaceSandboxLaunch(
       options.temporaryHome,
       options.command,
       options.environmentBudgetBytes,
+      // Many Linux installs lack en_US.UTF-8, and setting a missing locale
+      // makes every shell print warnings; glibc always has C.UTF-8.
+      linux ? "C.UTF-8" : "en_US.UTF-8",
     );
     const { set: environmentOverrides, ...environmentPolicyFields } =
       environmentResult.policy;

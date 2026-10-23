@@ -66,22 +66,105 @@ describe("AskAgentSandboxWorkspace", () => {
     ).not.toContain("background");
   });
 
-  it("is unavailable off macOS and without a staged helper", async () => {
+  it("is unavailable on other hosts and without a staged helper", async () => {
     const root = await temporaryDirectory("al-ask-sbx-");
-    expect(
-      new AskAgentSandboxWorkspace({
+    for (const platform of ["win32", "linux", "darwin"] as const) {
+      await expect(
+        new AskAgentSandboxWorkspace({
+          rootDirectory: root,
+          extensionRoot: root,
+          platform,
+        }).isAvailable(),
+      ).resolves.toBe(false);
+    }
+  });
+
+  describe("on Linux", () => {
+    const passing = (ripgrep: string) => ({
+      available: true,
+      checks: [
+        { id: "platform" as const, status: "pass" as const, detail: "Linux" },
+        { id: "ripgrep" as const, status: "pass" as const, detail: ripgrep },
+      ],
+    });
+
+    async function linuxWorkspace(
+      result: Awaited<
+        ReturnType<
+          NonNullable<
+            ConstructorParameters<
+              typeof AskAgentSandboxWorkspace
+            >[0]["checkLinuxPrerequisites"]
+          >
+        >
+      >,
+      ripgrepPath?: string,
+    ) {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const host = await import("@agentlink/workspace-host");
+      const checks: unknown[] = [];
+      const launches: Array<readonly string[]> = [];
+      const workspace = new AskAgentSandboxWorkspace({
         rootDirectory: root,
         extensionRoot: root,
         platform: "linux",
-      }).isAvailable(),
-    ).toBe(false);
-    expect(
-      new AskAgentSandboxWorkspace({
-        rootDirectory: root,
-        extensionRoot: root,
-        platform: "darwin",
-      }).isAvailable(),
-    ).toBe(false);
+        homeDirectory: "/home/example",
+        ...(ripgrepPath ? { ripgrepPath } : {}),
+        checkLinuxPrerequisites: async (options) => {
+          checks.push(options);
+          return result;
+        },
+        createProcessLauncher: ({ deniedReadRoots }) => {
+          launches.push(deniedReadRoots);
+          return host.createLocalWorkspaceExecutionBackend();
+        },
+      });
+      cleanups.push(() => workspace.dispose());
+      return { workspace, checks, launches, root };
+    }
+
+    it("is available only when the bubblewrap check passes, checking once", async () => {
+      const ok = await linuxWorkspace(passing("/opt/rg"), "/opt/rg");
+      await expect(ok.workspace.isAvailable()).resolves.toBe(true);
+      await expect(ok.workspace.isAvailable()).resolves.toBe(true);
+      expect(ok.checks).toEqual([
+        {
+          runtimeRoot: path.join(ok.root, "dist", "sandbox-runtime"),
+          ripgrepPath: "/opt/rg",
+        },
+      ]);
+
+      const missing = await linuxWorkspace({
+        available: false,
+        checks: [
+          {
+            id: "namespaces",
+            status: "fail",
+            detail: "AppArmor restricts unprivileged user namespaces.",
+          },
+        ],
+      });
+      await expect(missing.workspace.isAvailable()).resolves.toBe(false);
+      await expect(
+        missing.workspace.execute({
+          sessionId: "chat-a",
+          turnId: "turn-1",
+          toolName: "execute_command",
+          input: { command: "true" },
+        }),
+      ).resolves.toMatchObject({ isError: true });
+    });
+
+    it("hides /home and the user's home from commands", async () => {
+      const test = await linuxWorkspace(passing("/usr/bin/rg"));
+      await test.workspace.execute({
+        sessionId: "chat-a",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "true" },
+      });
+      expect(test.launches).toEqual([["/home/example", "/home"]]);
+    });
   });
 
   it("writes, runs and presents files inside one chat's work folder", async () => {
@@ -249,7 +332,7 @@ describe("AskAgentSandboxWorkspace", () => {
         homeDirectory: home,
       });
       cleanups.push(() => workspace.dispose());
-      expect(workspace.isAvailable()).toBe(true);
+      await expect(workspace.isAvailable()).resolves.toBe(true);
 
       await workspace.execute({
         sessionId: "chat-b",
