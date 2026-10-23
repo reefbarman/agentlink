@@ -559,6 +559,8 @@ function classifyAskAgentRoute(
     case "readGrants":
     case "readGrantAdd":
     case "readGrantRevoke":
+    case "commandPolicy":
+    case "commandRuleRemove":
     case "projectHandoffTargets":
     case "projectHandoffPropose":
     case "projectHandoffCancel":

@@ -501,6 +501,18 @@ type TestSnapshot = {
       kind: "file" | "directory";
       access?: "read" | "commands";
     }>;
+    commandPolicy?: {
+      approveForMe: boolean;
+      rules: Array<{
+        id: string;
+        pattern: string;
+        mode: "prefix" | "exact" | "regex";
+        decision: "allow" | "prompt" | "forbidden";
+        scope: "session" | "project" | "global";
+        root?: string;
+        createdAt: number;
+      }>;
+    };
     mcpStatusInfos: never[];
   };
   session: {
@@ -7922,6 +7934,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     const askSnapshot = createAskAgentSessionResponse().snapshot;
     let granted = false;
     const grantBodies: Array<Record<string, unknown>> = [];
+    const policyBodies: unknown[] = [];
+    let grantSnapshot:
+      | ReturnType<typeof createAskAgentSessionResponse>["snapshot"]
+      | undefined;
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init) => {
       const url = String(input);
@@ -7953,6 +7969,35 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             access: body.access,
           },
         ];
+        if (body.access === "commands") {
+          next.ui.commandPolicy = {
+            approveForMe: false,
+            rules: [
+              {
+                id: "rule-1",
+                pattern: "npm test",
+                mode: "prefix",
+                decision: "allow",
+                scope: "project",
+                root: body.path,
+                createdAt: 100,
+              },
+            ],
+          };
+        }
+        grantSnapshot = next;
+        return jsonResponse({ ok: true, snapshot: next });
+      }
+      if (pathname === "/api/ask-agent/command-policy") {
+        policyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        const next = structuredClone(grantSnapshot!);
+        next.ui.commandPolicy!.approveForMe = true;
+        return jsonResponse({ ok: true, snapshot: next });
+      }
+      if (pathname === "/api/ask-agent/command-policy/rules/remove") {
+        policyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        const next = structuredClone(grantSnapshot!);
+        next.ui.commandPolicy = { approveForMe: true, rules: [] };
         return jsonResponse({ ok: true, snapshot: next });
       }
       if (pathname === "/api/ask-agent/read-grants/revoke") {
@@ -8034,6 +8079,16 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       access: "commands",
     });
     await screen.findByText((content) => content.includes("read + commands"));
+
+    // Approve for Me and saved rules appear once a folder allows commands.
+    await screen.findByText("npm test");
+    fireEvent.click(screen.getByLabelText(/^Approve for Me/));
+    await screen.findByText(
+      "Approve for Me is on: sandboxed commands in granted folders run without asking.",
+    );
+    fireEvent.click(screen.getByText("Remove"));
+    await screen.findByText("Command rule removed.");
+    expect(policyBodies).toEqual([{ approveForMe: true }, { id: "rule-1" }]);
     expect(
       fetchMock.mock.calls.some(
         ([input]) => String(input) === "/api/read-grants",

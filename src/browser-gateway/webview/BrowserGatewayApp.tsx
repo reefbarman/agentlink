@@ -484,6 +484,19 @@ type AskAgentReadGrant = {
   access?: "read" | "commands";
 };
 
+type AskAgentCommandPolicy = {
+  approveForMe: boolean;
+  rules: Array<{
+    id: string;
+    pattern: string;
+    mode: "prefix" | "exact" | "regex";
+    decision: "allow" | "prompt" | "forbidden";
+    scope: "session" | "project" | "global";
+    root?: string;
+    createdAt: number;
+  }>;
+};
+
 type BrowserGatewayInstanceOption = {
   instanceId: string;
   workspaceName: string;
@@ -544,6 +557,7 @@ export type GatewaySnapshot = {
     memoryCandidateNudge?: AskAgentMemoryCandidateNudge | null;
     projectHandoff?: AskAgentProjectHandoff | null;
     readGrants?: AskAgentReadGrant[];
+    commandPolicy?: AskAgentCommandPolicy;
     mcpStatusInfos: Array<{
       name: string;
       status: string;
@@ -3643,6 +3657,12 @@ export function BrowserGatewayApp({
     isAskAgentSelected && !visibleApproval
       ? (snapshot?.ui.readGrants ?? [])
       : [];
+  const askAgentCommandPolicy: AskAgentCommandPolicy = (isAskAgentSelected
+    ? snapshot?.ui.commandPolicy
+    : undefined) ?? { approveForMe: false, rules: [] };
+  const askAgentHasCommandGrant = askAgentReadGrants.some(
+    (grant) => grant.access === "commands",
+  );
   const askAgentHandoffTargets = instanceOptions.filter(
     (instance) => instance.disconnectedAt === undefined,
   );
@@ -4905,6 +4925,64 @@ export function BrowserGatewayApp({
     } catch (err) {
       setSendStatus(`Read grant revoke error: ${String(err)}`);
       logAskAgentBrowserEvent("read_grant.revoke", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentReadGrantPending(false);
+    }
+  }
+
+  /** Approve for Me toggle and saved-rule removal for granted-folder commands. */
+  async function updateAskAgentCommandPolicy(
+    action:
+      | { kind: "approve-for-me"; enabled: boolean }
+      | { kind: "remove-rule"; id: string },
+  ): Promise<void> {
+    setAskAgentReadGrantPending(true);
+    try {
+      const response = await fetch(
+        action.kind === "approve-for-me"
+          ? "/api/ask-agent/command-policy"
+          : "/api/ask-agent/command-policy/rules/remove",
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(
+            action.kind === "approve-for-me"
+              ? { approveForMe: action.enabled }
+              : { id: action.id },
+          ),
+        },
+      );
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(
+          `Command settings change failed: ${body.message ?? body.error ?? response.status}`,
+        );
+        return;
+      }
+      commitAskAgentSnapshot(body.snapshot);
+      setSendStatus(
+        action.kind === "remove-rule"
+          ? "Command rule removed."
+          : action.enabled
+            ? "Approve for Me is on: sandboxed commands in granted folders run without asking."
+            : "Approve for Me is off: commands in granted folders ask first.",
+      );
+      logAskAgentBrowserEvent(`command_policy.${action.kind}`, { ok: true });
+    } catch (err) {
+      setSendStatus(`Command settings change error: ${String(err)}`);
+      logAskAgentBrowserEvent(`command_policy.${action.kind}`, {
         ok: false,
         error: String(err),
       });
@@ -10121,6 +10199,63 @@ export function BrowserGatewayApp({
                     <p class="ask-agent-memory-empty">
                       No local paths have been granted to Ask Agent.
                     </p>
+                  )}
+                  {(askAgentHasCommandGrant ||
+                    askAgentCommandPolicy.approveForMe ||
+                    askAgentCommandPolicy.rules.length > 0) && (
+                    <div class="ask-agent-command-policy">
+                      <label class="ask-agent-handoff-field ask-agent-grant-commands">
+                        <input
+                          type="checkbox"
+                          checked={askAgentCommandPolicy.approveForMe}
+                          disabled={askAgentReadGrantPending}
+                          onChange={(event) =>
+                            void updateAskAgentCommandPolicy({
+                              kind: "approve-for-me",
+                              enabled: (event.target as HTMLInputElement)
+                                .checked,
+                            })
+                          }
+                        />
+                        <span>
+                          Approve for Me: run sandboxed commands in granted
+                          folders without asking (Prompt and Forbidden rules
+                          still apply)
+                        </span>
+                      </label>
+                      {askAgentCommandPolicy.rules.length > 0 && (
+                        <ul class="ask-agent-read-grants-list">
+                          {askAgentCommandPolicy.rules.map((rule) => (
+                            <li key={rule.id}>
+                              <div>
+                                <strong>{rule.pattern}</strong>
+                                <span>
+                                  {rule.decision} · {rule.mode} ·{" "}
+                                  {rule.scope === "global"
+                                    ? "all granted folders"
+                                    : rule.scope === "project"
+                                      ? (rule.root ?? "one folder")
+                                      : "this chat"}
+                                </span>
+                              </div>
+                              <button
+                                class="secondary"
+                                disabled={askAgentReadGrantPending}
+                                onClick={() =>
+                                  void updateAskAgentCommandPolicy({
+                                    kind: "remove-rule",
+                                    id: rule.id,
+                                  })
+                                }
+                                type="button"
+                              >
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   )}
                 </section>
               )}

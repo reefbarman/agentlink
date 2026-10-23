@@ -121,6 +121,10 @@ import {
 } from "../../agent/mcpConfig.js";
 import { persistStandaloneMcpGlobalApproval } from "./standaloneMcpApprovalPolicy.js";
 import {
+  AskAgentCommandPolicy,
+  isAskAgentCardRuleEntry,
+} from "./AskAgentCommandPolicy.js";
+import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
   redactStructuredSecrets,
@@ -470,6 +474,8 @@ export interface HelperRuntimeOptions {
   standaloneMcp?: boolean;
 }
 
+/** Approval ids for Ask Agent commands in folders granted for commands. */
+const ASK_AGENT_COMMAND_APPROVAL_PREFIX = "ask-agent-command-";
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
 const DEFAULT_HELPER_VERSION = "dev";
 const DEFAULT_MDNS_NAME = "agentlink";
@@ -1139,6 +1145,8 @@ export class BrowserGatewayHelper {
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
   /** Per-chat sandboxed scratch folders; null when disabled. */
   private readonly askAgentSandbox: AskAgentSandboxWorkspace | null;
+  /** Rules and Approve for Me for commands in folders granted for commands. */
+  private readonly askAgentCommandPolicy: AskAgentCommandPolicy;
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -1231,6 +1239,7 @@ export class BrowserGatewayHelper {
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
       /** Null disables the per-chat sandbox tools. */
       askAgentSandbox?: AskAgentSandboxWorkspace | null;
+      askAgentCommandPolicy?: AskAgentCommandPolicy;
       standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
       standaloneMcpOAuthRuntime?: StandaloneMcpOAuthRuntime;
       createStandaloneMcpRuntime?: (
@@ -1500,6 +1509,8 @@ export class BrowserGatewayHelper {
     this.askAgentHistoryStore =
       injectables.askAgentHistoryStore ??
       new BrowserGatewayAskAgentHistoryStore();
+    this.askAgentCommandPolicy =
+      injectables.askAgentCommandPolicy ?? new AskAgentCommandPolicy();
     this.askAgentSandbox =
       injectables.askAgentSandbox !== undefined
         ? injectables.askAgentSandbox
@@ -1640,6 +1651,7 @@ export class BrowserGatewayHelper {
       this.askAgentHistoryStore.read(),
     ]);
     this.restoreState(preferences, history);
+    await this.publishAskAgentCommandPolicy({ publish: false });
     const askAgentState = await this.buildAskAgentResponse();
     this.askAgentOwnerAdapter.initialize(askAgentState.snapshot);
     this.dataPlaneRoutes.ownerRegistered(
@@ -1904,6 +1916,10 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentReadGrantAddRequest(req, res);
       case "readGrantRevoke":
         return this.handleAskAgentReadGrantRevokeRequest(req, res);
+      case "commandPolicy":
+        return this.handleAskAgentCommandPolicyRequest(req, res);
+      case "commandRuleRemove":
+        return this.handleAskAgentCommandRuleRemoveRequest(req, res);
       case "projectHandoffTargets":
         return this.handleAskAgentProjectHandoffTargetsRequest(res);
       case "projectHandoffPropose":
@@ -2571,6 +2587,7 @@ export class BrowserGatewayHelper {
       if (!this.askAgentSessionStore.deleteSession(sessionId)) {
         throw new Error("ask_agent_session_delete_race");
       }
+      this.askAgentCommandPolicy.clearSession(sessionId);
       await this.askAgentSandbox
         ?.deleteChat(sessionId)
         .catch((error: unknown) =>
@@ -5380,6 +5397,37 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
+      const pendingCommand = this.askAgentController.getPendingApproval();
+      if (
+        pendingCommand?.id === body.id &&
+        pendingCommand.kind === "command" &&
+        pendingCommand.id.startsWith(ASK_AGENT_COMMAND_APPROVAL_PREFIX)
+      ) {
+        const savedRules = (Array.isArray(body.rules) ? body.rules : []).filter(
+          (rule) => rule?.scope !== "skip" && rule?.mode !== "skip",
+        );
+        if (
+          Array.isArray(body.rules) &&
+          !body.rules.every(isAskAgentCardRuleEntry)
+        ) {
+          writeJson(res, 400, { error: "invalid_command_rules" });
+          return;
+        }
+        // Saved rules widen what later runs without a card, so only this
+        // machine can add them. Remote clients can still Run once.
+        if (
+          savedRules.length > 0 &&
+          classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+            "loopback"
+        ) {
+          writeJson(res, 403, {
+            error: "command_rules_require_this_machine",
+            message:
+              "Save command rules from AgentLink Desktop or a browser on the same computer, or choose Run.",
+          });
+          return;
+        }
+      }
       let globalRuleSaved = false;
       if (this.standaloneMcpPolicyApprovalsInFlight.has(body.id)) {
         writeJson(res, 409, { error: "mcp_approval_save_in_progress" });
@@ -5626,6 +5674,78 @@ export class BrowserGatewayHelper {
         access,
       });
       writeJson(res, 200, { ok: true, grants, snapshot: response.snapshot });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      writeJson(res, invalidJson ? 400 : 500, {
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
+    }
+  }
+
+  /**
+   * Turn Approve for Me on or off for Ask Agent commands in granted folders.
+   * Turning it on widens what runs without asking, so only this machine can;
+   * any signed-in client can turn it off.
+   */
+  private async handleAskAgentCommandPolicyRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as {
+        approveForMe?: unknown;
+      } | null;
+      if (typeof body?.approveForMe !== "boolean") {
+        writeJson(res, 400, { ok: false, error: "invalid_request" });
+        return;
+      }
+      if (
+        body.approveForMe &&
+        classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+          "loopback"
+      ) {
+        writeJson(res, 403, {
+          ok: false,
+          error: "command_policy_requires_this_machine",
+          message:
+            "Turn on Approve for Me from AgentLink Desktop or a browser on the same computer.",
+        });
+        return;
+      }
+      await this.askAgentCommandPolicy.setApproveForMe(body.approveForMe);
+      await this.publishAskAgentCommandPolicy();
+      this.logAskAgentEvent("ask-agent.command-policy", {
+        ok: true,
+        approveForMe: body.approveForMe,
+      });
+      const response = await this.buildAskAgentResponse();
+      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      writeJson(res, invalidJson ? 400 : 500, {
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
+    }
+  }
+
+  /** Remove a saved command rule. Narrowing access works from any client. */
+  private async handleAskAgentCommandRuleRemoveRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as { id?: unknown } | null;
+      const id = typeof body?.id === "string" ? body.id.trim() : "";
+      if (!id || !(await this.askAgentCommandPolicy.removeRule(id))) {
+        writeJson(res, 404, { ok: false, error: "command_rule_not_found" });
+        return;
+      }
+      await this.publishAskAgentCommandPolicy();
+      this.logAskAgentEvent("ask-agent.command-rule.remove", { ok: true });
+      const response = await this.buildAskAgentResponse();
+      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
     } catch (err) {
       const invalidJson =
         err instanceof Error && err.message === "invalid_json";
@@ -8775,13 +8895,38 @@ export class BrowserGatewayHelper {
   }
 
   /**
-   * Allow once / Deny card for a sandboxed command in a granted folder.
-   * Sandboxed commands can be approved from any signed-in client.
+   * Decide a sandboxed command in a granted folder: saved rules and Approve
+   * for Me can run or refuse it without a card; otherwise the user sees a
+   * Run / Reject card, which any signed-in client can answer. Saving rules
+   * from the card is limited to this machine by the approval route.
    */
   private async requestAskAgentCommandApproval(
     proposal: AskAgentCommandApprovalProposal,
     signal: AbortSignal,
   ): Promise<AskAgentCommandApprovalDecision> {
+    const policy = await this.askAgentCommandPolicy.evaluate({
+      sessionId: proposal.sessionId,
+      root: proposal.root,
+      command: proposal.command,
+    });
+    if (policy.decision === "forbidden") {
+      this.logAskAgentEvent("ask-agent.command-approval", {
+        ok: true,
+        decision: "forbidden",
+      });
+      return {
+        decision: "deny",
+        reason: "Command forbidden by a saved Ask Agent command rule",
+      };
+    }
+    if (policy.decision === "allow") {
+      this.logAskAgentEvent("ask-agent.command-approval", {
+        ok: true,
+        decision: "allow",
+        by: policy.by,
+      });
+      return { decision: "run" };
+    }
     if (
       this.askAgentMemoryProposalBridge.getPendingApproval() ||
       this.askAgentController.getPendingApproval()
@@ -8790,9 +8935,10 @@ export class BrowserGatewayHelper {
     }
     const request: ApprovalRequest = {
       kind: "command",
-      id: `ask-agent-command-${randomUUID()}`,
+      id: `${ASK_AGENT_COMMAND_APPROVAL_PREFIX}${randomUUID()}`,
       command: proposal.command,
       cwd: proposal.cwd,
+      subCommands: policy.subCommands,
       commandSandbox: {
         writableRoot: proposal.root,
         network: proposal.network,
@@ -8805,22 +8951,62 @@ export class BrowserGatewayHelper {
     this.logAskAgentEvent("ask-agent.command-approval", {
       ok: true,
       decision: result.decision,
+      rules: result.rules?.filter((rule) => rule.scope !== "skip").length ?? 0,
     });
-    if (result.decision === "run-once") return { decision: "run" };
-    if (
-      result.decision === "edit" &&
-      typeof result.editedCommand === "string" &&
-      result.editedCommand.trim()
-    ) {
-      return { decision: "edit", command: result.editedCommand };
+    if (result.decision !== "run-once" && result.decision !== "edit") {
+      return {
+        decision: "reject",
+        ...(typeof result.rejectionReason === "string" &&
+        result.rejectionReason.trim()
+          ? { reason: result.rejectionReason.trim() }
+          : {}),
+      };
     }
-    return {
-      decision: "reject",
-      ...(typeof result.rejectionReason === "string" &&
-      result.rejectionReason.trim()
-        ? { reason: result.rejectionReason.trim() }
-        : {}),
-    };
+    // The approval route only lets rules through from this machine.
+    if (result.rules?.length) {
+      await this.askAgentCommandPolicy.saveCardRules({
+        sessionId: proposal.sessionId,
+        root: proposal.root,
+        rules: result.rules,
+      });
+      await this.publishAskAgentCommandPolicy();
+    }
+    // "Save Rules & Run" reports run-once with the edited command.
+    const edited =
+      typeof result.editedCommand === "string" &&
+      result.editedCommand.trim() &&
+      result.editedCommand !== proposal.command
+        ? result.editedCommand
+        : undefined;
+    // Forbidden rules apply to what will actually run, including a rule
+    // saved on this card and a command edited on it.
+    const after = await this.askAgentCommandPolicy.evaluate({
+      sessionId: proposal.sessionId,
+      root: proposal.root,
+      command: edited ?? proposal.command,
+    });
+    if (after.decision === "forbidden") {
+      return {
+        decision: "deny",
+        reason: "Command forbidden by a saved Ask Agent command rule",
+      };
+    }
+    return edited ? { decision: "edit", command: edited } : { decision: "run" };
+  }
+
+  /**
+   * Publish saved command rules and Approve for Me to every client. Chat-only
+   * rules are left out: they are temporary and belong to one chat.
+   */
+  private async publishAskAgentCommandPolicy(
+    options: { readonly publish?: boolean } = {},
+  ): Promise<void> {
+    this.askAgentSessionStore.setCommandPolicy(
+      await this.askAgentCommandPolicy.snapshot(),
+    );
+    if (options.publish === false) return;
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
   }
 
   /** Copy this chat's attached files into its scratch folder's inputs/. */

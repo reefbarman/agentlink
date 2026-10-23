@@ -162,6 +162,21 @@ export interface BrowserGatewayAskAgentReadGrant {
   access?: "read" | "commands";
 }
 
+/** Rules and Approve for Me for commands in folders granted for commands. */
+export interface BrowserGatewayAskAgentCommandPolicy {
+  approveForMe: boolean;
+  rules: Array<{
+    id: string;
+    pattern: string;
+    mode: "prefix" | "exact" | "regex";
+    decision: "allow" | "prompt" | "forbidden";
+    /** session: this chat; project: one folder; global: all granted folders. */
+    scope: "session" | "project" | "global";
+    root?: string;
+    createdAt: number;
+  }>;
+}
+
 export interface BrowserGatewayAskAgentQueuedMessage {
   id: string;
   text: string;
@@ -188,6 +203,7 @@ export interface BrowserGatewayAskAgentSnapshot {
     memoryCandidateNudge: BrowserGatewayAskAgentMemoryCandidateNudge | null;
     projectHandoff: BrowserGatewayAskAgentProjectHandoff | null;
     readGrants: BrowserGatewayAskAgentReadGrant[];
+    commandPolicy: BrowserGatewayAskAgentCommandPolicy;
   };
   session: {
     repository: null;
@@ -407,6 +423,10 @@ export class BrowserGatewayAskAgentSessionStore {
   private todos: TodoItem[] = [];
   private projectHandoff: BrowserGatewayAskAgentProjectHandoff | null = null;
   private readGrants: BrowserGatewayAskAgentReadGrant[] = [];
+  private commandPolicy: BrowserGatewayAskAgentCommandPolicy = {
+    approveForMe: false,
+    rules: [],
+  };
 
   constructor(
     private readonly ownerRegistry: BrowserGatewayCoreOwnerRegistry,
@@ -1195,6 +1215,16 @@ export class BrowserGatewayAskAgentSessionStore {
     return this.readGrants.map((grant) => ({ ...grant }));
   }
 
+  setCommandPolicy(policy: {
+    readonly approveForMe: boolean;
+    readonly rules: readonly BrowserGatewayAskAgentCommandPolicy["rules"][number][];
+  }): void {
+    this.commandPolicy = {
+      approveForMe: policy.approveForMe,
+      rules: policy.rules.map((rule) => ({ ...rule })),
+    };
+  }
+
   completeProjectHandoff(handoffId: string): boolean {
     if (!this.projectHandoff || this.projectHandoff.id !== handoffId) {
       return false;
@@ -1635,6 +1665,10 @@ export class BrowserGatewayAskAgentSessionStore {
           memoryCandidateNudge,
           projectHandoff: this.projectHandoff,
           readGrants: this.getReadGrants(),
+          commandPolicy: {
+            approveForMe: this.commandPolicy.approveForMe,
+            rules: this.commandPolicy.rules.map((rule) => ({ ...rule })),
+          },
         },
         session: {
           repository: null,

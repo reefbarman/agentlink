@@ -479,6 +479,30 @@ describe("AskAgentSandboxWorkspace", () => {
       await expect(fs.stat(path.join(project, "late"))).rejects.toThrow();
     });
 
+    it("does not run a command the policy denies", async () => {
+      const root = await temporaryDirectory("al-ask-sbx-");
+      const project = await temporaryDirectory("al-ask-project-");
+      const { workspace } = await localWorkspace(root);
+      const requestApproval = approver({
+        decision: "deny",
+        reason: "forbidden by rule",
+      });
+      const denied = await workspace.execute({
+        sessionId: "chat-7",
+        turnId: "turn-1",
+        toolName: "execute_command",
+        input: { command: "touch denied", cwd: project },
+        commandRoots: [project],
+        requestApproval,
+      });
+      expect(parse(denied.content)).toMatchObject({
+        status: "forbidden",
+        error: "forbidden by rule",
+      });
+      expect(requestApproval.mock.calls[0]![0].sessionId).toBe("chat-7");
+      await expect(fs.stat(path.join(project, "denied"))).rejects.toThrow();
+    });
+
     it("reports the macOS sandbox's local-only network on the approval", async () => {
       const root = await temporaryDirectory("al-ask-sbx-");
       const project = await temporaryDirectory("al-ask-project-");

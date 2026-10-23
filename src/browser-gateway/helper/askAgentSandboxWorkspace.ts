@@ -176,12 +176,14 @@ export function askAgentCommandFoldersPrompt(
     "The user granted these folders for commands. To run a command in one, pass its absolute path (or a folder inside it) as execute_command's cwd:",
     ...roots.map((root) => `- ${root}`),
     "",
-    "Each command there waits for the user to approve it, so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. write_file and present_files still only work in the scratch folder.",
+    "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. write_file and present_files still only work in the scratch folder.",
   ].join("\n");
 }
 
 /** What the user is asked to approve for a command in a granted folder. */
 export interface AskAgentCommandApprovalProposal {
+  /** The chat asking, for chat-scoped rules. */
+  readonly sessionId: string;
   readonly command: string;
   readonly cwd: string;
   /** The granted folder the command can write to. */
@@ -245,7 +247,9 @@ export async function findNestedRepository(
 export type AskAgentCommandApprovalDecision =
   | { readonly decision: "run" }
   | { readonly decision: "edit"; readonly command: string }
-  | { readonly decision: "reject"; readonly reason?: string };
+  | { readonly decision: "reject"; readonly reason?: string }
+  /** Refused by policy (for example a Forbidden rule), without a card. */
+  | { readonly decision: "deny"; readonly reason: string };
 
 export interface AskAgentSandboxInputFile {
   readonly name: string;
@@ -1208,6 +1212,7 @@ export class AskAgentSandboxWorkspace {
     let decision: AskAgentCommandApprovalDecision;
     try {
       decision = await request.requestApproval!({
+        sessionId: request.sessionId,
         command: display.command,
         cwd: display.cwd,
         root,
@@ -1227,6 +1232,17 @@ export class AskAgentSandboxWorkspace {
               message === "ask_agent_approval_pending"
                 ? "Another approval is already pending"
                 : "Command approval was cancelled",
+          }),
+          isError: true,
+        },
+      };
+    }
+    if (decision.decision === "deny") {
+      return {
+        result: {
+          content: JSON.stringify({
+            status: "forbidden",
+            error: decision.reason,
           }),
           isError: true,
         },

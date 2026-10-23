@@ -47,6 +47,8 @@ import {
   type HelperRuntimeOptions,
 } from "./browserGatewayHelper.js";
 import { AskAgentSandboxWorkspace } from "./askAgentSandboxWorkspace.js";
+import { AskAgentCommandPolicy } from "./AskAgentCommandPolicy.js";
+import { Readable } from "node:stream";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
 import { PROMPT_PROFILE_POLICY_REVISION } from "@agentlink/protocol/prompt-profile";
@@ -328,6 +330,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   askAgentInstructionsHomeDir?: string | null;
   /** Defaults to null so tests never create real scratch folders. */
   askAgentSandbox?: AskAgentSandboxWorkspace | null;
+  askAgentCommandPolicy?: AskAgentCommandPolicy;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -379,6 +382,11 @@ async function makeAskAgentToolLoopTestHarness(params: {
       beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
       askAgentInstructionsHomeDir: params.askAgentInstructionsHomeDir ?? null,
       askAgentSandbox: params.askAgentSandbox ?? null,
+      askAgentCommandPolicy:
+        params.askAgentCommandPolicy ??
+        new AskAgentCommandPolicy({
+          filePath: path.join(storeDir, "command-policy.json"),
+        }),
     },
   );
   helperServer.on("request", helper.handleRequest);
@@ -11551,6 +11559,218 @@ describe("BrowserGatewayHelper proxy routing", () => {
       await fs.rename(movable, `${movable}-moved`);
       await fs.symlink(sandboxRoot, movable);
       expect(await commandRoots()).toEqual([]);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("saves command rules from this machine and honours Approve for Me", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: () =>
+        workspaceHost.createLocalWorkspaceExecutionBackend(),
+    });
+    const commands = [
+      "printf one > one.txt",
+      "printf two > two.txt",
+      "touch three.txt",
+    ];
+    let calls = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      calls += 1;
+      if (toolMessages?.length) return { text: "Done.", toolCalls: [] };
+      const command = commands.shift()!;
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: `rule-run-${calls}`,
+            name: "execute_command",
+            input: { command, cwd: project },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+    const send = (text: string) => post("/api/ask-agent/send", { text });
+    /** Call a route handler as a paired LAN client would reach it. */
+    const fromLan = async (handler: string, body: unknown) => {
+      const written: { status?: number; body?: string } = {};
+      const req = Object.assign(Readable.from([JSON.stringify(body)]), {
+        socket: { remoteAddress: "192.168.50.20" },
+        headers: { "content-type": "application/json" },
+      });
+      await (
+        harness.helper as unknown as Record<
+          string,
+          (req: unknown, res: unknown) => Promise<void>
+        >
+      )[handler]!.call(harness.helper, req, {
+        writeHead: (status: number) => {
+          written.status = status;
+        },
+        end: (text: string) => {
+          written.body = text;
+        },
+      });
+      return written;
+    };
+    const pendingApproval = async () => {
+      let approval: Record<string, unknown> | null = null;
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval?.kind).toBe("command");
+        approval = body.snapshot.ui.approval;
+      });
+      return approval!;
+    };
+
+    try {
+      expect(
+        (
+          await post("/api/ask-agent/read-grants", {
+            path: project,
+            confirm: true,
+            access: "commands",
+          })
+        ).ok,
+      ).toBe(true);
+
+      const first = send("Write one");
+      const approval = await pendingApproval();
+      expect(approval.subCommands).toEqual([
+        { command: "printf one > one.txt" },
+      ]);
+      const rule = {
+        pattern: "printf",
+        mode: "prefix",
+        decision: "allow",
+        scope: "project",
+      };
+      // A paired LAN or phone client can run the command but not save rules.
+      const lanRules = await fromLan("handleAskAgentApprovalRequest", {
+        id: approval.id,
+        decision: "run-once",
+        rules: [rule],
+      });
+      expect(lanRules.status).toBe(403);
+      expect(lanRules.body).toContain("command_rules_require_this_machine");
+
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: approval.id,
+            decision: "run-once",
+            rules: [rule],
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await first).ok).toBe(true);
+      expect(await fs.readFile(path.join(project, "one.txt"), "utf8")).toBe(
+        "one",
+      );
+
+      // The saved folder rule runs the next printf without a card.
+      const second = await send("Write two");
+      const secondBody = (await second.json()) as {
+        snapshot: {
+          ui: {
+            approval: unknown;
+            commandPolicy: {
+              approveForMe: boolean;
+              rules: Array<{ id: string; pattern: string; root?: string }>;
+            };
+          };
+        };
+      };
+      expect(await fs.readFile(path.join(project, "two.txt"), "utf8")).toBe(
+        "two",
+      );
+      expect(secondBody.snapshot.ui.commandPolicy.rules).toEqual([
+        expect.objectContaining({ pattern: "printf", root: project }),
+      ]);
+
+      // Only this machine can turn Approve for Me on.
+      const lanApproveForMe = await fromLan(
+        "handleAskAgentCommandPolicyRequest",
+        { approveForMe: true },
+      );
+      expect(lanApproveForMe.status).toBe(403);
+      const enabled = await post("/api/ask-agent/command-policy", {
+        approveForMe: true,
+      });
+      expect(enabled.ok).toBe(true);
+      await expect(enabled.json()).resolves.toMatchObject({
+        snapshot: { ui: { commandPolicy: { approveForMe: true } } },
+      });
+      expect((await send("Touch three")).ok).toBe(true);
+      await expect(
+        fs.stat(path.join(project, "three.txt")),
+      ).resolves.toBeTruthy();
+
+      // Any client can narrow access again.
+      const lanOff = await fromLan("handleAskAgentCommandPolicyRequest", {
+        approveForMe: false,
+      });
+      expect(lanOff.status).toBe(200);
+      const removed = await fromLan("handleAskAgentCommandRuleRemoveRequest", {
+        id: secondBody.snapshot.ui.commandPolicy.rules[0]!.id,
+      });
+      expect(removed.status).toBe(200);
+      expect(removed.body).toContain('"rules":[]');
+
+      // A Forbidden rule saved on the card also stops an edited command.
+      commands.push("printf four > four.txt");
+      const fourth = send("Write four");
+      const card = await pendingApproval();
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: card.id,
+            decision: "run-once",
+            editedCommand: "touch evil.txt",
+            rules: [
+              {
+                pattern: "touch",
+                mode: "prefix",
+                decision: "forbidden",
+                scope: "session",
+              },
+            ],
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await fourth).ok).toBe(true);
+      await expect(fs.stat(path.join(project, "evil.txt"))).rejects.toThrow();
+      await expect(fs.stat(path.join(project, "four.txt"))).rejects.toThrow();
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(project, { recursive: true, force: true });
