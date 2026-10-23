@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.68.0
+
 - The standalone CLI preview now ships for Linux on x64 and arm64 (glibc), alongside macOS Apple Silicon. `install.sh --surface cli` and `agentlink updates --install` pick the right archive. On a headless server without a desktop keyring the CLI still starts, and API keys can come from `AGENTLINK_OPENAI_API_KEY` (or `OPENAI_API_KEY`) and, for OpenAI-compatible endpoints, a variable named by the provider's new `apiKeyEnv` setting. `agentlink status` shows where each key came from. `agentlink auth openai` and `auth codex` now check the credential store before prompting.
 - On Linux, a D-Bus failure while opening the Secret Service (for example over SSH with no session bus) is now reported as `LinuxCredentialStoreUnavailableError` instead of a raw platform error.
 - Desktop Ask Agent on macOS now has a private scratch folder per chat. It can write files there, run commands in the macOS sandbox (no network, no access to your home folder or other chats) to analyse data or make charts, and hand you the results: images show inline and other files get a download button. Attached files are copied into the folder's `inputs/`, and deleting the chat deletes the folder. `@agentlink/sandbox` adds a `deniedReadRoots` launch option and a `helperEnvironment` transport option to support this.

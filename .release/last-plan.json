@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
-  "createdAt": "2026-10-23T03:26:37.233Z",
+  "sourceSha": "909a501a768ad86755646368efe23f1722336817",
+  "createdAt": "2026-10-23T10:52:06.386Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,49 +10,186 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.67.0",
-      "baselineRef": "v1.67.0",
-      "reserved": "1.67.0",
-      "commits": ["3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"],
+      "published": "1.67.1",
+      "baselineRef": "v1.67.1",
+      "reserved": "1.67.1",
+      "commits": [
+        "1ffeeac1beb356905435b31877662c402e478ce3",
+        "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+        "736df21aa34e7c464b8ebdc6877424384d863465",
+        "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+        "06d1083a16e89eaa935dde6df20299f1704035a6",
+        "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+        "837b3ccb81a3eef6e14477d9b644020273b182ad",
+        "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+        "df4323df696226e27c83b54907c7ed00bce19204",
+        "63cf98267343e364c809f115aef9043669b6191a"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "1.67.1",
-      "effectiveBump": "patch",
+      "version": "1.68.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.67.1",
+      "tag": "v1.68.0",
       "notes": [
         {
-          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
-          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
-          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
+          "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+          "subject": "fix(linux): drop macOS node-pty from Linux VSIXs and require Secret Service",
+          "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+          "breaking": false
+        },
+        {
+          "sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+          "subject": "feat(ask-agent): add per-chat sandboxed scratch folder with downloadable outputs",
+          "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
+          "breaking": false
+        },
+        {
+          "sha": "736df21aa34e7c464b8ebdc6877424384d863465",
+          "subject": "feat(cli): ship Linux x64 and arm64 builds with environment API keys for headless hosts",
+          "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+          "breaking": false
+        },
+        {
+          "sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+          "subject": "feat(terminal): enable the Native Agent terminal on Linux",
+          "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+          "breaking": false
+        },
+        {
+          "sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+          "subject": "feat(sandbox): add a bubblewrap backend for Linux, not yet enabled",
+          "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+          "breaking": false
+        },
+        {
+          "sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+          "subject": "feat(sandbox): run sandboxed agent commands under bubblewrap on Linux",
+          "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+          "breaking": false
+        },
+        {
+          "sha": "837b3ccb81a3eef6e14477d9b644020273b182ad",
+          "subject": "feat(ask-agent): run the scratch-folder sandbox on Linux",
+          "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+          "breaking": false
+        },
+        {
+          "sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+          "subject": "fix(sandbox): fixes from testing the Linux sandbox on four distros",
+          "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+          "breaking": false
+        },
+        {
+          "sha": "df4323df696226e27c83b54907c7ed00bce19204",
+          "subject": "feat(desktop): build and run AgentLink Desktop on Linux as an AppImage",
+          "summary": "Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.",
+          "breaking": false
+        },
+        {
+          "sha": "63cf98267343e364c809f115aef9043669b6191a",
+          "subject": "feat(desktop): ship a Linux deb with an AppArmor profile and build Linux Desktop in CI",
+          "summary": "Linux Desktop builds now also produce a deb that installs an AppArmor profile so Chromium keeps its renderer sandbox on Ubuntu 24.04, and CI builds and smoke-tests the Linux packages.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.53.0",
-      "baselineRef": "desktop-v0.53.0",
-      "reserved": "0.53.0",
-      "commits": ["3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"],
+      "published": "0.53.1",
+      "baselineRef": "desktop-v0.53.1",
+      "reserved": "0.53.1",
+      "commits": [
+        "1ffeeac1beb356905435b31877662c402e478ce3",
+        "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+        "736df21aa34e7c464b8ebdc6877424384d863465",
+        "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+        "06d1083a16e89eaa935dde6df20299f1704035a6",
+        "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+        "837b3ccb81a3eef6e14477d9b644020273b182ad",
+        "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+        "df4323df696226e27c83b54907c7ed00bce19204",
+        "63cf98267343e364c809f115aef9043669b6191a",
+        "a120b2ad2563f3460e59501dadc61a4004dd5c21"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.53.1",
-      "effectiveBump": "patch",
+      "version": "0.54.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.53.1",
+      "tag": "desktop-v0.54.0",
       "notes": [
         {
-          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
-          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
-          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
+          "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+          "subject": "fix(linux): drop macOS node-pty from Linux VSIXs and require Secret Service",
+          "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+          "breaking": false
+        },
+        {
+          "sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+          "subject": "feat(ask-agent): add per-chat sandboxed scratch folder with downloadable outputs",
+          "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
+          "breaking": false
+        },
+        {
+          "sha": "736df21aa34e7c464b8ebdc6877424384d863465",
+          "subject": "feat(cli): ship Linux x64 and arm64 builds with environment API keys for headless hosts",
+          "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+          "breaking": false
+        },
+        {
+          "sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+          "subject": "feat(terminal): enable the Native Agent terminal on Linux",
+          "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+          "breaking": false
+        },
+        {
+          "sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+          "subject": "feat(sandbox): add a bubblewrap backend for Linux, not yet enabled",
+          "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+          "breaking": false
+        },
+        {
+          "sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+          "subject": "feat(sandbox): run sandboxed agent commands under bubblewrap on Linux",
+          "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+          "breaking": false
+        },
+        {
+          "sha": "837b3ccb81a3eef6e14477d9b644020273b182ad",
+          "subject": "feat(ask-agent): run the scratch-folder sandbox on Linux",
+          "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+          "breaking": false
+        },
+        {
+          "sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+          "subject": "fix(sandbox): fixes from testing the Linux sandbox on four distros",
+          "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+          "breaking": false
+        },
+        {
+          "sha": "df4323df696226e27c83b54907c7ed00bce19204",
+          "subject": "feat(desktop): build and run AgentLink Desktop on Linux as an AppImage",
+          "summary": "Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.",
+          "breaking": false
+        },
+        {
+          "sha": "63cf98267343e364c809f115aef9043669b6191a",
+          "subject": "feat(desktop): ship a Linux deb with an AppArmor profile and build Linux Desktop in CI",
+          "summary": "Linux Desktop builds now also produce a deb that installs an AppArmor profile so Chromium keeps its renderer sandbox on Ubuntu 24.04, and CI builds and smoke-tests the Linux packages.",
+          "breaking": false
+        },
+        {
+          "sha": "a120b2ad2563f3460e59501dadc61a4004dd5c21",
+          "subject": "fix(desktop): pin Linux artifact names to the target arch",
+          "summary": "Linux Desktop artifact filenames are now pinned to the target architecture so AppImage and deb names are consistent.",
           "breaking": false
         }
       ]
@@ -61,55 +198,244 @@
       "published": "0.38.0",
       "baselineRef": "cli-v0.38.0",
       "reserved": "0.38.0",
-      "commits": [],
+      "commits": [
+        "1ffeeac1beb356905435b31877662c402e478ce3",
+        "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+        "736df21aa34e7c464b8ebdc6877424384d863465",
+        "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+        "06d1083a16e89eaa935dde6df20299f1704035a6",
+        "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+        "837b3ccb81a3eef6e14477d9b644020273b182ad",
+        "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+        "df4323df696226e27c83b54907c7ed00bce19204"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.39.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.39.0",
+      "notes": [
+        {
+          "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+          "subject": "fix(linux): drop macOS node-pty from Linux VSIXs and require Secret Service",
+          "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+          "breaking": false
+        },
+        {
+          "sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+          "subject": "feat(ask-agent): add per-chat sandboxed scratch folder with downloadable outputs",
+          "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
+          "breaking": false
+        },
+        {
+          "sha": "736df21aa34e7c464b8ebdc6877424384d863465",
+          "subject": "feat(cli): ship Linux x64 and arm64 builds with environment API keys for headless hosts",
+          "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+          "breaking": false
+        },
+        {
+          "sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+          "subject": "feat(terminal): enable the Native Agent terminal on Linux",
+          "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+          "breaking": false
+        },
+        {
+          "sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+          "subject": "feat(sandbox): add a bubblewrap backend for Linux, not yet enabled",
+          "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+          "breaking": false
+        },
+        {
+          "sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+          "subject": "feat(sandbox): run sandboxed agent commands under bubblewrap on Linux",
+          "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+          "breaking": false
+        },
+        {
+          "sha": "837b3ccb81a3eef6e14477d9b644020273b182ad",
+          "subject": "feat(ask-agent): run the scratch-folder sandbox on Linux",
+          "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+          "breaking": false
+        },
+        {
+          "sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+          "subject": "fix(sandbox): fixes from testing the Linux sandbox on four distros",
+          "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+          "breaking": false
+        },
+        {
+          "sha": "df4323df696226e27c83b54907c7ed00bce19204",
+          "subject": "feat(desktop): build and run AgentLink Desktop on Linux as an AppImage",
+          "summary": "Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.29.0",
       "baselineRef": "sdk-v0.29.0",
       "reserved": "0.29.0",
-      "commits": [],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
-    },
-    "assistant": {
-      "published": "0.25.0",
-      "baselineRef": "assistant-v0.25.0",
-      "reserved": "0.25.0",
       "commits": [
-        "5067671d95ac8b21e38281ae3d85b531baaf33c1",
-        "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d"
+        "1ffeeac1beb356905435b31877662c402e478ce3",
+        "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+        "736df21aa34e7c464b8ebdc6877424384d863465",
+        "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+        "06d1083a16e89eaa935dde6df20299f1704035a6",
+        "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+        "837b3ccb81a3eef6e14477d9b644020273b182ad",
+        "fc0635b1683cb0efb09d5964689a6d79a12f4846"
       ],
       "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
+      "breakingCommits": ["1ffeeac1beb356905435b31877662c402e478ce3"],
+      "bump": "breaking",
       "status": "release",
-      "version": "0.25.1",
-      "effectiveBump": "patch",
-      "breaking": false,
+      "version": "0.30.0",
+      "effectiveBump": "minor",
+      "breaking": true,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.25.1",
+      "tag": "sdk-v0.30.0",
       "notes": [
         {
-          "sha": "5067671d95ac8b21e38281ae3d85b531baaf33c1",
-          "subject": "fix(server): raise Inbox entries for Assistant chat background-agent approvals",
-          "summary": "Assistant chats now raise an Inbox needs-approval entry, with badge and notifications, when one of their background agents waits for approval.",
+          "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+          "subject": "fix(linux): drop macOS node-pty from Linux VSIXs and require Secret Service",
+          "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+          "breaking": true
+        },
+        {
+          "sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+          "subject": "feat(ask-agent): add per-chat sandboxed scratch folder with downloadable outputs",
+          "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
           "breaking": false
         },
         {
-          "sha": "3f02c79434aee43f53d0ecd2b1af039d68a8bd3d",
-          "subject": "fix(terminal): run approved commands on Linux and remote hosts",
-          "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
+          "sha": "736df21aa34e7c464b8ebdc6877424384d863465",
+          "subject": "feat(cli): ship Linux x64 and arm64 builds with environment API keys for headless hosts",
+          "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+          "breaking": false
+        },
+        {
+          "sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+          "subject": "feat(terminal): enable the Native Agent terminal on Linux",
+          "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+          "breaking": false
+        },
+        {
+          "sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+          "subject": "feat(sandbox): add a bubblewrap backend for Linux, not yet enabled",
+          "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+          "breaking": false
+        },
+        {
+          "sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+          "subject": "feat(sandbox): run sandboxed agent commands under bubblewrap on Linux",
+          "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+          "breaking": false
+        },
+        {
+          "sha": "837b3ccb81a3eef6e14477d9b644020273b182ad",
+          "subject": "feat(ask-agent): run the scratch-folder sandbox on Linux",
+          "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+          "breaking": false
+        },
+        {
+          "sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+          "subject": "fix(sandbox): fixes from testing the Linux sandbox on four distros",
+          "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+          "breaking": false
+        }
+      ]
+    },
+    "assistant": {
+      "published": "0.25.1",
+      "baselineRef": "assistant-v0.25.1",
+      "reserved": "0.25.1",
+      "commits": [
+        "1ffeeac1beb356905435b31877662c402e478ce3",
+        "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+        "736df21aa34e7c464b8ebdc6877424384d863465",
+        "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+        "06d1083a16e89eaa935dde6df20299f1704035a6",
+        "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+        "837b3ccb81a3eef6e14477d9b644020273b182ad",
+        "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+        "df4323df696226e27c83b54907c7ed00bce19204",
+        "63cf98267343e364c809f115aef9043669b6191a"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.26.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.26.0",
+      "notes": [
+        {
+          "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
+          "subject": "fix(linux): drop macOS node-pty from Linux VSIXs and require Secret Service",
+          "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+          "breaking": false
+        },
+        {
+          "sha": "e7c98f1166dffaefcdb7ac8e992997be298c919f",
+          "subject": "feat(ask-agent): add per-chat sandboxed scratch folder with downloadable outputs",
+          "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
+          "breaking": false
+        },
+        {
+          "sha": "736df21aa34e7c464b8ebdc6877424384d863465",
+          "subject": "feat(cli): ship Linux x64 and arm64 builds with environment API keys for headless hosts",
+          "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+          "breaking": false
+        },
+        {
+          "sha": "e28caedb3ad7550588d610ee70b861fc74b5c14f",
+          "subject": "feat(terminal): enable the Native Agent terminal on Linux",
+          "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+          "breaking": false
+        },
+        {
+          "sha": "06d1083a16e89eaa935dde6df20299f1704035a6",
+          "subject": "feat(sandbox): add a bubblewrap backend for Linux, not yet enabled",
+          "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+          "breaking": false
+        },
+        {
+          "sha": "53e0aede46aad3bfb40343cdefebd9dd4e473719",
+          "subject": "feat(sandbox): run sandboxed agent commands under bubblewrap on Linux",
+          "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+          "breaking": false
+        },
+        {
+          "sha": "837b3ccb81a3eef6e14477d9b644020273b182ad",
+          "subject": "feat(ask-agent): run the scratch-folder sandbox on Linux",
+          "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+          "breaking": false
+        },
+        {
+          "sha": "fc0635b1683cb0efb09d5964689a6d79a12f4846",
+          "subject": "fix(sandbox): fixes from testing the Linux sandbox on four distros",
+          "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+          "breaking": false
+        },
+        {
+          "sha": "df4323df696226e27c83b54907c7ed00bce19204",
+          "subject": "feat(desktop): build and run AgentLink Desktop on Linux as an AppImage",
+          "summary": "Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.",
+          "breaking": false
+        },
+        {
+          "sha": "63cf98267343e364c809f115aef9043669b6191a",
+          "subject": "feat(desktop): ship a Linux deb with an AppArmor profile and build Linux Desktop in CI",
+          "summary": "Linux Desktop builds now also produce a deb that installs an AppArmor profile so Chromium keeps its renderer sandbox on Ubuntu 24.04, and CI builds and smoke-tests the Linux packages.",
           "breaking": false
         }
       ]
@@ -128,6 +454,94 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Approved agent commands now run in a VS Code terminal on Linux, Windows and remote hosts instead of failing before launch; sandbox-only requests and untrusted workspaces stay blocked.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1ffeeac1beb356905435b31877662c402e478ce3": {
+      "bump": "patch",
+      "breakingUnits": ["sdk"],
+      "summary": "Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: \"keyutils\" is passed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e7c98f1166dffaefcdb7ac8e992997be298c919f": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "736df21aa34e7c464b8ebdc6877424384d863465": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e28caedb3ad7550588d610ee70b861fc74b5c14f": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "06d1083a16e89eaa935dde6df20299f1704035a6": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "53e0aede46aad3bfb40343cdefebd9dd4e473719": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "837b3ccb81a3eef6e14477d9b644020273b182ad": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fc0635b1683cb0efb09d5964689a6d79a12f4846": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "df4323df696226e27c83b54907c7ed00bce19204": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "63cf98267343e364c809f115aef9043669b6191a": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Linux Desktop builds now also produce a deb that installs an AppArmor profile so Chromium keeps its renderer sandbox on Ubuntu 24.04, and CI builds and smoke-tests the Linux packages.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a120b2ad2563f3460e59501dadc61a4004dd5c21": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Linux Desktop artifact filenames are now pinned to the target architecture so AppImage and deb names are consistent.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
