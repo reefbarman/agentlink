@@ -1,0 +1,30 @@
+src/agent/unifiedContextBaselines.test.ts
+  h_e08a86bb3a33a2 796
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 81-84,1172-1175,1278,1302
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 327-354
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_ff0d30640d9954::t_110c54c50b374e 11-13,19,29-31,37,47-49,55,65-67,73,83-92,100-109,117-126,134-143,151-153,159,169-171,177,187-189,195,205-207,213,223-232,240-249,257-266,274-283,291-293,299,309-311,317,327-329,335,345-347,353,363-372,380-389,397-406,414-423,431-433,439,449-451,457,467-469,475,485-487,493,503-512,520-529,537-546,554-563,571-573,579,589-591,597,607-609,615,625-627,633,643-652,660-669,677-686,694-703,711-713,719,729-731,737,747-749,755,765-767,773,783-792,800-809,817-826,834-843
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a99633498a97f32f32fd0b47477d9b3ed90cec23",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_ff0d30640d9954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75f58cd6-468b-453c-b8b7-3a54a9175334",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
