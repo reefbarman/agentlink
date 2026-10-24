@@ -1,0 +1,14 @@
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 6123-6125,6134-6135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84d5be564ccd4c8652ec39c5c7ffc8b0074bc5f8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
