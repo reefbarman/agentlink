@@ -1,0 +1,118 @@
+src/agent/WorkHistoryRegistry.ts
+  h_e08a86bb3a33a2 1-171
+src/agent/webview/components/WorkSummaryBlock.tsx
+  h_e08a86bb3a33a2 1-366
+packages/protocol/src/finalStatus.ts
+  h_e08a86bb3a33a2 31-113
+packages/protocol/src/browserGatewayOwnerCommandBody.ts
+  h_e08a86bb3a33a2 28-30,33
+src/core/workHistory.ts
+  h_e08a86bb3a33a2 1-492
+src/browser-gateway/dataPlane/transcriptBlockDetail.test.ts
+  h_e08a86bb3a33a2 180-229
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_e08a86bb3a33a2 9
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 80,10768-10770
+  s_023d2046e6b4f9::t_2b986c445773fa 10771-10774
+packages/protocol/src/browserGatewayTranscriptMessage.test.ts
+  h_e08a86bb3a33a2 37
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 4258-4465
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_e08a86bb3a33a2 420,432-450
+  s_023d2046e6b4f9::t_376695d4147b0d 451-453
+src/adapters/vscode/workspaceEditOrchestration.ts
+  h_e08a86bb3a33a2 9-10,23-25,32,35-40,43,47-93
+  s_4bb2c1e9ee98c6::t_0266f38acae72a 94-95
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_e08a86bb3a33a2 12-15,311-412
+  s_023d2046e6b4f9::t_d08c939707d391 11
+src/browser-gateway/webview/toolDetailTransport.ts
+  h_e08a86bb3a33a2 1-4,6-8,15,17-43
+  s_023d2046e6b4f9::t_78ab35390f3067 5,16
+src/core/workHistory.test.ts
+  h_e08a86bb3a33a2 1-249
+src/browser-gateway/dataPlane/transcriptBlockDetail.ts
+  h_e08a86bb3a33a2 9,37,158-185,247-248,344-351,392-473
+  s_4bb2c1e9ee98c6::t_fa8085e57bb324 246,352,474
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 43,723-724,728,946,953,977-987
+packages/protocol/src/browserGatewayOwnerCommandBody.test.ts
+  h_e08a86bb3a33a2 29
+packages/protocol/src/chatTranscript.ts
+  h_e08a86bb3a33a2 30-35,221-222
+src/integrations/editDurability.ts
+  h_e08a86bb3a33a2 19,42-44,48-65
+  s_b24d6f913d616c::t_f51399fc4083bd 66
+src/browser-gateway/dataPlane/protocol.ts
+  h_e08a86bb3a33a2 2272,2275-2290,2332,3102-3103
+src/agent/webview/components/RemoteToolDetail.tsx
+  h_e08a86bb3a33a2 4,8,22,63-65,73,83,88-90,93-113,259-260,321-364
+  s_023d2046e6b4f9::t_736233f2ecadf5 257-258,261,365-369
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  h_e08a86bb3a33a2 17,64
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 13,1132-1156,3448-3454,4123-4127,4130-4131,4162-4166
+  s_023d2046e6b4f9::t_87cfb168db2247 4132-4161,4199
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_e08a86bb3a33a2 58-59,107-108,155,197-200,281-284,332,652,677,1339-1345
+  s_023d2046e6b4f9::t_d36190a31b5df0 285-286,1346-1347
+src/integrations/editDurability.test.ts
+  h_e08a86bb3a33a2 13-14,339-421
+  s_023d2046e6b4f9::t_03f6517dc8a2c4 422-423
+src/browser-gateway/testing/stateEquivalenceOracle.ts
+  h_e08a86bb3a33a2 614-627,651,822
+  s_023d2046e6b4f9::t_ad0fd25f0a271b 650,652,821,823
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 1611,1685
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 8,5807,9841,9912,10096,10181
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_e08a86bb3a33a2 183,187,322
+packages/protocol/src/browserGatewayTranscriptMessage.ts
+  h_e08a86bb3a33a2 8-10,49-54
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 250
+resources/builtin-skills/documentation/references/release-notes.md
+  s_023d2046e6b4f9::t_67158b435b9f50 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e9756499f709b1720b7afc223e9e7ffb805c9f6f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_023d2046e6b4f9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e699e43c-ff4d-4cb1-828b-8520904f8050",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_4bb2c1e9ee98c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ea82d41-36c6-410b-b753-c24e2ec96384",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b24d6f913d616c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc6f8876-d62c-4ec9-99f7-a45b1e9ecbb3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
