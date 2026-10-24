@@ -1,0 +1,20 @@
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 10787-10789
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_e08a86bb3a33a2 75-76,677,692,750,892-893,1093,1196
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 168-169,195,657
+src/agent/webview/components/ChatView.tsx
+  h_e08a86bb3a33a2 111-112,149,462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b27f77c0971d58ea96d8b6a2735c5d195e54469",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
