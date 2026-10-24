@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a57b2bb64f01fba185b66bd10bc93215c68f503d",
-  "createdAt": "2026-10-24T04:49:37.088Z",
+  "sourceSha": "7309d8176b2298f7496f9551f2c6b5af2c739f99",
+  "createdAt": "2026-10-24T05:13:57.585Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -29,7 +29,8 @@
         "0f866355725b5bd93d2c82db3c6e6ea26f739e58",
         "f7a62390c1adbdf9596ad33826695af5657c2344",
         "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
-        "a57b2bb64f01fba185b66bd10bc93215c68f503d"
+        "a57b2bb64f01fba185b66bd10bc93215c68f503d",
+        "7309d8176b2298f7496f9551f2c6b5af2c739f99"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -137,29 +138,35 @@
           "subject": "feat(ask-agent): agent-requested folder access and Manage access panel",
           "summary": "Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.",
           "breaking": false
+        },
+        {
+          "sha": "7309d8176b2298f7496f9551f2c6b5af2c739f99",
+          "subject": "feat(ask-agent): edit files without asking in folders approved on a card",
+          "summary": "Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder \"Edit files without asking\" toggle in Manage access.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.59.0",
-      "baselineRef": "desktop-v0.59.0",
-      "reserved": "0.59.0",
-      "commits": ["a57b2bb64f01fba185b66bd10bc93215c68f503d"],
+      "published": "0.60.0",
+      "baselineRef": "desktop-v0.60.0",
+      "reserved": "0.60.0",
+      "commits": ["7309d8176b2298f7496f9551f2c6b5af2c739f99"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.60.0",
+      "version": "0.61.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.60.0",
+      "tag": "desktop-v0.61.0",
       "notes": [
         {
-          "sha": "a57b2bb64f01fba185b66bd10bc93215c68f503d",
-          "subject": "feat(ask-agent): agent-requested folder access and Manage access panel",
-          "summary": "Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.",
+          "sha": "7309d8176b2298f7496f9551f2c6b5af2c739f99",
+          "subject": "feat(ask-agent): edit files without asking in folders approved on a card",
+          "summary": "Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder \"Edit files without asking\" toggle in Manage access.",
           "breaking": false
         }
       ]
@@ -189,25 +196,25 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.31.0",
-      "baselineRef": "assistant-v0.31.0",
-      "reserved": "0.31.0",
-      "commits": ["a57b2bb64f01fba185b66bd10bc93215c68f503d"],
+      "published": "0.32.0",
+      "baselineRef": "assistant-v0.32.0",
+      "reserved": "0.32.0",
+      "commits": ["7309d8176b2298f7496f9551f2c6b5af2c739f99"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.32.0",
+      "version": "0.33.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.32.0",
+      "tag": "assistant-v0.33.0",
       "notes": [
         {
-          "sha": "a57b2bb64f01fba185b66bd10bc93215c68f503d",
-          "subject": "feat(ask-agent): agent-requested folder access and Manage access panel",
-          "summary": "Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.",
+          "sha": "7309d8176b2298f7496f9551f2c6b5af2c739f99",
+          "subject": "feat(ask-agent): edit files without asking in folders approved on a card",
+          "summary": "Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder \"Edit files without asking\" toggle in Manage access.",
           "breaking": false
         }
       ]
@@ -346,6 +353,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7309d8176b2298f7496f9551f2c6b5af2c739f99": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder \"Edit files without asking\" toggle in Manage access.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
