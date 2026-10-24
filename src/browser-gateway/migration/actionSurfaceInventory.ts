@@ -560,6 +560,7 @@ function classifyAskAgentRoute(
     case "readGrantAdd":
     case "readGrantRevoke":
     case "scratchFolderOpen":
+    case "readGrantEdits":
     case "commandPolicy":
     case "commandRuleRemove":
     case "projectHandoffTargets":

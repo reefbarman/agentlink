@@ -482,6 +482,7 @@ type AskAgentReadGrant = {
   label: string;
   kind: "file" | "directory";
   access?: "read" | "commands";
+  editsWithoutAsking?: boolean;
 };
 
 type AskAgentCommandPolicy = {
@@ -4947,6 +4948,44 @@ export function BrowserGatewayApp({
         ok: false,
         text: `Could not open the scratch folder: ${String(err)}`,
       });
+    }
+  }
+
+  async function setAskAgentGrantEditsWithoutAsking(
+    id: string,
+    enabled: boolean,
+  ): Promise<void> {
+    setAskAgentReadGrantPending(true);
+    try {
+      const response = await fetch("/api/ask-agent/read-grants/edits", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ id, enabled }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setAskAgentReadGrantResult({
+          ok: false,
+          text: `Could not change edit approval: ${body.error ?? response.status}`,
+        });
+        return;
+      }
+      commitAskAgentSnapshot(body.snapshot);
+    } catch (err) {
+      setAskAgentReadGrantResult({
+        ok: false,
+        text: `Could not change edit approval: ${String(err)}`,
+      });
+    } finally {
+      setAskAgentReadGrantPending(false);
     }
   }
 
@@ -10195,6 +10234,23 @@ export function BrowserGatewayApp({
                           <div>
                             <strong>{grant.label}</strong>
                             <span title={grant.rootPath}>{grant.rootPath}</span>
+                            {grant.access === "commands" && (
+                              <label class="ask-agent-grant-edits">
+                                <input
+                                  type="checkbox"
+                                  checked={grant.editsWithoutAsking === true}
+                                  disabled={askAgentReadGrantPending}
+                                  onChange={(event) =>
+                                    void setAskAgentGrantEditsWithoutAsking(
+                                      grant.id,
+                                      (event.target as HTMLInputElement)
+                                        .checked,
+                                    )
+                                  }
+                                />
+                                Edit files without asking
+                              </label>
+                            )}
                           </div>
                           <span
                             class={`ask-agent-access-badge${grant.access === "commands" ? " commands" : ""}`}

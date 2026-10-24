@@ -1675,6 +1675,16 @@ textarea {
   color: #4ec9b0;
 }
 
+.ask-agent-access-panel .ask-agent-read-grants-list .ask-agent-grant-edits {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--ag-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .ask-agent-access-panel .ask-agent-command-policy {
   display: flex;
   flex-direction: column;

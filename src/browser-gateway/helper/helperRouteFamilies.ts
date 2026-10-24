@@ -53,6 +53,7 @@ export type AskAgentRouteHandler =
   | "readGrantAdd"
   | "readGrantRevoke"
   | "scratchFolderOpen"
+  | "readGrantEdits"
   | "commandPolicy"
   | "commandRuleRemove"
   | "projectHandoffTargets"
@@ -226,6 +227,11 @@ export const ASK_AGENT_ROUTES = [
     method: "POST",
     path: "/api/ask-agent/read-grants/revoke",
     handler: "readGrantRevoke",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/read-grants/edits",
+    handler: "readGrantEdits",
   },
   {
     method: "POST",

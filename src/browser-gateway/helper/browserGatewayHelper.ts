@@ -1965,6 +1965,8 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentReadGrantAddRequest(req, res);
       case "readGrantRevoke":
         return this.handleAskAgentReadGrantRevokeRequest(req, res);
+      case "readGrantEdits":
+        return this.handleAskAgentReadGrantEditsRequest(req, res);
       case "scratchFolderOpen":
         return this.handleAskAgentScratchFolderOpenRequest(req, res);
       case "commandPolicy":
@@ -5796,6 +5798,8 @@ export class BrowserGatewayHelper {
       readonly expectedRealPath?: string;
       /** Refuse (`cancelled`) if aborted before the grant is stored. */
       readonly signal?: AbortSignal;
+      /** For commands grants: apply file edits there without a card. */
+      readonly editsWithoutAsking?: boolean;
     } = {},
   ): Promise<
     | {
@@ -5910,6 +5914,9 @@ export class BrowserGatewayHelper {
       label: path.basename(realPath) || realPath,
       kind: stat.isDirectory() ? ("directory" as const) : ("file" as const),
       access,
+      ...(access === "commands" && options.editsWithoutAsking
+        ? { editsWithoutAsking: true }
+        : {}),
     };
     const replaced = this.askAgentSessionStore
       .getReadGrants()
@@ -6031,6 +6038,50 @@ export class BrowserGatewayHelper {
         grants: this.askAgentSessionStore.getReadGrants(),
         snapshot: response.snapshot,
       });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      writeJson(res, invalidJson ? 400 : 500, {
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
+    }
+  }
+
+  /**
+   * Turn edits without asking on or off for a folder granted for commands.
+   * Any signed-in client may: every client can already approve each edit
+   * card, and instruction files still ask and stay this-machine-only.
+   */
+  private async handleAskAgentReadGrantEditsRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as {
+        id?: unknown;
+        enabled?: unknown;
+      } | null;
+      const id = typeof body?.id === "string" ? body.id.trim() : "";
+      if (!id || typeof body?.enabled !== "boolean") {
+        writeJson(res, 400, { ok: false, error: "invalid_request" });
+        return;
+      }
+      if (
+        !this.askAgentSessionStore.setReadGrantEditsWithoutAsking(
+          id,
+          body.enabled,
+        )
+      ) {
+        writeJson(res, 404, { ok: false, error: "read_grant_not_found" });
+        return;
+      }
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+      this.logAskAgentEvent("ask-agent.read-grant.edits", {
+        ok: true,
+        enabled: body.enabled,
+      });
+      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
     } catch (err) {
       const invalidJson =
         err instanceof Error && err.message === "invalid_json";
@@ -9268,7 +9319,7 @@ export class BrowserGatewayHelper {
           ? `AgentLink creates this empty folder: ${target}`
           : `Folder: ${target}`,
         access === "commands"
-          ? "Ask Agent can read this folder and ask to run commands and edit files in it. Each command and edit still asks first unless a saved rule or Approve for Me allows it."
+          ? "Ask Agent can read this folder, create and edit files in it without asking, and ask to run commands there. Agent instruction files still ask, and each command asks first unless a saved rule or Approve for Me allows it. You can turn edits without asking off in Manage access."
           : "Ask Agent can read, list and search this folder.",
         anyDevice
           ? undefined
@@ -9373,6 +9424,9 @@ export class BrowserGatewayHelper {
     const added = await this.addAskAgentGrant(target, access, {
       expectedRealPath: target,
       signal,
+      // Approving the folder approves working in it: edits there apply
+      // without a card (instruction files and commands still ask).
+      editsWithoutAsking: access === "commands",
     });
     if (!added.ok) {
       return finish(
@@ -9630,6 +9684,24 @@ export class BrowserGatewayHelper {
         ok: true,
         decision: "allow",
         by: "approve-for-me",
+      });
+      return { decision: "run" };
+    }
+    if (
+      !proposal.protected &&
+      this.askAgentSessionStore
+        .getReadGrants()
+        .some(
+          (grant) =>
+            grant.access === "commands" &&
+            grant.editsWithoutAsking === true &&
+            this.isPathInsideRoot(proposal.path, grant.rootPath),
+        )
+    ) {
+      this.logAskAgentEvent("ask-agent.edit-approval", {
+        ok: true,
+        decision: "allow",
+        by: "folder-edits-without-asking",
       });
       return { decision: "run" };
     }

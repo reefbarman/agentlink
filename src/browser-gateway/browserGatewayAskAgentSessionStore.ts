@@ -160,6 +160,12 @@ export interface BrowserGatewayAskAgentReadGrant {
    * commands there, each behind an approval card. Absent means `read`.
    */
   access?: "read" | "commands";
+  /**
+   * File edits in this folder (granted for commands) apply without a
+   * card, like Approve for Me but for this folder only. Agent instruction
+   * and configuration files still ask. Commands are not affected.
+   */
+  editsWithoutAsking?: boolean;
 }
 
 /** Rules and Approve for Me for commands in folders granted for commands. */
@@ -1219,6 +1225,14 @@ export class BrowserGatewayAskAgentSessionStore {
     const index = this.readGrants.findIndex((grant) => grant.id === grantId);
     if (index === -1) return false;
     this.readGrants.splice(index, 1);
+    return true;
+  }
+
+  /** Turn edits without asking on or off for a folder granted for commands. */
+  setReadGrantEditsWithoutAsking(grantId: string, enabled: boolean): boolean {
+    const grant = this.readGrants.find((candidate) => candidate.id === grantId);
+    if (!grant || grant.access !== "commands") return false;
+    grant.editsWithoutAsking = enabled;
     return true;
   }
 

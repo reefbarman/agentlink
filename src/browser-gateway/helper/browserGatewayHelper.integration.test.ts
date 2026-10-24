@@ -12179,7 +12179,50 @@ describe("BrowserGatewayHelper proxy routing", () => {
       expect(toolResults.at(-1)).toContain("granted");
       expect((await fs.stat(newFolder)).isDirectory()).toBe(true);
       expect(await grants()).toContainEqual(
-        expect.objectContaining({ rootPath: newFolder, access: "commands" }),
+        expect.objectContaining({
+          rootPath: newFolder,
+          access: "commands",
+          editsWithoutAsking: true,
+        }),
+      );
+      // Approving the folder approves editing in it: no card per write.
+      const decideEdit = (filePath: string) =>
+        (
+          harness.helper as unknown as {
+            requestAskAgentEditApproval(proposal: unknown): Promise<{
+              decision: string;
+            }>;
+          }
+        ).requestAskAgentEditApproval({
+          sessionId: "s",
+          toolName: "write_file",
+          path: filePath,
+          root: newFolder,
+          operation: "created",
+          diff: "+hi",
+          protected: false,
+          signal: new AbortController().signal,
+        });
+      expect(
+        (await decideEdit(path.join(newFolder, "print-date.sh"))).decision,
+      ).toBe("run");
+      // Turned off from Manage access, edits ask again.
+      const grantId = (
+        (await grants()) as Array<{ id?: string; rootPath: string }>
+      ).find((grant) => grant.rootPath === newFolder)!.id;
+      expect(
+        (
+          await post("/api/ask-agent/read-grants/edits", {
+            id: grantId,
+            enabled: false,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(await grants()).toContainEqual(
+        expect.objectContaining({
+          rootPath: newFolder,
+          editsWithoutAsking: false,
+        }),
       );
       expect(completionParams[0]?.tools?.map((tool) => tool.name)).toContain(
         "request_folder_access",
@@ -12215,7 +12258,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ).toBe(true);
       expect((await existing).ok).toBe(true);
       expect(await grants()).toContainEqual(
-        expect.objectContaining({ rootPath: project, access: "commands" }),
+        expect.objectContaining({
+          rootPath: project,
+          access: "commands",
+          editsWithoutAsking: true,
+        }),
       );
 
       // Already covered: no card.
