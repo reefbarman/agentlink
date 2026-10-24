@@ -324,6 +324,34 @@ describe("buildSystemPrompt", () => {
     expect(disabled).not.toContain("## Compose Routing");
   });
 
+  it("guides foreground agents to recall prior sessions before guessing from files", async () => {
+    const foreground = await buildPromptArtifacts("code", tmpDir);
+    expect(foreground.systemPrompt).toContain("## Session History Recall");
+    expect(foreground.systemPrompt).toContain("`search_workspace_sessions`");
+    expect(foreground.systemPrompt).toContain(
+      "`read_workspace_session_excerpt`",
+    );
+    expect(foreground.systemPrompt).toContain("before guessing from files");
+    expect(foreground.systemPrompt).toContain("`search_session_history`");
+    expect(foreground.systemPrompt).toContain("`include_worktrees`");
+    expect(foreground.systemPrompt).toContain("`find_native_tools`");
+    expect(
+      foreground.promptBreakdown.sections.some(
+        (section) => section.label === "session history recall",
+      ),
+    ).toBe(true);
+
+    const background = await buildPromptArtifacts("code", tmpDir, {
+      isBackground: true,
+    });
+    expect(background.systemPrompt).not.toContain("## Session History Recall");
+
+    const lightweight = await buildPromptArtifacts("review", tmpDir, {
+      lightweight: true,
+    });
+    expect(lightweight.systemPrompt).not.toContain("## Session History Recall");
+  });
+
   it("recomputes supplied prompt-profile evidence under current trusted policy", async () => {
     const forgedLunaEvidence = {
       profile: "reasoning" as const,
