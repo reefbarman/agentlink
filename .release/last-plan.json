@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "a02b308310cbd623151a8ec72837b5e64dcc326d",
-  "createdAt": "2026-10-24T08:28:15.312Z",
+  "sourceSha": "a99633498a97f32f32fd0b47477d9b3ed90cec23",
+  "createdAt": "2026-10-24T10:49:49.036Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -31,7 +31,11 @@
         "385e9d5321a145c81ecfd2605d93f4761ff5ec36",
         "a57b2bb64f01fba185b66bd10bc93215c68f503d",
         "7309d8176b2298f7496f9551f2c6b5af2c739f99",
-        "a02b308310cbd623151a8ec72837b5e64dcc326d"
+        "a02b308310cbd623151a8ec72837b5e64dcc326d",
+        "798bfbf67db55d877361b58ed2677451c0b49404",
+        "7147f6b1a3e76d6f71b234687515212eec455a2c",
+        "e5982386ce809453f2ee9a9682af0098dfb72aea",
+        "a99633498a97f32f32fd0b47477d9b3ed90cec23"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -151,29 +155,76 @@
           "subject": "feat(ask-agent): Approve for Me toggle in the composer",
           "summary": "Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's \"File access...\" menu item is renamed \"Manage access...\". .",
           "breaking": false
+        },
+        {
+          "sha": "798bfbf67db55d877361b58ed2677451c0b49404",
+          "subject": "fix(chat): drop empty reply placeholder between batched queued messages",
+          "summary": "Fixes a stray empty \"(No response)\" assistant row appearing between batched queued user messages while a turn is still running.",
+          "breaking": false
+        },
+        {
+          "sha": "7147f6b1a3e76d6f71b234687515212eec455a2c",
+          "subject": "fix(ask-agent): drop duplicate inline streaming indicator",
+          "summary": "Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.",
+          "breaking": false
+        },
+        {
+          "sha": "e5982386ce809453f2ee9a9682af0098dfb72aea",
+          "subject": "feat(chat): reveal the terminal a completed command ran in",
+          "summary": "Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.",
+          "breaking": false
+        },
+        {
+          "sha": "a99633498a97f32f32fd0b47477d9b3ed90cec23",
+          "subject": "feat(agent): prompt foreground agents to recall earlier sessions",
+          "summary": "Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.61.0",
-      "baselineRef": "desktop-v0.61.0",
-      "reserved": "0.61.0",
-      "commits": ["a02b308310cbd623151a8ec72837b5e64dcc326d"],
+      "published": "0.62.0",
+      "baselineRef": "desktop-v0.62.0",
+      "reserved": "0.62.0",
+      "commits": [
+        "798bfbf67db55d877361b58ed2677451c0b49404",
+        "7147f6b1a3e76d6f71b234687515212eec455a2c",
+        "e5982386ce809453f2ee9a9682af0098dfb72aea",
+        "a99633498a97f32f32fd0b47477d9b3ed90cec23"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.62.0",
+      "version": "0.63.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.62.0",
+      "tag": "desktop-v0.63.0",
       "notes": [
         {
-          "sha": "a02b308310cbd623151a8ec72837b5e64dcc326d",
-          "subject": "feat(ask-agent): Approve for Me toggle in the composer",
-          "summary": "Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's \"File access...\" menu item is renamed \"Manage access...\". .",
+          "sha": "798bfbf67db55d877361b58ed2677451c0b49404",
+          "subject": "fix(chat): drop empty reply placeholder between batched queued messages",
+          "summary": "Fixes a stray empty \"(No response)\" assistant row appearing between batched queued user messages while a turn is still running.",
+          "breaking": false
+        },
+        {
+          "sha": "7147f6b1a3e76d6f71b234687515212eec455a2c",
+          "subject": "fix(ask-agent): drop duplicate inline streaming indicator",
+          "summary": "Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.",
+          "breaking": false
+        },
+        {
+          "sha": "e5982386ce809453f2ee9a9682af0098dfb72aea",
+          "subject": "feat(chat): reveal the terminal a completed command ran in",
+          "summary": "Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.",
+          "breaking": false
+        },
+        {
+          "sha": "a99633498a97f32f32fd0b47477d9b3ed90cec23",
+          "subject": "feat(agent): prompt foreground agents to recall earlier sessions",
+          "summary": "Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.",
           "breaking": false
         }
       ]
@@ -203,25 +254,41 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.33.0",
-      "baselineRef": "assistant-v0.33.0",
-      "reserved": "0.33.0",
-      "commits": ["a02b308310cbd623151a8ec72837b5e64dcc326d"],
+      "published": "0.34.0",
+      "baselineRef": "assistant-v0.34.0",
+      "reserved": "0.34.0",
+      "commits": [
+        "798bfbf67db55d877361b58ed2677451c0b49404",
+        "7147f6b1a3e76d6f71b234687515212eec455a2c",
+        "e5982386ce809453f2ee9a9682af0098dfb72aea"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.34.0",
+      "tag": "assistant-v0.35.0",
       "notes": [
         {
-          "sha": "a02b308310cbd623151a8ec72837b5e64dcc326d",
-          "subject": "feat(ask-agent): Approve for Me toggle in the composer",
-          "summary": "Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's \"File access...\" menu item is renamed \"Manage access...\". .",
+          "sha": "798bfbf67db55d877361b58ed2677451c0b49404",
+          "subject": "fix(chat): drop empty reply placeholder between batched queued messages",
+          "summary": "Fixes a stray empty \"(No response)\" assistant row appearing between batched queued user messages while a turn is still running.",
+          "breaking": false
+        },
+        {
+          "sha": "7147f6b1a3e76d6f71b234687515212eec455a2c",
+          "subject": "fix(ask-agent): drop duplicate inline streaming indicator",
+          "summary": "Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.",
+          "breaking": false
+        },
+        {
+          "sha": "e5982386ce809453f2ee9a9682af0098dfb72aea",
+          "subject": "feat(chat): reveal the terminal a completed command ran in",
+          "summary": "Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.",
           "breaking": false
         }
       ]
@@ -376,6 +443,38 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's \"File access...\" menu item is renamed \"Manage access...\". .",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "798bfbf67db55d877361b58ed2677451c0b49404": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes a stray empty \"(No response)\" assistant row appearing between batched queued user messages while a turn is still running.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "7147f6b1a3e76d6f71b234687515212eec455a2c": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "e5982386ce809453f2ee9a9682af0098dfb72aea": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a99633498a97f32f32fd0b47477d9b3ed90cec23": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
