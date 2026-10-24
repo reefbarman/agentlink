@@ -4,7 +4,7 @@ src/browser-gateway/helper/helperRouteFamilies.ts
   h_e08a86bb3a33a2 55,230-233
   s_10c3b4faf4c4af::t_f933a09a7edad4 234
 CHANGELOG.md
-  h_e08a86bb3a33a2 5-7
+  h_e08a86bb3a33a2 5-8
 src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
   h_e08a86bb3a33a2 11432-11474,12063-12277
 src/browser-gateway/webview/styles.css
