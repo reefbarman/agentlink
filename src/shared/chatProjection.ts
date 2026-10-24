@@ -2009,6 +2009,34 @@ function completeIncompleteRuntimeBlocks(
   });
 }
 
+/**
+ * When several user messages join the same live turn (a drained queue batch
+ * or an interjection before any output), the earlier user row's empty
+ * assistant placeholder would otherwise render as "(No response)" between
+ * them. Drop it so the batch reads as consecutive user messages answered by
+ * one assistant reply. Only applies while a turn is live, so a completed
+ * turn's genuinely empty reply keeps its fallback.
+ */
+function dropPendingAssistantPlaceholder(
+  messages: ChatMessage[],
+  streaming: boolean,
+): ChatMessage[] {
+  if (!streaming) return messages;
+  const last = messages[messages.length - 1];
+  const previous = messages[messages.length - 2];
+  if (
+    last?.role !== "assistant" ||
+    previous?.role !== "user" ||
+    last.content !== "" ||
+    last.blocks.length > 0 ||
+    last.error ||
+    last.finalMarker
+  ) {
+    return messages;
+  }
+  return messages.slice(0, -1);
+}
+
 function clearFinalMarkerContinueActions(
   messages: ChatMessage[],
 ): ChatMessage[] {
@@ -2204,7 +2232,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "ADD_USER_MESSAGE": {
       const dismissedMessageId = state.detectedQuestion?.messageId;
       const messagesWithoutContinueActions = clearFinalMarkerContinueActions(
-        state.messages,
+        dropPendingAssistantPlaceholder(state.messages, state.streaming),
       );
       const withNewRows = [
         ...messagesWithoutContinueActions,
@@ -3353,7 +3381,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       }
 
       const messagesWithoutContinueActions = clearFinalMarkerContinueActions(
-        state.messages,
+        dropPendingAssistantPlaceholder(state.messages, state.streaming),
       );
       const withCommittedRows = [
         ...messagesWithoutContinueActions,

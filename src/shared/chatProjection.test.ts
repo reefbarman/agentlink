@@ -1,7 +1,7 @@
 import {
   agentMessagesToChatMessages,
-  queueHasSkillSelectionError,
   initialState,
+  queueHasSkillSelectionError,
   reducer,
 } from "./chatProjection.js";
 import { describe, expect, it } from "vitest";
@@ -114,6 +114,7 @@ describe("explicit skill selection projection", () => {
       type: "ADD_USER_MESSAGE",
       text: "Earlier request",
     });
+    state = { ...state, streaming: false };
     const priorCount = state.messages.length;
     state = reducer(state, {
       type: "ADD_USER_MESSAGE",
@@ -2556,6 +2557,36 @@ describe("transcript stability invariants", () => {
     expect(
       replayed.messages.filter((m) => m.content === "run the tests"),
     ).toHaveLength(1);
+  });
+
+  it.each(["ADD_USER_MESSAGE", "ADD_COMMITTED_USER_MESSAGE"] as const)(
+    "%s batches queued messages without an empty reply between them",
+    (type) => {
+      const first = reducer(initialState, { type, text: "first" });
+      const second = reducer(first, { type, text: "second" });
+
+      expect(second.messages.map((m) => [m.role, m.content] as const)).toEqual([
+        ["user", "first"],
+        ["user", "second"],
+        ["assistant", ""],
+      ]);
+    },
+  );
+
+  it("keeps a completed turn's empty reply when the next message is sent", () => {
+    const sent = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "first",
+    });
+    const idle = { ...sent, streaming: false };
+    const next = reducer(idle, { type: "ADD_USER_MESSAGE", text: "second" });
+
+    expect(next.messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
   });
 
   it("keeps an identical background completion in place on replay", () => {
