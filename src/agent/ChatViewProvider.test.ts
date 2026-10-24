@@ -374,6 +374,34 @@ describe("tool terminal reveal messages", () => {
     });
 
     expect(revealTerminal).toHaveBeenCalledWith("tool-running");
+    expect(mockShowInformationMessage).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("tells the user when a completed command's terminal has closed", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const revealTerminal = vi.fn(() => "unavailable");
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+    };
+    provider.setToolCallTracker({ revealTerminal } as never);
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "revealToolCallTerminal",
+      id: "tool-done",
+    });
+
+    expect(revealTerminal).toHaveBeenCalledWith("tool-done");
+    expect(mockShowInformationMessage).toHaveBeenCalledWith(
+      "The terminal this command ran in is no longer open.",
+    );
   }, 15_000);
 
   it("projects MCP parallel opt-ins to Browser Ask Agent", async () => {

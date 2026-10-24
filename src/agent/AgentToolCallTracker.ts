@@ -55,6 +55,17 @@ const TERMINAL_REVEAL_TOOLS = new Set([
   "get_terminal_output",
 ]);
 
+/** Completed terminal calls remembered so their terminal can still be revealed. */
+const MAX_COMPLETED_TERMINAL_CALLS = 200;
+
+interface CompletedTerminalCall {
+  toolName: string;
+  terminalId: string;
+  terminalProvider?: TerminalProvider;
+}
+
+export type RevealTerminalOutcome = "revealed" | "pending" | "unavailable";
+
 function canContinueInBackground(toolName: string): boolean {
   return BACKGROUND_CONTINUABLE_TOOLS.has(toolName);
 }
@@ -62,6 +73,7 @@ function canContinueInBackground(toolName: string): boolean {
 export class AgentToolCallTracker extends EventEmitter {
   private activeCalls = new Map<string, TrackedCall>();
   private recentCalls = new Map<string, TrackedCallInfo>();
+  private completedTerminalCalls = new Map<string, CompletedTerminalCall>();
   private log: (msg: string) => void;
 
   constructor(
@@ -103,6 +115,19 @@ export class AgentToolCallTracker extends EventEmitter {
       parentCallId: call.parentCallId,
     };
     this.recentCalls.set(call.id, info);
+    if (call.terminalId && TERMINAL_REVEAL_TOOLS.has(call.toolName)) {
+      this.completedTerminalCalls.delete(call.id);
+      this.completedTerminalCalls.set(call.id, {
+        toolName: call.toolName,
+        terminalId: call.terminalId,
+        terminalProvider: call.terminalProvider,
+      });
+      while (this.completedTerminalCalls.size > MAX_COMPLETED_TERMINAL_CALLS) {
+        const oldest = this.completedTerminalCalls.keys().next().value;
+        if (oldest === undefined) break;
+        this.completedTerminalCalls.delete(oldest);
+      }
+    }
     setTimeout(() => {
       this.recentCalls.delete(call.id);
       this.emit("change");
@@ -118,27 +143,42 @@ export class AgentToolCallTracker extends EventEmitter {
       );
       if (call.backgroundRequested) void this.detachExecuteCommand(call);
       if (call.revealTerminalRequested) {
-        void this.revealToolCallTerminal(call);
+        this.revealToolCallTerminal(call);
       }
     }
   }
 
-  /** Reveal the managed terminal backing a running terminal tool call. */
-  revealTerminal(id: string): void {
+  /**
+   * Reveal the managed terminal backing a terminal tool call. Running calls
+   * reveal once their terminal is assigned; completed calls reveal their
+   * terminal only while it is still open.
+   */
+  revealTerminal(id: string): RevealTerminalOutcome {
     const call = this.activeCalls.get(id);
-    if (!call || !TERMINAL_REVEAL_TOOLS.has(call.toolName)) {
-      this.log(
-        `REVEAL_TERMINAL_MISS (${id.slice(0, 8)}) — no active terminal tool`,
-      );
-      return;
+    if (call && TERMINAL_REVEAL_TOOLS.has(call.toolName)) {
+      call.revealTerminalRequested = true;
+      if (!call.terminalId) return "pending";
+      return this.revealToolCallTerminal(call) ? "revealed" : "unavailable";
     }
 
-    call.revealTerminalRequested = true;
-    if (call.terminalId) void this.revealToolCallTerminal(call);
+    const completed = !call ? this.completedTerminalCalls.get(id) : undefined;
+    if (completed) {
+      return this.revealToolCallTerminal({ id, ...completed })
+        ? "revealed"
+        : "unavailable";
+    }
+
+    this.log(`REVEAL_TERMINAL_MISS (${id.slice(0, 8)}) — no terminal tool`);
+    return "unavailable";
   }
 
-  private async revealToolCallTerminal(call: TrackedCall): Promise<void> {
-    if (!call.terminalId) return;
+  private revealToolCallTerminal(call: {
+    id: string;
+    toolName: string;
+    terminalId?: string;
+    terminalProvider?: TerminalProvider;
+  }): boolean {
+    if (!call.terminalId) return false;
     const revealed =
       call.terminalProvider?.revealTerminal?.({
         owner: undefined,
@@ -147,6 +187,7 @@ export class AgentToolCallTracker extends EventEmitter {
     this.log(
       `REVEAL_TERMINAL ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, revealed=${revealed}`,
     );
+    return revealed;
   }
 
   // ── Agent call registration (lightweight — no wrapping) ──────────────────

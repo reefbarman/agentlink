@@ -854,13 +854,24 @@ export function ToolCallBlock({
     (toolCall.name === "execute_command" ||
       (isTerminalOutput && !!terminalId)) &&
     !!onRevealToolCallTerminal;
+  // A finished command can still jump to its terminal when the result says
+  // which terminal ran it. The host reports when that terminal has closed.
+  const revealsCompletedTerminal =
+    complete &&
+    isCommand &&
+    !!onRevealToolCallTerminal &&
+    !!extractField(toolCall.result, "terminal_id");
+  const revealsTerminal = revealsRunningTerminal || revealsCompletedTerminal;
+  const revealTerminalTitle = revealsRunningTerminal
+    ? "Show the running terminal"
+    : "Show the terminal this command ran in";
   const handleHeaderClick = useCallback(() => {
-    if (revealsRunningTerminal) {
+    if (revealsTerminal) {
       onRevealToolCallTerminal?.(toolCall.id);
       return;
     }
     setExpanded((current) => !current);
-  }, [onRevealToolCallTerminal, revealsRunningTerminal, toolCall.id]);
+  }, [onRevealToolCallTerminal, revealsTerminal, toolCall.id]);
 
   const handleToggleClick = useCallback(() => {
     setExpanded((current) => !current);
@@ -914,12 +925,8 @@ export function ToolCallBlock({
             <button
               class="tool-command-preview"
               type="button"
-              title={
-                revealsRunningTerminal ? "Show the running terminal" : command
-              }
-              aria-label={
-                revealsRunningTerminal ? "Show the running terminal" : undefined
-              }
+              title={revealsTerminal ? revealTerminalTitle : command}
+              aria-label={revealsTerminal ? revealTerminalTitle : undefined}
               onClick={(event: MouseEvent) => {
                 event.stopPropagation();
                 handleHeaderClick();

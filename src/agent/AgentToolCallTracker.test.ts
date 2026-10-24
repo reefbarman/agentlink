@@ -334,8 +334,52 @@ describe("AgentToolCallTracker revealTerminal", () => {
       vi.fn(),
     );
 
-    tracker.revealTerminal("call-read");
+    expect(tracker.revealTerminal("call-read")).toBe("unavailable");
 
+    expect(mocks.revealTerminal).not.toHaveBeenCalled();
+  });
+
+  it("reveals the terminal a completed execute_command ran in", () => {
+    const tracker = createTracker();
+    const context = tracker.registerAgentCall(
+      "call-done-reveal",
+      "execute_command",
+      "npm test",
+      "session-1",
+      vi.fn(),
+    );
+    context.setTerminalId("term_done");
+    tracker.completeAgentCall("call-done-reveal");
+
+    expect(tracker.revealTerminal("call-done-reveal")).toBe("revealed");
+    expect(mocks.revealTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term_done",
+    });
+  });
+
+  it("reports a completed command whose terminal has closed", () => {
+    mocks.revealTerminal.mockReturnValue(false);
+    const tracker = createTracker();
+    const context = tracker.registerAgentCall(
+      "call-closed-reveal",
+      "execute_command",
+      "npm test",
+      "session-1",
+      vi.fn(),
+    );
+    context.setTerminalId("term_closed");
+    tracker.completeAgentCall("call-closed-reveal");
+
+    expect(tracker.revealTerminal("call-closed-reveal")).toBe("unavailable");
+  });
+
+  it("reports unknown completed calls as unavailable", () => {
+    const tracker = createTracker();
+
+    expect(tracker.revealTerminal("call-from-previous-window")).toBe(
+      "unavailable",
+    );
     expect(mocks.revealTerminal).not.toHaveBeenCalled();
   });
 });

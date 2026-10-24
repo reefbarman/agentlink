@@ -9006,8 +9006,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "revealToolCallTerminal": {
         const id = msg.id as string | undefined;
-        if (id) {
-          this.toolCallTracker?.revealTerminal(id);
+        if (id && this.toolCallTracker?.revealTerminal(id) === "unavailable") {
+          void vscode.window.showInformationMessage(
+            "The terminal this command ran in is no longer open.",
+          );
         }
         break;
       }

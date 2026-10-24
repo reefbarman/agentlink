@@ -234,6 +234,61 @@ describe("ToolCallBlock", () => {
     expect(onRevealToolCallTerminal).toHaveBeenCalledTimes(2);
   });
 
+  it("reveals the terminal a completed command ran in", () => {
+    const onRevealToolCallTerminal = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "completed-command",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({ exit_code: 0, terminal_id: "term_7" }),
+          complete: true,
+        },
+        onRevealToolCallTerminal,
+      }),
+    );
+
+    const toggle = screen.getByRole("button", { name: "Command details" });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show the terminal this command ran in",
+      }),
+    );
+    expect(onRevealToolCallTerminal).toHaveBeenCalledWith("completed-command");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(onRevealToolCallTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("expands a completed command that never got a terminal", () => {
+    const onRevealToolCallTerminal = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "rejected-command",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "rm -rf build" }),
+          result: JSON.stringify({ status: "rejected_by_user" }),
+          complete: true,
+        },
+        onRevealToolCallTerminal,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "rm -rf build" }));
+    expect(onRevealToolCallTerminal).not.toHaveBeenCalled();
+    expect(
+      screen
+        .getByRole("button", { name: "Command details" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   it("reveals and controls the terminal observed by get_terminal_output", () => {
     const onRevealToolCallTerminal = vi.fn();
     const onContinueToolCallInBackground = vi.fn();
