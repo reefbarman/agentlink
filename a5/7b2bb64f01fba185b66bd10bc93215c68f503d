@@ -1,0 +1,73 @@
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_e08a86bb3a33a2 562
+src/browser-gateway/helper/helperRouteFamilies.ts
+  h_e08a86bb3a33a2 55,230-233
+  s_10c3b4faf4c4af::t_f933a09a7edad4 234
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 11432-11474,12063-12277
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 1526-1683
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 8034-8037,8039-8043,8046,8051,8057-8058,8069,8072,8080-8082
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 2386-2387,2390-2394,4870,4893-4895,4901,4903-4906,4910-4913,4923-4952,9827,10166,10170,10172-10175,10181,10187,10192-10194,10197,10199-10205,10207,10221-10252,10261-10268,10285-10286,10291,10297-10308,10316,10352,10387
+  s_0874c014ddf826::t_a2a3289a7a28f5 10253-10260,10269-10284,10287-10290,10292-10296
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 203,218-225
+  s_58a9469f083914::t_f8e56e180b5407 226
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 21,300-301,489-500,1191-1193,1195-1197,1968-1969,2412-2416,5493-5496,5498,5502,5710-5712,5714-5715,5721,5723-5724,5735-5780,5782-5822,5825-5830,5836-5838,5842-5877,5884-5886,5892-5893,5895-5904,5920-5923,5927-5931,6701,8938-8944,9089-9391,9671-9672,9677,9699
+  h_e08a86bb3a33a2 1198,5781,5823-5824,5831-5835,5839-5841,5878-5883,5887-5891,5894,5905-5919,5924-5926,5932-5933,8937,9392-9394,9673-9676
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 120-123,126-167
+  s_10c3b4faf4c4af::t_c98fab993c8bac 168
+resources/builtin-skills/documentation/references/release-notes.md
+  s_8fde9839823537::t_9cc963c539a160 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a57b2bb64f01fba185b66bd10bc93215c68f503d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0874c014ddf826": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f7053be0-74d1-4c40-8565-c2a96472e235",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_10c3b4faf4c4af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d17196c-3464-49ac-ad63-4cadc6d9e2ce",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_58a9469f083914": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebf8e43c-8f91-4ee4-9995-9f6137c10ef0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_8fde9839823537": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b70c15cc-f5d7-435e-8469-0a6031526f68",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
