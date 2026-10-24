@@ -117,7 +117,54 @@ export const ASK_AGENT_SANDBOX_PROMPT = [
   "Commands run in a sandbox: they can only write inside the scratch folder, cannot read the user's home folder or other chats, and have no internet access, so package installs such as pip install fail. Prefer tools that are already installed. Read results with read_file, list_files or search_files using scratch-relative paths.",
   "",
   "The user cannot see the scratch folder. To give them a file (an image, CSV, PDF, report and so on), call present_files with its path; it then appears in the chat with a download button. Images are shown inline.",
+  "",
+  "## Working in real folders",
+  "",
+  'Use the scratch folder for throwaway work. When the user wants to keep the result, or asks you to work on files they already have, call request_folder_access first instead of asking them to grant a folder by hand. Suggest a location yourself: for new work they will keep, a new folder at ~/AgentLink/<short-task-name> with create: true; for an existing project or file, its own folder. Pass access: "commands" when you need to run commands or edit files there, "read" when you only need to read. Give a short reason. The user approves it on a card; then work in that folder with absolute paths.',
 ].join("\n");
+
+export const ASK_AGENT_FOLDER_ACCESS_TOOL_NAME = "request_folder_access";
+const ASK_AGENT_FOLDER_ACCESS_MAX_REASON_LENGTH = 1_000;
+
+/**
+ * Lets the agent ask for a folder grant on an approval card instead of the
+ * user typing a path. The helper handles it, since grants live there.
+ */
+export const ASK_AGENT_FOLDER_ACCESS_TOOL: CoreModelToolDefinition =
+  Object.freeze({
+    name: ASK_AGENT_FOLDER_ACCESS_TOOL_NAME,
+    description:
+      "Ask the user for access to a folder on their computer, shown as an approval card. Use it before reading, running commands in, or editing files outside the scratch folder. For new work the user wants to keep, suggest ~/AgentLink/<short-task-name> with create: true. Returns status granted, already_granted or rejected_by_user.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Absolute folder path; ~ means the user's home folder (for example ~/AgentLink/csv-cleanup).",
+        },
+        access: {
+          type: "string",
+          enum: ["read", "commands"],
+          description:
+            "read: read, list and search only. commands (the default): also run commands and edit files, each still asking first unless a rule or Approve for Me allows it.",
+        },
+        reason: {
+          type: "string",
+          maxLength: ASK_AGENT_FOLDER_ACCESS_MAX_REASON_LENGTH,
+          description: "Short reason shown on the card.",
+        },
+        create: {
+          type: "boolean",
+          description:
+            "Create the folder if it does not exist yet. Only inside the user's home folder.",
+        },
+      },
+      required: ["path", "reason"],
+      additionalProperties: false,
+    },
+  });
 
 export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
   Object.freeze([

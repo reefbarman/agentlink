@@ -11429,6 +11429,49 @@ describe("BrowserGatewayHelper proxy routing", () => {
         access: "everything",
       });
       expect(invalid.status).toBe(400);
+
+      // `~` means this user's home folder; relative paths are refused, and
+      // a missing folder says which path it looked for.
+      const homeFolder = await fs.mkdtemp(
+        path.join(testHome.directory, "tilde-"),
+      );
+      const tilde = await grantRequest({
+        path: `~/${path.basename(homeFolder)}`,
+        confirm: true,
+        access: "read",
+      });
+      expect(tilde.status).toBe(200);
+      const tildeGrants = (await tilde.json()) as {
+        grants: Array<{ id: string; rootPath: string }>;
+      };
+      const homeFolderReal = await fs.realpath(homeFolder);
+      const tildeGrant = tildeGrants.grants.find(
+        (grant) => grant.rootPath === homeFolderReal,
+      );
+      expect(tildeGrant).toBeDefined();
+      // Keep the later grant-count assertions about the project only.
+      await fetch(`${harness.helperBase}/api/ask-agent/read-grants/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({ id: tildeGrant!.id }),
+      });
+      const relative = await grantRequest({
+        path: "some/relative/folder",
+        confirm: true,
+        access: "read",
+      });
+      expect(relative.status).toBe(400);
+      expect(await relative.text()).toContain("path_not_absolute");
+      const missing = await grantRequest({
+        path: "~/definitely-missing-folder-for-grant-test",
+        confirm: true,
+        access: "read",
+      });
+      expect(missing.status).toBe(404);
+      expect(await missing.text()).toContain(
+        "definitely-missing-folder-for-grant-test does not exist",
+      );
+
       const fileGrant = await grantRequest({
         path: projectFile,
         confirm: true,
@@ -12014,6 +12057,221 @@ describe("BrowserGatewayHelper proxy routing", () => {
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("grants folders the agent asks for on a card, with existing folders approved only on this machine", async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
+    );
+    const project = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-project-")),
+    );
+    const homeReal = await fs.realpath(os.homedir());
+    const taskName = `task-${Date.now()}`;
+    const newFolder = path.join(homeReal, "AgentLink", taskName);
+    const workspaceHost = await import("@agentlink/workspace-host");
+    const sandbox = new AskAgentSandboxWorkspace({
+      rootDirectory: sandboxRoot,
+      extensionRoot: sandboxRoot,
+      platform: "darwin",
+      homeDirectory: "/Users/example",
+      createProcessLauncher: () =>
+        workspaceHost.createLocalWorkspaceExecutionBackend(),
+    });
+    const calls: Array<Record<string, unknown>> = [
+      { path: `~/AgentLink/${taskName}`, create: true, reason: "keep it" },
+      { path: project, access: "commands", reason: "fix the build" },
+      { path: project, access: "read", reason: "again" },
+      { path: "/opt/agentlink-new-folder", create: true, reason: "nope" },
+      { path: `~/AgentLink/${taskName}-raced`, create: true, reason: "race" },
+    ];
+    const racedFolder = `${newFolder}-raced`;
+    const toolResults: string[] = [];
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    let call = 0;
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length) {
+        toolResults.push(JSON.stringify(params.toolMessages));
+        return { text: "Done.", toolCalls: [] };
+      }
+      call += 1;
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: `access-${call}`,
+            name: "request_folder_access",
+            input: calls.shift()!,
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentSandbox: sandbox,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = (route: string, body: unknown) =>
+      fetch(`${harness.helperBase}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify(body),
+      });
+    const fromLan = async (body: unknown) => {
+      const written: { status?: number; body?: string } = {};
+      const req = Object.assign(Readable.from([JSON.stringify(body)]), {
+        socket: { remoteAddress: "192.168.50.20" },
+        headers: { "content-type": "application/json" },
+      });
+      await (
+        harness.helper as unknown as Record<
+          string,
+          (req: unknown, res: unknown) => Promise<void>
+        >
+      ).handleAskAgentApprovalRequest!.call(harness.helper, req, {
+        writeHead: (status: number) => {
+          written.status = status;
+        },
+        end: (text: string) => {
+          written.body = text;
+        },
+      });
+      return written;
+    };
+    const pendingCard = async () => {
+      let approval: Record<string, unknown> | null = null;
+      await waitForExpectation(async () => {
+        const session = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await session.json()) as {
+          snapshot: { ui: { approval: Record<string, unknown> | null } };
+        };
+        expect(body.snapshot.ui.approval?.kind).toBe("write");
+        approval = body.snapshot.ui.approval;
+      });
+      return approval!;
+    };
+    const grants = async () =>
+      (
+        (await (
+          await fetch(`${harness.helperBase}/api/ask-agent/read-grants`, {
+            headers: { Cookie: harness.cookie },
+          })
+        ).json()) as { grants: Array<{ rootPath: string; access: string }> }
+      ).grants;
+
+    try {
+      // A new folder under ~/AgentLink: any signed-in device can approve.
+      const created = post("/api/ask-agent/send", { text: "Keep it" });
+      const newCard = await pendingCard();
+      expect(newCard.filePath).toBe(`~/AgentLink/${taskName}`);
+      expect(String(newCard.detail)).toContain("keep it");
+      expect(String(newCard.detail)).not.toContain("Only the computer");
+      expect(
+        (await fromLan({ id: newCard.id, decision: "accept" })).status,
+      ).toBe(200);
+      expect((await created).ok).toBe(true);
+      expect(toolResults.at(-1)).toContain("granted");
+      expect((await fs.stat(newFolder)).isDirectory()).toBe(true);
+      expect(await grants()).toContainEqual(
+        expect.objectContaining({ rootPath: newFolder, access: "commands" }),
+      );
+      expect(completionParams[0]?.tools?.map((tool) => tool.name)).toContain(
+        "request_folder_access",
+      );
+
+      // An existing folder: other devices can only reject.
+      const existing = post("/api/ask-agent/send", { text: "Fix it" });
+      const existingCard = await pendingCard();
+      expect(String(existingCard.detail)).toContain("Only the computer");
+      const lan = await fromLan({ id: existingCard.id, decision: "accept" });
+      expect(lan.status).toBe(403);
+      expect(lan.body).toContain("grant_requires_this_machine");
+      await expect(
+        (
+          harness.helper as unknown as {
+            executeAskAgentApprovalCommand(params: {
+              requestId: string;
+              decision: "approve" | "reject";
+            }): Promise<void>;
+          }
+        ).executeAskAgentApprovalCommand({
+          requestId: String(existingCard.id),
+          decision: "approve",
+        }),
+      ).rejects.toThrow("grant_requires_this_machine");
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: existingCard.id,
+            decision: "accept",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await existing).ok).toBe(true);
+      expect(await grants()).toContainEqual(
+        expect.objectContaining({ rootPath: project, access: "commands" }),
+      );
+
+      // Already covered: no card.
+      expect((await post("/api/ask-agent/send", { text: "Again" })).ok).toBe(
+        true,
+      );
+      expect(toolResults.at(-1)).toContain("already_granted");
+
+      // New folders only inside the home folder.
+      expect((await post("/api/ask-agent/send", { text: "Nope" })).ok).toBe(
+        true,
+      );
+      expect(toolResults.at(-1)).toContain("create_outside_home");
+
+      // A "new" folder that appears (with contents) while the card is open is
+      // not created or granted: a phone may approve only empty new folders.
+      const raced = post("/api/ask-agent/send", { text: "Race" });
+      const racedCard = await pendingCard();
+      await fs.mkdir(racedFolder);
+      await fs.writeFile(path.join(racedFolder, "secret.txt"), "x");
+      expect(
+        (await fromLan({ id: racedCard.id, decision: "accept" })).status,
+      ).toBe(200);
+      expect((await raced).ok).toBe(true);
+      expect(toolResults.at(-1)).toContain("path_changed");
+      expect(
+        (await grants()).some((grant) => grant.rootPath === racedFolder),
+      ).toBe(false);
+
+      // Opening the scratch folder opens a window, so only from this computer.
+      const opened: { status?: number; body?: string } = {};
+      await (
+        harness.helper as unknown as Record<
+          string,
+          (req: unknown, res: unknown) => Promise<void>
+        >
+      ).handleAskAgentScratchFolderOpenRequest!.call(
+        harness.helper,
+        { socket: { remoteAddress: "192.168.50.20" }, headers: {} },
+        {
+          writeHead: (status: number) => {
+            opened.status = status;
+          },
+          end: (text: string) => {
+            opened.body = text;
+          },
+        },
+      );
+      expect(opened.status).toBe(403);
+      expect(opened.body).toContain("open_requires_this_machine");
+    } finally {
+      await sandbox.dispose();
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(project, { recursive: true, force: true });
+      await fs.rm(newFolder, { recursive: true, force: true });
+      await fs.rm(racedFolder, { recursive: true, force: true });
     }
   });
 

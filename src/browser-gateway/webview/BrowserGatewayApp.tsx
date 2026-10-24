@@ -2383,8 +2383,15 @@ export function BrowserGatewayApp({
   const [showAskAgentReadGrants, setShowAskAgentReadGrants] = useState(false);
   const [askAgentReadGrantPath, setAskAgentReadGrantPath] = useState("");
   const [askAgentGrantCommands, setAskAgentGrantCommands] = useState(false);
+  /** The manual "Add a folder yourself" form is secondary and folded away. */
+  const [showAskAgentManualGrant, setShowAskAgentManualGrant] = useState(false);
   const [askAgentReadGrantPending, setAskAgentReadGrantPending] =
     useState(false);
+  /** Result of the last grant attempt, shown inside the panel. */
+  const [askAgentReadGrantResult, setAskAgentReadGrantResult] = useState<{
+    readonly ok: boolean;
+    readonly text: string;
+  } | null>(null);
   const [askAgentHandoffTargetId, setAskAgentHandoffTargetId] = useState("");
   const [askAgentHandoffMode, setAskAgentHandoffMode] = useState("code");
   const [askAgentHandoffInstruction, setAskAgentHandoffInstruction] =
@@ -4860,6 +4867,7 @@ export function BrowserGatewayApp({
     }
     const access = askAgentGrantCommands ? "commands" : "read";
     setAskAgentReadGrantPending(true);
+    setAskAgentReadGrantResult(null);
     setSendStatus(
       access === "commands"
         ? "Granting read and command access…"
@@ -4882,28 +4890,63 @@ export function BrowserGatewayApp({
         snapshot?: GatewaySnapshot;
       };
       if (!response.ok || !body.ok || !body.snapshot) {
-        setSendStatus(
-          `Grant failed: ${body.message ?? body.error ?? response.status}`,
-        );
+        const failure = `Grant failed: ${body.message ?? body.error ?? response.status}`;
+        setSendStatus(failure);
+        setAskAgentReadGrantResult({ ok: false, text: failure });
         return;
       }
       commitAskAgentSnapshot(body.snapshot);
       setAskAgentReadGrantPath("");
       setAskAgentGrantCommands(false);
-      setSendStatus(
+      const granted =
         access === "commands"
-          ? "Ask Agent can now read this folder and ask to run commands in it."
-          : "Read-only access granted for Ask Agent.",
-      );
+          ? "Ask Agent can now read this folder and ask to run commands and edit files in it."
+          : "Read-only access granted for Ask Agent.";
+      setSendStatus(granted);
+      setAskAgentReadGrantResult({ ok: true, text: granted });
       logAskAgentBrowserEvent("read_grant.add", { ok: true });
     } catch (err) {
       setSendStatus(`Read grant error: ${String(err)}`);
+      setAskAgentReadGrantResult({
+        ok: false,
+        text: `Grant failed: ${String(err)}`,
+      });
       logAskAgentBrowserEvent("read_grant.add", {
         ok: false,
         error: String(err),
       });
     } finally {
       setAskAgentReadGrantPending(false);
+    }
+  }
+
+  async function openAskAgentScratchFolder(): Promise<void> {
+    try {
+      const response = await fetch("/api/ask-agent/scratch-folder/open", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: "{}",
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+      };
+      if (!response.ok || !body.ok) {
+        setAskAgentReadGrantResult({
+          ok: false,
+          text: `Could not open the scratch folder: ${body.message ?? body.error ?? response.status}`,
+        });
+      }
+    } catch (err) {
+      setAskAgentReadGrantResult({
+        ok: false,
+        text: `Could not open the scratch folder: ${String(err)}`,
+      });
     }
   }
 
@@ -9781,7 +9824,7 @@ export function BrowserGatewayApp({
                           onClick={() =>
                             setShowAskAgentReadGrants((value) => !value)
                           }
-                          title="Read-only local file grants"
+                          title="Manage access"
                           type="button"
                         >
                           <i class="codicon codicon-folder-opened" />
@@ -10120,83 +10163,48 @@ export function BrowserGatewayApp({
               {showAskAgentReadGrants && isAskAgentSelected && (
                 <section
                   aria-label="Ask Agent local access grants"
-                  class="ask-agent-memory-panel ask-agent-read-grants-panel"
+                  class="ask-agent-memory-panel ask-agent-read-grants-panel ask-agent-access-panel"
                 >
                   <div class="ask-agent-memory-panel-header">
                     <div>
-                      <strong>Local file access</strong>
+                      <strong>Manage access</strong>
                       <span>
-                        Grant local files or folders for Ask Agent to read, list
-                        and search. A folder can also allow commands: each one
-                        asks you first, runs in a sandbox that can only write
-                        inside that folder, and has no network. Grants can only
-                        be added on this computer and end when AgentLink
-                        restarts.
+                        Ask Agent asks on a card when a task needs a folder, and
+                        suggests a new one under ~/AgentLink when nothing exists
+                        yet. Throwaway work stays in this chat's scratch folder.
+                        Access ends when AgentLink restarts.
                       </span>
                     </div>
                     <button
                       class="icon-button"
                       onClick={() => setShowAskAgentReadGrants(false)}
-                      title="Close read grants"
+                      title="Close access panel"
                       type="button"
                     >
                       <i class="codicon codicon-close" />
                     </button>
                   </div>
-                  <label class="ask-agent-handoff-field">
-                    <span>Local path to grant</span>
-                    <input
-                      type="text"
-                      value={askAgentReadGrantPath}
-                      onInput={(event) =>
-                        setAskAgentReadGrantPath(
-                          (event.target as HTMLInputElement).value,
-                        )
-                      }
-                      placeholder="/Users/name/project or /Users/name/file.md"
-                    />
-                  </label>
-                  <label class="ask-agent-handoff-field ask-agent-grant-commands">
-                    <input
-                      type="checkbox"
-                      checked={askAgentGrantCommands}
-                      onChange={(event) =>
-                        setAskAgentGrantCommands(
-                          (event.target as HTMLInputElement).checked,
-                        )
-                      }
-                    />
-                    <span>
-                      Also allow commands and edits in this folder (asks first)
-                    </span>
-                  </label>
-                  <div class="ask-agent-memory-actions">
-                    <button
-                      disabled={askAgentReadGrantPending}
-                      onClick={() => void addAskAgentReadGrant()}
-                      type="button"
-                    >
-                      {askAgentGrantCommands
-                        ? "Confirm read and command grant"
-                        : "Confirm read grant"}
-                    </button>
-                  </div>
+                  <h4 class="ask-agent-access-heading">Folders</h4>
                   {askAgentReadGrants.length > 0 ? (
                     <ul class="ask-agent-read-grants-list">
                       {askAgentReadGrants.map((grant) => (
                         <li key={grant.id}>
+                          <i
+                            class={`codicon codicon-${grant.kind === "directory" ? "folder" : "file"}`}
+                          />
                           <div>
                             <strong>{grant.label}</strong>
-                            <span>
-                              {grant.kind}
-                              {grant.access === "commands"
-                                ? " · read + commands"
-                                : " · read only"}{" "}
-                              · {grant.rootPath}
-                            </span>
+                            <span title={grant.rootPath}>{grant.rootPath}</span>
                           </div>
+                          <span
+                            class={`ask-agent-access-badge${grant.access === "commands" ? " commands" : ""}`}
+                          >
+                            {grant.access === "commands"
+                              ? "read + commands"
+                              : "read only"}
+                          </span>
                           <button
-                            class="secondary"
+                            class="ask-agent-access-button subtle"
                             disabled={askAgentReadGrantPending}
                             onClick={() =>
                               void revokeAskAgentReadGrant(grant.id)
@@ -10210,7 +10218,94 @@ export function BrowserGatewayApp({
                     </ul>
                   ) : (
                     <p class="ask-agent-memory-empty">
-                      No local paths have been granted to Ask Agent.
+                      No folders yet. Ask for something that needs one and Ask
+                      Agent will suggest a location.
+                    </p>
+                  )}
+                  <div class="ask-agent-memory-actions">
+                    {desktopShell && (
+                      <button
+                        class="ask-agent-access-button"
+                        onClick={() => void openAskAgentScratchFolder()}
+                        type="button"
+                      >
+                        <i class="codicon codicon-folder-opened" />
+                        Show scratch folder in Finder
+                      </button>
+                    )}
+                    <button
+                      aria-expanded={showAskAgentManualGrant}
+                      class="ask-agent-access-button subtle"
+                      onClick={() =>
+                        setShowAskAgentManualGrant((value) => !value)
+                      }
+                      type="button"
+                    >
+                      <i
+                        class={`codicon codicon-${showAskAgentManualGrant ? "chevron-down" : "add"}`}
+                      />
+                      Add a folder yourself
+                    </button>
+                  </div>
+                  {showAskAgentManualGrant && (
+                    <div class="ask-agent-access-manual">
+                      <label class="ask-agent-handoff-field">
+                        <span>Local path to grant</span>
+                        <input
+                          type="text"
+                          value={askAgentReadGrantPath}
+                          onInput={(event) =>
+                            setAskAgentReadGrantPath(
+                              (event.target as HTMLInputElement).value,
+                            )
+                          }
+                          placeholder="~/projects/app or ~/notes/file.md"
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "Enter" &&
+                              !askAgentReadGrantPending
+                            ) {
+                              event.preventDefault();
+                              void addAskAgentReadGrant();
+                            }
+                          }}
+                        />
+                      </label>
+                      <label class="ask-agent-handoff-field ask-agent-grant-commands">
+                        <input
+                          type="checkbox"
+                          checked={askAgentGrantCommands}
+                          onChange={(event) =>
+                            setAskAgentGrantCommands(
+                              (event.target as HTMLInputElement).checked,
+                            )
+                          }
+                        />
+                        <span>
+                          Also allow commands and edits in this folder (asks
+                          first)
+                        </span>
+                      </label>
+                      <div class="ask-agent-memory-actions">
+                        <button
+                          class="ask-agent-access-button primary"
+                          disabled={askAgentReadGrantPending}
+                          onClick={() => void addAskAgentReadGrant()}
+                          type="button"
+                        >
+                          {askAgentGrantCommands
+                            ? "Add folder with commands"
+                            : "Add read-only"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {askAgentReadGrantResult && (
+                    <p
+                      class={`ask-agent-grant-result ${askAgentReadGrantResult.ok ? "ok" : "error"}`}
+                      role={askAgentReadGrantResult.ok ? "status" : "alert"}
+                    >
+                      {askAgentReadGrantResult.text}
                     </p>
                   )}
                   {(askAgentHasCommandGrant ||
@@ -10218,6 +10313,7 @@ export function BrowserGatewayApp({
                     askAgentCommandPolicy.rules.length > 0 ||
                     askAgentCommandDestinations.length > 0) && (
                     <div class="ask-agent-command-policy">
+                      <h4 class="ask-agent-access-heading">Commands</h4>
                       <label class="ask-agent-handoff-field ask-agent-grant-commands">
                         <input
                           type="checkbox"
@@ -10253,7 +10349,7 @@ export function BrowserGatewayApp({
                                 </span>
                               </div>
                               <button
-                                class="secondary"
+                                class="ask-agent-access-button subtle"
                                 disabled={askAgentReadGrantPending}
                                 onClick={() =>
                                   void updateAskAgentCommandPolicy({
@@ -10288,7 +10384,7 @@ export function BrowserGatewayApp({
                                 </span>
                               </div>
                               <button
-                                class="secondary"
+                                class="ask-agent-access-button subtle"
                                 disabled={askAgentReadGrantPending}
                                 onClick={() =>
                                   void updateAskAgentCommandPolicy({

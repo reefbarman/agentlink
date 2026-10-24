@@ -8031,25 +8031,31 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    fireEvent.click(await screen.findByTitle("Read-only local file grants"));
-    await screen.findByText("Local file access");
+    fireEvent.click(await screen.findByTitle("Manage access"));
+    await screen.findByText("Manage access");
+    expect(screen.getByText(/^No folders yet\./)).toBeTruthy();
+    // The manual form is a secondary action, folded away until asked for.
     expect(
-      screen.getByText("No local paths have been granted to Ask Agent."),
-    ).toBeTruthy();
+      screen.queryByPlaceholderText("~/projects/app or ~/notes/file.md"),
+    ).toBeNull();
+    // Show in Finder is Desktop only.
+    expect(screen.queryByText("Show scratch folder in Finder")).toBeNull();
+    fireEvent.click(screen.getByText("Add a folder yourself"));
 
     fireEvent.input(
-      screen.getByPlaceholderText("/Users/name/project or /Users/name/file.md"),
+      screen.getByPlaceholderText("~/projects/app or ~/notes/file.md"),
       {
         target: { value: "/tmp/ask-agent-read" },
       },
     );
-    fireEvent.click(screen.getByText("Confirm read grant"));
+    fireEvent.click(screen.getByText("Add read-only"));
 
     await screen.findByText("ask-agent-read");
     await screen.findByText((content) =>
       content.includes("/tmp/ask-agent-read"),
     );
-    await screen.findByText("Read-only access granted for Ask Agent.");
+    // Shown in the status line and inside the panel.
+    await screen.findAllByText("Read-only access granted for Ask Agent.");
     expect(granted).toBe(true);
     expect(grantBodies.at(-1)).toEqual({
       path: "/tmp/ask-agent-read",
@@ -8060,10 +8066,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     fireEvent.click(screen.getByText("Revoke"));
     await screen.findByText("Local access revoked.");
-    await screen.findByText("No local paths have been granted to Ask Agent.");
+    await screen.findByText(/^No folders yet\./);
 
     fireEvent.input(
-      screen.getByPlaceholderText("/Users/name/project or /Users/name/file.md"),
+      screen.getByPlaceholderText("~/projects/app or ~/notes/file.md"),
       { target: { value: "/tmp/ask-agent-project" } },
     );
     fireEvent.click(
@@ -8071,9 +8077,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         "Also allow commands and edits in this folder (asks first)",
       ),
     );
-    fireEvent.click(screen.getByText("Confirm read and command grant"));
-    await screen.findByText(
-      "Ask Agent can now read this folder and ask to run commands in it.",
+    fireEvent.click(screen.getByText("Add folder with commands"));
+    await screen.findAllByText(
+      "Ask Agent can now read this folder and ask to run commands and edit files in it.",
     );
     expect(grantBodies.at(-1)).toEqual({
       path: "/tmp/ask-agent-project",

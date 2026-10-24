@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Ask Agent can now ask for the folder it needs. A new `request_folder_access` tool shows a card with the folder, the agent's reason and what the access allows, and approving adds the usual grant. The agent keeps throwaway work in the scratch folder and otherwise suggests a new folder under `~/AgentLink/<task-name>`, which AgentLink creates once you approve; any signed-in client, including a paired phone, can approve a new folder there. Access to an existing folder can still only be approved on the computer running AgentLink.
+- The local access panel is now **Manage access**: granted folders show as cards with their access and **Revoke**, followed by the command settings, with teal controls instead of default grey buttons. Adding a folder by hand moved behind **Add a folder yourself**, and Desktop adds **Show scratch folder in Finder**.
+- Fixed adding a folder from the access panel appearing to do nothing. Paths starting with `~` now work, a relative path or missing folder gets a clear message, the result shows inside the panel, and Enter submits.
+
 ## 1.68.0
 
 - Ask Agent commands in granted folders can now run in the background. With `execute_command`'s `background: true`, a dev server, test watcher or watch build starts and the call returns straight away; it keeps running after the reply until it exits, reaches its time limit (default 1 hour, at most 8 hours), the agent stops it, or you revoke the folder or delete the chat. The command card is labelled **Background** and shows the time limit. New `list_commands` and `stop_command` tools are offered while a folder is granted for commands. A chat can run up to 5 background commands at once, and they cannot ask for internet destinations. File edits still wait until no command that can write there, background included, is running, which now also counts commands from an enclosing granted folder. Tool calls that arrive for a chat after it is deleted are refused instead of recreating its scratch folder. The shared approval card's `commandSandbox` gains `background` and `timeoutMs`.

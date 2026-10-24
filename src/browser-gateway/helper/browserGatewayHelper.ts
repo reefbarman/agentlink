@@ -18,6 +18,7 @@ import * as os from "os";
 import * as path from "path";
 import { PassThrough, Writable } from "stream";
 import { createHash, randomUUID } from "crypto";
+import { execFile } from "child_process";
 import { z } from "zod";
 import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
 import {
@@ -296,6 +297,8 @@ import {
 } from "../../shared/toolSchemas.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import {
+  ASK_AGENT_FOLDER_ACCESS_TOOL,
+  ASK_AGENT_FOLDER_ACCESS_TOOL_NAME,
   ASK_AGENT_GRANTED_FOLDER_TOOL_NAMES,
   ASK_AGENT_SANDBOX_PROMPT,
   ASK_AGENT_SANDBOX_TOOLS,
@@ -483,6 +486,18 @@ const ASK_AGENT_COMMAND_APPROVAL_PREFIX = "ask-agent-command-";
 const ASK_AGENT_NETWORK_APPROVAL_PREFIX = "ask-agent-network-";
 /** Approval ids for file changes in folders granted for commands. */
 const ASK_AGENT_EDIT_APPROVAL_PREFIX = "ask-agent-edit-";
+/** Approval ids for request_folder_access cards. */
+const ASK_AGENT_ACCESS_APPROVAL_PREFIX = "ask-agent-access-";
+
+/** `~` means this user's home folder, like a shell. */
+function expandHomePath(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === "~") return os.homedir();
+  if (trimmed.startsWith("~/") || trimmed.startsWith(`~${path.sep}`)) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
 /**
  * Longest diff an edit card shows, in characters. Longer edits are refused
  * rather than approved from a partial diff.
@@ -1173,10 +1188,14 @@ export class BrowserGatewayHelper {
   /** Network destination cards, shown one at a time. */
   private askAgentNetworkApprovals: Promise<unknown> = Promise.resolve();
   /**
-   * Pending edit cards for agent instruction or configuration files, which
-   * only this computer can approve.
+   * Pending cards only this computer can approve (edits to agent
+   * instruction or configuration files, access to existing folders), with
+   * the error other clients get when they try.
    */
-  private readonly askAgentProtectedEditApprovals = new Set<string>();
+  private readonly askAgentThisMachineOnlyApprovals = new Map<
+    string,
+    { readonly error: string; readonly message: string }
+  >();
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -1946,6 +1965,8 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentReadGrantAddRequest(req, res);
       case "readGrantRevoke":
         return this.handleAskAgentReadGrantRevokeRequest(req, res);
+      case "scratchFolderOpen":
+        return this.handleAskAgentScratchFolderOpenRequest(req, res);
       case "commandPolicy":
         return this.handleAskAgentCommandPolicyRequest(req, res);
       case "commandRuleRemove":
@@ -2388,12 +2409,11 @@ export class BrowserGatewayHelper {
     ) {
       throw new Error("unsandboxed_command_requires_this_machine");
     }
-    if (
-      params.decision === "approve" &&
-      current &&
-      this.askAgentProtectedEditApprovals.has(current.id)
-    ) {
-      throw new Error("protected_edit_requires_this_machine");
+    const thisMachineOnly = current
+      ? this.askAgentThisMachineOnlyApprovals.get(current.id)
+      : undefined;
+    if (params.decision === "approve" && thisMachineOnly) {
+      throw new Error(thisMachineOnly.error);
     }
     // Ask Agent's own cards read their usual decision names; approving
     // from here never saves a rule.
@@ -5470,17 +5490,16 @@ export class BrowserGatewayHelper {
         });
         return;
       }
+      const thisMachineOnly =
+        pendingCommand?.id === body.id
+          ? this.askAgentThisMachineOnlyApprovals.get(pendingCommand.id)
+          : undefined;
       if (
-        pendingCommand?.id === body.id &&
-        this.askAgentProtectedEditApprovals.has(pendingCommand.id) &&
+        thisMachineOnly &&
         body.decision !== "reject" &&
         !isFromThisMachine(req)
       ) {
-        writeJson(res, 403, {
-          error: "protected_edit_requires_this_machine",
-          message:
-            "Changes to agent instruction or configuration files can only be approved on the computer running AgentLink. From here you can only reject it.",
-        });
+        writeJson(res, 403, thisMachineOnly);
         return;
       }
       if (
@@ -5688,88 +5707,22 @@ export class BrowserGatewayHelper {
         });
         return;
       }
-      const resolvedPath = path.resolve(requestedPath);
-      const stat = await fs.stat(resolvedPath).catch(() => null);
-      if (!stat || (!stat.isFile() && !stat.isDirectory())) {
-        writeJson(res, 404, { ok: false, error: "path_not_found" });
-        return;
-      }
-      if (
-        access === "commands" &&
-        (await this.askAgentSandbox?.isAvailable()) !== true
-      ) {
-        writeJson(res, 409, {
+      const added = await this.addAskAgentGrant(requestedPath, access);
+      if (!added.ok) {
+        writeJson(res, added.status, {
           ok: false,
-          error: "commands_unavailable",
-          message:
-            "Commands need the command sandbox, which is not available on this computer.",
+          error: added.error,
+          ...(added.message ? { message: added.message } : {}),
         });
         return;
-      }
-      if (access === "commands" && !stat.isDirectory()) {
-        writeJson(res, 400, {
-          ok: false,
-          error: "commands_grant_requires_directory",
-          message: "Commands can only be granted for a folder.",
-        });
-        return;
-      }
-      const realPath = await fs.realpath(resolvedPath);
-      const homeRealPath = await fs
-        .realpath(os.homedir())
-        .catch(() => os.homedir());
-      if (
-        access === "commands" &&
-        (realPath === path.parse(realPath).root || realPath === homeRealPath)
-      ) {
-        writeJson(res, 400, {
-          ok: false,
-          error: "commands_grant_too_broad",
-          message:
-            "Grant commands for a project folder, not your whole disk or home folder.",
-        });
-        return;
-      }
-      if (access === "commands") {
-        // The sandbox protects Git metadata and agent instruction files only
-        // at the top of the folder, so repositories inside it would not be.
-        const nested = await findNestedRepository(realPath);
-        if (nested) {
-          writeJson(res, 400, {
-            ok: false,
-            error: "commands_grant_contains_repositories",
-            message:
-              nested === "too_large"
-                ? "This folder is too large to check for other repositories. Grant commands for a single project folder."
-                : `This folder contains another repository (${path.dirname(nested)}). Grant commands for that repository's folder instead.`,
-          });
-          return;
-        }
-      }
-      const grant = {
-        id: `ask-agent-read-grant-${randomUUID()}`,
-        createdAt: Date.now(),
-        rootPath: realPath,
-        label: path.basename(realPath) || realPath,
-        kind: stat.isDirectory() ? ("directory" as const) : ("file" as const),
-        access,
-      };
-      const replaced = this.askAgentSessionStore
-        .getReadGrants()
-        .find((candidate) => candidate.rootPath === realPath);
-      const grants = this.askAgentSessionStore.addReadGrant(grant);
-      if (replaced?.access === "commands" && access !== "commands") {
-        await this.revokeAskAgentCommandRootIfUncovered(realPath);
       }
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
-      this.logAskAgentEvent("ask-agent.read-grant.add", {
+      writeJson(res, 200, {
         ok: true,
-        grantId: grant.id,
-        kind: grant.kind,
-        access,
+        grants: added.grants,
+        snapshot: response.snapshot,
       });
-      writeJson(res, 200, { ok: true, grants, snapshot: response.snapshot });
     } catch (err) {
       const invalidJson =
         err instanceof Error && err.message === "invalid_json";
@@ -5777,6 +5730,205 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     }
+  }
+
+  /**
+   * Open the active chat's scratch folder in Finder (or the Linux file
+   * manager). Only from this computer: it opens a window here.
+   */
+  private async handleAskAgentScratchFolderOpenRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!isFromThisMachine(req)) {
+      writeJson(res, 403, {
+        ok: false,
+        error: "open_requires_this_machine",
+        message: "The scratch folder can only be opened on this computer.",
+      });
+      return;
+    }
+    const opener =
+      process.platform === "darwin"
+        ? "open"
+        : process.platform === "linux"
+          ? "xdg-open"
+          : undefined;
+    if (!opener || (await this.askAgentSandbox?.isAvailable()) !== true) {
+      writeJson(res, 409, {
+        ok: false,
+        error: "scratch_folder_unavailable",
+        message: "This computer has no Ask Agent scratch folder.",
+      });
+      return;
+    }
+    try {
+      const folder = this.askAgentSandbox!.workDirectory(
+        this.askAgentSessionStore.getActiveSessionId(),
+      );
+      await fs.mkdir(folder, { recursive: true, mode: 0o700 });
+      await new Promise<void>((resolve, reject) => {
+        execFile(opener, [folder], (error) =>
+          error ? reject(error) : resolve(),
+        );
+      });
+      writeJson(res, 200, { ok: true, path: folder });
+    } catch (error) {
+      writeJson(res, 500, {
+        ok: false,
+        error: "open_failed",
+        message: String(error),
+      });
+    }
+  }
+
+  /**
+   * Check and, unless `dryRun`, add an Ask Agent grant. Shared by the
+   * access panel (typed paths) and request_folder_access (approved cards),
+   * so both apply the same rules. The caller publishes the snapshot.
+   */
+  private async addAskAgentGrant(
+    requestedPath: string,
+    access: "read" | "commands",
+    options: {
+      readonly dryRun?: boolean;
+      /** Refuse (`path_changed`) unless the path still resolves here. */
+      readonly expectedRealPath?: string;
+      /** Refuse (`cancelled`) if aborted before the grant is stored. */
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly realPath: string;
+        readonly grants: ReturnType<BrowserGatewayHelper["listAskAgentGrants"]>;
+      }
+    | {
+        readonly ok: false;
+        readonly status: number;
+        readonly error: string;
+        readonly message?: string;
+      }
+  > {
+    const expandedPath = expandHomePath(requestedPath);
+    if (!path.isAbsolute(expandedPath)) {
+      return {
+        ok: false,
+        status: 400,
+        error: "path_not_absolute",
+        message: "Enter a full path, for example ~/projects/app.",
+      };
+    }
+    const resolvedPath = path.resolve(expandedPath);
+    const stat = await fs.stat(resolvedPath).catch(() => null);
+    if (!stat || (!stat.isFile() && !stat.isDirectory())) {
+      return {
+        ok: false,
+        status: 404,
+        error: "path_not_found",
+        message: `${resolvedPath} does not exist. Create it first, then grant it.`,
+      };
+    }
+    if (
+      access === "commands" &&
+      (await this.askAgentSandbox?.isAvailable()) !== true
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        error: "commands_unavailable",
+        message:
+          "Commands need the command sandbox, which is not available on this computer.",
+      };
+    }
+    if (access === "commands" && !stat.isDirectory()) {
+      return {
+        ok: false,
+        status: 400,
+        error: "commands_grant_requires_directory",
+        message: "Commands can only be granted for a folder.",
+      };
+    }
+    const realPath = await fs.realpath(resolvedPath);
+    if (
+      options.expectedRealPath !== undefined &&
+      realPath !== options.expectedRealPath
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        error: "path_changed",
+        message: "The folder's location changed while the card was open.",
+      };
+    }
+    const homeRealPath = await fs
+      .realpath(os.homedir())
+      .catch(() => os.homedir());
+    if (
+      access === "commands" &&
+      (realPath === path.parse(realPath).root || realPath === homeRealPath)
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: "commands_grant_too_broad",
+        message:
+          "Grant commands for a project folder, not your whole disk or home folder.",
+      };
+    }
+    if (access === "commands") {
+      // The sandbox protects Git metadata and agent instruction files only
+      // at the top of the folder, so repositories inside it would not be.
+      const nested = await findNestedRepository(realPath);
+      if (nested) {
+        return {
+          ok: false,
+          status: 400,
+          error: "commands_grant_contains_repositories",
+          message:
+            nested === "too_large"
+              ? "This folder is too large to check for other repositories. Grant commands for a single project folder."
+              : `This folder contains another repository (${path.dirname(nested)}). Grant commands for that repository's folder instead.`,
+        };
+      }
+    }
+    if (options.dryRun) {
+      return { ok: true, realPath, grants: this.listAskAgentGrants() };
+    }
+    if (options.signal?.aborted) {
+      return {
+        ok: false,
+        status: 409,
+        error: "cancelled",
+        message: "The turn was stopped before access was granted.",
+      };
+    }
+    const grant = {
+      id: `ask-agent-read-grant-${randomUUID()}`,
+      createdAt: Date.now(),
+      rootPath: realPath,
+      label: path.basename(realPath) || realPath,
+      kind: stat.isDirectory() ? ("directory" as const) : ("file" as const),
+      access,
+    };
+    const replaced = this.askAgentSessionStore
+      .getReadGrants()
+      .find((candidate) => candidate.rootPath === realPath);
+    const grants = this.askAgentSessionStore.addReadGrant(grant);
+    if (replaced?.access === "commands" && access !== "commands") {
+      await this.revokeAskAgentCommandRootIfUncovered(realPath);
+    }
+    this.logAskAgentEvent("ask-agent.read-grant.add", {
+      ok: true,
+      grantId: grant.id,
+      kind: grant.kind,
+      access,
+    });
+    return { ok: true, realPath, grants };
+  }
+
+  private listAskAgentGrants() {
+    return this.askAgentSessionStore.getReadGrants();
   }
 
   /**
@@ -6546,6 +6698,7 @@ export class BrowserGatewayHelper {
       }
       const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
         ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+        ...(sandboxTools ? [ASK_AGENT_FOLDER_ACCESS_TOOL] : []),
         // apply_diff and background command control need a granted folder.
         ...(sandboxTools
           ? ASK_AGENT_SANDBOX_TOOLS.filter(
@@ -8782,6 +8935,14 @@ export class BrowserGatewayHelper {
     }
 
     if (
+      toolCall.name === ASK_AGENT_FOLDER_ACCESS_TOOL_NAME &&
+      mcpInvocation &&
+      (await this.askAgentSandbox?.isAvailable()) === true
+    ) {
+      return await this.executeAskAgentFolderAccessTool(toolCall, signal);
+    }
+
+    if (
       isAskAgentSandboxToolName(toolCall.name) &&
       mcpInvocation &&
       (await this.askAgentSandbox?.isAvailable()) === true
@@ -8922,6 +9083,312 @@ export class BrowserGatewayHelper {
       toolCall,
       startedAt,
       turnContext,
+    );
+  }
+
+  /**
+   * request_folder_access: the agent proposes a folder and the user grants
+   * it on a card, instead of typing the path in the access panel. Granting
+   * an existing folder can only be approved on this computer; creating a
+   * new empty folder under ~/AgentLink can be approved from any signed-in
+   * client, since there is nothing in it yet to read or change.
+   */
+  private async executeAskAgentFolderAccessTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    signal: AbortSignal,
+  ): Promise<AskAgentToolExecutionResult> {
+    const finish = (payload: Record<string, unknown>, isError: boolean) => {
+      const content = JSON.stringify(payload);
+      this.logAskAgentEvent(
+        `ask-agent.tool.${ASK_AGENT_FOLDER_ACCESS_TOOL_NAME}`,
+        {
+          ok: !isError,
+          status: String(payload.status ?? payload.error ?? ""),
+        },
+      );
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          isError,
+        ),
+      };
+    };
+    const input = toolCall.input;
+    const access =
+      input.access === undefined || input.access === "commands"
+        ? ("commands" as const)
+        : input.access === "read"
+          ? ("read" as const)
+          : null;
+    const reason =
+      typeof input.reason === "string"
+        ? input.reason.trim().slice(0, 1_000)
+        : "";
+    if (typeof input.path !== "string" || !input.path.trim() || !access) {
+      return finish(
+        {
+          error:
+            'invalid_input: pass path (absolute or ~/...) and access "read" or "commands"',
+        },
+        true,
+      );
+    }
+    if (input.create !== undefined && typeof input.create !== "boolean") {
+      return finish({ error: "invalid_input: create must be a boolean" }, true);
+    }
+    const expanded = expandHomePath(input.path);
+    if (!path.isAbsolute(expanded)) {
+      return finish(
+        {
+          error:
+            "path_not_absolute: pass an absolute path or one starting with ~/",
+        },
+        true,
+      );
+    }
+    const resolved = path.resolve(expanded);
+    const homeReal = await fs.realpath(os.homedir()).catch(() => os.homedir());
+
+    // The canonical target: the real path of what exists, plus any missing
+    // folders below it. Links in existing parents are followed here, so a
+    // link cannot make a folder look like it is under ~/AgentLink.
+    let existing = resolved;
+    const missing: string[] = [];
+    let existingReal: string | undefined;
+    for (;;) {
+      existingReal = await fs.realpath(existing).catch(() => undefined);
+      if (existingReal) break;
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      missing.unshift(path.basename(existing));
+      existing = parent;
+    }
+    if (!existingReal) {
+      return finish({ error: "path_not_found" }, true);
+    }
+    const target = path.join(existingReal, ...missing);
+    const create = missing.length > 0;
+    if (create && input.create !== true) {
+      return finish(
+        {
+          error: `path_not_found: ${target} does not exist; pass create: true to create it (inside the user's home folder)`,
+        },
+        true,
+      );
+    }
+    if (
+      create &&
+      (!this.isPathInsideRoot(target, homeReal) || target === homeReal)
+    ) {
+      return finish(
+        {
+          error:
+            "create_outside_home: new folders can only be created inside the user's home folder, for example ~/AgentLink/<task-name>",
+        },
+        true,
+      );
+    }
+    if (!create) {
+      const stat = await fs.stat(target).catch(() => null);
+      const covered =
+        access === "commands"
+          ? (await this.askAgentCommandRoots()).some((root) =>
+              this.isPathInsideRoot(target, root),
+            )
+          : this.listAskAgentGrants().some((grant) =>
+              grant.kind === "directory"
+                ? this.isPathInsideRoot(target, grant.rootPath)
+                : grant.rootPath === target,
+            );
+      if (covered && stat) {
+        return finish(
+          { status: "already_granted", path: target, access },
+          false,
+        );
+      }
+      // Fail before the card if the grant itself would be refused.
+      const check = await this.addAskAgentGrant(target, access, {
+        dryRun: true,
+      });
+      if (!check.ok) {
+        return finish(
+          {
+            error: check.message
+              ? `${check.error}: ${check.message}`
+              : check.error,
+          },
+          true,
+        );
+      }
+    } else if (
+      access === "commands" &&
+      (await this.askAgentSandbox?.isAvailable()) !== true
+    ) {
+      return finish({ error: "commands_unavailable" }, true);
+    }
+    if (
+      this.askAgentMemoryProposalBridge.getPendingApproval() ||
+      this.askAgentController.getPendingApproval()
+    ) {
+      return finish(
+        {
+          status: "approval_pending",
+          error: "Another approval is already pending",
+        },
+        true,
+      );
+    }
+    const agentLinkFolder = path.join(homeReal, "AgentLink");
+    const anyDevice =
+      create &&
+      this.isPathInsideRoot(target, agentLinkFolder) &&
+      target !== agentLinkFolder;
+    const id = `${ASK_AGENT_ACCESS_APPROVAL_PREFIX}${randomUUID()}`;
+    const displayPath = this.isPathInsideRoot(target, homeReal)
+      ? `~${target.slice(homeReal.length)}`
+      : target;
+    const request: ApprovalRequest = {
+      kind: "write",
+      id,
+      filePath: displayPath,
+      writeOperation: create ? "create" : "modify",
+      writeChoices: [
+        {
+          label: create ? "Create folder and allow" : "Allow access",
+          value: "accept",
+          isPrimary: true,
+        },
+      ],
+      detail: [
+        reason ? `Why: ${reason}` : undefined,
+        create
+          ? `AgentLink creates this empty folder: ${target}`
+          : `Folder: ${target}`,
+        access === "commands"
+          ? "Ask Agent can read this folder and ask to run commands and edit files in it. Each command and edit still asks first unless a saved rule or Approve for Me allows it."
+          : "Ask Agent can read, list and search this folder.",
+        anyDevice
+          ? undefined
+          : "Only the computer running AgentLink can approve this; other devices can only reject it.",
+        "Access lasts until AgentLink restarts, and you can revoke it from the local access panel.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    };
+    if (!anyDevice) {
+      this.askAgentThisMachineOnlyApprovals.set(id, {
+        error: "grant_requires_this_machine",
+        message:
+          "Access to an existing folder can only be approved on the computer running AgentLink. From here you can only reject it.",
+      });
+    }
+    let accepted = false;
+    let rejectionReason: string | undefined;
+    try {
+      const decision = this.askAgentController.requestApproval(request, signal);
+      // Handled below; this only stops an unhandled rejection if publishing
+      // fails first and the approval is released.
+      decision.catch(() => undefined);
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+      const result = await decision;
+      accepted = result.decision === "accept";
+      if (
+        typeof result.rejectionReason === "string" &&
+        result.rejectionReason.trim()
+      ) {
+        rejectionReason = result.rejectionReason.trim();
+      }
+    } catch {
+      // Publishing can fail after the card is registered; withdraw it so it
+      // does not block later approvals with nothing left to answer it.
+      this.askAgentController.releaseApproval(id);
+      return finish(
+        { status: "cancelled", error: "Folder access approval was cancelled" },
+        true,
+      );
+    } finally {
+      this.askAgentThisMachineOnlyApprovals.delete(id);
+    }
+    if (!accepted) {
+      return finish(
+        {
+          status: "rejected_by_user",
+          error: "The user declined folder access",
+          ...(rejectionReason ? { reason: rejectionReason } : {}),
+        },
+        true,
+      );
+    }
+    const stopped = () =>
+      finish(
+        {
+          status: "cancelled",
+          error: "The turn was stopped before access was granted",
+        },
+        true,
+      );
+    const pathChanged = (detail = "the folder's location changed") =>
+      finish(
+        { error: `path_changed: ${detail} while the card was open` },
+        true,
+      );
+    if (signal.aborted) return stopped();
+    if (create) {
+      // Create one level at a time. Each parent must still be the real
+      // folder shown on the card, and the last level must be new: if it
+      // appeared while the card was open it may hold anything, and only an
+      // empty new folder can be approved from another device.
+      let current = existingReal;
+      for (const [index, segment] of missing.entries()) {
+        if ((await fs.realpath(current).catch(() => undefined)) !== current) {
+          return pathChanged();
+        }
+        current = path.join(current, segment);
+        const last = index === missing.length - 1;
+        try {
+          await fs.mkdir(current, { mode: 0o755 });
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EEXIST") {
+            return finish({ error: `create_failed: ${String(error)}` }, true);
+          }
+          if (last)
+            return pathChanged("the folder was created by something else");
+          const existingStat = await fs.lstat(current).catch(() => null);
+          if (!existingStat?.isDirectory()) return pathChanged();
+        }
+      }
+      if ((await fs.realpath(target).catch(() => undefined)) !== target) {
+        return pathChanged();
+      }
+      if (signal.aborted) {
+        await fs.rmdir(target).catch(() => undefined);
+        return stopped();
+      }
+    }
+    const added = await this.addAskAgentGrant(target, access, {
+      expectedRealPath: target,
+      signal,
+    });
+    if (!added.ok) {
+      return finish(
+        {
+          error: added.message
+            ? `${added.error}: ${added.message}`
+            : added.error,
+        },
+        true,
+      );
+    }
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    return finish(
+      { status: "granted", path: added.realPath, access, created: create },
+      false,
     );
   }
 
@@ -9201,7 +9668,13 @@ export class BrowserGatewayHelper {
         .filter(Boolean)
         .join("\n\n"),
     };
-    if (proposal.protected) this.askAgentProtectedEditApprovals.add(id);
+    if (proposal.protected) {
+      this.askAgentThisMachineOnlyApprovals.set(id, {
+        error: "protected_edit_requires_this_machine",
+        message:
+          "Changes to agent instruction or configuration files can only be approved on the computer running AgentLink. From here you can only reject it.",
+      });
+    }
     try {
       const decision = this.askAgentController.requestApproval(request, signal);
       const response = await this.buildAskAgentResponse();
@@ -9223,7 +9696,7 @@ export class BrowserGatewayHelper {
       }
       return { decision: "run" };
     } finally {
-      this.askAgentProtectedEditApprovals.delete(id);
+      this.askAgentThisMachineOnlyApprovals.delete(id);
     }
   }
 
