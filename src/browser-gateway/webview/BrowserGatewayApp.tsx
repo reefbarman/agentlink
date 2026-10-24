@@ -9266,12 +9266,12 @@ export function BrowserGatewayApp({
                 <button
                   class={`desktop-more-item${showAskAgentReadGrants ? " active" : ""}`}
                   type="button"
-                  title="Manage local file permissions"
+                  title="Manage access"
                   aria-pressed={showAskAgentReadGrants}
                   onClick={() => setShowAskAgentReadGrants((value) => !value)}
                 >
                   <i class="codicon codicon-folder-opened" aria-hidden="true" />
-                  File access…
+                  Manage access…
                 </button>
                 <button
                   class={`desktop-more-item${showAskAgentHandoff ? " active" : ""}`}
@@ -11665,18 +11665,32 @@ export function BrowserGatewayApp({
                     }
                     commandApprovalPolicy={
                       isAskAgentSelected
-                        ? undefined
+                        ? askAgentCommandPolicy.approveForMe
+                          ? "approve-for-me"
+                          : "safe"
                         : (foreground?.commandApprovalPolicy ?? "safe")
+                    }
+                    approveForMeTitles={
+                      isAskAgentSelected
+                        ? {
+                            on: "Approve for Me is on: commands and file edits in granted folders run without asking. They still run in the sandbox; agent instruction files, Prompt and Forbidden rules, internet destinations and full terminal access still ask.",
+                            off: "Run commands and file edits in granted folders without asking. They still run in the sandbox; agent instruction files, Prompt and Forbidden rules, internet destinations and full terminal access still ask. Can be turned on only on the computer running AgentLink.",
+                          }
+                        : undefined
                     }
                     configuredCommandApprovalPolicy={
                       isAskAgentSelected
-                        ? undefined
+                        ? "safe"
                         : (foreground?.configuredCommandApprovalPolicy ??
                           "safe")
                     }
                     onSetCommandApprovalPolicy={
                       isAskAgentSelected
-                        ? undefined
+                        ? (policy) =>
+                            void updateAskAgentCommandPolicy({
+                              kind: "approve-for-me",
+                              enabled: policy === "approve-for-me",
+                            })
                         : handleSetCommandApprovalPolicy
                     }
                     autoContinueEnabled={

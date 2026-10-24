@@ -62,7 +62,13 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     reasoningEffort,
     serviceTier,
     injection,
+    commandApprovalPolicy,
+    approveForMeTitles,
+    onSetCommandApprovalPolicy,
   }: {
+    commandApprovalPolicy?: string;
+    approveForMeTitles?: { on: string; off: string };
+    onSetCommandApprovalPolicy?: (policy: string) => void;
     injection?: { type: string; context?: string } | null;
     allowThinkingToggle?: boolean;
     availableModels?: Array<{ id: string; displayName?: string }>;
@@ -111,6 +117,29 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
       contextMode?.content,
+      onSetCommandApprovalPolicy
+        ? h(
+            "button",
+            {
+              type: "button",
+              class: "approve-for-me-toggle",
+              "aria-pressed": String(
+                commandApprovalPolicy === "approve-for-me",
+              ),
+              title:
+                commandApprovalPolicy === "approve-for-me"
+                  ? approveForMeTitles?.on
+                  : approveForMeTitles?.off,
+              onClick: () =>
+                onSetCommandApprovalPolicy(
+                  commandApprovalPolicy === "approve-for-me"
+                    ? "safe"
+                    : "approve-for-me",
+                ),
+            },
+            "Approve for Me toggle",
+          )
+        : null,
       h("textarea", {
         "data-testid": "continuation-draft",
         value: injection?.context ?? "",
@@ -8097,6 +8126,17 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(screen.getByText("Remove"));
     await screen.findByText("Command rule removed.");
     expect(policyBodies).toEqual([{ approveForMe: true }, { id: "rule-1" }]);
+    // The composer has VS Code's Approve for Me toggle, bound to the same
+    // Ask Agent setting.
+    const composerToggle = document.querySelector<HTMLButtonElement>(
+      ".approve-for-me-toggle",
+    );
+    expect(composerToggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(composerToggle?.title).toContain("granted folders");
+    fireEvent.click(composerToggle!);
+    await waitFor(() =>
+      expect(policyBodies.at(-1)).toEqual({ approveForMe: false }),
+    );
     expect(
       fetchMock.mock.calls.some(
         ([input]) => String(input) === "/api/read-grants",

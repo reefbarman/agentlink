@@ -304,6 +304,8 @@ interface InputAreaProps {
   sessionApprovalMode?: "autonomous" | "ask";
   onSetSessionApprovalMode?: (mode: "autonomous" | "ask") => void;
   commandApprovalPolicy?: CommandApprovalPolicy;
+  /** Surface-specific Approve for Me tooltip (on, off). */
+  approveForMeTitles?: { readonly on: string; readonly off: string };
   configuredCommandApprovalPolicy?: Exclude<
     CommandApprovalPolicy,
     "approve-for-me"
@@ -369,6 +371,7 @@ export function InputArea({
   sessionApprovalMode = "autonomous",
   onSetSessionApprovalMode,
   commandApprovalPolicy = "safe",
+  approveForMeTitles,
   configuredCommandApprovalPolicy = "safe",
   onSetCommandApprovalPolicy,
   autoContinueEnabled = false,
@@ -1991,9 +1994,13 @@ export function InputArea({
                   )
                 }
                 title={
-                  commandApprovalPolicy === "approve-for-me"
-                    ? "Approve for Me is on. Eligible workspace and temporary-file commands go to a separate reviewer. High-confidence, bounded commands may run automatically; guardrail-triggered commands ask you directly with a short reason, while reviewer uncertainty shows the review reason. Uses model quota."
-                    : "Let a separate reviewer approve eligible workspace and temporary-file commands. Guardrail-triggered commands ask you directly; reviewer uncertainty includes the review reason. Uses model quota and applies only to this session."
+                  approveForMeTitles
+                    ? commandApprovalPolicy === "approve-for-me"
+                      ? approveForMeTitles.on
+                      : approveForMeTitles.off
+                    : commandApprovalPolicy === "approve-for-me"
+                      ? "Approve for Me is on. Eligible workspace and temporary-file commands go to a separate reviewer. High-confidence, bounded commands may run automatically; guardrail-triggered commands ask you directly with a short reason, while reviewer uncertainty shows the review reason. Uses model quota."
+                      : "Let a separate reviewer approve eligible workspace and temporary-file commands. Guardrail-triggered commands ask you directly; reviewer uncertainty includes the review reason. Uses model quota and applies only to this session."
                 }
                 type="button"
               >
