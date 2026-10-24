@@ -27,6 +27,12 @@ export interface RemoteDisplayImageDetail {
   index: number;
 }
 
+/** Relay reference for one lazily loaded final-marker work summary. */
+export interface RemoteWorkSummaryDetail {
+  messageId: string;
+  contentRevision: number;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -212,6 +218,8 @@ export interface ChatMessage {
   checkpointId?: string;
   /** Final-turn status marker rendered on the last assistant response. */
   finalMarker?: FinalMessageMarker;
+  /** Relay reference for a final marker's work summary, loaded lazily. */
+  remoteWorkSummary?: RemoteWorkSummaryDetail;
   /** Explicit user-facing control change rendered at the point it occurred. */
   surfaceChange?: {
     model?: { previousModel: string; model: string };

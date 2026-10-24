@@ -16,6 +16,7 @@ import {
 } from "../core/editDurability.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 import { MAX_EDITOR_RECOVERY_BYTES } from "./editorRecoveryPolicy.js";
+import { workHistoryRegistry } from "../agent/WorkHistoryRegistry.js";
 
 export interface CommitAndVerifyEditRequest {
   document: vscode.TextDocument;
@@ -38,8 +39,30 @@ let preservingSaveTail: Promise<void> = Promise.resolve();
 /**
  * Save one approved editor state and verify its durable disk representation.
  * Callers must hold the per-file edit lock for the complete operation.
+ *
+ * Verified saves are recorded in the running tool call's work history, from
+ * the disk baseline to the content actually saved.
  */
 export async function commitAndVerifyEdit(
+  request: CommitAndVerifyEditRequest,
+): Promise<CommitAndVerifyEditResult> {
+  const result = await commitAndVerifyEditUnrecorded(request);
+  if (result.status === "accepted" && result.finalContent !== undefined) {
+    workHistoryRegistry.recordCommittedEdit({
+      absolutePath: request.absolutePath,
+      displayPath: request.relativePath,
+      before: {
+        exists: request.baselineExists,
+        content: request.baselineContent,
+      },
+      after: { exists: true, content: result.finalContent },
+      formatted: result.durability?.outcome === "transformed",
+    });
+  }
+  return result;
+}
+
+async function commitAndVerifyEditUnrecorded(
   request: CommitAndVerifyEditRequest,
 ): Promise<CommitAndVerifyEditResult> {
   const policy = request.saveWithoutFormatting

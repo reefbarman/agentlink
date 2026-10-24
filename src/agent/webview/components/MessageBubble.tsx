@@ -40,6 +40,7 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { getLatestThinkingSummary, ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { RemoteWorkSummaryBlock, WorkSummaryBlock } from "./WorkSummaryBlock";
 import { getFinalMessageContinueAction } from "@agentlink/protocol/final-status";
 import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
@@ -719,9 +720,12 @@ export function MessageBubble({
             <FinalMarkerHeader marker={finalMarker} />
             {(finalMarker.summary ||
               finalMarker.toolCall ||
+              finalMarker.workSummary ||
+              message.remoteWorkSummary ||
               hasVisibleFinalContinueAction) && (
               <FinalMarkerActions
                 marker={finalMarker}
+                remoteWorkSummary={message.remoteWorkSummary}
                 citations={citations}
                 onContinue={onFinalMarkerContinue}
                 onOpenFile={onOpenFile}
@@ -939,12 +943,14 @@ function FinalMarkerHeader({
 
 function FinalMarkerActions({
   marker,
+  remoteWorkSummary,
   citations,
   onContinue,
   onOpenFile,
   onOpenSpecialBlockPanel,
 }: {
   marker: NonNullable<ChatMessage["finalMarker"]>;
+  remoteWorkSummary?: ChatMessage["remoteWorkSummary"];
   citations: readonly CoreWebCitation[];
   onContinue?: (prompt: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
@@ -968,6 +974,17 @@ function FinalMarkerActions({
           <CopyButton text={marker.summary} />
         </div>
       )}
+      {marker.workSummary ? (
+        <WorkSummaryBlock
+          summary={marker.workSummary}
+          onOpenFile={onOpenFile}
+        />
+      ) : remoteWorkSummary ? (
+        <RemoteWorkSummaryBlock
+          reference={remoteWorkSummary}
+          onOpenFile={onOpenFile}
+        />
+      ) : null}
       {marker.autoContinueStopReason && (
         <div class="final-marker-auto-continue-stopped">
           <i class="codicon codicon-debug-pause" />

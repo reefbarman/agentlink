@@ -417,7 +417,7 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
     ...(message.displayMedia
       ? { displayMedia: projectDisplayMedia(message) }
       : {}),
-    ...(message.finalMarker ? { finalMarker: message.finalMarker } : {}),
+    ...projectFinalMarker(message),
     ...(message.surfaceChange ? { surfaceChange: message.surfaceChange } : {}),
     ...(message.error ? { error: message.error } : {}),
     ...(message.apiRequest ? { apiRequest: message.apiRequest } : {}),
@@ -426,6 +426,28 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
       ? { warningMessage: message.warningMessage }
       : {}),
     ...(message.warningRetry ? { warningRetry: message.warningRetry } : {}),
+  };
+}
+
+/**
+ * Relay final markers carry only a work-summary revision; the transcript loads
+ * the frozen summary lazily through a `work-summary` detail request.
+ */
+function projectFinalMarker(
+  message: BrowserGatewayTranscriptMessage,
+): Pick<ChatMessage, "finalMarker" | "remoteWorkSummary"> {
+  if (!message.finalMarker) return {};
+  const { workSummary, ...finalMarker } = message.finalMarker;
+  return {
+    finalMarker,
+    ...(workSummary
+      ? {
+          remoteWorkSummary: {
+            messageId: message.messageId,
+            contentRevision: workSummary.contentRevision,
+          },
+        }
+      : {}),
   };
 }
 

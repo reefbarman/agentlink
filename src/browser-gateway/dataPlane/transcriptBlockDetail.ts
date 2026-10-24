@@ -6,6 +6,7 @@ import type {
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "@agentlink/protocol/browser-gateway-data-plane-limits";
 import type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
 import type { BrowserGatewayTranscriptBlockDetailSummary } from "@agentlink/protocol/browser-gateway-transcript-block";
+import type { WorkSummary } from "@agentlink/protocol/final-status";
 
 export type TranscriptDisplayBlock = Extract<
   ContentBlock,
@@ -33,6 +34,7 @@ export type TranscriptBlockDetailResponse = {
       documents: ResultDocumentDescriptor[];
     }
   | { state: "media"; data: string; mimeType: string; name?: string }
+  | { state: "work_summary"; summary: WorkSummary }
   | { state: "not_found" | "stale_revision" | "too_large" }
 );
 
@@ -153,6 +155,34 @@ export function displayMediaContentRevision(
   return revision;
 }
 
+const workSummaryRevisions = new WeakMap<WorkSummary, number>();
+
+/** Stable revision for a frozen work summary, cached per object identity. */
+export function workSummaryContentRevision(summary: WorkSummary): number {
+  const cached = workSummaryRevisions.get(summary);
+  if (cached !== undefined) return cached;
+  const revision = hashString(JSON.stringify(summary));
+  workSummaryRevisions.set(summary, revision);
+  return revision;
+}
+
+/** Encodes a final marker's work summary addressed by a `work-summary` request. */
+export function encodeWorkSummaryDetail(
+  request: TranscriptBlockDetailRequest,
+  message: ChatMessage | undefined,
+): Uint8Array {
+  const summary = message?.finalMarker?.workSummary;
+  let response: TranscriptBlockDetailResponse;
+  if (!summary || request.resource?.kind !== "work-summary") {
+    response = { request, state: "not_found" };
+  } else if (workSummaryContentRevision(summary) !== request.contentRevision) {
+    response = { request, state: "stale_revision" };
+  } else {
+    response = { request, state: "work_summary", summary };
+  }
+  return encodeDetailResponse(request, response);
+}
+
 /** Encodes one message display image addressed by a `display-image` request. */
 export function encodeDisplayImageDetail(
   request: TranscriptBlockDetailRequest,
@@ -213,7 +243,9 @@ export function encodeTranscriptBlockDetail(
     response = { request, state: "stale_revision" };
   } else if (request.resource) {
     const resource =
-      block.type === "tool_call" && request.resource.kind !== "display-image"
+      block.type === "tool_call" &&
+      (request.resource.kind === "image" ||
+        request.resource.kind === "document")
         ? (request.resource.kind === "image"
             ? block.resultImages
             : block.resultDocuments)?.[request.resource.index]
@@ -309,6 +341,15 @@ export function parseTranscriptBlockDetailResponse(
   ) {
     return { request, state: value.state };
   }
+  if (value.state === "work_summary") {
+    if (
+      request.resource?.kind !== "work-summary" ||
+      !isWorkSummary(value.summary)
+    ) {
+      throw new Error("relay_block_detail_payload_invalid");
+    }
+    return { request, state: "work_summary", summary: value.summary };
+  }
   if (
     value.state === "media" &&
     request.resource &&
@@ -347,6 +388,89 @@ export function parseTranscriptBlockDetailResponse(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+const WORK_SUMMARY_OPERATIONS = new Set(["created", "modified", "deleted"]);
+const WORK_SUMMARY_DISK_CHECKS = new Set([
+  "matches",
+  "changed",
+  "missing",
+  "not_checked",
+]);
+const WORK_SUMMARY_NOTES = new Set([
+  "shell_commands",
+  "mcp_tools",
+  "background_agents",
+  "capture_restarted",
+  "storage_limit",
+]);
+const WORK_SUMMARY_OMISSIONS = new Set([
+  "too_large",
+  "binary",
+  "content_unavailable",
+  "summary_budget",
+]);
+function isCount(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function isWorkSummaryHunk(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ["oldStart", "oldLines", "newStart", "newLines"].every(
+      (key) => isCount(value[key]) && value[key] !== undefined,
+    ) &&
+    Array.isArray(value.lines) &&
+    value.lines.every((line) => typeof line === "string")
+  );
+}
+function isWorkSummaryDiff(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isCount(value.added) &&
+    isCount(value.removed) &&
+    (value.formatted === undefined || typeof value.formatted === "boolean") &&
+    (value.omitted === undefined ||
+      WORK_SUMMARY_OMISSIONS.has(value.omitted as string)) &&
+    (value.hunks === undefined ||
+      (Array.isArray(value.hunks) && value.hunks.every(isWorkSummaryHunk)))
+  );
+}
+function isWorkSummaryScope(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isCount(value.omittedFiles) &&
+    Array.isArray(value.coverageNotes) &&
+    value.coverageNotes.every((note) =>
+      WORK_SUMMARY_NOTES.has(note as string),
+    ) &&
+    Array.isArray(value.files) &&
+    value.files.every(
+      (file) =>
+        isRecord(file) &&
+        typeof file.path === "string" &&
+        typeof file.absolutePath === "string" &&
+        WORK_SUMMARY_OPERATIONS.has(file.operation as string) &&
+        WORK_SUMMARY_DISK_CHECKS.has(file.diskCheck as string) &&
+        isCount(file.editCount) &&
+        file.editCount !== undefined &&
+        Array.isArray(file.segments) &&
+        file.segments.every(isWorkSummaryDiff),
+    )
+  );
+}
+function isWorkSummary(value: unknown): value is WorkSummary {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    typeof value.id === "string" &&
+    typeof value.capturedAt === "number" &&
+    isWorkSummaryScope(value.sinceSummary) &&
+    (value.session === undefined || isWorkSummaryScope(value.session)) &&
+    (value.sessionSameAsSince === undefined ||
+      typeof value.sessionSameAsSince === "boolean")
+  );
 }
 function isImageDescriptor(value: unknown): value is ResultImageDescriptor {
   return isRecord(value) && typeof value.mimeType === "string";

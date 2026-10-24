@@ -1,9 +1,11 @@
 import type {
   ContentBlock,
   RemoteDisplayImageDetail,
+  RemoteWorkSummaryDetail,
 } from "@agentlink/protocol/chat-transcript";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 
+import type { WorkSummary } from "@agentlink/protocol/final-status";
 import { createContext } from "preact";
 
 type RemoteToolBlock = Extract<
@@ -17,6 +19,7 @@ interface RemoteToolDetailContextValue {
     wanted: () => boolean,
   ) => Promise<RemoteToolBlock>;
   loadDisplayImage: (reference: RemoteDisplayImageDetail) => Promise<string>;
+  loadWorkSummary: (reference: RemoteWorkSummaryDetail) => Promise<WorkSummary>;
 }
 
 const RemoteToolDetailContext =
@@ -57,6 +60,9 @@ export function RemoteToolDetailProvider(props: {
   scopeKey: string;
   loadDetail: (block: RemoteToolBlock) => Promise<RemoteToolBlock>;
   loadDisplayImage?: (reference: RemoteDisplayImageDetail) => Promise<string>;
+  loadWorkSummary?: (
+    reference: RemoteWorkSummaryDetail,
+  ) => Promise<WorkSummary>;
   children: preact.ComponentChildren;
 }) {
   return (
@@ -64,6 +70,7 @@ export function RemoteToolDetailProvider(props: {
       key={props.scopeKey}
       loadDetail={props.loadDetail}
       loadDisplayImage={props.loadDisplayImage}
+      loadWorkSummary={props.loadWorkSummary}
     >
       {props.children}
     </RemoteToolDetailScopeProvider>
@@ -73,12 +80,37 @@ export function RemoteToolDetailProvider(props: {
 function RemoteToolDetailScopeProvider({
   loadDetail,
   loadDisplayImage,
+  loadWorkSummary,
   children,
 }: {
   loadDetail: (block: RemoteToolBlock) => Promise<RemoteToolBlock>;
   loadDisplayImage?: (reference: RemoteDisplayImageDetail) => Promise<string>;
+  loadWorkSummary?: (
+    reference: RemoteWorkSummaryDetail,
+  ) => Promise<WorkSummary>;
   children: preact.ComponentChildren;
 }) {
+  const summaryLoader = useRef(loadWorkSummary);
+  summaryLoader.current = loadWorkSummary;
+  // Summaries are frozen, so a revision always maps to the same content.
+  const summaries = useRef(new Map<string, Promise<WorkSummary>>());
+  const loadSummary = (
+    reference: RemoteWorkSummaryDetail,
+  ): Promise<WorkSummary> => {
+    const key = `${reference.messageId}:${reference.contentRevision}`;
+    const existing = summaries.current.get(key);
+    if (existing) return existing;
+    const load = summaryLoader.current;
+    if (!load) {
+      return Promise.reject(new Error("Work summaries are unavailable."));
+    }
+    const promise = load(reference).catch((error: unknown) => {
+      summaries.current.delete(key);
+      throw error;
+    });
+    summaries.current.set(key, promise);
+    return promise;
+  };
   const cache = useRef(new Map<string, CacheEntry>());
   const pending = useRef(
     new Map<
@@ -222,7 +254,11 @@ function RemoteToolDetailScopeProvider({
 
   const value = useRef<RemoteToolDetailContextValue | null>(null);
   if (value.current === null)
-    value.current = { load, loadDisplayImage: loadImage };
+    value.current = {
+      load,
+      loadDisplayImage: loadImage,
+      loadWorkSummary: loadSummary,
+    };
 
   return (
     <RemoteToolDetailContext.Provider value={value.current}>
@@ -277,6 +313,55 @@ export function useRemoteDisplayImage<
   }
   return {
     image: matching?.src ? { ...image, src: matching.src } : image,
+    loading: !matching,
+    error: matching?.error ?? null,
+  };
+}
+
+/** Loads a relay-backed final-marker work summary. */
+export function useRemoteWorkSummary(
+  reference: RemoteWorkSummaryDetail | undefined,
+): { summary?: WorkSummary; loading: boolean; error: string | null } {
+  const context = useContext(RemoteToolDetailContext);
+  const key = reference
+    ? `${reference.messageId}:${reference.contentRevision}`
+    : null;
+  const [state, setState] = useState<{
+    key: string;
+    summary?: WorkSummary;
+    error?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!key || !reference || !context) return;
+    let current = true;
+    context
+      .loadWorkSummary(reference)
+      .then((summary) => {
+        if (current) setState({ key, summary });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setState({
+            key,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not load the work summary",
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [context, key]);
+
+  if (!key) return { loading: false, error: null };
+  const matching = state?.key === key ? state : null;
+  if (!context && !matching) {
+    return { loading: false, error: "Work summary is unavailable." };
+  }
+  return {
+    summary: matching?.summary,
     loading: !matching,
     error: matching?.error ?? null,
   };

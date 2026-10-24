@@ -6,6 +6,7 @@ export const BROWSER_GATEWAY_DATA_PLANE_FEATURES = [
   "transcript-block-detail-v1",
   "transcript-display-media-v1",
   "transcript-image-attribution-v1",
+  "transcript-work-summary-v1",
 ] as const;
 export type BrowserGatewayDataPlaneFeature =
   (typeof BROWSER_GATEWAY_DATA_PLANE_FEATURES)[number];

@@ -10,6 +10,8 @@ import {
   documentChangedSince,
 } from "./editDurability.js";
 
+import { workHistoryRegistry } from "../agent/WorkHistoryRegistry.js";
+
 describe("documentChangedSince", () => {
   const target = path.join(os.tmpdir(), "agentlink-doc-state.ts");
   const makeDoc = (overrides: Partial<Record<string, unknown>> = {}) => {
@@ -332,6 +334,91 @@ describe("commitAndVerifyEdit", () => {
     });
     expect(result.save_failure).not.toHaveProperty("vscode_error_message");
     expect(result.next_steps?.join(" ")).not.toContain("returned false");
+  });
+
+  it("records the saved, formatted content in the running tool call's work history", async () => {
+    const target = await makeFile("formatted.ts", "const a=1\n");
+    const document = makeDocument(target.absolutePath, "const a=2\n", {
+      save: async (doc) => {
+        // A format-on-save participant rewrites the approved content.
+        doc.content = "const a = 2;\n";
+        await fs.writeFile(target.absolutePath, doc.content, "utf-8");
+        doc.isDirty = false;
+        return true;
+      },
+    });
+    const sessionId = `work-history-${Date.now()}`;
+    try {
+      await workHistoryRegistry.runWithCapture(
+        { sessionId, toolCallId: "call-1", toolName: "apply_diff" },
+        () =>
+          commitAndVerifyEdit(
+            request(
+              document,
+              target.absolutePath,
+              target.relativePath,
+              "const a=1\n",
+            ),
+          ),
+      );
+      // Saves outside a captured tool call are not attributed to the session.
+      const outside = makeDocument(target.absolutePath, "outside\n");
+      await commitAndVerifyEdit(
+        request(
+          outside,
+          target.absolutePath,
+          target.relativePath,
+          "const a = 2;\n",
+        ),
+      );
+      await fs.writeFile(target.absolutePath, "const a = 2;\n", "utf-8");
+
+      const summary = await workHistoryRegistry.freeze(sessionId, {
+        id: "summary-1",
+      });
+      const [file] = summary?.sinceSummary.files ?? [];
+      expect(file).toMatchObject({
+        path: "formatted.ts",
+        operation: "modified",
+        editCount: 1,
+        diskCheck: "matches",
+      });
+      expect(file?.segments).toHaveLength(1);
+      expect(file?.segments[0]).toMatchObject({
+        added: 1,
+        removed: 1,
+        formatted: true,
+      });
+      expect(file?.segments[0]?.hunks?.[0]?.lines).toEqual([
+        "-const a=1",
+        "+const a = 2;",
+      ]);
+    } finally {
+      workHistoryRegistry.dispose(sessionId);
+    }
+  });
+
+  it("does not record a save that fails verification", async () => {
+    const target = await makeFile("failed.ts", "old");
+    const document = makeDocument(target.absolutePath, "new", {
+      save: async () => false,
+    });
+    const sessionId = `work-history-failed-${Date.now()}`;
+    try {
+      const result = await workHistoryRegistry.runWithCapture(
+        { sessionId, toolName: "write_file" },
+        () =>
+          commitAndVerifyEdit(
+            request(document, target.absolutePath, target.relativePath, "old"),
+          ),
+      );
+      expect(result.status).toBe("error");
+      expect(
+        await workHistoryRegistry.freeze(sessionId, { id: "summary" }),
+      ).toBeUndefined();
+    } finally {
+      workHistoryRegistry.dispose(sessionId);
+    }
   });
 
   it("uses the normal document save and verifies exact disk content", async () => {

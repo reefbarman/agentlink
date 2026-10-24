@@ -1,11 +1,46 @@
+import {
+  BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+  BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
+} from "@agentlink/protocol/browser-gateway-transcript-message";
+import type {
+  RemoteDisplayImageDetail,
+  RemoteWorkSummaryDetail,
+} from "@agentlink/protocol/chat-transcript";
 import type {
   TranscriptBlockDetailRequest,
   TranscriptBlockDetailResponse,
   TranscriptDisplayBlock,
 } from "../dataPlane/transcriptBlockDetail";
 
-import { BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
-import type { RemoteDisplayImageDetail } from "@agentlink/protocol/chat-transcript";
+import type { WorkSummary } from "@agentlink/protocol/final-status";
+
+/** Fetches one final marker's frozen work summary over the relay. */
+export async function loadRemoteWorkSummary(
+  reference: RemoteWorkSummaryDetail,
+  sessionId: string,
+  requestDetail: (
+    request: TranscriptBlockDetailRequest,
+  ) => Promise<TranscriptBlockDetailResponse>,
+): Promise<WorkSummary> {
+  const response = await requestDetail({
+    kind: "transcript.block-detail",
+    sessionId,
+    messageId: reference.messageId,
+    blockId: BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
+    contentRevision: reference.contentRevision,
+    resource: { kind: "work-summary", index: 0 },
+  });
+  if (response.state !== "work_summary") {
+    throw new Error(
+      response.state === "stale_revision"
+        ? "This summary has changed. Retry to load the current version."
+        : response.state === "not_found"
+          ? "This work summary is no longer available in the selected session."
+          : "Work summary response is unavailable.",
+    );
+  }
+  return response.summary;
+}
 
 /** Fetches one message display image over the relay and returns a data URL. */
 export async function loadRemoteDisplayImage(

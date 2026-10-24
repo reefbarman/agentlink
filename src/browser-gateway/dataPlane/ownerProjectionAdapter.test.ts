@@ -8,7 +8,11 @@ import {
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import { BrowserGatewayProtocolError } from "./protocol.js";
 import { parseTranscriptBlockDetailResponse } from "./transcriptBlockDetail.js";
-import { BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
+import {
+  BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+  BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
+} from "@agentlink/protocol/browser-gateway-transcript-message";
+import type { WorkSummary } from "@agentlink/protocol/final-status";
 import type { BrowserGatewayDataPlaneFeature } from "@agentlink/protocol/browser-gateway-helper-lifecycle";
 import {
   BrowserGatewayOwnerProjectionAdapter,
@@ -304,6 +308,108 @@ function makeAdapter(
 }
 
 describe("BrowserGatewayOwnerProjectionAdapter", () => {
+  it("relays a final-marker work summary as a lazily loaded reference only to helpers that advertise it", () => {
+    const workSummary: WorkSummary = {
+      version: 1,
+      id: "summary-1",
+      capturedAt: 900,
+      sessionSameAsSince: true,
+      sinceSummary: {
+        files: [
+          {
+            path: "src/a.ts",
+            absolutePath: "/repo/src/a.ts",
+            operation: "modified",
+            editCount: 2,
+            diskCheck: "matches",
+            segments: [
+              {
+                added: 1,
+                removed: 1,
+                hunks: [
+                  {
+                    oldStart: 1,
+                    oldLines: 1,
+                    newStart: 1,
+                    newLines: 1,
+                    lines: ["-old", "+new"],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        coverageNotes: ["shell_commands"],
+      },
+    };
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-assistant", "assistant", "done", 800),
+          finalMarker: {
+            status: "completed",
+            summary: "Done",
+            source: "tool",
+            workSummary,
+          },
+        },
+      ],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-block-detail-v1"],
+    });
+    expect(
+      legacy.getCheckpoint().transcript.messages[0]?.finalMarker,
+    ).not.toHaveProperty("workSummary");
+
+    const adapter = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: [
+        "transcript-block-detail-v1",
+        "transcript-work-summary-v1",
+      ],
+    });
+    const projected = adapter.getCheckpoint().transcript.messages[0];
+    const reference = projected?.finalMarker?.workSummary;
+    expect(reference).toEqual({ contentRevision: expect.any(Number) });
+    // The inline reference carries no paths or diff text.
+    expect(JSON.stringify(projected?.finalMarker)).not.toContain("src/a.ts");
+
+    const request = {
+      kind: "transcript.block-detail" as const,
+      sessionId: source.foreground.sessionId,
+      messageId: "message-assistant",
+      blockId: BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
+      contentRevision: reference!.contentRevision,
+      resource: { kind: "work-summary" as const, index: 0 },
+    };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(request),
+        request,
+      ),
+    ).toEqual({ request, state: "work_summary", summary: workSummary });
+
+    const stale = {
+      ...request,
+      contentRevision: reference!.contentRevision + 1,
+    };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(stale),
+        stale,
+      ).state,
+    ).toBe("stale_revision");
+    expect(
+      parseTranscriptBlockDetailResponse(
+        legacy.getBlockDetailContent(request),
+        request,
+      ).state,
+    ).toBe("not_found");
+  });
+
   it("forwards bounded web image attribution only to helpers that advertise it", () => {
     const source = readSet();
     source.foreground = {

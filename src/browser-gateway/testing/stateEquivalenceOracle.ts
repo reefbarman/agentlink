@@ -611,6 +611,20 @@ export class BrowserGatewayRelayProjectionAccumulator {
   }
 }
 
+/**
+ * Work summaries travel as a full object on legacy transcripts and as a lazy
+ * revision reference over the relay; equivalence compares the marker without it.
+ */
+function normalizeFinalMarker(
+  marker: NonNullable<
+    ChatMessage["finalMarker"] | BrowserGatewayTranscriptMessage["finalMarker"]
+  >,
+): BrowserGatewayNormalizedTranscriptMessage["finalMarker"] {
+  const { workSummary, ...rest } = marker;
+  void workSummary;
+  return rest;
+}
+
 function normalizeLegacyTranscript(
   messages: readonly ChatMessage[],
 ): BrowserGatewayNormalizedTranscriptMessage[] {
@@ -633,7 +647,9 @@ function normalizeLegacyTranscript(
       : {}),
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
-    ...(message.finalMarker ? { finalMarker: message.finalMarker } : {}),
+    ...(message.finalMarker
+      ? { finalMarker: normalizeFinalMarker(message.finalMarker) }
+      : {}),
     ...(message.error ? { error: message.error } : {}),
     ...(message.apiRequest
       ? {
@@ -802,7 +818,9 @@ function normalizeRelayMessage(
       : {}),
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
-    ...(message.finalMarker ? { finalMarker: message.finalMarker } : {}),
+    ...(message.finalMarker
+      ? { finalMarker: normalizeFinalMarker(message.finalMarker) }
+      : {}),
     ...(message.error ? { error: message.error } : {}),
     ...(message.apiRequest ? { apiRequest: message.apiRequest } : {}),
     ...(message.condenseInfo ? { condenseInfo: message.condenseInfo } : {}),

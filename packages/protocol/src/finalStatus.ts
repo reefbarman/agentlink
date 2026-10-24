@@ -28,6 +28,89 @@ export interface FinalMessageMarker {
   autoContinueStopReason?: string;
   /** Raw set_task_status invocation shown in the final marker inspector. */
   toolCall?: FinalMarkerToolCall;
+  /**
+   * Host-generated, frozen record of file changes captured through AgentLink
+   * file tools. Never supplied by the model.
+   */
+  workSummary?: WorkSummary;
+}
+
+/** One unified-diff hunk; lines keep their " ", "+" or "-" prefix. */
+export interface WorkSummaryDiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+/** Why a captured comparison has no displayable diff. */
+export type WorkSummaryDiffOmission =
+  | "too_large"
+  | "binary"
+  | "content_unavailable"
+  | "summary_budget";
+
+/** One continuous run of captured edits with no outside change in between. */
+export interface WorkSummaryDiff {
+  /** Absent when the comparison could not be counted (binary/unavailable). */
+  added?: number;
+  removed?: number;
+  hunks?: WorkSummaryDiffHunk[];
+  omitted?: WorkSummaryDiffOmission;
+  /** True when the saved content was changed by format-on-save. */
+  formatted?: boolean;
+}
+
+export type WorkSummaryOperation = "created" | "modified" | "deleted";
+
+/** Observation of the file at summary time, compared with the last captured edit. */
+export type WorkSummaryDiskCheck =
+  | "matches"
+  | "changed"
+  | "missing"
+  | "not_checked";
+
+export interface WorkSummaryFileChange {
+  /** Workspace-relative display path (absolute outside the workspace). */
+  path: string;
+  /** Absolute path used to open the file. */
+  absolutePath: string;
+  operation: WorkSummaryOperation;
+  /** Number of accepted AgentLink edits folded into this row. */
+  editCount: number;
+  /**
+   * Continuous captured segments. More than one means the file changed
+   * outside AgentLink's edits between them, so no single net diff is shown.
+   */
+  segments: WorkSummaryDiff[];
+  diskCheck: WorkSummaryDiskCheck;
+}
+
+export type WorkSummaryCoverageNote =
+  | "shell_commands"
+  | "mcp_tools"
+  | "background_agents"
+  | "capture_restarted"
+  | "storage_limit";
+
+export interface WorkSummaryScope {
+  files: WorkSummaryFileChange[];
+  /** Files omitted from `files` because the summary row limit was reached. */
+  omittedFiles?: number;
+  coverageNotes: WorkSummaryCoverageNote[];
+}
+
+export interface WorkSummary {
+  version: 1;
+  id: string;
+  capturedAt: number;
+  /** Changes since the previous final status summary in this session. */
+  sinceSummary: WorkSummaryScope;
+  /** Changes through this summary since capture started for the session. */
+  session?: WorkSummaryScope;
+  /** True when the session scope is identical to `sinceSummary`. */
+  sessionSameAsSince?: boolean;
 }
 
 export interface FinalMessageContinueAction {

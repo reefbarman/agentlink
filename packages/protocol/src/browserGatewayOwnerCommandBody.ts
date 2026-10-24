@@ -25,10 +25,12 @@ export type BrowserGatewayOwnerCommandBody =
        * `display-image` addresses message-level display media (user
        * attachments, promoted generated images). Its `blockId` is
        * `BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID` and `contentRevision` is the
-       * message's display-media revision.
+       * message's display-media revision. `work-summary` addresses the
+       * message's final-marker work summary with
+       * `BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID` and the summary revision.
        */
       resource?: {
-        kind: "image" | "document" | "display-image";
+        kind: "image" | "document" | "display-image" | "work-summary";
         index: number;
       };
     }

@@ -180,10 +180,11 @@ function cloneAssistantSegment(
   const cached = segments?.get(id);
   if (cached) return cached;
 
-  const { apiRequest, error, finalMarker, ...base } = source;
+  const { apiRequest, error, finalMarker, remoteWorkSummary, ...base } = source;
   void apiRequest;
   void error;
   void finalMarker;
+  void remoteWorkSummary;
   const segment = {
     ...base,
     id,
@@ -318,6 +319,7 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
       message: {
         ...rows[targetIndex].message,
         finalMarker: message.finalMarker,
+        remoteWorkSummary: message.remoteWorkSummary,
         apiRequest: message.apiRequest,
         error: message.error,
       },

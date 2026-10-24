@@ -77,6 +77,7 @@ import type {
 import {
   loadRemoteDisplayImage,
   loadRemoteTranscriptBlockDetail,
+  loadRemoteWorkSummary,
 } from "./toolDetailTransport";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
@@ -10760,6 +10761,13 @@ export function BrowserGatewayApp({
                     }
                     loadDisplayImage={(reference) =>
                       loadRemoteDisplayImage(
+                        reference,
+                        foreground?.sessionId ?? "",
+                        requestRelayBlockDetail,
+                      )
+                    }
+                    loadWorkSummary={(reference) =>
+                      loadRemoteWorkSummary(
                         reference,
                         foreground?.sessionId ?? "",
                         requestRelayBlockDetail,

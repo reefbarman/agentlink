@@ -5,6 +5,9 @@ import type { ImageAttribution } from "./toolResult.js";
 /** Block id used by `display-image` detail requests for message display media. */
 export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
 
+/** Block id used by `work-summary` detail requests for a final marker's summary. */
+export const BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID = "work-summary";
+
 /**
  * Byte-free descriptors for message-level display media. Image bytes are
  * fetched lazily through a `display-image` transcript detail request.
@@ -43,6 +46,12 @@ export interface BrowserGatewayTranscriptMessage {
     continueAction?: { label: string; prompt: string };
     continueActionConsumed?: boolean;
     autoContinueStopReason?: string;
+    /**
+     * Reference to the final marker's work summary, fetched lazily through a
+     * `work-summary` detail request. Sent only to helpers advertising
+     * `transcript-work-summary-v1`, so older strict validators never see it.
+     */
+    workSummary?: { contentRevision: number };
   };
   surfaceChange?: {
     model?: { previousModel: string; model: string };

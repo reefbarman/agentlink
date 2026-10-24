@@ -177,4 +177,54 @@ describe("transcript block detail", () => {
       "README.md",
     );
   });
+
+  it("rejects malformed work summaries before they reach the UI", () => {
+    const summaryRequest: TranscriptBlockDetailRequest = {
+      ...request,
+      blockId: "work-summary",
+      resource: { kind: "work-summary", index: 0 },
+    };
+    const payload = (hunks: unknown) =>
+      new TextEncoder().encode(
+        JSON.stringify({
+          request: summaryRequest,
+          state: "work_summary",
+          summary: {
+            version: 1,
+            id: "s",
+            capturedAt: 1,
+            sinceSummary: {
+              coverageNotes: [],
+              files: [
+                {
+                  path: "a.ts",
+                  absolutePath: "/repo/a.ts",
+                  operation: "modified",
+                  editCount: 1,
+                  diskCheck: "matches",
+                  segments: [{ added: 1, removed: 0, hunks }],
+                },
+              ],
+            },
+          },
+        }),
+      );
+    expect(
+      parseTranscriptBlockDetailResponse(
+        payload([
+          { oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ["+a"] },
+        ]),
+        summaryRequest,
+      ).state,
+    ).toBe("work_summary");
+    expect(() =>
+      parseTranscriptBlockDetailResponse(payload({}), summaryRequest),
+    ).toThrow("relay_block_detail_payload_invalid");
+    expect(() =>
+      parseTranscriptBlockDetailResponse(
+        payload([{ oldStart: 1, lines: [1] }]),
+        summaryRequest,
+      ),
+    ).toThrow("relay_block_detail_payload_invalid");
+  });
 });

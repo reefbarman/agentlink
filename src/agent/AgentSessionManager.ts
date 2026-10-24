@@ -5,6 +5,7 @@ import {
   buildBudgetEvidenceDigest,
 } from "./background/budgetEvidenceDigest.js";
 import { getCondensePreparation } from "./condensePreparation.js";
+import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
@@ -5803,6 +5804,7 @@ export class AgentSessionManager {
     }
 
     this.sessions.delete(session.id);
+    workHistoryRegistry.dispose(session.id);
     this.removeSkillCatalogFallback(session);
     this.sessionApprovalModes.delete(session.id);
     this.retainedCommandReviewDenials.clearSession(session.id);
@@ -9836,6 +9838,7 @@ export class AgentSessionManager {
     const raced = this.sessions.get(sessionId);
     if (raced) return raced;
     this.sessions.set(sessionId, session);
+    workHistoryRegistry.markRestored(sessionId);
     this.reconcileRestoredSessionApproval(session);
     this.updateSkillCatalogFallback(session);
     this.syncSessionApproveForMe(session);
@@ -9906,6 +9909,7 @@ export class AgentSessionManager {
         continue;
       }
       this.sessions.delete(sessionId);
+      workHistoryRegistry.dispose(sessionId);
       this.removeSkillCatalogFallback(session);
       this.sessionRevisions.delete(sessionId);
       this.sessionSaveQueues.delete(sessionId);
@@ -10089,6 +10093,7 @@ export class AgentSessionManager {
         }
       }
       this.sessions.set(session.id, session);
+      workHistoryRegistry.markRestored(session.id);
       this.updateSkillCatalogFallback(session);
       this.syncSessionApproveForMe(session);
       this.restoredBackgroundSessionIds.add(session.id);
@@ -10173,6 +10178,7 @@ export class AgentSessionManager {
         });
       }
       this.sessions.delete(sessionId);
+      workHistoryRegistry.dispose(sessionId);
       this.removeSkillCatalogFallback(removedSession);
       if (this.foregroundId === sessionId) {
         this.foregroundId = null;

@@ -34,6 +34,7 @@ it("pins the complete browser gateway transcript-message contract", () => {
       continueAction?: { label: string; prompt: string };
       continueActionConsumed?: boolean;
       autoContinueStopReason?: string;
+      workSummary?: { contentRevision: number };
     };
     surfaceChange?: {
       model?: { previousModel: string; model: string };

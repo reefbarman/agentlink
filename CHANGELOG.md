@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Final status cards now show a **Work summary** of the files AgentLink's file tools changed, with expandable read-only diffs and an open-file button. It defaults to changes since the previous summary, with a **Session so far** view, and each card stays frozen. AgentLink builds it from what verified saves left on disk (including format-on-save), so it never counts your edits or another session's as the agent's: a file changed by someone else between edits shows each run of edits separately, files that changed on disk afterwards are flagged, and notes say when shell commands, MCP tools or background agents ran or the session was reloaded, since those changes aren't captured. The browser and Desktop remote views load summaries on demand through a new `transcript-work-summary-v1` data-plane feature and a `work-summary` transcript detail resource.
+
 ## 1.68.0
 
 - The Ask Agent can now ask for the folder it needs. A new `request_folder_access` tool shows a card with the folder, the agent's reason and what the access allows, and approving adds the usual grant. The agent keeps throwaway work in the scratch folder and otherwise suggests a new folder under `~/AgentLink/<task-name>`, which AgentLink creates once you approve; any signed-in client, including a paired phone, can approve a new folder there. Access to an existing folder can still only be approved on the computer running AgentLink.

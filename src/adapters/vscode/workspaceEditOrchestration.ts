@@ -6,6 +6,8 @@ import {
   type CommitAndVerifyEditResult,
 } from "../../integrations/editDurability.js";
 import { canonicalizePath } from "../../util/canonicalPath.js";
+import { getRelativePath } from "../../util/paths.js";
+import { workHistoryRegistry } from "../../agent/WorkHistoryRegistry.js";
 
 export interface WorkspaceEditOrchestration<TFailure, TSuccess> {
   edit: vscode.WorkspaceEdit;
@@ -18,19 +20,77 @@ export interface WorkspaceEditOrchestration<TFailure, TSuccess> {
 export async function applyWorkspaceEditAndSave<TFailure, TSuccess>(
   params: WorkspaceEditOrchestration<TFailure, TSuccess>,
 ): Promise<TFailure | TSuccess> {
+  const baselines = workHistoryRegistry.activeContext
+    ? await readCaptureBaselines(params.affectedPaths)
+    : undefined;
   const applied = await vscode.workspace.applyEdit(params.edit);
   if (!applied) {
     return params.applyFailure;
   }
 
   const saveFailure = params.saveFailure ?? params.applyFailure;
+  const verified = new Set<string>();
   for (const document of await collectAffectedDocuments(params)) {
     if (!document.isDirty) continue;
-    if (!(await document.save())) return saveFailure;
-    if (!(await diskMatchesDocument(document))) return saveFailure;
+    if (!(await document.save()) || !(await diskMatchesDocument(document))) {
+      // Files saved before the failure are durable; keep them in the history.
+      if (baselines) await recordSavedEdits(baselines, verified);
+      return saveFailure;
+    }
+    verified.add(canonicalizePath(document.uri.fsPath));
   }
 
+  if (baselines) await recordSavedEdits(baselines);
   return params.buildSuccess();
+}
+
+/** Disk baselines for work-history capture, keyed by canonical path. */
+async function readCaptureBaselines(
+  affectedPaths: readonly string[],
+): Promise<
+  Map<string, { absolutePath: string; exists: boolean; content: string }>
+> {
+  const baselines = new Map<
+    string,
+    { absolutePath: string; exists: boolean; content: string }
+  >();
+  for (const absolutePath of affectedPaths) {
+    const key = canonicalizePath(absolutePath);
+    if (baselines.has(key)) continue;
+    try {
+      baselines.set(key, {
+        absolutePath,
+        ...(await readDiskBaseline(absolutePath)),
+      });
+    } catch {
+      // Unreadable baseline: leave this file out of the captured history.
+    }
+  }
+  return baselines;
+}
+
+async function recordSavedEdits(
+  baselines: Map<
+    string,
+    { absolutePath: string; exists: boolean; content: string }
+  >,
+  only?: ReadonlySet<string>,
+): Promise<void> {
+  for (const [key, baseline] of baselines) {
+    if (only && !only.has(key)) continue;
+    let after: { exists: boolean; content: string };
+    try {
+      after = await readDiskBaseline(baseline.absolutePath);
+    } catch {
+      continue;
+    }
+    workHistoryRegistry.recordCommittedEdit({
+      absolutePath: baseline.absolutePath,
+      displayPath: getRelativePath(baseline.absolutePath),
+      before: { exists: baseline.exists, content: baseline.content },
+      after,
+    });
+  }
 }
 
 /**

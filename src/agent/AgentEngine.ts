@@ -10,6 +10,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
 import { normalizeSkillToolNames } from "./skillToolAliases.js";
+import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import {
   skillAdmissionMessageText,
   formatExplicitSkillContextBlock,
@@ -1126,6 +1127,31 @@ export function toolResultToContent(
       };
     })
     .filter((b): b is ContentBlock => b !== null);
+}
+
+/**
+ * Freeze the session's captured file changes into an accepted final marker.
+ * Capture failures leave the marker unchanged.
+ */
+async function attachWorkSummary(
+  session: AgentSession,
+  marker: FinalMessageMarker,
+  log?: (msg: string) => void,
+): Promise<FinalMessageMarker> {
+  if (marker.workSummary) return marker;
+  try {
+    const earlierSummaryExists = session
+      .getAllMessages()
+      .some((message) => message.uiHint?.finalMarker?.source === "tool");
+    const workSummary = await workHistoryRegistry.freeze(session.id, {
+      id: marker.toolCall?.id ?? randomUUID(),
+      hasEarlierSummaries: earlierSummaryExists,
+    });
+    return workSummary ? { ...marker, workSummary } : marker;
+  } catch (error) {
+    log?.(`[agent] work summary capture failed: ${String(error)}`);
+    return marker;
+  }
 }
 
 export class AgentEngine {
@@ -3419,6 +3445,13 @@ export class AgentEngine {
           }
         }
 
+        if (pendingFinalMarker?.source === "tool") {
+          pendingFinalMarker = await attachWorkSummary(
+            session,
+            pendingFinalMarker,
+            this.log,
+          );
+        }
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.
         const finalMarkerForTurn = pendingFinalMarker;
@@ -4087,8 +4120,50 @@ export class AgentEngine {
           throw new Error(
             `The active ${driftedSkill} skill changed; tool dispatch is blocked until a new user request.`,
           );
+        const workCapture = {
+          sessionId: session.id,
+          toolCallId: call.id,
+          toolName: call.name,
+        };
         const result = await (forcePromise
           ? Promise.race([
+              workHistoryRegistry.runWithCapture(workCapture, () =>
+                this.toolRuntime!.executeTool({
+                  name: call.name,
+                  input: call.input as Record<string, unknown>,
+                  context: {
+                    ...ctx,
+                    sessionId: session.id,
+                    toolCallId: call.id,
+                    ...(call.providerName !== call.name
+                      ? {
+                          providerToolName: call.providerName,
+                          providerToolInput: call.providerInput,
+                        }
+                      : {}),
+                    trackerCtx,
+                    toolAbortSignal: controller?.signal,
+                    getSkillDiagnostics: () =>
+                      session.getSkillDiagnostics?.() ?? [],
+                    getAdvertisedSkills: () =>
+                      session.getAdvertisedSkills().map((skill) => ({
+                        id: skill.id,
+                        name: skill.name,
+                        revision: skill.revision,
+                        skillPath: skill.skillPath,
+                        realSkillPath: skill.provenance.realSkillPath,
+                        sourceScope: skill.provenance.scope,
+                      })),
+                    getAdvertisedRules: () => session.getAdvertisedRules(),
+                    onSkillLoad: (activation) =>
+                      session.trackLoadedSkill(activation),
+                    skillAllowedTools: batchSkillAllowedTools,
+                  },
+                }),
+              ),
+              forcePromise,
+            ])
+          : workHistoryRegistry.runWithCapture(workCapture, () =>
               this.toolRuntime!.executeTool({
                 name: call.name,
                 input: call.input as Record<string, unknown>,
@@ -4121,40 +4196,7 @@ export class AgentEngine {
                   skillAllowedTools: batchSkillAllowedTools,
                 },
               }),
-              forcePromise,
-            ])
-          : this.toolRuntime!.executeTool({
-              name: call.name,
-              input: call.input as Record<string, unknown>,
-              context: {
-                ...ctx,
-                sessionId: session.id,
-                toolCallId: call.id,
-                ...(call.providerName !== call.name
-                  ? {
-                      providerToolName: call.providerName,
-                      providerToolInput: call.providerInput,
-                    }
-                  : {}),
-                trackerCtx,
-                toolAbortSignal: controller?.signal,
-                getSkillDiagnostics: () =>
-                  session.getSkillDiagnostics?.() ?? [],
-                getAdvertisedSkills: () =>
-                  session.getAdvertisedSkills().map((skill) => ({
-                    id: skill.id,
-                    name: skill.name,
-                    revision: skill.revision,
-                    skillPath: skill.skillPath,
-                    realSkillPath: skill.provenance.realSkillPath,
-                    sourceScope: skill.provenance.scope,
-                  })),
-                getAdvertisedRules: () => session.getAdvertisedRules(),
-                onSkillLoad: (activation) =>
-                  session.trackLoadedSkill(activation),
-                skillAllowedTools: batchSkillAllowedTools,
-              },
-            }));
+            ));
         return {
           tool_use_id: call.id,
           toolName: call.name,

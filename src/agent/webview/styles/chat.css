@@ -4255,6 +4255,214 @@ body.chat-activity-shelf-resizing * {
   margin-top: 2px;
 }
 
+.work-summary {
+  width: 100%;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.work-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.work-summary-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.work-summary-scopes {
+  display: inline-flex;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.work-summary-scope {
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.work-summary-scope.active {
+  background: color-mix(in srgb, #4ec9b0 18%, transparent);
+  color: var(--vscode-foreground);
+}
+
+.work-summary-scope:focus-visible,
+.work-summary-file-toggle:focus-visible,
+.work-summary-open:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.work-summary-totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 4px 0 2px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.work-summary-muted {
+  color: var(--vscode-descriptionForeground);
+}
+
+.work-summary-counts {
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--vscode-editor-font-family);
+  flex-shrink: 0;
+}
+
+.work-summary-added {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+
+.work-summary-removed {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.work-summary-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.work-summary-file-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.work-summary-file-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 3px 2px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.work-summary-file-toggle:hover,
+.work-summary-open:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.work-summary-op {
+  flex-shrink: 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+.work-summary-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-summary-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  color: var(--vscode-descriptionForeground);
+}
+
+.work-summary-badge-warning {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 60%,
+    transparent
+  );
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.work-summary-open {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.work-summary-detail {
+  margin: 2px 0 6px 18px;
+}
+
+.work-summary-segment + .work-summary-segment {
+  margin-top: 6px;
+}
+
+.work-summary-segment-header {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.work-summary-line-no {
+  flex-shrink: 0;
+  width: 3.5em;
+  padding-right: 6px;
+  text-align: right;
+  user-select: none;
+  opacity: 0.5;
+}
+
+.work-summary-hunk-gap {
+  padding: 0 6px;
+  opacity: 0.5;
+  user-select: none;
+}
+
+.work-summary-eof {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.work-summary-notes {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.work-summary-notes li {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.work-summary-notes .codicon {
+  font-size: 12px;
+  margin-top: 1px;
+}
+
 .final-marker-continue {
   border: 1px solid color-mix(in srgb, #4ec9b0 36%, transparent);
   background: transparent;
