@@ -1,0 +1,27 @@
+src/shared/chatProjection.ts
+  h_e08a86bb3a33a2 2012-2039,2235,3384
+src/shared/chatProjection.test.ts
+  h_e08a86bb3a33a2 4,117,2562-2589
+  s_bfeae90284d1b7::t_881a6d1ade5ccc 2590-2591
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "798bfbf67db55d877361b58ed2677451c0b49404",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_bfeae90284d1b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d93f4fbe-867b-4dcf-a851-c5770e19a7f2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
