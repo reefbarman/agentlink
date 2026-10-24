@@ -6120,6 +6120,9 @@ describe("AgentSessionManager in-flight persistence", () => {
         };
       }),
     }));
+    // The resume turn is fire-and-forget, so await the turn it started rather
+    // than polling with a wall-clock timeout that fails under suite load.
+    const sendMessage = vi.spyOn(mgr, "sendMessage");
 
     await expect(
       Promise.all([
@@ -6128,7 +6131,8 @@ describe("AgentSessionManager in-flight persistence", () => {
       ]),
     ).resolves.toEqual([true, false]);
 
-    await vi.waitFor(() => expect(loaded?.runState).toBeUndefined());
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    await sendMessage.mock.results[0]!.value;
     const flattened = savedMessages.flat().map((message) => message.content);
     expect(flattened).toEqual(
       expect.arrayContaining([
