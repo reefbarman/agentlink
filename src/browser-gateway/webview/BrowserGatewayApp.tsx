@@ -10784,6 +10784,9 @@ export function BrowserGatewayApp({
                         key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
                         messages={messages}
                         streaming={Boolean(streaming)}
+                        // Ask Agent relies on the pinned status bar alone;
+                        // two live indicators read as duplicated UI.
+                        showInlineStreamingActivity={!isAskAgentSelected}
                         initialMessageLimit={
                           mobileLayout || touchInput ? 20 : undefined
                         }

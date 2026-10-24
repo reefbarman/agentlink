@@ -165,6 +165,8 @@ interface MessageBubbleProps {
   onFinalMarkerContinue?: (prompt: string) => void;
   /** Fork the chat before this user message and restore it for editing. */
   onEditInFork?: (edit: { prompt: string; attachments: string[] }) => void;
+  /** Render the inline live-activity row; off when a pinned status bar owns it. */
+  showStreamingActivity?: boolean;
 }
 
 export function MessageBubble({
@@ -190,6 +192,7 @@ export function MessageBubble({
   onOpenTranscript,
   onFinalMarkerContinue,
   onEditInFork,
+  showStreamingActivity = true,
 }: MessageBubbleProps) {
   const citations = useMemo(
     () => getProviderCitations(message.blocks),
@@ -651,7 +654,7 @@ export function MessageBubble({
         {activitySegments.map(renderSegment)}
 
         {/* General live activity stays visible through every streaming gap. */}
-        {streamingActivity && (
+        {streamingActivity && showStreamingActivity && (
           <div
             class={`streaming-indicator${canExpandThinking ? " streaming-indicator-expandable" : ""}`}
           >

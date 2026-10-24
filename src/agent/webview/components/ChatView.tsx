@@ -108,6 +108,8 @@ interface ChatViewProps {
   streamingMetricsScope?: string;
   /** Optional product-specific content for an empty foreground chat. */
   emptyState?: ComponentChildren;
+  /** Render live activity inside the streaming bubble (default true). */
+  showInlineStreamingActivity?: boolean;
 }
 
 export function ChatView({
@@ -144,6 +146,7 @@ export function ChatView({
   streamingMetricsSurface,
   streamingMetricsScope,
   emptyState,
+  showInlineStreamingActivity,
 }: ChatViewProps) {
   const hasMessages = messages.length > 0;
   const {
@@ -456,6 +459,7 @@ export function ChatView({
             streamingMetrics={streamingMetrics}
             streamingMetricsSurface={streamingMetricsSurface}
             streamingMetricsScope={streamingMetricsScope}
+            showInlineStreamingActivity={showInlineStreamingActivity}
           />
         </div>
         {jumpTargets.latest && (

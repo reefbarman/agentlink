@@ -72,6 +72,8 @@ interface TranscriptMessageListProps {
     "vscode-webview" | "browser-webview"
   >;
   streamingMetricsScope?: string;
+  /** Render live activity inside the streaming bubble (default true). */
+  showInlineStreamingActivity?: boolean;
 }
 
 interface TranscriptRow {
@@ -672,6 +674,7 @@ interface MemoizedTranscriptRowProps {
   revision: string;
   row: TranscriptRow;
   sessionId?: string | null;
+  showInlineStreamingActivity: boolean;
 }
 
 function renderTranscriptRow({
@@ -686,6 +689,7 @@ function renderTranscriptRow({
   revision,
   row,
   sessionId,
+  showInlineStreamingActivity,
 }: MemoizedTranscriptRowProps) {
   const { key, message, sourceMessage, bgAgentResultOnly, warningMessages } =
     row;
@@ -743,6 +747,7 @@ function renderTranscriptRow({
       <MessageBubble
         message={message}
         streaming={active && message.role === "assistant"}
+        showStreamingActivity={showInlineStreamingActivity}
         detectedQuestion={
           message.role === "assistant" && !bgAgentResultOnly
             ? detectedQuestion
@@ -884,7 +889,8 @@ const MemoizedTranscriptRow = memo(
     previous.revision === next.revision &&
     previous.metrics === next.metrics &&
     previous.metricsScope === next.metricsScope &&
-    previous.metricsSurface === next.metricsSurface,
+    previous.metricsSurface === next.metricsSurface &&
+    previous.showInlineStreamingActivity === next.showInlineStreamingActivity,
 );
 
 function relevantBackgroundSessions(
@@ -1084,6 +1090,7 @@ export function TranscriptMessageList({
   streamingMetrics,
   streamingMetricsSurface,
   streamingMetricsScope = sessionId ?? "transcript",
+  showInlineStreamingActivity = true,
 }: TranscriptMessageListProps) {
   const rows = useMemo(
     () => buildTranscriptRows(messages, streaming),
@@ -1186,6 +1193,7 @@ export function TranscriptMessageList({
             revision={revision}
             row={row}
             sessionId={sessionId}
+            showInlineStreamingActivity={showInlineStreamingActivity}
           />
         );
       })}
