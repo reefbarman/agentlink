@@ -1,0 +1,41 @@
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 4281-4306
+src/agent/webview/components/WorkSummaryBlock.tsx
+  h_e08a86bb3a33a2 112,123,127-137,140-147,170-200,245
+  s_10f0911dbb0deb::t_61f0e6a5b2e55c 122,124-125
+package-lock.json
+  s_0cac4c58dc672c::t_f6f1c53ef6d3af 3,9
+package.json
+  s_0cac4c58dc672c::t_db07cbf4969a81 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e17f3152d6b24b5178863a6b973480ffa5b74792",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0cac4c58dc672c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "34c22397-782e-4500-a4d9-c6eb14ea35af",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_10f0911dbb0deb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7d2a531-9dea-4423-9a41-ef4674d02516",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
