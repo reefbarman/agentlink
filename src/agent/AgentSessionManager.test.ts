@@ -4609,6 +4609,19 @@ describe("AgentSessionManager condense thresholds", () => {
 
   it("defers terminal-turn condensing until a real continuation is accepted", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    // sendMessage checkpoints the project root with real git before and after
+    // the turn. Here that root is the shared /tmp, so the git work scales with
+    // whatever else lives there (~1.5s idle alone) and blew the 5s timeout
+    // under suite load. This test only covers condense ordering. Stub before
+    // createSession, which creates the project's checkpoint manager.
+    (mgr as any).host.createCheckpointManager = vi.fn(() => ({
+      baseCommit: null,
+      initialize: vi.fn(async () => true),
+      createCheckpoint: vi.fn(async () => null),
+      previewRevert: vi.fn(async () => null),
+      revertToCheckpoint: vi.fn(async () => false),
+      getDiffBetween: vi.fn(async () => ""),
+    }));
     mgr.setToolContext({
       approvalManager: { bindSessionProject: vi.fn() } as any,
       approvalPanel: {} as any,
