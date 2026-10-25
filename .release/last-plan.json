@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-  "createdAt": "2026-10-25T23:17:13.051Z",
+  "sourceSha": "645c278b25a31024a497ba154692d29bb8e246cc",
+  "createdAt": "2026-10-25T23:46:11.231Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -39,7 +39,8 @@
         "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
         "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
         "24518350d51ec937890635683f63476b728e508c",
-        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+        "645c278b25a31024a497ba154692d29bb8e246cc"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -207,158 +208,83 @@
           "subject": "fix(chat): mark the chat tab that owns a pending question",
           "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
           "breaking": false
+        },
+        {
+          "sha": "645c278b25a31024a497ba154692d29bb8e246cc",
+          "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
+          "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.63.0",
-      "baselineRef": "desktop-v0.63.0",
-      "reserved": "0.63.0",
-      "commits": [
-        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-        "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
-        "24518350d51ec937890635683f63476b728e508c",
-        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
-      ],
+      "published": "0.64.0",
+      "baselineRef": "desktop-v0.64.0",
+      "reserved": "0.64.0",
+      "commits": ["645c278b25a31024a497ba154692d29bb8e246cc"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.64.0",
-      "effectiveBump": "minor",
+      "version": "0.64.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.64.0",
+      "tag": "desktop-v0.64.1",
       "notes": [
         {
-          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-          "subject": "feat: add frozen work summaries to final status cards",
-          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
-          "breaking": false
-        },
-        {
-          "sha": "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
-          "subject": "test(retrieval): give LanceDB contract tests a load-tolerant timeout",
-          "summary": "Test-only change giving the LanceDB retrieval contract tests a longer timeout under load; no shipped behaviour changes.",
-          "breaking": false
-        },
-        {
-          "sha": "24518350d51ec937890635683f63476b728e508c",
-          "subject": "feat: make work summary cards collapsible",
-          "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
-          "breaking": false
-        },
-        {
-          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-          "subject": "fix(chat): mark the chat tab that owns a pending question",
-          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "sha": "645c278b25a31024a497ba154692d29bb8e246cc",
+          "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
+          "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.42.0",
-      "baselineRef": "cli-v0.42.0",
-      "reserved": "0.42.0",
-      "commits": [
-        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
-      ],
+      "published": "0.43.0",
+      "baselineRef": "cli-v0.43.0",
+      "reserved": "0.43.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.43.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.43.0",
-      "notes": [
-        {
-          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-          "subject": "feat: add frozen work summaries to final status cards",
-          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
-          "breaking": false
-        },
-        {
-          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-          "subject": "fix(chat): mark the chat tab that owns a pending question",
-          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
-      "published": "0.33.0",
-      "baselineRef": "sdk-v0.33.0",
-      "reserved": "0.33.0",
-      "commits": [
-        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
-      ],
+      "published": "0.34.0",
+      "baselineRef": "sdk-v0.34.0",
+      "reserved": "0.34.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.34.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.34.0",
-      "notes": [
-        {
-          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-          "subject": "feat: add frozen work summaries to final status cards",
-          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
-          "breaking": false
-        },
-        {
-          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-          "subject": "fix(chat): mark the chat tab that owns a pending question",
-          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "assistant": {
-      "published": "0.35.0",
-      "baselineRef": "assistant-v0.35.0",
-      "reserved": "0.35.0",
-      "commits": [
-        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-        "24518350d51ec937890635683f63476b728e508c",
-        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
-      ],
+      "published": "0.36.0",
+      "baselineRef": "assistant-v0.36.0",
+      "reserved": "0.36.0",
+      "commits": ["645c278b25a31024a497ba154692d29bb8e246cc"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.36.0",
-      "effectiveBump": "minor",
+      "version": "0.36.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.36.0",
+      "tag": "assistant-v0.36.1",
       "notes": [
         {
-          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
-          "subject": "feat: add frozen work summaries to final status cards",
-          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
-          "breaking": false
-        },
-        {
-          "sha": "24518350d51ec937890635683f63476b728e508c",
-          "subject": "feat: make work summary cards collapsible",
-          "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
-          "breaking": false
-        },
-        {
-          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-          "subject": "fix(chat): mark the chat tab that owns a pending question",
-          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "sha": "645c278b25a31024a497ba154692d29bb8e246cc",
+          "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
+          "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
           "breaking": false
         }
       ]
@@ -577,6 +503,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "645c278b25a31024a497ba154692d29bb8e246cc": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
