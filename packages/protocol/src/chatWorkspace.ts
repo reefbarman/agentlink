@@ -139,9 +139,20 @@ export function parseChatTabActionAddress(
   };
 }
 
+export interface ChatWorkspaceViewSnapshotOptions {
+  /**
+   * Tab-bound session IDs with a pending question or approval owned by the
+   * host (including ones raised by descendant background sessions or restored
+   * after reload). These override the session-derived status with
+   * `needs_input`, because the session itself may have no live execution phase.
+   */
+  sessionIdsNeedingInput?: ReadonlySet<string>;
+}
+
 export function createChatWorkspaceViewSnapshot(
   workspace: ChatTabWorkspaceSnapshot,
   sessions: readonly ChatWorkspaceSessionSummary[],
+  options: ChatWorkspaceViewSnapshotOptions = {},
 ): ChatWorkspaceViewSnapshot {
   const sessionsById = new Map(
     sessions.map((session) => [session.id, session]),
@@ -160,7 +171,10 @@ export function createChatWorkspaceViewSnapshot(
         sessionId: tab.sessionId,
         placement: tab.placement,
         title: session?.title,
-        status: getChatTabViewStatus(session),
+        status:
+          tab.sessionId && options.sessionIdsNeedingInput?.has(tab.sessionId)
+            ? "needs_input"
+            : getChatTabViewStatus(session),
         busy: isChatTabSessionBusy(session),
       };
     }),

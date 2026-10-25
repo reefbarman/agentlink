@@ -2420,8 +2420,25 @@ export async function activate(
       createChatWorkspaceViewSnapshot(
         chatTabController.getWorkspaceSnapshot(),
         agentSessionManager.getSessionInfos(),
+        {
+          sessionIdsNeedingInput:
+            chatViewProvider.getChatTabSessionIdsNeedingInput(),
+        },
       ),
-    (listener) => chatTabController.onDidChangeWorkspace(() => listener()),
+    (listener) => {
+      const workspace = chatTabController.onDidChangeWorkspace(() =>
+        listener(),
+      );
+      const attention = chatViewProvider.onDidChangeChatWorkspaceAttention(() =>
+        listener(),
+      );
+      return {
+        dispose: () => {
+          workspace.dispose();
+          attention.dispose();
+        },
+      };
+    },
   );
   const browserGatewayRepositoryObserver = new BrowserGatewayRepositoryObserver(
     {

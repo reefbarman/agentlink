@@ -127,6 +127,21 @@ describe("chat workspace protocol", () => {
     expect(selectedWorkspaceSessionId(snapshot, "missing")).toBeNull();
   });
 
+  it("marks tabs with host-tracked pending input as needing input", () => {
+    const snapshot = createChatWorkspaceViewSnapshot(
+      workspace,
+      [session({ id: "session-1", status: "idle", messageCount: 3 })],
+      { sessionIdsNeedingInput: new Set(["session-1"]) },
+    );
+
+    expect(snapshot.tabs[0]).toMatchObject({
+      sessionId: "session-1",
+      status: "needs_input",
+      busy: false,
+    });
+    expect(snapshot.tabs[1]?.status).toBe("idle");
+  });
+
   it.each([
     [
       session({

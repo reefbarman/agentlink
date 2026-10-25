@@ -1410,6 +1410,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private readonly uiPublisher: AgentUiPublisher;
   private readonly browserGatewaySurfaceChangeEmitter =
     new vscode.EventEmitter<BrowserGatewaySurfaceChangeKind>();
+  private readonly chatWorkspaceAttentionEmitter =
+    new vscode.EventEmitter<void>();
   private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
     null;
   private readonly projectedForegroundStore = new ProjectedForegroundStore();
@@ -1625,6 +1627,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.outputChannel.dispose();
     this.uiEventHub.dispose();
     this.browserGatewaySurfaceChangeEmitter.dispose();
+    this.chatWorkspaceAttentionEmitter.dispose();
     this.specialBlockPanel?.dispose();
     this.specialBlockPanel = undefined;
     for (const w of this.fileWatchers) w.dispose();
@@ -3395,6 +3398,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.recordApprovalInterruption(sessionId, request);
     }
     this.activeApprovalRequests.set(request.id, request);
+    const attentionChanged =
+      this.approvalSessionById.get(request.id) !== sessionId;
     this.approvalSessionById.set(request.id, sessionId);
     const presentation = this.getApprovalPresentation(sessionId, request);
     this.approvalPresentationById.set(request.id, presentation);
@@ -3408,6 +3413,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else {
       this.uiPublisher.publishApproval(presentation.sessionId, request);
     }
+    if (attentionChanged) this.notifyChatWorkspaceAttentionChanged();
   }
 
   private recordApprovalInterruption(
@@ -3483,6 +3489,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.visibleApprovalId = null;
       this.publishVisibleApproval();
     }
+    this.notifyChatWorkspaceAttentionChanged();
   }
 
   private getApprovalPresentation(
@@ -4208,11 +4215,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       recovered,
       sessionId,
     });
+    this.notifyChatWorkspaceAttentionChanged();
   }
 
   private clearQuestionAttention(id: string): void {
-    this.questionAttentionById.get(id)?.attention.dispose();
+    const pending = this.questionAttentionById.get(id);
+    if (!pending) return;
+    pending.attention.dispose();
     this.questionAttentionById.delete(id);
+    this.notifyChatWorkspaceAttentionChanged();
+  }
+
+  /**
+   * Tab-bound session IDs that have a pending question or approval, including
+   * ones raised by descendant background sessions (attributed to the nearest
+   * ancestor with a chat tab, matching `focusPendingInteraction`) and questions
+   * restored after reload. The session's own execution phase is not enough:
+   * restored or background-owned questions have no live interactive phase.
+   */
+  getChatTabSessionIdsNeedingInput(): Set<string> {
+    const result = new Set<string>();
+    const controller = this.chatTabController;
+    if (!controller) return result;
+    const pendingSessionIds = new Set<string>([
+      ...Array.from(this.questionAttentionById.values(), (p) => p.sessionId),
+      ...this.approvalSessionById.values(),
+    ]);
+    for (const sessionId of pendingSessionIds) {
+      let target: string | undefined = sessionId;
+      const visited = new Set<string>();
+      while (target && !visited.has(target)) {
+        visited.add(target);
+        if (controller.getTabForSession(target)) {
+          result.add(target);
+          break;
+        }
+        target = this.sessionManager?.getBackgroundParentSessionId(target);
+      }
+    }
+    return result;
+  }
+
+  onDidChangeChatWorkspaceAttention(listener: () => void): vscode.Disposable {
+    return this.chatWorkspaceAttentionEmitter.event(listener);
+  }
+
+  private notifyChatWorkspaceAttentionChanged(): void {
+    this.sendChatWorkspaceUpdate();
+    this.chatWorkspaceAttentionEmitter.fire();
   }
 
   private reconcileQuestionAttention(): void {
@@ -7823,6 +7873,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return createChatWorkspaceViewSnapshot(
       this.chatTabController.getWorkspaceSnapshot(),
       this.sessionManager.getSessionInfos(),
+      { sessionIdsNeedingInput: this.getChatTabSessionIdsNeedingInput() },
     );
   }
 

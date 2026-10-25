@@ -9239,6 +9239,9 @@ describe("ChatViewProvider session state sync", () => {
         chatTabController: { getTabForSession(sessionId: string): undefined };
       }
     ).chatTabController = { getTabForSession: vi.fn(() => undefined) };
+    (
+      provider as unknown as { sendChatWorkspaceUpdate(): void }
+    ).sendChatWorkspaceUpdate = vi.fn();
     const uiPublisher = (
       provider as unknown as {
         uiPublisher: {
@@ -10375,6 +10378,59 @@ describe("chat tab host routing", () => {
         sessionId: "session-parent",
       }),
     );
+  });
+
+  it("marks the owning tab as needing input while a question is pending", async () => {
+    const { provider, chatTabController } = await makeTabRoutingProvider();
+    const parentTab: ChatTab = {
+      id: "tab-parent",
+      displayNumber: 1,
+      sessionId: "session-parent",
+      placement: "docked",
+      terminalGeneration: 1,
+    };
+    chatTabController.getTabForSession = vi.fn((sessionId: string) =>
+      sessionId === "session-parent" ? parentTab : undefined,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getBackgroundParentSessionId: vi.fn((sessionId: string) =>
+        sessionId === "session-child" ? "session-parent" : undefined,
+      ),
+      getForegroundSession: vi.fn(() => undefined),
+      clearPendingQuestionRecovery: vi.fn(),
+    };
+    const sendChatWorkspaceUpdate = vi.fn();
+    (
+      provider as unknown as { sendChatWorkspaceUpdate(): void }
+    ).sendChatWorkspaceUpdate = sendChatWorkspaceUpdate;
+    const attentionChanged = vi.fn();
+    provider.onDidChangeChatWorkspaceAttention(attentionChanged);
+    provider.setPendingInteractionAlertProvider(() => ({ dispose: vi.fn() }));
+
+    void provider.requestQuestion(
+      "Need input.",
+      [{ id: "q1", type: "yes_no", question: "Proceed?" }],
+      "session-child",
+      "child task",
+    );
+
+    expect([...provider.getChatTabSessionIdsNeedingInput()]).toEqual([
+      "session-parent",
+    ]);
+    expect(sendChatWorkspaceUpdate).toHaveBeenCalled();
+    expect(attentionChanged).toHaveBeenCalled();
+
+    const questionId = (
+      provider as unknown as { pendingQuestions: Map<string, unknown> }
+    ).pendingQuestions
+      .keys()
+      .next().value as string;
+    await provider.submitBrowserQuestionResponse({
+      id: questionId,
+      answers: { q1: true },
+    });
+
+    expect(provider.getChatTabSessionIdsNeedingInput().size).toBe(0);
   });
 
   it("returns false when the docked tab can no longer be focused", async () => {
