@@ -1,0 +1,27 @@
+src/test/retrievalRepositoryContract.ts
+  h_e08a86bb3a33a2 56-64,68,70-71
+src/storage/retrieval/LanceDbRetrievalRepository.contract.test.ts
+  h_e08a86bb3a33a2 21-22,43-47,78-83
+  s_db7a259d2e1abb::t_e5bad28c9ede88 20,23,84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_db7a259d2e1abb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da392bd9-f5b9-4800-b977-d8f021df18b3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
