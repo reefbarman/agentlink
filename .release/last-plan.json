@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "84d5be564ccd4c8652ec39c5c7ffc8b0074bc5f8",
-  "createdAt": "2026-10-24T11:17:16.248Z",
+  "sourceSha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+  "createdAt": "2026-10-25T23:17:13.051Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.67.1",
       "baselineRef": "v1.67.1",
-      "reserved": "1.68.0",
+      "reserved": "1.68.2",
       "commits": [
         "1ffeeac1beb356905435b31877662c402e478ce3",
         "e7c98f1166dffaefcdb7ac8e992997be298c919f",
@@ -35,18 +35,22 @@
         "798bfbf67db55d877361b58ed2677451c0b49404",
         "7147f6b1a3e76d6f71b234687515212eec455a2c",
         "e5982386ce809453f2ee9a9682af0098dfb72aea",
-        "a99633498a97f32f32fd0b47477d9b3ed90cec23"
+        "a99633498a97f32f32fd0b47477d9b3ed90cec23",
+        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+        "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
+        "24518350d51ec937890635683f63476b728e508c",
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.68.0",
+      "version": "1.68.2",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": true,
       "consumedIntent": false,
-      "tag": "v1.68.0",
+      "tag": "v1.68.2",
       "notes": [
         {
           "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
@@ -179,6 +183,30 @@
           "subject": "feat(agent): prompt foreground agents to recall earlier sessions",
           "summary": "Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.",
           "breaking": false
+        },
+        {
+          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+          "subject": "feat: add frozen work summaries to final status cards",
+          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+          "breaking": false
+        },
+        {
+          "sha": "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
+          "subject": "test(retrieval): give LanceDB contract tests a load-tolerant timeout",
+          "summary": "Test-only change giving the LanceDB retrieval contract tests a longer timeout under load; no shipped behaviour changes.",
+          "breaking": false
+        },
+        {
+          "sha": "24518350d51ec937890635683f63476b728e508c",
+          "subject": "feat: make work summary cards collapsible",
+          "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
+          "breaking": false
+        },
+        {
+          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+          "subject": "fix(chat): mark the chat tab that owns a pending question",
+          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "breaking": false
         }
       ]
     },
@@ -186,49 +214,154 @@
       "published": "0.63.0",
       "baselineRef": "desktop-v0.63.0",
       "reserved": "0.63.0",
-      "commits": [],
+      "commits": [
+        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+        "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
+        "24518350d51ec937890635683f63476b728e508c",
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.64.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.64.0",
+      "notes": [
+        {
+          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+          "subject": "feat: add frozen work summaries to final status cards",
+          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+          "breaking": false
+        },
+        {
+          "sha": "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
+          "subject": "test(retrieval): give LanceDB contract tests a load-tolerant timeout",
+          "summary": "Test-only change giving the LanceDB retrieval contract tests a longer timeout under load; no shipped behaviour changes.",
+          "breaking": false
+        },
+        {
+          "sha": "24518350d51ec937890635683f63476b728e508c",
+          "subject": "feat: make work summary cards collapsible",
+          "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
+          "breaking": false
+        },
+        {
+          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+          "subject": "fix(chat): mark the chat tab that owns a pending question",
+          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "breaking": false
+        }
+      ]
     },
     "cli": {
       "published": "0.42.0",
       "baselineRef": "cli-v0.42.0",
       "reserved": "0.42.0",
-      "commits": [],
+      "commits": [
+        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.43.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.43.0",
+      "notes": [
+        {
+          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+          "subject": "feat: add frozen work summaries to final status cards",
+          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+          "breaking": false
+        },
+        {
+          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+          "subject": "fix(chat): mark the chat tab that owns a pending question",
+          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.33.0",
       "baselineRef": "sdk-v0.33.0",
       "reserved": "0.33.0",
-      "commits": [],
+      "commits": [
+        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.34.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.34.0",
+      "notes": [
+        {
+          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+          "subject": "feat: add frozen work summaries to final status cards",
+          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+          "breaking": false
+        },
+        {
+          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+          "subject": "fix(chat): mark the chat tab that owns a pending question",
+          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.35.0",
       "baselineRef": "assistant-v0.35.0",
       "reserved": "0.35.0",
-      "commits": [],
+      "commits": [
+        "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+        "24518350d51ec937890635683f63476b728e508c",
+        "f9e3bf6b7a80eb99dc37f1e527eb12760debf451"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.36.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.36.0",
+      "notes": [
+        {
+          "sha": "a9d0a2e94e87b45c4e23784226b8fa34a16193b1",
+          "subject": "feat: add frozen work summaries to final status cards",
+          "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+          "breaking": false
+        },
+        {
+          "sha": "24518350d51ec937890635683f63476b728e508c",
+          "subject": "feat: make work summary cards collapsible",
+          "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
+          "breaking": false
+        },
+        {
+          "sha": "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
+          "subject": "fix(chat): mark the chat tab that owns a pending question",
+          "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -412,6 +545,38 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "a9d0a2e94e87b45c4e23784226b8fa34a16193b1": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "51b96d85e15ff5fef6433ceb4c7312cca180a9ba": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Test-only change giving the LanceDB retrieval contract tests a longer timeout under load; no shipped behaviour changes.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "24518350d51ec937890635683f63476b728e508c": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The Work summary card can now be collapsed to a header that still shows the file and line totals inline.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "f9e3bf6b7a80eb99dc37f1e527eb12760debf451": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

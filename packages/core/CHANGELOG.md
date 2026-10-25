@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.34.0 — 2026-10-25
+
+- Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.
+- Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.
+
 ## 0.33.0 — 2026-10-23
 
 - Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.68.2
+
 - Final status cards now show a **Work summary** of the files AgentLink's file tools changed, with expandable read-only diffs and an open-file button. It defaults to changes since the previous summary, with a **Session so far** view, and each card stays frozen. AgentLink builds it from what verified saves left on disk (including format-on-save), so it never counts your edits or another session's as the agent's: a file changed by someone else between edits shows each run of edits separately, files that changed on disk afterwards are flagged, and notes say when shell commands, MCP tools or background agents ran or the session was reloaded, since those changes aren't captured. The browser and Desktop remote views load summaries on demand through a new `transcript-work-summary-v1` data-plane feature and a `work-summary` transcript detail resource.
 
 ## 1.68.0
