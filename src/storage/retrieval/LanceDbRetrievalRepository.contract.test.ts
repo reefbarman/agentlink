@@ -17,7 +17,10 @@ import { LanceDbRetrievalRepository } from "./LanceDbRetrievalRepository.js";
 import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 import type { RetrievalSourceFreshness } from "@agentlink/protocol/retrieval-query";
-import { describeRetrievalRepositoryContract } from "../../test/retrievalRepositoryContract.js";
+import {
+  describeRetrievalRepositoryContract,
+  type RetrievalRepositoryContractInstance,
+} from "../../test/retrievalRepositoryContract.js";
 import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
 
 const fingerprint: RetrievalFingerprint = {
@@ -37,7 +40,11 @@ const fingerprint: RetrievalFingerprint = {
   },
 };
 
-describeRetrievalRepositoryContract("LanceDbRetrievalRepository", async () => {
+// Each contract test performs many real on-disk LanceDB commits with native
+// index rebuilds (~0.7s for the heaviest alone), so allow for suite load.
+const LANCEDB_CONTRACT_TEST_TIMEOUT_MS = 30_000;
+
+async function createLanceDbContractInstance(): Promise<RetrievalRepositoryContractInstance> {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "agentlink-lancedb-retrieval-contract-"),
   );
@@ -68,7 +75,13 @@ describeRetrievalRepositoryContract("LanceDbRetrievalRepository", async () => {
       await fs.rm(root, { recursive: true, force: true });
     },
   };
-});
+}
+
+describeRetrievalRepositoryContract(
+  "LanceDbRetrievalRepository",
+  createLanceDbContractInstance,
+  { testTimeoutMs: LANCEDB_CONTRACT_TEST_TIMEOUT_MS },
+);
 
 describe("LanceDbRetrievalRepository persistence", () => {
   it("rejects mutations after its code-index writer lease is displaced", async () => {

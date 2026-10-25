@@ -53,11 +53,22 @@ const lexicalQuery = {
   limit: 10,
 };
 
+export interface RetrievalRepositoryContractOptions {
+  /**
+   * Per-test timeout for backends that do real I/O. Disk-backed stores run
+   * many native publish cycles per test, which can exceed the 5s default
+   * under full-suite CPU contention without any logic fault.
+   */
+  testTimeoutMs?: number;
+}
+
 export function describeRetrievalRepositoryContract(
   name: string,
   factory: RetrievalRepositoryContractFactory,
+  options: RetrievalRepositoryContractOptions = {},
 ): void {
-  describe(`${name} retrieval repository contract`, () => {
+  const timeout = options.testTimeoutMs;
+  describe(`${name} retrieval repository contract`, { timeout }, () => {
     it("keeps prepared generations hidden until an atomic commit", async () => {
       await withRepository(factory, async (repository) => {
         const request = publication(
