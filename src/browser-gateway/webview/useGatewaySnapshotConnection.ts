@@ -1,4 +1,4 @@
-import { useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 
 export interface GatewaySnapshotReadResult<TSnapshot, TCapability> {
   snapshot: TSnapshot;
@@ -79,6 +79,12 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     observeConnection,
     now = Date.now,
   } = options;
+  // The connection lives as long as the selected tab, but re-selecting that
+  // tab (for example A -> B -> A inside one render batch) bumps the selection
+  // generation without restarting the effect. Commit with the latest
+  // generation so such a connection is not silently rejected forever.
+  const generationRef = useRef(generation);
+  generationRef.current = generation;
 
   useEffect(() => {
     if (!enabled) return;
@@ -139,7 +145,10 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
           return;
         }
         const data = await readSnapshotResponse(response);
-        if (!closed && commitSnapshot(data.snapshot, tabId, generation)) {
+        if (
+          !closed &&
+          commitSnapshot(data.snapshot, tabId, generationRef.current)
+        ) {
           if (data.askAgentCapabilities) {
             setAskAgentCapabilities(data.askAgentCapabilities);
           }
@@ -194,7 +203,7 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
       lastStreamApplyAt = now();
       try {
         const next = JSON.parse(data) as TSnapshot;
-        if (!commitSnapshot(next, tabId, generation)) return;
+        if (!commitSnapshot(next, tabId, generationRef.current)) return;
         if (!recordedFirstCommit) {
           recordedFirstCommit = true;
           // Measures usable state: event arrival, coalescing, parse, and commit.

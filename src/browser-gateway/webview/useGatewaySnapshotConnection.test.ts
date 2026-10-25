@@ -133,6 +133,29 @@ describe("useGatewaySnapshotConnection", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("commits with the latest selection generation without reconnecting", () => {
+    const options = createOptions();
+    const view = render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    // Re-selecting the same tab bumps the generation without changing tabId.
+    act(() => {
+      view.rerender(h(Harness, { options: { ...options, generation: 5 } }));
+    });
+    expect(ControllableEventSource.instances).toHaveLength(1);
+
+    act(() => {
+      source.open();
+      source.emit("snapshot", JSON.stringify({ id: "after-reselect" }));
+    });
+
+    expect(options.commitSnapshot).toHaveBeenCalledWith(
+      { id: "after-reselect" },
+      "instance-1",
+      5,
+    );
+  });
+
   it("recovers a delayed stream after the initial fallback starts", async () => {
     const transport = new ControllableFetch();
     globalThis.fetch = transport.fetch as typeof fetch;

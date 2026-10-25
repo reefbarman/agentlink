@@ -1793,6 +1793,11 @@ export function BrowserGatewayApp({
       body: JSON.stringify({ event, fields }),
     }).catch(() => undefined);
   }
+  // Stable handle for diagnostics logged from memoized callbacks.
+  const askAgentDiagnosticLogRef = useRef(logAskAgentBrowserEvent);
+  askAgentDiagnosticLogRef.current = logAskAgentBrowserEvent;
+  // Last rejection reported, so a stream of identical rejections logs once.
+  const lastAskAgentRejectionRef = useRef<string | null>(null);
 
   function persistStoredBrowserSelection(
     selection: StoredBrowserSelection,
@@ -1943,6 +1948,30 @@ export function BrowserGatewayApp({
     ): boolean => {
       let next = incoming;
       const expectedAskAgentSessionId = askAgentSessionTargetRef.current;
+      const reportAskAgentRejection = (reason: string): void => {
+        if (tabId !== BROWSER_GATEWAY_ASK_AGENT_TAB_ID || quickAsk) return;
+        const incomingSessionId =
+          incoming.session.foreground?.sessionId ?? null;
+        const key = `${reason}:${incomingSessionId}:${expectedAskAgentSessionId}:${generation}`;
+        if (lastAskAgentRejectionRef.current === key) return;
+        lastAskAgentRejectionRef.current = key;
+        askAgentDiagnosticLogRef.current("snapshot.rejected", {
+          reason,
+          incomingSessionId,
+          targetSessionId: expectedAskAgentSessionId,
+          targetInHelperHistory: expectedAskAgentSessionId
+            ? incoming.session.sessions.some(
+                (session) => session.id === expectedAskAgentSessionId,
+              )
+            : null,
+          generation,
+          selectedGeneration: selectedTabGenerationRef.current,
+          selectedTabIsAskAgent:
+            selectedTabIdRef.current === BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+          cachedGeneration:
+            snapshotCacheRef.current.get(tabId)?.generation ?? null,
+        });
+      };
       // The quick-ask panel never targets a session itself; it follows
       // whichever Ask Agent chat is current so model/thinking stay in sync.
       if (
@@ -1955,7 +1984,10 @@ export function BrowserGatewayApp({
           expectedAskAgentSessionId,
           snapshotCacheRef.current.get(tabId)?.snapshot,
         );
-        if (!reconciled) return false;
+        if (!reconciled) {
+          reportAskAgentRejection("session_target");
+          return false;
+        }
         next = reconciled;
       }
       const incomingAskAgentSessionId =
@@ -2013,7 +2045,10 @@ export function BrowserGatewayApp({
                 },
               }
             : next;
-      if (cached && generation < cached.generation) return false;
+      if (cached && generation < cached.generation) {
+        reportAskAgentRejection("stale_generation");
+        return false;
+      }
       snapshotCacheRef.current.set(tabId, {
         generation,
         snapshot: normalizedNext,
@@ -2052,7 +2087,11 @@ export function BrowserGatewayApp({
         selectedTabIdRef.current !== tabId ||
         selectedTabGenerationRef.current !== generation
       ) {
+        reportAskAgentRejection("inactive_selection");
         return false;
+      }
+      if (tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID) {
+        lastAskAgentRejectionRef.current = null;
       }
       snapshotOriginRef.current = { tabId, generation };
       const logicalSelection = selectedLogicalTabRef.current;
@@ -3133,6 +3172,93 @@ export function BrowserGatewayApp({
   }, [selectedInstanceId, selectedProjectId]);
 
   const foreground = snapshot?.session.foreground ?? null;
+  const askAgentStatusRef = useRef(status);
+  askAgentStatusRef.current = status;
+  const askAgentForegroundMissing =
+    isAskAgentSelected && !quickAsk && !foreground;
+  // Self-heal: an Ask Agent page without a session shows a placeholder model
+  // and ignores the saved model until the user picks one. Whatever dropped
+  // the initial snapshot (helper restart, a rejected stream update, a data
+  // plane switch), fetch the helper's current state and adopt it. Each
+  // attempt is logged so the dropped-snapshot cause can be diagnosed.
+  useEffect(() => {
+    if (!askAgentForegroundMissing) return;
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (delayMs: number): void => {
+      if (cancelled || attempt >= 5) return;
+      timer = setTimeout(() => void recover(), delayMs);
+    };
+    const recover = async (): Promise<void> => {
+      timer = undefined;
+      if (cancelled) return;
+      attempt += 1;
+      const fields = {
+        attempt,
+        relayClientEnabled,
+        streamStatus: askAgentStatusRef.current,
+        targetSessionId: askAgentSessionTargetRef.current,
+      };
+      try {
+        const response = await fetch("/api/ask-agent/session", {
+          credentials: "same-origin",
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (cancelled) return;
+        if (!response.ok) {
+          askAgentDiagnosticLogRef.current("session.recover", {
+            ...fields,
+            ok: false,
+            status: response.status,
+          });
+          schedule(3_000);
+          return;
+        }
+        const next = await readGatewaySnapshotResponse(response);
+        if (cancelled) return;
+        let committed = commitAskAgentSnapshot(next.snapshot);
+        let adoptedHelperSession = false;
+        if (!committed && next.snapshot.session.foreground) {
+          // The page's session target no longer matches the helper. Showing
+          // the helper's active chat beats an unusable composer.
+          askAgentSessionTargetRef.current = null;
+          adoptedHelperSession = true;
+          committed = commitAskAgentSnapshot(next.snapshot);
+        }
+        if (committed && next.askAgentCapabilities) {
+          setAskAgentCapabilities(next.askAgentCapabilities);
+        }
+        askAgentDiagnosticLogRef.current("session.recover", {
+          ...fields,
+          ok: true,
+          committed,
+          adoptedHelperSession,
+          helperSessionId: next.snapshot.session.foreground?.sessionId ?? null,
+          model: next.snapshot.session.foreground?.model ?? null,
+        });
+        if (!committed) schedule(3_000);
+      } catch (error) {
+        if (cancelled) return;
+        askAgentDiagnosticLogRef.current("session.recover", {
+          ...fields,
+          ok: false,
+          error: String(error),
+        });
+        schedule(3_000);
+      }
+    };
+    schedule(1_500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [
+    askAgentForegroundMissing,
+    authToken,
+    commitAskAgentSnapshot,
+    relayClientEnabled,
+  ]);
   // Ask Agent hosts whose turns can take queued messages in at the next
   // break, like VS Code's "Interject at next break".
   const askAgentInterjectionAvailable =
