@@ -178,6 +178,24 @@ vi.mock("./AgentSession.js", () => ({
   },
 }));
 
+/**
+ * sendMessage checkpoints the project root with real git before and after each
+ * turn. Tests rooted at the shared /tmp then spend ~0.3-0.8s per send on git
+ * work that grows with whatever else lives there, which exceeds the 5s
+ * timeout under full-suite load. Use this in tests that do not verify
+ * checkpoints. Call it before createSession, which creates the manager.
+ */
+function stubCheckpointManager(manager: AgentSessionManager): void {
+  (manager as any).host.createCheckpointManager = vi.fn(() => ({
+    baseCommit: null,
+    initialize: vi.fn(async () => true),
+    createCheckpoint: vi.fn(async () => null),
+    previewRevert: vi.fn(async () => null),
+    revertToCheckpoint: vi.fn(async () => false),
+    getDiffBetween: vi.fn(async () => ""),
+  }));
+}
+
 async function flushPromises(): Promise<void> {
   for (let i = 0; i < 10; i++) {
     await Promise.resolve();
@@ -4609,19 +4627,7 @@ describe("AgentSessionManager condense thresholds", () => {
 
   it("defers terminal-turn condensing until a real continuation is accepted", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
-    // sendMessage checkpoints the project root with real git before and after
-    // the turn. Here that root is the shared /tmp, so the git work scales with
-    // whatever else lives there (~1.5s idle alone) and blew the 5s timeout
-    // under suite load. This test only covers condense ordering. Stub before
-    // createSession, which creates the project's checkpoint manager.
-    (mgr as any).host.createCheckpointManager = vi.fn(() => ({
-      baseCommit: null,
-      initialize: vi.fn(async () => true),
-      createCheckpoint: vi.fn(async () => null),
-      previewRevert: vi.fn(async () => null),
-      revertToCheckpoint: vi.fn(async () => false),
-      getDiffBetween: vi.fn(async () => ""),
-    }));
+    stubCheckpointManager(mgr);
     mgr.setToolContext({
       approvalManager: { bindSessionProject: vi.fn() } as any,
       approvalPanel: {} as any,
@@ -5430,6 +5436,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
+    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     (session as any).messageCount = 0;
@@ -7578,6 +7585,7 @@ describe("AgentSessionManager checkpoints", () => {
 
   it("waits for an aborted run to settle before starting a replacement send", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     Object.assign(session, {
