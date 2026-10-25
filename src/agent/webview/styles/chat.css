@@ -4278,6 +4278,32 @@ body.chat-activity-shelf-resizing * {
   font-weight: 600;
 }
 
+.work-summary-collapse {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.work-summary-collapse:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.work-summary-collapsed-totals {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: 4px;
+  font-weight: normal;
+  color: var(--vscode-descriptionForeground);
+}
+
 .work-summary-scopes {
   display: inline-flex;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));

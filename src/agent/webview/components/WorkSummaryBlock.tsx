@@ -109,6 +109,7 @@ export function WorkSummaryBlock({
 }) {
   const sessionScope = summary.sessionSameAsSince ? undefined : summary.session;
   const [scopeKey, setScopeKey] = useState<ScopeKey>("since");
+  const [collapsed, setCollapsed] = useState(false);
   const scope =
     scopeKey === "session" && sessionScope
       ? sessionScope
@@ -118,13 +119,32 @@ export function WorkSummaryBlock({
   const capturedAt = new Date(summary.capturedAt).toLocaleString();
 
   return (
-    <section class="work-summary" aria-label="Work summary">
+    <section
+      class={`work-summary${collapsed ? " collapsed" : ""}`}
+      aria-label="Work summary"
+    >
       <div class="work-summary-header">
-        <span class="work-summary-title">
+        <button
+          type="button"
+          class="work-summary-title work-summary-collapse"
+          aria-expanded={!collapsed}
+          title={collapsed ? "Show work summary" : "Hide work summary"}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          <i
+            class={`codicon codicon-chevron-${collapsed ? "right" : "down"}`}
+            aria-hidden="true"
+          />
           <i class="codicon codicon-diff" aria-hidden="true" />
           Work summary
-        </span>
-        {sessionScope && (
+          {collapsed && fileCount > 0 && (
+            <span class="work-summary-collapsed-totals">
+              <span>{plural(fileCount, "file")} changed</span>
+              <DiffCounts added={totals.added} removed={totals.removed} />
+            </span>
+          )}
+        </button>
+        {!collapsed && sessionScope && (
           <div class="work-summary-scopes" role="tablist">
             <button
               type="button"
@@ -147,6 +167,37 @@ export function WorkSummaryBlock({
           </div>
         )}
       </div>
+      {!collapsed && (
+        <WorkSummaryBody
+          scope={scope}
+          scopeKey={scopeKey}
+          fileCount={fileCount}
+          totals={totals}
+          capturedAt={capturedAt}
+          onOpenFile={onOpenFile}
+        />
+      )}
+    </section>
+  );
+}
+
+function WorkSummaryBody({
+  scope,
+  scopeKey,
+  fileCount,
+  totals,
+  capturedAt,
+  onOpenFile,
+}: {
+  scope: WorkSummaryScope;
+  scopeKey: ScopeKey;
+  fileCount: number;
+  totals: ReturnType<typeof scopeTotals>;
+  capturedAt: string;
+  onOpenFile?: (path: string, line?: number) => void;
+}) {
+  return (
+    <>
       <div
         class="work-summary-totals"
         title={`Changes captured through AgentLink file tools, frozen at ${capturedAt}`}
@@ -191,7 +242,7 @@ export function WorkSummaryBlock({
           ))}
         </ul>
       )}
-    </section>
+    </>
   );
 }
 
