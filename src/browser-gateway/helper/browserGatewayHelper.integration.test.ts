@@ -5768,6 +5768,68 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
   });
 
+  it("resumes streaming when switching back to a chat whose turn is still running", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let releaseCall!: () => void;
+    const callReleased = new Promise<void>((resolve) => {
+      releaseCall = resolve;
+    });
+    const modelClient = makeAskAgentToolLoopClient(async () => {
+      resolveStarted();
+      await callReleased;
+      return { text: "Done.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    const post = async (route: string, body: unknown) =>
+      (await (
+        await fetch(`${harness.helperBase}${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify(body),
+        })
+      ).json()) as {
+        snapshot: {
+          session: { foreground: { sessionId: string; streaming: boolean } };
+        };
+      };
+
+    const firstSend = post("/api/ask-agent/send", { text: "Long job" });
+    await started;
+    const working = (
+      (await (
+        await fetch(`${harness.helperBase}/api/ask-agent/session`, {
+          headers: { Cookie: harness.cookie },
+        })
+      ).json()) as Awaited<ReturnType<typeof post>>
+    ).snapshot.session.foreground;
+    expect(working.streaming).toBe(true);
+
+    const other = await post("/api/ask-agent/session/new", {});
+    expect(other.snapshot.session.foreground.sessionId).not.toBe(
+      working.sessionId,
+    );
+    expect(other.snapshot.session.foreground.streaming).toBe(false);
+
+    const back = await post("/api/ask-agent/session/load", {
+      sessionId: working.sessionId,
+    });
+    expect(back.snapshot.session.foreground).toMatchObject({
+      sessionId: working.sessionId,
+      streaming: true,
+    });
+
+    releaseCall();
+    await firstSend;
+  });
+
   it("awaits an in-flight cancellation publication before helper shutdown", async () => {
     let resolveStarted!: () => void;
     const started = new Promise<void>((resolve) => {

@@ -1413,6 +1413,15 @@ export class BrowserGatewayAskAgentSessionStore {
     return message;
   }
 
+  /** Whether the given session's transcript holds this message. */
+  sessionHasMessage(sessionId: string, messageId: string): boolean {
+    return (
+      this.sessions
+        .find((session) => session.id === sessionId)
+        ?.messages.some((message) => message.id === messageId) ?? false
+    );
+  }
+
   getAssistantMessageText(messageId: string): string {
     return this.getAssistantMessage(messageId)?.content ?? "";
   }

@@ -2351,7 +2351,11 @@ export class BrowserGatewayHelper {
   private async executeAskAgentSelectSessionCommand(
     sessionId: string,
   ): Promise<void> {
-    if (!this.askAgentSessionStore.loadSession(sessionId)) {
+    if (
+      !this.askAgentSessionStore.loadSession(sessionId, {
+        streaming: this.askAgentTurnRunsInSession(sessionId),
+      })
+    ) {
       throw new Error("ask_agent_session_not_found");
     }
     await this.persistAskAgentHistory();
@@ -2617,7 +2621,12 @@ export class BrowserGatewayHelper {
       const sessionId =
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
       const previousSessionId = this.askAgentSessionStore.getActiveSessionId();
-      if (!sessionId || !this.askAgentSessionStore.loadSession(sessionId)) {
+      if (
+        !sessionId ||
+        !this.askAgentSessionStore.loadSession(sessionId, {
+          streaming: this.askAgentTurnRunsInSession(sessionId),
+        })
+      ) {
         this.logAskAgentEvent("ask-agent.session.load", {
           sessionId: sessionId || "none",
           ok: false,
@@ -4408,6 +4417,19 @@ export class BrowserGatewayHelper {
       this.askAgentController.hasActiveTurn() ||
       this.standaloneMcpManagerOperations.isRunning() ||
       Boolean(this.standaloneMcpLegacyReauth)
+    );
+  }
+
+  /**
+   * Whether the running turn writes to this chat. Switching back to a chat
+   * whose turn kept running while another was viewed must resume its
+   * streaming state, or the transcript loses its live activity indicator.
+   */
+  private askAgentTurnRunsInSession(sessionId: string): boolean {
+    const messageId = this.askAgentController.getActiveTurnMessageId();
+    return (
+      messageId !== null &&
+      this.askAgentSessionStore.sessionHasMessage(sessionId, messageId)
     );
   }
 
