@@ -1,0 +1,24 @@
+src/evals/goldenTasks.ts
+  h_e08a86bb3a33a2 1-223
+vitest.eval.config.mts
+  h_e08a86bb3a33a2 1-12
+package.json
+  h_e08a86bb3a33a2 1239
+src/evals/routingEval.eval.ts
+  h_e08a86bb3a33a2 1-218
+CLAUDE.md
+  h_e08a86bb3a33a2 121
+src/evals/goldenTasks.test.ts
+  h_e08a86bb3a33a2 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
