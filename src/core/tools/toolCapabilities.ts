@@ -136,6 +136,9 @@ const ESSENTIAL_TOOLS = new Set([
   "find_and_replace",
   "execute_command",
   "get_terminal_output",
+  // Inline so the model sees it when the user mentions earlier sessions;
+  // its excerpt reader stays deferred and is callable by exact name.
+  "search_workspace_sessions",
   "ask_user",
   "todo_write",
   "set_task_status",

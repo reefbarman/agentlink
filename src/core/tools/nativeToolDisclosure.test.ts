@@ -56,6 +56,20 @@ describe("native tool disclosure snapshots", () => {
     );
   });
 
+  it("advertises past-session search inline and keeps its excerpt reader deferred", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("search_workspace_sessions"),
+      definition("read_workspace_session_excerpt"),
+    ]);
+
+    expect(snapshot.inlineTools.map((tool) => tool.name)).toEqual([
+      "search_workspace_sessions",
+    ]);
+    expect(
+      getDeferredNativeTool(snapshot, "read_workspace_session_excerpt"),
+    ).toBeDefined();
+  });
+
   it("partitions canonical tools without changing source order", () => {
     const dynamicMcp = definition("demo__search");
     const snapshot = createNativeToolDisclosureSnapshot([

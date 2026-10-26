@@ -149,6 +149,18 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    id: "past-session-recall",
+    mode: "code",
+    intent:
+      "Work the user says happened in another session is recalled from saved sessions before guessing from files.",
+    prompt:
+      "Use the same release checklist we worked out in another session last week to prepare this release.",
+    expect: {
+      anyOf: ["search_workspace_sessions"],
+      forbid: NO_DELEGATION,
+    },
+  },
+  {
     id: "deferred-mcp-resources",
     mode: "ask",
     intent: "A deferred native tool is discovered or called by exact name.",

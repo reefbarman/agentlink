@@ -334,7 +334,9 @@ describe("buildSystemPrompt", () => {
     expect(foreground.systemPrompt).toContain("before guessing from files");
     expect(foreground.systemPrompt).toContain("`search_session_history`");
     expect(foreground.systemPrompt).toContain("`include_worktrees`");
-    expect(foreground.systemPrompt).toContain("`find_native_tools`");
+    expect(foreground.systemPrompt).toContain(
+      "including in question answers or notes",
+    );
     expect(
       foreground.promptBreakdown.sections.some(
         (section) => section.label === "session history recall",
