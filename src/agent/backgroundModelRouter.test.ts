@@ -205,6 +205,52 @@ describe("resolveBackgroundRoute", () => {
     });
   });
 
+  it("treats Terra models as balanced, below Sol and above Luna", async () => {
+    const models = [
+      "gpt-6-astra",
+      "gpt-6.1-sol",
+      "gpt-6.1-terra",
+      "gpt-5.6-terra",
+      "gpt-6-luna",
+    ].map((id) => makeModel(id, "codex"));
+    const registry = makeRegistry([makeProvider("codex", models)]);
+
+    for (const terra of ["gpt-6.1-terra", "gpt-5.6-terra"]) {
+      const below = await resolveBackgroundRoute(registry, generalRequest(), {
+        mode: "code",
+        model: terra,
+      });
+      expect(below).toMatchObject({
+        resolvedModel: "gpt-6-luna",
+        modelTier: "cheap",
+      });
+    }
+
+    const deep = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ modelTier: "deep_reasoning" }),
+      { mode: "code", model: "gpt-6.1-sol" },
+    );
+    expect(deep).toMatchObject({
+      resolvedModel: "gpt-6-astra",
+      modelTier: "deep_reasoning",
+    });
+
+    const withoutAstra = makeRegistry([
+      makeProvider(
+        "codex",
+        models.filter(({ id }) => id !== "gpt-6-astra"),
+      ),
+    ]);
+    await expect(
+      resolveBackgroundRoute(
+        withoutAstra,
+        generalRequest({ modelTier: "deep_reasoning" }),
+        { mode: "code", model: "gpt-6.1-sol" },
+      ),
+    ).rejects.toThrow(/No eligible deep_reasoning/);
+  });
+
   it("prefers GPT-6 Luna for cheap Codex reviews", async () => {
     const models = ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"].map((id) =>
       makeModel(id, "codex"),
@@ -471,7 +517,7 @@ describe("resolveBackgroundRoute", () => {
   });
 
   it("routes around a provider on availability cooldown", async () => {
-    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const foreground = makeModel("gpt-6-astra", "codex");
     const codexReviewer = makeModel("gpt-5.6-sol", "codex");
     const claudeReviewer = tieredModel(
       "custom-sonnet",
@@ -501,7 +547,7 @@ describe("resolveBackgroundRoute", () => {
   });
 
   it("honors an explicit provider request during its cooldown", async () => {
-    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const foreground = makeModel("gpt-6-astra", "codex");
     const reviewer = tieredModel(
       "custom-sonnet",
       "openai-compatible:claude",
@@ -529,7 +575,7 @@ describe("resolveBackgroundRoute", () => {
   });
 
   it("requires thinking-capable models for code review", async () => {
-    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const foreground = makeModel("gpt-6-astra", "codex");
     const reviewer = tieredModel(
       "custom-sonnet",
       "openai-compatible:claude",
