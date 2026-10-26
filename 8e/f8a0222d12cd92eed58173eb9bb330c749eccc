@@ -1,0 +1,51 @@
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 6,10,927-966
+  s_f3ed5dba827f2c::t_ede4b1c44eca4f 967-969
+CHANGELOG.md
+  h_e08a86bb3a33a2 51
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_e08a86bb3a33a2 588-592
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 1904-1927
+  s_f3ed5dba827f2c::t_78c67efe62d883 1928-1930
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 11773-11776,11789
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 956-988,2060,2081-2084
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 1199-1207,5982,9603-9618,9622-9625,9779-9782,9806,9925-9950
+  s_fea74dcd080001::t_49a5867c773fa4 9619-9621,9783,9951-9952
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 207
+resources/builtin-skills/documentation/references/release-notes.md
+  s_f3ed5dba827f2c::t_2650596a288c9b 51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f3ed5dba827f2c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "556dfdab-715b-4b1f-97f5-c7c99a5e5761",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_fea74dcd080001": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9b5717a-20a5-4b19-838e-45d07dbd0888",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
