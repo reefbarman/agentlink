@@ -304,6 +304,27 @@ describe("native tool disclosure snapshots", () => {
     });
   });
 
+  it("defers MCP resource and prompt bridges while keeping MCP discovery and calls inline", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("find_mcp_tools", "Discover MCP tools"),
+      definition("call_mcp_tool", "Call an MCP tool"),
+      definition("list_mcp_resources", "List MCP resources"),
+      definition("read_mcp_resource", "Read an MCP resource"),
+      definition("list_mcp_prompts", "List MCP prompts"),
+      definition("get_mcp_prompt", "Get an MCP prompt"),
+    ]);
+
+    expect(snapshot.inlineTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["find_mcp_tools", "call_mcp_tool"]),
+    );
+    expect(snapshot.deferredTools.map((tool) => tool.name)).toEqual([
+      "list_mcp_resources",
+      "read_mcp_resource",
+      "list_mcp_prompts",
+      "get_mcp_prompt",
+    ]);
+  });
+
   it("matches normalized names and ranks description query terms", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
       definition("get_call_hierarchy", "Inspect incoming and outgoing calls"),

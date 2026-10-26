@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Trimmed the system prompt for newer models: the "narrate tersely" rule now appears once instead of three times, and the prompt no longer has two **Modes** sections.
+- `list_mcp_resources`, `read_mcp_resource`, `list_mcp_prompts` and `get_mcp_prompt` are now deferred in VS Code sessions, so they no longer take up space in every request. Find them with `find_native_tools` or call them by exact name. `find_mcp_tools` now says it doesn't list resources or prompts and points to these tools.
+
 ## 1.68.2
 
 - Fixed Desktop and Browser Ask Agent sometimes opening with `ask-agent-unavailable` as the model until you picked one. If the page has no chat shortly after opening, it now fetches the saved chat, model and thinking level from the helper and uses them. The realtime stream also no longer drops every update after the Ask Agent tab is re-selected. Rejected and recovered snapshots are logged to `~/.agentlink/browser-gateway-ask-agent.log` as `browser.snapshot.rejected` and `browser.session.recover`.

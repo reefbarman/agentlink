@@ -1609,6 +1609,35 @@ describe("buildSystemPrompt", () => {
     );
   });
 
+  it.each(["conversation", "system"] as const)(
+    "states the reasoning narration and modes rules once (%s mode placement)",
+    async (modeInstructionPlacement) => {
+      const countOf = (text: string, needle: string) =>
+        text.split(needle).length - 1;
+      for (const [providerId, modelFamily] of [
+        ["openai-compatible:claude", "anthropic"],
+        ["openai", "openai"],
+      ] as const) {
+        const result = await buildPromptArtifacts("code", tmpDir, {
+          providerId,
+          modelFamily,
+          model: "claude-opus-4-8",
+          promptProfileOverrides: { "claude-opus-4-8": "reasoning" },
+          modeInstructionPlacement,
+        });
+        expect(result.promptProfile.profile).toBe("reasoning");
+        expect(countOf(result.systemPrompt, "## Modes\n")).toBe(1);
+        expect(countOf(result.systemPrompt, "Narrate tersely")).toBe(1);
+        expect(result.systemPrompt).not.toContain(
+          "Default to silence between messages",
+        );
+        expect(
+          countOf(result.systemPrompt, "Keep routine capability plumbing"),
+        ).toBe(1);
+      }
+    },
+  );
+
   it("gives compatible Claude models high-level code tool guidance", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "openai-compatible:claude",

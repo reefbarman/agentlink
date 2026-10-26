@@ -73,13 +73,18 @@ const ARTIFACT_LOADER_TOOLS = new Set([
   "load_skill",
   "read_skill_resource",
 ]);
-const MCP_BRIDGE_TOOLS = new Set([
-  "find_mcp_tools",
-  "call_mcp_tool",
+// MCP resources and prompts are rarely used, so their bridge tools are
+// discoverable through find_native_tools instead of advertised every request.
+const DEFERRED_MCP_BRIDGE_TOOLS = new Set([
   "list_mcp_resources",
   "read_mcp_resource",
   "list_mcp_prompts",
   "get_mcp_prompt",
+]);
+const ESSENTIAL_MCP_BRIDGE_TOOLS = new Set(["find_mcp_tools", "call_mcp_tool"]);
+const MCP_BRIDGE_TOOLS = new Set([
+  ...ESSENTIAL_MCP_BRIDGE_TOOLS,
+  ...DEFERRED_MCP_BRIDGE_TOOLS,
 ]);
 const SESSION_CONTROL_TOOLS = new Set([
   "ask_user",
@@ -114,6 +119,10 @@ const DEFERRED_BACKGROUND_TOOLS = new Set([
   "get_fleet_workflow_result",
   "manage_fleet_automations",
 ]);
+const DEFERRED_ADAPTER_TOOLS = new Set([
+  ...DEFERRED_BACKGROUND_TOOLS,
+  ...DEFERRED_MCP_BRIDGE_TOOLS,
+]);
 const ESSENTIAL_TOOLS = new Set([
   "web_search",
   "web_fetch",
@@ -138,7 +147,7 @@ const ESSENTIAL_TOOLS = new Set([
   "find_native_tools",
   "call_native_tool",
   "compose",
-  ...MCP_BRIDGE_TOOLS,
+  ...ESSENTIAL_MCP_BRIDGE_TOOLS,
 ]);
 
 const toolCapabilities = [
@@ -956,7 +965,7 @@ function metadata(
         ? "dormant"
         : ESSENTIAL_TOOLS.has(name) ||
             (definitionSource === "adapter-definition" &&
-              !DEFERRED_BACKGROUND_TOOLS.has(name))
+              !DEFERRED_ADAPTER_TOOLS.has(name))
           ? "essential"
           : availability.kind === "artifact-loader"
             ? "hidden"

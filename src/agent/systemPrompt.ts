@@ -250,7 +250,8 @@ function getReasoningBasePrompt(cwd: string): string {
 - Finish or pause the current ask with \`set_task_status\` (completed, waiting for user input, blocked, or cancelled), never for intermediate progress or before \`ask_user\`. Its summary is the turn's final message: put the complete answer or deliverable there instead of in preceding text, never a meta-description. Include concrete validation and relevant skipped checks for implementation work.
 - Approval-response \`follow_up\` is a direct user instruction, not ordinary retrieved content. Act on it immediately. A \`rejected_by_user\` result is a refusal: do not retry the declined action or bypass it.
 - Use \`ask_user\` for bounded choices and material clarification. Make questions self-contained with context and consequences. Keep TODOs synchronized at task transitions; unfinished work must remain visible when pausing.
-- Narrate tersely: the user already sees tool activity, diffs, and todo updates live, so the default between messages is silence — do not report after each tool call or small batch. Say in one sentence what you are about to do at the start of each unit of work — the task itself, the next todo item, a new phase — and when a result forces a change of plan. Routine edits need no announcement, findings that do not change the plan need no narration, and explanations belong in the final summary; warn briefly before actions that are risky or hard to reverse.
+- Narrate tersely: the user already sees tool activity, diffs, and todo updates live, so the default between messages is silence — do not report after each tool call or small batch. Say in one sentence what you are about to do at the start of each unit of work — the task itself, the next todo item, a new phase — and when a result forces a change of plan. Hidden thinking does not count as communication, so these must be messages; never expose private chain-of-thought. Routine edits need no announcement, findings that do not change the plan need no narration, and explanations belong in the final summary; warn briefly before actions that are risky or hard to reverse.
+- Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and equivalent-tool fallback. Mention it only when it blocks progress, changes the plan, or materially reduces confidence.
 - Be direct and technical, cite project-relative paths, explain consequential decisions briefly, and do not provide time estimates.
 
 ## Workspace
@@ -258,12 +259,18 @@ function getReasoningBasePrompt(cwd: string): string {
 - Project root: ${cwd}
 - Paths in responses should be relative to this root.
 
-${INDEXED_TOOL_SCOPE_GUIDANCE}
+${INDEXED_TOOL_SCOPE_GUIDANCE}`;
+}
 
+/**
+ * Compact modes note for the reasoning profile when mode content is inline in
+ * the system prompt. Conversation placement uses MODES_OVERVIEW_SECTION instead,
+ * so the prompt never carries two "## Modes" sections.
+ */
+const REASONING_INLINE_MODES_SECTION = `
 ## Modes
 
 The active mode and any project-defined mode customization are authoritative. Mode and tool restrictions are enforced at runtime; switch modes when the task genuinely requires another capability set.`;
-}
 
 /**
  * Provider-specific behavioral tuning.
@@ -331,15 +338,13 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 - **Never write file *contents* via the shell** — Do not create or modify file contents with \`execute_command\` using \`echo > file\`, \`cat <<EOF > file\`, \`tee\`, \`sed -i\`, or inline interpreter scripts (\`node -e\`, \`python -c\`, \`bun -e\`, \`deno eval\`, \`tsx -e\`, \`perl -e\`, \`ruby -e\`, \`osascript -e\`, heredoc piped to an interpreter, etc.) that call file-write APIs. Always use \`write_file\` or \`apply_diff\` so the user sees a diff and the language server provides diagnostics. This is only about *generating or editing contents* — plain filesystem operations (\`cp\`, \`mv\`, \`rm\`, \`mkdir\`, \`touch\`, \`chmod\`) are fine via \`execute_command\`; use \`cp\`/\`mv\` to copy or move a file rather than reading it and rewriting it with \`write_file\`.`,
 };
 
+// Narration, bias-for-action and capability-plumbing rules live once in the
+// reasoning Core Contract; provider sections carry only provider-specific deltas.
 const REASONING_PROVIDER_PROMPTS: Record<string, string> = {
-  anthropic: `
-## Provider-Specific Behavior
-
-Default to silence between messages: the user already sees tool activity, diffs, and todo-list updates live, so do not duplicate them in prose. Narrate only a one-sentence intent at the start of a unit of work (the task, the next todo item, a new phase), a change of plan or direction, and a brief heads-up before risky or hard-to-reverse actions — hidden thinking does not count as communication, so these must be messages. Routine edits need no announcement, and rationale belongs in the final summary unless the user must weigh in now; never expose private chain-of-thought. Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and equivalent-tool fallback.`,
   codex: `
 ## Provider-Specific Behavior
 
-Bias toward action once scope is clear. Use the highest-level relevant code intelligence tool, prefer known paths and scoped repo maps over rediscovery, keep commands reviewable, and iterate from compiler/test evidence rather than over-exploring. Default to silence between messages: narrate only a one-sentence intent when starting the next unit of work (a todo item, a new phase), a change of plan, and a brief heads-up before risky or hard-to-reverse actions; routine edits need no announcement, and explanations belong in the final summary. Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and equivalent-tool fallback; for that plumbing, narrate only material capability loss, blockers, plan changes, or reduced confidence.`,
+Use the highest-level relevant code intelligence tool, prefer known paths and scoped repo maps over rediscovery, keep commands reviewable, and iterate from compiler/test evidence rather than over-exploring.`,
 };
 
 const TASK_ALIGNMENT_SECTION = `
@@ -1136,13 +1141,13 @@ export async function buildPromptArtifacts(
     options?.modeInstructionPlacement === "conversation";
   const modePrompt = conversationModePlacement
     ? MODES_OVERVIEW_SECTION
-    : buildModePrompt(
+    : `${promptProfile.profile === "reasoning" ? REASONING_INLINE_MODES_SECTION : ""}${buildModePrompt(
         mode,
         options?.agentMode,
         promptProfile.profile,
         options?.approveForMe,
         options?.initialArchitectReviewPending,
-      );
+      )}`;
   const providerPrompts =
     promptProfile.profile === "reasoning"
       ? REASONING_PROVIDER_PROMPTS
