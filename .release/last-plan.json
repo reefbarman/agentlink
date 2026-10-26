@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
-  "createdAt": "2026-10-26T01:26:05.238Z",
+  "sourceSha": "34057d76818bb329653f52fbf76123205f7619ab",
+  "createdAt": "2026-10-26T02:33:47.135Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.67.1",
       "baselineRef": "v1.67.1",
-      "reserved": "1.68.3",
+      "reserved": "1.68.4",
       "commits": [
         "1ffeeac1beb356905435b31877662c402e478ce3",
         "e7c98f1166dffaefcdb7ac8e992997be298c919f",
@@ -46,18 +46,19 @@
         "20773fa7229d5487952fa6615dfd07e78d8554b3",
         "ae1956415d7db75c81d86984f1ae020c73731192",
         "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
-        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
+        "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
+        "34057d76818bb329653f52fbf76123205f7619ab"
       ],
       "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.68.3",
+      "version": "1.68.4",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": true,
       "consumedIntent": false,
-      "tag": "v1.68.3",
+      "tag": "v1.68.4",
       "notes": [
         {
           "sha": "1ffeeac1beb356905435b31877662c402e478ce3",
@@ -256,45 +257,35 @@
           "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
           "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
           "breaking": false
+        },
+        {
+          "sha": "34057d76818bb329653f52fbf76123205f7619ab",
+          "subject": "fix(agent): accept deferred MCP bridges on the pre-resolved native tool path",
+          "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.65.1",
-      "baselineRef": "desktop-v0.65.1",
-      "reserved": "0.65.1",
-      "commits": [
-        "ae1956415d7db75c81d86984f1ae020c73731192",
-        "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
-        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
-      ],
+      "published": "0.66.0",
+      "baselineRef": "desktop-v0.66.0",
+      "reserved": "0.66.0",
+      "commits": ["34057d76818bb329653f52fbf76123205f7619ab"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.66.0",
-      "effectiveBump": "minor",
+      "version": "0.66.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.66.0",
+      "tag": "desktop-v0.66.1",
       "notes": [
         {
-          "sha": "ae1956415d7db75c81d86984f1ae020c73731192",
-          "subject": "fix(ask-agent): keep the inline transcript indicator instead of the pinned bar",
-          "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
-          "breaking": false
-        },
-        {
-          "sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
-          "subject": "fix(ask-agent): keep Approve for Me on, approve open cards, restyle toggle",
-          "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
-          "breaking": false
-        },
-        {
-          "sha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
-          "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
-          "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
+          "sha": "34057d76818bb329653f52fbf76123205f7619ab",
+          "subject": "fix(agent): accept deferred MCP bridges on the pre-resolved native tool path",
+          "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
           "breaking": false
         }
       ]
@@ -324,44 +315,16 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.37.1",
-      "baselineRef": "assistant-v0.37.1",
-      "reserved": "0.37.1",
-      "commits": [
-        "ae1956415d7db75c81d86984f1ae020c73731192",
-        "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
-        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
-      ],
+      "published": "0.38.0",
+      "baselineRef": "assistant-v0.38.0",
+      "reserved": "0.38.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.38.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.38.0",
-      "notes": [
-        {
-          "sha": "ae1956415d7db75c81d86984f1ae020c73731192",
-          "subject": "fix(ask-agent): keep the inline transcript indicator instead of the pinned bar",
-          "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
-          "breaking": false
-        },
-        {
-          "sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
-          "subject": "fix(ask-agent): keep Approve for Me on, approve open cards, restyle toggle",
-          "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
-          "breaking": false
-        },
-        {
-          "sha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
-          "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
-          "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -633,6 +596,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "34057d76818bb329653f52fbf76123205f7619ab": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

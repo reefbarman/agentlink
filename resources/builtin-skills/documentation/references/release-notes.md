@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 1.68.4
+
+- Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.
+- Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.
+- The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.
+- Local glibc Linux hosts now run approved agent commands in the AgentLink terminal when the VSIX includes the node-pty prebuild, honouring the Linux terminal profile and env settings.
+- The sandbox helper and @agentlink/sandbox gain a bubblewrap backend for Linux x64/arm64 with a prerequisites checker, though no AgentLink surface routes to it yet.
+- VS Code on local glibc Linux now runs sandboxed agent commands under bubblewrap when the host passes the prerequisites check and attestation, otherwise falling back or blocking sandbox-only requests with a clear diagnostic.
+- The Browser Ask Agent scratch-folder sandbox now works on local Linux under bubblewrap when prerequisites pass, using bash and a C.UTF-8 locale and hiding /home.
+- Linux sandbox fixes found on four distros: symlinked tools are accepted, the which command is required, and Node.js 20 or later is required for the sandbox helper.
+- Desktop now builds and runs on Linux x64 and arm64 as an AppImage, with Secret Service credentials, Linux window chrome and tray, and the Ask Agent sandbox under bubblewrap.
+- Linux Desktop builds now also produce a deb that installs an AppArmor profile so Chromium keeps its renderer sandbox on Ubuntu 24.04, and CI builds and smoke-tests the Linux packages.
+- Ask Agent can now run sandboxed commands in folders you grant for commands, each behind an approval card with Run, edit or Reject. New grants can only be added from the same computer, and workspace-host and the approval protocol gain sandbox options.
+- Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.
+- Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.
+- The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.
+- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will
+- Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.
+- Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder "Edit files without asking" toggle in Manage access.
+- Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's "File access..." menu item is renamed "Manage access...". .
+- Fixes a stray empty "(No response)" assistant row appearing between batched queued user messages while a turn is still running.
+- Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.
+- Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.
+- Foreground agents are now prompted to recall earlier sessions via session search tools when the user refers to prior work not visible in the current conversation.
+- Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.
+- Test-only change giving the LanceDB retrieval contract tests a longer timeout under load; no shipped behaviour changes.
+- The Work summary card can now be collapsed to a header that still shows the file and line totals inline.
+- Chat tabs now show Needs input when they own a pending question or approval, including restored questions and ones raised by background agents, and the VS Code and browser tab lists refresh when that changes.
+- Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.
+- Trims duplicated reasoning prompt rules and defers the MCP resource and prompt tools behind find_native_tools, which reduces prompt size while find_mcp_tools and call_mcp_tool stay directly available.
+- Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.
+- Fixes deferred MCP resource and prompt tools (list/read resources, list/get prompts) so they can actually be invoked through call_native_tool instead of being discoverable but uninvocable.
+- Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.
+- Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.
+- Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.
+- Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.
+
 ## 1.68.3
 
 - The Yes/No choice card now also appears when a turn ends with a direct question like "Have you reloaded?" but the agent never marked the turn finished. Turns marked completed, blocked or cancelled, turns that ended with an error, and turns restored from history still don't show it.
