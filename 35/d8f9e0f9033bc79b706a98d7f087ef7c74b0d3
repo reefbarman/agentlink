@@ -1,0 +1,15 @@
+AGENTS.md
+  h_e08a86bb3a33a2 90-99
+  h_e08a86bb3a33a2 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "35d8f9e0f9033bc79b706a98d7f087ef7c74b0d3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
