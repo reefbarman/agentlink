@@ -92,7 +92,7 @@ export function CommandExecutionContext({
             ? "It has no network access."
             : hostSandbox.network === "approved-destinations"
               ? "Each new internet destination it connects to waits for your approval. Private network and cloud metadata addresses stay blocked."
-              : "It cannot reach the internet, but can connect to services running on this computer."
+              : "It cannot reach the internet, but can connect to services running on this computer and start a server on a local port."
         }`
       : protectedTerminal
         ? managedNetwork

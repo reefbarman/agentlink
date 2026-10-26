@@ -9348,31 +9348,56 @@ export class BrowserGatewayHelper {
     }
     let accepted = false;
     let rejectionReason: string | undefined;
-    try {
-      const decision = this.askAgentController.requestApproval(request, signal);
-      // Handled below; this only stops an unhandled rejection if publishing
-      // fails first and the approval is released.
-      decision.catch(() => undefined);
-      const response = await this.buildAskAgentResponse();
-      await this.publishAskAgentSnapshot(response.snapshot);
-      const result = await decision;
-      accepted = result.decision === "accept";
-      if (
-        typeof result.rejectionReason === "string" &&
-        result.rejectionReason.trim()
-      ) {
-        rejectionReason = result.rejectionReason.trim();
+    // Approve for Me (only turned on from this computer) covers a new empty
+    // folder under ~/AgentLink, the same kind any device may approve.
+    // Existing folders keep asking: they may hold anything.
+    if (
+      anyDevice &&
+      (await this.askAgentCommandPolicy.snapshot()).approveForMe
+    ) {
+      this.logAskAgentEvent("ask-agent.folder-access", {
+        ok: true,
+        by: "approve-for-me",
+        access,
+      });
+      accepted = true;
+    } else {
+      if (anyDevice) {
+        this.askAgentApproveForMeRechecks.set(id, async () => "accept");
       }
-    } catch {
-      // Publishing can fail after the card is registered; withdraw it so it
-      // does not block later approvals with nothing left to answer it.
-      this.askAgentController.releaseApproval(id);
-      return finish(
-        { status: "cancelled", error: "Folder access approval was cancelled" },
-        true,
-      );
-    } finally {
-      this.askAgentThisMachineOnlyApprovals.delete(id);
+      try {
+        const decision = this.askAgentController.requestApproval(
+          request,
+          signal,
+        );
+        // Handled below; this only stops an unhandled rejection if publishing
+        // fails first and the approval is released.
+        decision.catch(() => undefined);
+        const response = await this.buildAskAgentResponse();
+        await this.publishAskAgentSnapshot(response.snapshot);
+        const result = await decision;
+        accepted = result.decision === "accept";
+        if (
+          typeof result.rejectionReason === "string" &&
+          result.rejectionReason.trim()
+        ) {
+          rejectionReason = result.rejectionReason.trim();
+        }
+      } catch {
+        // Publishing can fail after the card is registered; withdraw it so it
+        // does not block later approvals with nothing left to answer it.
+        this.askAgentController.releaseApproval(id);
+        return finish(
+          {
+            status: "cancelled",
+            error: "Folder access approval was cancelled",
+          },
+          true,
+        );
+      } finally {
+        this.askAgentThisMachineOnlyApprovals.delete(id);
+        this.askAgentApproveForMeRechecks.delete(id);
+      }
     }
     if (!accepted) {
       return finish(

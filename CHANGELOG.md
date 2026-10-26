@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ask Agent commands in granted folders on macOS can now listen on a local port, so dev servers run sandboxed instead of asking for full terminal access, and with Approve for Me on a new folder under ~/AgentLink is created without a card. The sandbox launcher gains an allowLocalBinding option.
+
 ## 1.68.4
 
 - Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.
@@ -18,10 +20,10 @@
 - Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.
 - Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.
 - The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.
-- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will
+- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.
 - Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.
 - Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder "Edit files without asking" toggle in Manage access.
-- Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's "File access..." menu item is renamed "Manage access...". .
+- Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's "File access..." menu item is renamed "Manage access...".
 - Fixes a stray empty "(No response)" assistant row appearing between batched queued user messages while a turn is still running.
 - Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.
 - Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.
@@ -56,10 +58,10 @@
 - Ask Agent commands in folders granted for commands can now be allowed, prompted or forbidden by saved rules and an Approve for Me setting, with rule rows on the approval card and management in the local access panel.
 - Ask Agent commands in granted folders can request internet access with per-destination approval cards, or run unsandboxed with a this-computer-only Full terminal access approval; the sandbox launcher gains a publicNetwork option.
 - The Ask Agent can now edit files in folders granted for commands using write_file with absolute paths and a new apply_diff tool, with diff approval cards and protections for instruction, Git and .env files.
-- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.}]}</br>```json is not allowed so I will
+- Ask Agent can now run long-running background commands (dev servers, watchers) in granted folders, with new list_commands and stop_command tools, a Background label and time limit on command cards, and edits that wait for commands that can write in the folder.
 - Ask Agent can now request folder access through a new request_folder_access approval card, and the access panel becomes Manage access with a Show scratch folder in Finder action in Desktop and an improved manual grant form.
 - Approving a folder for commands in Ask Agent now also lets the agent create and edit files there without a card, with a per-folder "Edit files without asking" toggle in Manage access.
-- Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's "File access..." menu item is renamed "Manage access...". .
+- Ask Agent gains an Approve for Me toggle in the composer, tied to its granted-folder command policy, and Desktop's "File access..." menu item is renamed "Manage access...".
 - Fixes a stray empty "(No response)" assistant row appearing between batched queued user messages while a turn is still running.
 - Ask Agent no longer shows a duplicate inline streaming indicator alongside the pinned status bar above the composer.
 - Clicking a finished execute_command in the transcript now focuses the terminal it ran in if still open, or shows a notice if it has closed.

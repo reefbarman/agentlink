@@ -309,8 +309,13 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
  */
 export function askAgentCommandFoldersPrompt(
   roots: readonly string[],
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   if (roots.length === 0) return undefined;
+  const localServers =
+    platform === "darwin"
+      ? "Servers work in the sandbox: a dev server or test server can listen on a local port (bind to localhost, for example 127.0.0.1:3000) and the user can open it in their browser. Do not ask for require_escalated just to start a server."
+      : "A server started in the sandbox gets its own private network, so tests that start and call their own server work, but the user's browser cannot reach it. Only if the user needs to open it themselves, ask for require_escalated and say why.";
   return [
     "## Folders granted for commands",
     "",
@@ -323,7 +328,9 @@ export function askAgentCommandFoldersPrompt(
     "",
     "For a long-running command such as a dev server, test watcher or build in watch mode, pass background: true. The call returns once it starts; check on it with get_command_output, find it again with list_commands, and stop it with stop_command when you are done. Background commands cannot use require_managed_network.",
     "",
-    'When a command in a granted folder needs the internet (installing packages, downloading, git fetch), pass sandbox_permissions: "require_managed_network" with a reason; each new destination then waits for the user\'s approval. Only when the sandbox blocks something essential, pass sandbox_permissions: "require_escalated" with a reason to run it outside the sandbox with the user\'s full permissions. The user must approve that on their computer, so they may not be able to from a phone.',
+    localServers,
+    "",
+    'When a command in a granted folder needs the internet (installing packages, downloading, git fetch), pass sandbox_permissions: "require_managed_network" with a reason; each new destination then waits for the user\'s approval. Only when the sandbox blocks something essential, pass sandbox_permissions: "require_escalated" with a reason to run it outside the sandbox with the user\'s full permissions. The user must approve that on their computer, so they may not be able to from a phone, and Approve for Me never skips it. Try the command sandboxed first and escalate only after it fails because of the sandbox.',
   ].join("\n");
 }
 
@@ -1734,6 +1741,10 @@ export class AskAgentSandboxWorkspace {
         shareHostTemporaryDirectories: true,
         homeDirectory: this.homeDirectory,
         fallbackShell: "/bin/sh",
+        // Dev and test servers can listen on a local port inside the
+        // sandbox, so they need no full terminal access. On Linux each
+        // command has its own network namespace instead.
+        ...(this.platform === "darwin" ? { allowLocalBinding: true } : {}),
         ...(mode === "network" ? { publicNetwork: { onNetworkRequest } } : {}),
       });
     };

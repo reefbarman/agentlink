@@ -12090,8 +12090,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
       { path: project, access: "read", reason: "again" },
       { path: "/opt/agentlink-new-folder", create: true, reason: "nope" },
       { path: `~/AgentLink/${taskName}-raced`, create: true, reason: "race" },
+      { path: `~/AgentLink/${taskName}-toggled`, create: true, reason: "on" },
+      { path: `~/AgentLink/${taskName}-auto`, create: true, reason: "auto" },
+      { path: sandboxRoot, access: "read", reason: "existing" },
     ];
     const racedFolder = `${newFolder}-raced`;
+    const toggledFolder = `${newFolder}-toggled`;
+    const autoFolder = `${newFolder}-auto`;
     const toolResults: string[] = [];
     const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
     let call = 0;
@@ -12318,12 +12323,49 @@ describe("BrowserGatewayHelper proxy routing", () => {
       );
       expect(opened.status).toBe(403);
       expect(opened.body).toContain("open_requires_this_machine");
+
+      // Turning Approve for Me on while a new-folder card is open approves it.
+      const toggled = post("/api/ask-agent/send", { text: "Toggle" });
+      await pendingCard();
+      expect(
+        (await post("/api/ask-agent/command-policy", { approveForMe: true }))
+          .ok,
+      ).toBe(true);
+      expect((await toggled).ok).toBe(true);
+      expect(toolResults.at(-1)).toContain("granted");
+      expect((await fs.stat(toggledFolder)).isDirectory()).toBe(true);
+
+      // With Approve for Me on, a new ~/AgentLink folder needs no card.
+      expect((await post("/api/ask-agent/send", { text: "Auto" })).ok).toBe(
+        true,
+      );
+      expect(toolResults.at(-1)).toContain("granted");
+      expect((await fs.stat(autoFolder)).isDirectory()).toBe(true);
+      expect(await grants()).toContainEqual(
+        expect.objectContaining({ rootPath: autoFolder, access: "commands" }),
+      );
+
+      // An existing folder still asks.
+      const existingAgain = post("/api/ask-agent/send", { text: "Existing" });
+      const existingAgainCard = await pendingCard();
+      expect(
+        (
+          await post("/api/ask-agent/approval", {
+            id: existingAgainCard.id,
+            decision: "reject",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await existingAgain).ok).toBe(true);
+      expect(toolResults.at(-1)).toContain("rejected_by_user");
     } finally {
       await sandbox.dispose();
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(project, { recursive: true, force: true });
       await fs.rm(newFolder, { recursive: true, force: true });
       await fs.rm(racedFolder, { recursive: true, force: true });
+      await fs.rm(toggledFolder, { recursive: true, force: true });
+      await fs.rm(autoFolder, { recursive: true, force: true });
     }
   });
 

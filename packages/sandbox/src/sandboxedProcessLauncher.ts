@@ -64,6 +64,14 @@ export interface SandboxedProcessLauncherOptions {
   readonly deniedReadRoots?: readonly string[];
   /** Host platform; picks the reported backend. Defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform;
+  /**
+   * Let commands listen on local ports (dev servers, test servers). Outbound
+   * traffic stays loopback or proxy constrained, but on macOS Seatbelt
+   * cannot limit the listener to loopback addresses. Creating a launcher
+   * with this set is the caller's approval: each launch gets the one-launch
+   * capability grant the compiler requires. Defaults to false.
+   */
+  readonly allowLocalBinding?: boolean;
 }
 
 export interface SandboxedProcessRequest {
@@ -163,7 +171,7 @@ export function launchSandboxedProcess(
       sessionId: request.sessionId,
       capability: {
         publicNetwork: request.publicNetwork !== undefined,
-        localBinding: false,
+        localBinding: options.allowLocalBinding === true,
       },
       hostEnvironment: request.environment,
       agentEnvironment: options.agentEnvironment ?? {},
@@ -187,21 +195,22 @@ export function launchSandboxedProcess(
       ...(options.platform ? { platform: options.platform } : {}),
     });
     const now = Date.now();
-    const authorization = request.publicNetwork
-      ? {
-          ...prepared.authorization,
-          grant: {
-            grantId: randomUUID(),
-            bindingDigest: prepared.bindingDigest,
-            policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
-            sessionId: request.sessionId,
-            issuedAt: now,
-            expiresAt: now + 60_000,
-            auditId: randomUUID(),
-            consumedAt: now,
-          },
-        }
-      : prepared.authorization;
+    const authorization =
+      request.publicNetwork || options.allowLocalBinding === true
+        ? {
+            ...prepared.authorization,
+            grant: {
+              grantId: randomUUID(),
+              bindingDigest: prepared.bindingDigest,
+              policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
+              sessionId: request.sessionId,
+              issuedAt: now,
+              expiresAt: now + 60_000,
+              auditId: randomUUID(),
+              consumedAt: now,
+            },
+          }
+        : prepared.authorization;
     let launched: SandboxCommandProcess;
     try {
       launched = options.runtime.launch(

@@ -216,6 +216,30 @@ describe("launchSandboxedProcess", () => {
     await handle.exited;
   });
 
+  it("lets a launcher with allowLocalBinding listen on local ports", async () => {
+    const root = await temporaryDirectory("al-sbx-launch-");
+    const fake = fakeRuntime();
+    const handle = launchSandboxedProcess(
+      { runtime: fake.runtime, writableRoots: [root], allowLocalBinding: true },
+      {
+        sessionId: "session-bind",
+        command: "node server.js",
+        shell: "/bin/sh",
+        cwd: root,
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+      () => undefined,
+    );
+    const metadata = await handle.started;
+    expect(fake.launches[0]!.network).toEqual({
+      mode: "loopback",
+      allowLocalBinding: true,
+    });
+    expect(metadata.capabilities.network).toBe("loopback-listener");
+    fake.finish({ exitCode: 0, timedOut: false });
+    await handle.exited;
+  });
+
   it("rejects network requests from a launch without the public proxy", async () => {
     const root = await temporaryDirectory("al-sbx-launch-");
     const fake = fakeRuntime();
