@@ -1,0 +1,41 @@
+src/shared/mcpToolDefinitions.ts
+  h_e08a86bb3a33a2 32
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 1612-1640
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 253-254,262-263,265-270,341-342,347,1144,1150
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 278
+src/core/tools/toolCapabilities.ts
+  h_e08a86bb3a33a2 76-78,84-87,122-124,150,968
+  s_28075ffe62544b::t_00efbe9b47bc56 88,125
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/core/tools/nativeToolDisclosure.test.ts
+  h_e08a86bb3a33a2 307-327
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_28075ffe62544b::t_a959ed828fb16c 29-31,64-66,99-101,133-135,168-170,203-205,238-240,272-274,307-309,342-344,377-379,411-413,446-448,481-483,516-518,550-552,585-587,620-622,655-657,689-691,724-726,759-761,794-796,828-830,844-846,851-853,858-860,872-874,887-891,895-899,903-907,919-923,935-938,940-947,986
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e6302eeffc5c80c7b240f7b73cb25cad12b05eb",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_28075ffe62544b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd950475-75e9-4eb4-a578-a02e0905431a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
