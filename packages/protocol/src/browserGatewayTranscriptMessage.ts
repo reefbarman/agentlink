@@ -52,6 +52,11 @@ export interface BrowserGatewayTranscriptMessage {
      * `transcript-work-summary-v1`, so older strict validators never see it.
      */
     workSummary?: { contentRevision: number };
+    /**
+     * Wall-clock duration of the ask this marker ends. Sent only to helpers
+     * advertising `transcript-final-elapsed-v1`.
+     */
+    elapsedMs?: number;
   };
   surfaceChange?: {
     model?: { previousModel: string; model: string };

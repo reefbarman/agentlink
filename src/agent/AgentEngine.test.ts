@@ -2939,6 +2939,81 @@ describe("AgentEngine", () => {
       );
     });
 
+    it("stamps the final marker with time since the open ask started", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_final",
+              name: "set_task_status",
+              input: { status: "completed", summary: "Done." },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const makeEngine = () => {
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(
+          engine,
+          {
+            approvalManager: {} as ToolDispatchContext["approvalManager"],
+            approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+            sessionId: "seed-session",
+            extensionUri: {} as ToolDispatchContext["extensionUri"],
+          },
+          async (request: AgentToolExecutionRequest) => {
+            if (request.name === "set_task_status") {
+              request.context.onFinalStatus?.({
+                status: "completed",
+                source: "tool",
+                summary: "Done.",
+              });
+            }
+            return {
+              content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            };
+          },
+        );
+        return engine;
+      };
+      const elapsedOf = (events: AgentEvent[]) => {
+        const event = events.find(
+          (candidate) => candidate.type === "final_marker",
+        );
+        return event?.type === "final_marker"
+          ? event.marker?.elapsedMs
+          : undefined;
+      };
+
+      // A run inside an already-open ask keeps the original start time.
+      const session = await makeSession();
+      session.addUserMessage("follow-up after a stop");
+      const askStartedAt = Date.now() - 90_000;
+      session.askStartedAt = askStartedAt;
+      const elapsedMs = elapsedOf(
+        await collectEvents(makeEngine().run(session)),
+      );
+      expect(elapsedMs).toBeGreaterThanOrEqual(90_000);
+      expect(elapsedMs).toBeLessThan(120_000);
+      expect(session.askStartedAt).toBe(askStartedAt);
+
+      // The first run of a fresh ask opens the clock itself.
+      const fresh = await makeSession();
+      fresh.addUserMessage("new ask");
+      const before = Date.now();
+      const freshElapsedMs = elapsedOf(
+        await collectEvents(makeEngine().run(fresh)),
+      );
+      expect(fresh.askStartedAt).toBeGreaterThanOrEqual(before);
+      expect(freshElapsedMs).toBeGreaterThanOrEqual(0);
+      expect(freshElapsedMs).toBeLessThan(30_000);
+    });
+
     it("finalizes a warned structured review after it ends with an empty response", async () => {
       const requests: StreamRequest[] = [];
       let callCount = 0;

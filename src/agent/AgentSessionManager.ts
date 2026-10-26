@@ -8038,6 +8038,11 @@ export class AgentSessionManager {
                 continue;
               }
 
+              // The agent stopped on its own: close the ask clock. A message
+              // queued during the run belongs to the same ask, like an
+              // interjection, so keep the clock open for its follow-up run.
+              if (!hasQueuedUserMessages) session.askStartedAt = undefined;
+
               const completedTurnIndex = countVisibleUserMessages(
                 session.getAllMessages(),
               );
@@ -8619,6 +8624,12 @@ export class AgentSessionManager {
             continue;
           }
 
+          if (
+            session.hasPendingInterjections !== true &&
+            session.hasQueuedUiMessages !== true
+          ) {
+            session.askStartedAt = undefined;
+          }
           if (!session.background) {
             session.runState = undefined;
           }

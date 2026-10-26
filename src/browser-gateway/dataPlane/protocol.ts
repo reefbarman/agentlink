@@ -2270,8 +2270,13 @@ function parseFinalMarker(
     "continueActionConsumed",
     "autoContinueStopReason",
     "workSummary",
+    "elapsedMs",
   ]);
   const summary = optionalString(object, "summary", path, 8_000);
+  const elapsedMs =
+    object.elapsedMs === undefined
+      ? undefined
+      : nonNegativeSafeInteger(object.elapsedMs, `${path}.elapsedMs`);
   const workSummary = optionalObject(
     object,
     "workSummary",
@@ -2330,6 +2335,7 @@ function parseFinalMarker(
     ...(continueActionConsumed !== undefined ? { continueActionConsumed } : {}),
     ...(autoContinueStopReason ? { autoContinueStopReason } : {}),
     ...(workSummary ? { workSummary } : {}),
+    ...(elapsedMs !== undefined ? { elapsedMs } : {}),
   };
 }
 

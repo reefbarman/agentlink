@@ -358,6 +358,13 @@ export class AgentSession {
     });
   }
 
+  /**
+   * In-memory start time of the current ask. Opened by the first run after a
+   * natural stop and closed by the host when the agent stops on its own, so
+   * interjections, user stops, retries and automatic resumes share one clock.
+   */
+  askStartedAt: number | undefined;
+
   private abortController: AbortController | null = null;
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;

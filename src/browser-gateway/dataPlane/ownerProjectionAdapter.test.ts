@@ -410,6 +410,38 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     ).toBe("not_found");
   });
 
+  it("relays the final-marker ask duration only to helpers that advertise it", () => {
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-assistant", "assistant", "done", 800),
+          finalMarker: {
+            status: "completed",
+            summary: "Done",
+            source: "tool",
+            elapsedMs: 252_000,
+          },
+        },
+      ],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-block-detail-v1"],
+    });
+    expect(
+      legacy.getCheckpoint().transcript.messages[0]?.finalMarker,
+    ).not.toHaveProperty("elapsedMs");
+
+    const adapter = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-final-elapsed-v1"],
+    });
+    expect(
+      adapter.getCheckpoint().transcript.messages[0]?.finalMarker?.elapsedMs,
+    ).toBe(252_000);
+  });
+
   it("forwards bounded web image attribution only to helpers that advertise it", () => {
     const source = readSet();
     source.foreground = {

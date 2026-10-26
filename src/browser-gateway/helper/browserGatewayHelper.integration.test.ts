@@ -1609,6 +1609,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "transcript-display-media-v1",
         "transcript-image-attribution-v1",
         "transcript-work-summary-v1",
+        "transcript-final-elapsed-v1",
       ],
     });
 
@@ -1683,6 +1684,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "transcript-display-media-v1",
         "transcript-image-attribution-v1",
         "transcript-work-summary-v1",
+        "transcript-final-elapsed-v1",
       ],
       ownerRegistration: {
         owner: {

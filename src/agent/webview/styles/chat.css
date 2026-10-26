@@ -4185,6 +4185,12 @@ body.chat-activity-shelf-resizing * {
   font-size: 12px;
 }
 
+.final-marker-elapsed {
+  color: var(--vscode-descriptionForeground);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
 .final-marker-header-blocked {
   color: var(--vscode-editorWarning-foreground, #cca700);
 }

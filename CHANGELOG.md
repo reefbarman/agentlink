@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The final status card now shows how long the ask took, timed by AgentLink from the agent's previous natural stop. Interjections, questions, automatic resumes and stopping then resending don't reset it. Shown in VS Code and browser chat.
+
 ## 1.68.5
 
 - The compatibility system prompt used by most non-Codex models states each tool-selection, narration and shell-write rule once instead of repeating them in the base and provider sections, making the prompt shorter without changing routing (the golden-task eval passes on both prompt profiles).

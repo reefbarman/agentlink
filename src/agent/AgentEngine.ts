@@ -1234,6 +1234,9 @@ export class AgentEngine {
     },
   ): AsyncGenerator<AgentEvent> {
     const ac = session.createAbortController();
+    // The first run after a natural stop opens the ask clock; later runs in
+    // the same ask (stop and resend, retry, automatic resume) keep it.
+    session.askStartedAt ??= Date.now();
     // Capture signal locally — a subsequent run() call on the same session would
     // replace session._abortSignal via createAbortController(), causing session.isAborted
     // to return false in this (still-running) loop and allowing spurious API calls.
@@ -3451,6 +3454,12 @@ export class AgentEngine {
             pendingFinalMarker,
             this.log,
           );
+          if (session.askStartedAt !== undefined) {
+            pendingFinalMarker = {
+              ...pendingFinalMarker,
+              elapsedMs: Math.max(0, Date.now() - session.askStartedAt),
+            };
+          }
         }
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.

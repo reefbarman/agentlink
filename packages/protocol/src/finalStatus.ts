@@ -33,6 +33,12 @@ export interface FinalMessageMarker {
    * file tools. Never supplied by the model.
    */
   workSummary?: WorkSummary;
+  /**
+   * Host-measured wall-clock time for the ask this marker ends: from the run
+   * that opened the ask (after the previous natural stop) to this marker.
+   * Interjections, questions and automatic resumes do not reset it.
+   */
+  elapsedMs?: number;
 }
 
 /** One unified-diff hunk; lines keep their " ", "+" or "-" prefix. */

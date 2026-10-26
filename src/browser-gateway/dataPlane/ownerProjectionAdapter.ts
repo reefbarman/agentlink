@@ -106,6 +106,8 @@ interface ProjectionContext {
   readonly imageAttribution?: boolean;
   /** Receiver accepts final-marker work summary references. */
   readonly workSummaries?: boolean;
+  /** Receiver accepts the final marker's ask duration. */
+  readonly finalElapsed?: boolean;
 }
 
 interface ProjectedReadSet {
@@ -153,6 +155,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly displayMedia: boolean;
   private readonly imageAttribution: boolean;
   private readonly workSummaries: boolean;
+  private readonly finalElapsed: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
@@ -198,6 +201,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
       this.blockDetails &&
       (options.dataPlaneFeatures?.includes("transcript-work-summary-v1") ??
         false);
+    this.finalElapsed =
+      options.dataPlaneFeatures?.includes("transcript-final-elapsed-v1") ??
+      false;
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
     });
@@ -330,6 +336,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         displayMedia: this.displayMedia,
         imageAttribution: this.imageAttribution,
         workSummaries: this.workSummaries,
+        finalElapsed: this.finalElapsed,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -650,6 +657,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       displayMedia: this.displayMedia,
       imageAttribution: this.imageAttribution,
       workSummaries: this.workSummaries,
+      finalElapsed: this.finalElapsed,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
     const referencedDetails = [...details.values()];
@@ -675,6 +683,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       displayMedia: this.displayMedia,
       imageAttribution: this.imageAttribution,
       workSummaries: this.workSummaries,
+      finalElapsed: this.finalElapsed,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1344,6 +1353,12 @@ function projectMessage(
                     ),
                   },
                 }
+              : {}),
+            ...(context.finalElapsed &&
+            typeof message.finalMarker.elapsedMs === "number" &&
+            Number.isSafeInteger(message.finalMarker.elapsedMs) &&
+            message.finalMarker.elapsedMs >= 0
+              ? { elapsedMs: message.finalMarker.elapsedMs }
               : {}),
           },
         }

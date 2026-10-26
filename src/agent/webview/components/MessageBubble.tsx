@@ -927,16 +927,40 @@ function getFinalMarkerMeta(marker: NonNullable<ChatMessage["finalMarker"]>) {
   }
 }
 
+/** Formats an ask duration as "42s", "3m 05s" or "1h 07m". */
+export function formatAskElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  if (hours > 0) return `${hours}h ${pad(minutes)}m`;
+  if (minutes > 0) return `${minutes}m ${pad(seconds)}s`;
+  return `${seconds}s`;
+}
+
 function FinalMarkerHeader({
   marker,
 }: {
   marker: NonNullable<ChatMessage["finalMarker"]>;
 }) {
   const meta = getFinalMarkerMeta(marker);
+  const elapsed =
+    typeof marker.elapsedMs === "number" && Number.isFinite(marker.elapsedMs)
+      ? formatAskElapsed(marker.elapsedMs)
+      : undefined;
   return (
     <div class={`final-marker-header final-marker-header-${marker.status}`}>
       <i class={`codicon codicon-${meta.icon}`} />
       <span>{meta.label}</span>
+      {elapsed && (
+        <span
+          class="final-marker-elapsed"
+          title="Time since this ask started (after the agent's previous stop)"
+        >
+          · {elapsed}
+        </span>
+      )}
     </div>
   );
 }

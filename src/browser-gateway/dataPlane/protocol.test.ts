@@ -1332,6 +1332,7 @@ describe("browser gateway owner protocol", () => {
         continueAction: { label: "Continue", prompt: "Continue work" },
         continueActionConsumed: false,
         autoContinueStopReason: "none",
+        elapsedMs: 252_000,
       },
       surfaceChange: {
         model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
