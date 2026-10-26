@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   BENCHMARK_LANGUAGE_TOOLS,
   getAgentTools,
+  getNativeTargetSchema,
   dispatchToolCall,
   createAgentToolRuntime,
   getExecuteCommandUsageMetrics,
@@ -27,7 +28,7 @@ import { createComposeExecutionScope } from "./compose/composeScope.js";
 import { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
-import { BUILT_IN_MODES } from "./modes.js";
+import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
@@ -1200,6 +1201,57 @@ describe("tool usage telemetry project attribution", () => {
     expect(JSON.stringify(result)).toContain("by the active skill allowance");
     expect(JSON.stringify(result)).not.toContain("use switch_mode");
     expect(handleGetCallHierarchy).not.toHaveBeenCalled();
+  });
+
+  it("gives every deferred native tool a validator matching its advertised schema", () => {
+    // Deferred tools are invoked through call_native_tool, whose bridge and
+    // pre-resolved paths both require a canonical zod validator. Discovery
+    // alone succeeding is not enough (see the deferred MCP bridge regression).
+    const unionMode = buildUnionAgentMode(BUILT_IN_MODES);
+    const catalogs = [false, true].map((isBackground) =>
+      getAgentTools(
+        unionMode,
+        [],
+        isBackground,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ["search", "fetch"],
+        true,
+        true,
+      ),
+    );
+    const deferred = new Map(
+      catalogs
+        .flatMap(
+          (tools) => createNativeToolDisclosureSnapshot(tools).deferredTools,
+        )
+        .map((tool) => [tool.name, tool]),
+    );
+    expect(deferred.size).toBeGreaterThan(0);
+    expect([...deferred.keys()]).toEqual(
+      expect.arrayContaining(["list_mcp_resources", "get_mcp_prompt"]),
+    );
+
+    for (const [name, tool] of deferred) {
+      const schema = getNativeTargetSchema(name);
+      expect(schema, `${name} has no call_native_tool validator`).toBeDefined();
+      const advertised = tool.input_schema as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      expect(
+        Object.keys(schema!).sort(),
+        `${name} validator fields differ from its advertised schema`,
+      ).toEqual(Object.keys(advertised.properties ?? {}).sort());
+      for (const key of advertised.required ?? []) {
+        expect(
+          schema![key]!.safeParse(undefined).success,
+          `${name}.${key} is required in the advertised schema but optional in its validator`,
+        ).toBe(false);
+      }
+    }
   });
 
   it("invokes deferred MCP resource and prompt bridges through call_native_tool", async () => {

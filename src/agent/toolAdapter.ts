@@ -441,7 +441,7 @@ const DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS: Record<
  * Canonical runtime validator for a deferred-native target. Shared by the
  * bridge (call_native_tool) and pre-resolved paths so they cannot diverge.
  */
-function getNativeTargetSchema(
+export function getNativeTargetSchema(
   name: string,
 ): Record<string, z.ZodTypeAny> | undefined {
   return (
