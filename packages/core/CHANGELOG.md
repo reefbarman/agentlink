@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.35.0 — 2026-10-26
+
+- Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>
+
 ## 0.34.0 — 2026-10-25
 
 - Final status cards in VS Code now include a frozen Work summary with per-file rows and expandable read-only diffs, also served on demand to browser and Desktop remote views and exposed as new protocol types.

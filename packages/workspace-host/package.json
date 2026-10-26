@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/workspace-host",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "private": true,
   "description": "Standalone local coding host composition for AgentLink",
   "license": "MIT",
@@ -24,10 +24,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/core": "0.34.0",
-    "@agentlink/node-host": "0.34.0",
-    "@agentlink/protocol": "0.34.0",
-    "@agentlink/sandbox": "0.34.0",
+    "@agentlink/core": "0.35.0",
+    "@agentlink/node-host": "0.35.0",
+    "@agentlink/protocol": "0.35.0",
+    "@agentlink/sandbox": "0.35.0",
     "diff": "^9.0.0"
   },
   "engines": {

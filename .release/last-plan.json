@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "34057d76818bb329653f52fbf76123205f7619ab",
-  "createdAt": "2026-10-26T02:33:47.135Z",
+  "sourceSha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+  "createdAt": "2026-10-26T02:48:28.942Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -47,7 +47,8 @@
         "ae1956415d7db75c81d86984f1ae020c73731192",
         "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
         "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
-        "34057d76818bb329653f52fbf76123205f7619ab"
+        "34057d76818bb329653f52fbf76123205f7619ab",
+        "c22a4cb82a4bde5aa590063007a09a49f2998c7b"
       ],
       "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
@@ -263,29 +264,35 @@
           "subject": "fix(agent): accept deferred MCP bridges on the pre-resolved native tool path",
           "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
           "breaking": false
+        },
+        {
+          "sha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+          "subject": "fix(ask-agent): run dev servers sandboxed and auto-approve new folders with Approve for Me",
+          "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.66.0",
-      "baselineRef": "desktop-v0.66.0",
-      "reserved": "0.66.0",
-      "commits": ["34057d76818bb329653f52fbf76123205f7619ab"],
+      "published": "0.66.1",
+      "baselineRef": "desktop-v0.66.1",
+      "reserved": "0.66.1",
+      "commits": ["c22a4cb82a4bde5aa590063007a09a49f2998c7b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.66.1",
-      "effectiveBump": "patch",
+      "version": "0.67.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.66.1",
+      "tag": "desktop-v0.67.0",
       "notes": [
         {
-          "sha": "34057d76818bb329653f52fbf76123205f7619ab",
-          "subject": "fix(agent): accept deferred MCP bridges on the pre-resolved native tool path",
-          "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
+          "sha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+          "subject": "fix(ask-agent): run dev servers sandboxed and auto-approve new folders with Approve for Me",
+          "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
           "breaking": false
         }
       ]
@@ -294,37 +301,73 @@
       "published": "0.44.0",
       "baselineRef": "cli-v0.44.0",
       "reserved": "0.44.0",
-      "commits": [],
+      "commits": ["c22a4cb82a4bde5aa590063007a09a49f2998c7b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.45.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.45.0",
+      "notes": [
+        {
+          "sha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+          "subject": "fix(ask-agent): run dev servers sandboxed and auto-approve new folders with Approve for Me",
+          "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.34.0",
       "baselineRef": "sdk-v0.34.0",
       "reserved": "0.34.0",
-      "commits": [],
+      "commits": ["c22a4cb82a4bde5aa590063007a09a49f2998c7b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.35.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "sdk-v0.35.0",
+      "notes": [
+        {
+          "sha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+          "subject": "fix(ask-agent): run dev servers sandboxed and auto-approve new folders with Approve for Me",
+          "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
+          "breaking": false
+        }
+      ]
     },
     "assistant": {
       "published": "0.38.0",
       "baselineRef": "assistant-v0.38.0",
       "reserved": "0.38.0",
-      "commits": [],
+      "commits": ["c22a4cb82a4bde5aa590063007a09a49f2998c7b"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.39.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.39.0",
+      "notes": [
+        {
+          "sha": "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
+          "subject": "fix(ask-agent): run dev servers sandboxed and auto-approve new folders with Approve for Me",
+          "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -604,6 +647,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes deferred MCP bridge tools like list_mcp_resources failing with invalid_resolved_native_tool when called through the pre-resolved native tool path in live sessions.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "c22a4cb82a4bde5aa590063007a09a49f2998c7b": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

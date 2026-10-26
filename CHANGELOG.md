@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-- Ask Agent commands in granted folders on macOS can now listen on a local port, so dev servers run sandboxed instead of asking for full terminal access, and with Approve for Me on a new folder under ~/AgentLink is created without a card. The sandbox launcher gains an allowLocalBinding option.
-
 ## 1.68.4
 
+- Ask Agent commands in granted folders on macOS can now listen on a local port, so dev servers run sandboxed instead of asking for full terminal access, and with Approve for Me on a new folder under ~/AgentLink is created without a card. The sandbox launcher gains an allowLocalBinding option.
 - Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.
 - Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.
 - The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.
