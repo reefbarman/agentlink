@@ -13,7 +13,6 @@ cli-releases/
 .env.local
 plans/*
 .mcp.json
-/AGENTS.md
 benchmarks/
 tmp/
 native-builds/

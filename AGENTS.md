@@ -15,7 +15,7 @@
 
 ## Public Documentation
 
-Public documentation is a product surface. Keep it as current and deliberate as the code. `AGENTS.md` is a symlink to this file; edit `CLAUDE.md` and preserve that symlink.
+Public documentation is a product surface. Keep it as current and deliberate as the code. This `AGENTS.md` is the single project instructions file for every agent, including Claude Code (v2.1.277+), which reads it when no `CLAUDE.md` exists. Do not add a root `CLAUDE.md`: Claude Code would then read that instead of this file.
 
 | Artifact                                                                                      | Owns                                                                                    | Do not use it for                                                              |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -86,6 +86,16 @@ When full verification is skipped, explicitly state:
 - what was skipped,
 - why it was skipped,
 - and what validation was run instead (if any).
+
+### Testing gotchas
+
+Recurring causes of slow or flaky tests in this repo:
+
+- **Never run real git or recursive file work on the shared `/tmp`.** Its size depends on the machine, so tests that do will time out unpredictably. Use `fs.mkdtempSync(path.join(os.tmpdir(), "..."))` and clean up. `AgentSessionManager.test.ts` stubs checkpoints by default; call `useRealCheckpoints()` with a temp workspace only when a test verifies real checkpoints.
+- **Wait for the work, not the clock.** Await the promise or event that signals completion instead of polling with wall-clock deadlines or short sleeps.
+- **Heavy tests (LanceDB, real subprocesses, git) need a timeout that holds under full-suite load**, not one tuned on an idle run.
+- **Root `npm test` does not run `apps/`.** When a change can affect the CLI, desktop, or server, run `npx vitest run` in each affected `apps/<name>` folder.
+- **Before blaming your change for a failure, check it on clean `main`** (rebuild `packages/core` first, since tests import its build output).
 
 ## Adding or Changing Tools
 
