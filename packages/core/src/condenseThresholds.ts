@@ -99,8 +99,9 @@ export function getTargetWindowScale(
 // sign-in, and 100k for Haiku 5.5.
 //
 // Codex-aligned models condense at 90% of their target, like Codex
-// auto-compaction (90% of its window): ~236k for GPT-5.6 and GPT-6.1 Sol on an
-// API key (under the 272k API long-context price tier), ~450k on 500k targets.
+// auto-compaction (90% of its window): ~236k for GPT-5.6, GPT-6.1 Terra, and
+// GPT-6.1 Sol on an API key (under the 272k API long-context price tier),
+// ~450k on 500k targets.
 const CODEX_ALIGNED_DEFAULT_THRESHOLD = 0.9;
 const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
 const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
@@ -120,8 +121,8 @@ function isGpt56Model(modelId: string): boolean {
   return /^gpt-5\.6(?:-|$)/i.test(modelId);
 }
 
-function isGpt61SolModel(modelId: string): boolean {
-  return /^gpt-6\.1-sol(?:-|$)/i.test(modelId);
+function isGpt61CodexAlignedModel(modelId: string): boolean {
+  return /^gpt-6\.1-(?:sol|terra)(?:-|$)/i.test(modelId);
 }
 
 /** Frontier models historically treated as large when capabilities are unavailable. */
@@ -139,7 +140,7 @@ function getBaseAutoCondenseThreshold(
   modelId: string,
   capabilities?: CondenseWindowCapabilities,
 ): number {
-  if (isGpt56Model(modelId) || isGpt61SolModel(modelId)) {
+  if (isGpt56Model(modelId) || isGpt61CodexAlignedModel(modelId)) {
     return CODEX_ALIGNED_DEFAULT_THRESHOLD;
   }
   if (

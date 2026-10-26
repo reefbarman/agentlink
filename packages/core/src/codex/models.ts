@@ -162,6 +162,7 @@ export interface ResponsesCaps {
 export const CODEX_PICKER_MODEL_IDS = [
   "gpt-6-astra",
   "gpt-6.1-sol",
+  "gpt-6.1-terra",
   "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -187,7 +188,8 @@ export const CODEX_PICKER_MODEL_IDS = [
  * in a deprecation grace period — treat them as gone. GPT-6 Sol and Luna were
  * added from OpenAI's 2026-09-22 launch announcement while their gradual Codex
  * rollout was still in progress. GPT-6.1 Sol replaced GPT-6 Sol in the picker
- * on 2026-09-30 from OpenAI's DevDay announcement.
+ * on 2026-09-30 from OpenAI's DevDay announcement. GPT-6.1 Terra was added
+ * on 2026-10-27 from OpenAI's launch announcement (Codex and API).
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
   ...CODEX_PICKER_MODEL_IDS,
@@ -392,6 +394,19 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_6_1_SOL_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
+  },
+  {
+    // Documented 1.05M window, 128K output, `none` through `max` effort.
+    id: "gpt-6.1-terra",
+    displayName: "GPT-6.1 Terra",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
     serviceTiers: CODEX_FAST_TIER,
   },

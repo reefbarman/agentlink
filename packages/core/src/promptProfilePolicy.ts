@@ -11,6 +11,7 @@ export const CODEX_MODEL_PROMPT_PROFILES: Readonly<
 > = Object.freeze({
   "gpt-6-astra": "reasoning",
   "gpt-6.1-sol": "reasoning",
+  "gpt-6.1-terra": "reasoning",
   "gpt-6-luna": "compatibility",
   "gpt-5.6-sol": "reasoning",
   "gpt-5.6-terra": "reasoning",

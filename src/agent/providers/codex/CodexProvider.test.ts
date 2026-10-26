@@ -1991,10 +1991,11 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(createMock).toHaveBeenCalledOnce();
   });
 
-  it("lists only the official seven models for OAuth and API key", async () => {
+  it("lists only the official eight models for OAuth and API key", async () => {
     const expected = [
       "gpt-6-astra",
       "gpt-6.1-sol",
+      "gpt-6.1-terra",
       "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
