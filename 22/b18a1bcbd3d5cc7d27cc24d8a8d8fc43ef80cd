@@ -1,0 +1,17 @@
+src/agent/backgroundModelRouter.test.ts
+  h_e08a86bb3a33a2 208-253,520,550,578
+src/agent/backgroundModelRouting.config.json
+  h_e08a86bb3a33a2 56-58,60,67
+  h_e08a86bb3a33a2 52-55,59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "22b18a1bcbd3d5cc7d27cc24d8a8d8fc43ef80cd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
