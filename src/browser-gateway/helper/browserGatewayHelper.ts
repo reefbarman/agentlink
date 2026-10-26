@@ -1196,6 +1196,15 @@ export class BrowserGatewayHelper {
     string,
     { readonly error: string; readonly message: string }
   >();
+  /**
+   * Open command and edit cards that Approve for Me can answer when it is
+   * turned on: each returns the card's approve decision, or null when the
+   * card still needs the user (a Prompt rule, full terminal access).
+   */
+  private readonly askAgentApproveForMeRechecks = new Map<
+    string,
+    () => Promise<"run-once" | "accept" | null>
+  >();
   /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
   private readonly askAgentMemoryStore:
     | BrowserGatewayAskAgentMemoryStore
@@ -5970,6 +5979,7 @@ export class BrowserGatewayHelper {
       }
       await this.askAgentCommandPolicy.setApproveForMe(body.approveForMe);
       await this.publishAskAgentCommandPolicy();
+      if (body.approveForMe) await this.applyApproveForMeToPendingApproval();
       this.logAskAgentEvent("ask-agent.command-policy", {
         ok: true,
         approveForMe: body.approveForMe,
@@ -9590,10 +9600,29 @@ export class BrowserGatewayHelper {
           : {}),
       },
     };
-    const decision = this.askAgentController.requestApproval(request, signal);
-    const response = await this.buildAskAgentResponse();
-    await this.publishAskAgentSnapshot(response.snapshot);
-    const answer = await decision;
+    // Turning Approve for Me on while this card is open runs it, as in
+    // VS Code, when the policy would now have run it without a card.
+    this.askAgentApproveForMeRechecks.set(request.id, async () =>
+      !unsandboxed &&
+      (
+        await this.askAgentCommandPolicy.evaluate({
+          sessionId: proposal.sessionId,
+          root: proposal.root,
+          command: proposal.command,
+        })
+      ).decision === "allow"
+        ? "run-once"
+        : null,
+    );
+    let answer: Awaited<ReturnType<AskAgentController["requestApproval"]>>;
+    try {
+      const decision = this.askAgentController.requestApproval(request, signal);
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+      answer = await decision;
+    } finally {
+      this.askAgentApproveForMeRechecks.delete(request.id);
+    }
     // Defence in depth: the card has no rule rows for an escalation.
     const result = unsandboxed ? { ...answer, rules: undefined } : answer;
     this.logAskAgentEvent("ask-agent.command-approval", {
@@ -9747,6 +9776,11 @@ export class BrowserGatewayHelper {
           "Changes to agent instruction or configuration files can only be approved on the computer running AgentLink. From here you can only reject it.",
       });
     }
+    // Approve for Me turned on while the card is open applies an ordinary
+    // edit; instruction files keep asking.
+    if (!proposal.protected) {
+      this.askAgentApproveForMeRechecks.set(id, async () => "accept");
+    }
     try {
       const decision = this.askAgentController.requestApproval(request, signal);
       const response = await this.buildAskAgentResponse();
@@ -9769,6 +9803,7 @@ export class BrowserGatewayHelper {
       return { decision: "run" };
     } finally {
       this.askAgentThisMachineOnlyApprovals.delete(id);
+      this.askAgentApproveForMeRechecks.delete(id);
     }
   }
 
@@ -9885,6 +9920,34 @@ export class BrowserGatewayHelper {
       await this.publishAskAgentCommandPolicy();
     }
     return "allow-once";
+  }
+
+  /**
+   * After Approve for Me is turned on, answer the open command or edit card
+   * if Approve for Me would now have let it through without a card.
+   */
+  private async applyApproveForMeToPendingApproval(): Promise<void> {
+    const pending = this.askAgentController.getPendingApproval();
+    const recheck = pending
+      ? this.askAgentApproveForMeRechecks.get(pending.id)
+      : undefined;
+    if (!pending || !recheck) return;
+    const decision = await recheck();
+    if (!decision) return;
+    if (
+      this.askAgentController.submitApproval({
+        type: "decision",
+        id: pending.id,
+        decision,
+      })
+    ) {
+      this.logAskAgentEvent("ask-agent.approve-for-me.pending", {
+        ok: true,
+        kind: pending.kind,
+      });
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+    }
   }
 
   /**

@@ -11770,7 +11770,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
         expect.objectContaining({ pattern: "printf", root: project }),
       ]);
 
-      // Only this machine can turn Approve for Me on.
+      // Only this machine can turn Approve for Me on. Turning it on while a
+      // card is open runs that command, as in VS Code.
+      const third = send("Touch three");
+      await pendingApproval();
       const lanApproveForMe = await fromLan(
         "handleAskAgentCommandPolicyRequest",
         { approveForMe: true },
@@ -11783,7 +11786,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       await expect(enabled.json()).resolves.toMatchObject({
         snapshot: { ui: { commandPolicy: { approveForMe: true } } },
       });
-      expect((await send("Touch three")).ok).toBe(true);
+      expect((await third).ok).toBe(true);
       await expect(
         fs.stat(path.join(project, "three.txt")),
       ).resolves.toBeTruthy();

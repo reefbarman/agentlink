@@ -585,7 +585,11 @@ function snapshotToReadSet(
     mcp: [],
     policies: {
       agentWriteApproval: foreground.agentWriteApproval,
-      commandApprovalPolicy: "manual",
+      // Relay clients read Ask Agent's Approve for Me from here: the relay
+      // checkpoint has no field for the Ask Agent command policy.
+      commandApprovalPolicy: snapshot.ui.commandPolicy?.approveForMe
+        ? "approve-for-me"
+        : "manual",
       approvalPolicy: "on-request",
       approvalReviewer: "user",
       executionPreset: "native-manual",

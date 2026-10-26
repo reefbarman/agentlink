@@ -953,6 +953,39 @@ export function mergeDetachedSessionDetail(
   };
 }
 
+/**
+ * Relay checkpoints carry no Ask Agent grants or command policy, so a relay
+ * snapshot would otherwise blank them. Keep the last known values; Approve
+ * for Me itself rides on the foreground command approval policy.
+ */
+export function carryAskAgentAccessState(
+  next: GatewaySnapshot,
+  previous: GatewaySnapshot | undefined,
+): GatewaySnapshot {
+  if (next.ui.commandPolicy && next.ui.readGrants) return next;
+  const previousPolicy = previous?.ui.commandPolicy;
+  const relayPolicy = next.session.foreground?.commandApprovalPolicy;
+  const commandPolicy =
+    next.ui.commandPolicy ??
+    (previousPolicy || relayPolicy
+      ? {
+          ...(previousPolicy ?? { rules: [] }),
+          approveForMe: relayPolicy
+            ? relayPolicy === "approve-for-me"
+            : (previousPolicy?.approveForMe ?? false),
+        }
+      : undefined);
+  const readGrants = next.ui.readGrants ?? previous?.ui.readGrants;
+  return {
+    ...next,
+    ui: {
+      ...next.ui,
+      ...(commandPolicy ? { commandPolicy } : {}),
+      ...(readGrants ? { readGrants } : {}),
+    },
+  };
+}
+
 function isGatewaySnapshot(value: unknown): value is GatewaySnapshot {
   return Boolean(
     value &&
@@ -2024,7 +2057,7 @@ export function BrowserGatewayApp({
                 tab.sessionId === selectedLogicalTab.sessionId,
             )
           : undefined;
-      const normalizedNext =
+      const withWorkspace =
         next.session.chatWorkspace == null && cachedWorkspace
           ? {
               ...next,
@@ -2045,6 +2078,10 @@ export function BrowserGatewayApp({
                 },
               }
             : next;
+      const normalizedNext =
+        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+          ? carryAskAgentAccessState(withWorkspace, cached?.snapshot)
+          : withWorkspace;
       if (cached && generation < cached.generation) {
         reportAskAgentRejection("stale_generation");
         return false;

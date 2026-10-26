@@ -3,9 +3,11 @@
 import {
   BrowserGatewayApp,
   cacheDetachedSessionDetail,
+  carryAskAgentAccessState,
   mergeDetachedSessionDetail,
   pruneDetachedSessionDetailCache,
   reconcileAskAgentSessionTarget,
+  type GatewaySnapshot,
 } from "./BrowserGatewayApp";
 import type {
   ChatMessage,
@@ -919,6 +921,49 @@ describe("reconcileAskAgentSessionTarget", () => {
         cached as never,
       ),
     ).toBeNull();
+  });
+});
+
+describe("carryAskAgentAccessState", () => {
+  it("keeps grants and rules a relay snapshot leaves out, with Approve for Me from the relay policy", () => {
+    const previous = createSnapshot() as unknown as GatewaySnapshot;
+    previous.ui.readGrants = [
+      {
+        id: "grant-1",
+        createdAt: 1,
+        rootPath: "/tmp/p",
+        label: "p",
+        kind: "directory",
+        access: "commands",
+      },
+    ];
+    previous.ui.commandPolicy = {
+      approveForMe: false,
+      rules: [
+        {
+          id: "rule-1",
+          pattern: "npm test",
+          mode: "prefix",
+          decision: "allow",
+          scope: "global",
+        },
+      ],
+    } as GatewaySnapshot["ui"]["commandPolicy"];
+    const relay = structuredClone(previous);
+    delete relay.ui.readGrants;
+    delete relay.ui.commandPolicy;
+    relay.session.foreground = {
+      ...relay.session.foreground!,
+      commandApprovalPolicy: "approve-for-me",
+    };
+    const carried = carryAskAgentAccessState(relay, previous);
+    expect(carried.ui.readGrants).toEqual(previous.ui.readGrants);
+    expect(carried.ui.commandPolicy).toMatchObject({
+      approveForMe: true,
+      rules: [expect.objectContaining({ id: "rule-1" })],
+    });
+    // A full helper snapshot is used as is.
+    expect(carryAskAgentAccessState(previous, relay)).toBe(previous);
   });
 });
 
