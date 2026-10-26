@@ -1273,6 +1273,31 @@ describe("tool usage telemetry project attribution", () => {
       isError: true,
       data: { status: "invalid_native_tool_input" },
     });
+
+    // The engine pre-resolves call_native_tool to its target before dispatch;
+    // that path must accept the same deferred MCP bridges.
+    const preResolved = (name: string, input: Record<string, unknown>) =>
+      runtime.executeTool({
+        name,
+        input,
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          availableToolNames: new Set(["call_native_tool"]),
+          providerToolName: "call_native_tool",
+          providerToolInput: { name, input },
+          nativeToolDisclosure,
+        },
+      });
+    const preResolvedList = await preResolved("list_mcp_resources", {});
+    expect(preResolvedList.isError).toBeFalsy();
+    expect(JSON.stringify(preResolvedList)).toContain("linear://issues");
+    expect((await preResolved("list_mcp_prompts", {})).isError).toBeFalsy();
+    expect(
+      JSON.stringify(
+        await preResolved("get_mcp_prompt", { server: "linear", name: "s" }),
+      ),
+    ).toContain("prompt-body-7f3a");
   });
 
   it("rejects forged pre-resolved native calls outside the frozen snapshot", async () => {

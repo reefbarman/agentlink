@@ -438,6 +438,20 @@ const DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS: Record<
 };
 
 /**
+ * Canonical runtime validator for a deferred-native target. Shared by the
+ * bridge (call_native_tool) and pre-resolved paths so they cannot diverge.
+ */
+function getNativeTargetSchema(
+  name: string,
+): Record<string, z.ZodTypeAny> | undefined {
+  return (
+    TOOL_SCHEMAS[name] ??
+    DEFERRED_AGENT_TOOL_SCHEMAS[name] ??
+    DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS[name]
+  );
+}
+
+/**
  * Read-only inventory of native adapter schemas. Stage 0 evaluation baselines
  * use this to detect drift across the currently fragmented tool registries
  * without making this adapter mapping a second mutable registry.
@@ -2320,8 +2334,7 @@ export function resolveAgentToolCall(
         ? getDeferredNativeTool(snapshot, request.name)
         : undefined;
       const targetSchema = target
-        ? (TOOL_SCHEMAS[target.name] ??
-          DEFERRED_AGENT_TOOL_SCHEMAS[target.name])
+        ? getNativeTargetSchema(target.name)
         : undefined;
       const parsedTarget = targetSchema
         ? z.object(targetSchema).safeParse(request.input)
@@ -2405,10 +2418,7 @@ export function resolveAgentToolCall(
     );
   }
 
-  const targetSchema =
-    TOOL_SCHEMAS[target.name] ??
-    DEFERRED_AGENT_TOOL_SCHEMAS[target.name] ??
-    DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS[target.name];
+  const targetSchema = getNativeTargetSchema(target.name);
   if (!targetSchema) {
     return nativeToolResolutionError(
       request,
