@@ -5135,7 +5135,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBeNull();
   });
 
-  it("pins the streaming status row on desktop like VS Code, alongside approvals", async () => {
+  it("leaves Ask Agent live activity inline instead of pinning a status row", async () => {
     render(
       h(BrowserGatewayApp, {
         authToken: "test-token",
@@ -5164,9 +5164,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       MockEventSource.instances.at(-1)?.emit("snapshot", response.snapshot);
     });
     await screen.findByRole("button", { name: "Open browser" });
-    const statusRow = document.querySelector(".browser-streaming-row");
-    expect(statusRow).toBeTruthy();
-    expect(statusRow?.textContent).toContain("Preparing response");
+    expect(document.querySelector(".browser-streaming-row")).toBeNull();
   });
 
   it("keeps the current instance selected instead of jumping to an active one", async () => {

@@ -10918,9 +10918,6 @@ export function BrowserGatewayApp({
                         key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
                         messages={messages}
                         streaming={Boolean(streaming)}
-                        // Ask Agent relies on the pinned status bar alone;
-                        // two live indicators read as duplicated UI.
-                        showInlineStreamingActivity={!isAskAgentSelected}
                         initialMessageLimit={
                           mobileLayout || touchInput ? 20 : undefined
                         }
@@ -11501,8 +11498,13 @@ export function BrowserGatewayApp({
                     </div>
                   )}
                 {/* Pinned like VS Code: the inline transcript indicator can
-                    scroll out of view during long tool-heavy turns. */}
-                {streaming && !visibleQuestion && !mobileReviewOpen ? (
+                    scroll out of view during long tool-heavy turns. Ask Agent
+                    keeps only the inline transcript indicator; two live
+                    indicators read as duplicated UI. */}
+                {streaming &&
+                !isAskAgentSelected &&
+                !visibleQuestion &&
+                !mobileReviewOpen ? (
                   <StreamingStatusBar
                     messages={messages}
                     statusOverride={statusOverride}
