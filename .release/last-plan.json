@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "645c278b25a31024a497ba154692d29bb8e246cc",
-  "createdAt": "2026-10-25T23:46:11.231Z",
+  "sourceSha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+  "createdAt": "2026-10-26T00:32:48.912Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -40,9 +40,11 @@
         "51b96d85e15ff5fef6433ceb4c7312cca180a9ba",
         "24518350d51ec937890635683f63476b728e508c",
         "f9e3bf6b7a80eb99dc37f1e527eb12760debf451",
-        "645c278b25a31024a497ba154692d29bb8e246cc"
+        "645c278b25a31024a497ba154692d29bb8e246cc",
+        "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+        "188d9c224d1e0d9c396033c5cc3622ad9a6de05d"
       ],
-      "unknownPaths": [],
+      "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
@@ -214,29 +216,50 @@
           "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
           "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
           "breaking": false
+        },
+        {
+          "sha": "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+          "subject": "feat(agent): trim duplicated reasoning prompt rules and defer MCP resource tools",
+          "summary": "Trims duplicated reasoning prompt rules and defers the MCP resource and prompt tools behind find_native_tools, which reduces prompt size while find_mcp_tools and call_mcp_tool stay directly available.",
+          "breaking": false
+        },
+        {
+          "sha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+          "subject": "feat(evals): add a live first-turn routing eval with golden tasks",
+          "summary": "Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.64.0",
-      "baselineRef": "desktop-v0.64.0",
-      "reserved": "0.64.0",
-      "commits": ["645c278b25a31024a497ba154692d29bb8e246cc"],
-      "unknownPaths": [],
+      "published": "0.64.1",
+      "baselineRef": "desktop-v0.64.1",
+      "reserved": "0.64.1",
+      "commits": [
+        "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+        "188d9c224d1e0d9c396033c5cc3622ad9a6de05d"
+      ],
+      "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.64.1",
-      "effectiveBump": "patch",
+      "version": "0.65.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.64.1",
+      "tag": "desktop-v0.65.0",
       "notes": [
         {
-          "sha": "645c278b25a31024a497ba154692d29bb8e246cc",
-          "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
-          "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
+          "sha": "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+          "subject": "feat(agent): trim duplicated reasoning prompt rules and defer MCP resource tools",
+          "summary": "Trims duplicated reasoning prompt rules and defers the MCP resource and prompt tools behind find_native_tools, which reduces prompt size while find_mcp_tools and call_mcp_tool stay directly available.",
+          "breaking": false
+        },
+        {
+          "sha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+          "subject": "feat(evals): add a live first-turn routing eval with golden tasks",
+          "summary": "Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.",
           "breaking": false
         }
       ]
@@ -245,13 +268,25 @@
       "published": "0.43.0",
       "baselineRef": "cli-v0.43.0",
       "reserved": "0.43.0",
-      "commits": [],
-      "unknownPaths": [],
+      "commits": ["188d9c224d1e0d9c396033c5cc3622ad9a6de05d"],
+      "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "minor",
+      "status": "release",
+      "version": "0.44.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.44.0",
+      "notes": [
+        {
+          "sha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+          "subject": "feat(evals): add a live first-turn routing eval with golden tasks",
+          "summary": "Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.",
+          "breaking": false
+        }
+      ]
     },
     "sdk": {
       "published": "0.34.0",
@@ -266,25 +301,34 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.36.0",
-      "baselineRef": "assistant-v0.36.0",
-      "reserved": "0.36.0",
-      "commits": ["645c278b25a31024a497ba154692d29bb8e246cc"],
-      "unknownPaths": [],
+      "published": "0.36.1",
+      "baselineRef": "assistant-v0.36.1",
+      "reserved": "0.36.1",
+      "commits": [
+        "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+        "188d9c224d1e0d9c396033c5cc3622ad9a6de05d"
+      ],
+      "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.36.1",
-      "effectiveBump": "patch",
+      "version": "0.37.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.36.1",
+      "tag": "assistant-v0.37.0",
       "notes": [
         {
-          "sha": "645c278b25a31024a497ba154692d29bb8e246cc",
-          "subject": "fix(browser-gateway): recover Ask Agent's saved model when the first snapshot is lost",
-          "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
+          "sha": "fa66bf94b25e6a726a05accaa3f50382048f95b0",
+          "subject": "feat(agent): trim duplicated reasoning prompt rules and defer MCP resource tools",
+          "summary": "Trims duplicated reasoning prompt rules and defers the MCP resource and prompt tools behind find_native_tools, which reduces prompt size while find_mcp_tools and call_mcp_tool stay directly available.",
+          "breaking": false
+        },
+        {
+          "sha": "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
+          "subject": "feat(evals): add a live first-turn routing eval with golden tasks",
+          "summary": "Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.",
           "breaking": false
         }
       ]
@@ -511,6 +555,22 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Ask Agent in Desktop and Browser now recovers its saved chat, model and thinking level when the first snapshot is lost, instead of staying on the placeholder model, and logs rejected snapshots and recovery attempts.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "fa66bf94b25e6a726a05accaa3f50382048f95b0": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Trims duplicated reasoning prompt rules and defers the MCP resource and prompt tools behind find_native_tools, which reduces prompt size while find_mcp_tools and call_mcp_tool stay directly available.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "188d9c224d1e0d9c396033c5cc3622ad9a6de05d": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Adds a developer-only live first-turn routing eval (npm run eval:routing) with golden tasks; it is not shipped to users.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
