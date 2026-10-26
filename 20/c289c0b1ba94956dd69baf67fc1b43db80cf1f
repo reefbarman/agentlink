@@ -1,0 +1,29 @@
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 1416-1424
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 5771-5832
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 2355-2357,2626-2628,4423-4432
+  s_1531912bb3678b::t_332b99aab57411 2354,2358,2624-2625,2629,4433-4435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "20c289c0b1ba94956dd69baf67fc1b43db80cf1f",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1531912bb3678b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0262e547-bdbd-4077-a8c4-325ff9267f38",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
