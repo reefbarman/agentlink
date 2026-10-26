@@ -5183,6 +5183,38 @@ describe("ChatViewProvider session state sync", () => {
         provider.getBrowserProjectedForegroundState()?.detectedQuestion ?? null,
       ).toBeNull();
     });
+
+    it("detects a direct question on a live turn that ended without set_task_status", async () => {
+      const foreground = {
+        ...restoredForeground(),
+        getAllMessages: () => [] as unknown[],
+      };
+      const provider = await createProvider(foreground);
+      const project = (msg: Record<string, unknown>) =>
+        (
+          provider as unknown as {
+            projectExtensionMessage: (msg: Record<string, unknown>) => void;
+          }
+        ).projectExtensionMessage(msg);
+
+      // Hydrate the empty session first so the live turn is not a restore.
+      provider.getBrowserProjectedForegroundState();
+      foreground.status = "streaming";
+      project({
+        type: "agentTextDelta",
+        sessionId: "session-1",
+        text: "Fix pushed. Have you installed and reloaded?",
+      });
+      foreground.status = "idle";
+      project({ type: "agentDone", sessionId: "session-1" });
+
+      expect(
+        provider.getBrowserProjectedForegroundState()?.detectedQuestion,
+      ).toMatchObject({
+        kind: "yes_no",
+        prompt: "Have you installed and reloaded?",
+      });
+    });
   });
 
   it("projects revert recovery notice into browser foreground state", async () => {

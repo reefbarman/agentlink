@@ -185,6 +185,23 @@ export interface QuestionDetectionOptions {
   waitingForUser?: boolean;
 }
 
+/**
+ * Whether a final message may offer a card for a direct yes/no question.
+ * True when the turn explicitly waited on the user, and also when it ended
+ * without any `set_task_status` (and without an error), since a trailing
+ * "Have you…?" is then the agent's last word. Explicit completed, blocked or
+ * cancelled statuses keep direct questions as prose.
+ */
+export function allowsDirectYesNoQuestion(message: {
+  finalMarker?: { status?: string };
+  error?: unknown;
+}): boolean {
+  if (message.finalMarker) {
+    return message.finalMarker.status === "waiting_for_user";
+  }
+  return !message.error;
+}
+
 const DIRECT_YES_NO_START =
   /^(?:have|has|had|did|do|does|is|are|am|was|were|can|could|will|would|should|shall|may|might)\s/i;
 

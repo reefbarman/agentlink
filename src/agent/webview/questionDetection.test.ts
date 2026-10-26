@@ -1,8 +1,31 @@
-import { describe, expect, it } from "vitest";
 import {
+  allowsDirectYesNoQuestion,
   detectQuestionFromAssistantText,
   getQuestionDetectionText,
 } from "./questionDetection";
+import { describe, expect, it } from "vitest";
+
+describe("allowsDirectYesNoQuestion", () => {
+  it("allows waiting turns and turns that ended without set_task_status", () => {
+    expect(
+      allowsDirectYesNoQuestion({
+        finalMarker: { status: "waiting_for_user" },
+      }),
+    ).toBe(true);
+    expect(allowsDirectYesNoQuestion({})).toBe(true);
+  });
+
+  it("keeps explicit non-waiting statuses and errored turns as prose", () => {
+    for (const status of ["completed", "blocked", "cancelled"]) {
+      expect(allowsDirectYesNoQuestion({ finalMarker: { status } })).toBe(
+        false,
+      );
+    }
+    expect(allowsDirectYesNoQuestion({ error: { message: "boom" } })).toBe(
+      false,
+    );
+  });
+});
 
 describe("getQuestionDetectionText", () => {
   it("prefers the final status summary over mid-turn narration", () => {

@@ -251,6 +251,7 @@ import type {
 } from "./voice/VoiceInputService.js";
 import type { VoiceInputLiveEvent } from "../shared/voiceInputProtocol.js";
 import {
+  allowsDirectYesNoQuestion,
   detectQuestionFromAssistantText,
   getQuestionDetectionText,
   type QuestionDetectionOptions,
@@ -10705,6 +10706,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    // Live turns that ended without set_task_status may still offer a card
+    // for a trailing direct yes/no question; restored history may not. The
+    // key uses the strict status so a restored message stays handled when
+    // later non-streaming events re-run this pass.
+    const allowDirectYesNo =
+      waitingForUser || (!restored && allowsDirectYesNoQuestion(lastMsg));
     const detectKey = `${lastMsg.id}:${waitingForUser}:${assistantText}`;
     if (this.projectedLastDetectKey === detectKey) {
       return;
@@ -10741,7 +10748,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     this.detectRequestInputs.set(requestId, { detectKey });
     this.detectQuestionForWebview(requestId, lastMsg.id, assistantText, {
-      waitingForUser,
+      waitingForUser: allowDirectYesNo,
     });
   }
 

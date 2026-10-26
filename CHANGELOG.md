@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Yes/No choice card now also appears when a turn ends with a direct question like "Have you reloaded?" but the agent never marked the turn finished. Turns marked completed, blocked or cancelled, turns that ended with an error, and turns restored from history still don't show it.
+
 ## 1.68.3
 
 - Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.

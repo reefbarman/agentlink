@@ -115,7 +115,10 @@ import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-f
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
 import { useHostVoiceInput } from "./useHostVoiceInput";
-import { getQuestionDetectionText } from "./questionDetection";
+import {
+  allowsDirectYesNoQuestion,
+  getQuestionDetectionText,
+} from "./questionDetection";
 import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   resolveOpenFileRequest,
@@ -2886,6 +2889,10 @@ export function App({
       return;
     }
 
+    // Live turns that ended without set_task_status may still offer a card
+    // for a trailing direct yes/no question.
+    const allowDirectYesNo =
+      waitingForUser || (streamEnded && allowsDirectYesNoQuestion(lastMsg));
     const requestId = `detect-question-${lastMsg.id}-${Date.now()}`;
     activeDetectRequestRef.current = {
       requestId,
@@ -2897,7 +2904,7 @@ export function App({
       requestId,
       messageId: lastMsg.id,
       text: assistantText,
-      waitingForUser,
+      waitingForUser: allowDirectYesNo,
     });
   }, [
     state.streaming,

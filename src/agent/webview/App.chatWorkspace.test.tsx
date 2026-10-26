@@ -1681,4 +1681,44 @@ describe("App chat workspace integration", () => {
       ).toEqual([]);
     });
   });
+
+  describe("detected questions on live turns", () => {
+    function runLiveTurn(marker?: Record<string, unknown>) {
+      const vscodeApi = createVsCodeApi();
+      render(<App vscodeApi={vscodeApi} />);
+      deliver({
+        type: "stateUpdate",
+        state: { sessionId: "session-1", mode: "code", streaming: true },
+      });
+      deliver({
+        type: "agentTextDelta",
+        sessionId: "session-1",
+        text: "Fix pushed. Have you installed and reloaded?",
+      });
+      if (marker) {
+        deliver({ type: "agentFinalMarker", sessionId: "session-1", marker });
+      }
+      deliver({ type: "agentDone", sessionId: "session-1" });
+      return postedCommands(vscodeApi.postMessage, "agentDetectQuestion");
+    }
+
+    it("allows direct yes/no detection when the turn had no set_task_status", () => {
+      expect(runLiveTurn()).toEqual([
+        expect.objectContaining({
+          text: "Fix pushed. Have you installed and reloaded?",
+          waitingForUser: true,
+        }),
+      ]);
+    });
+
+    it("keeps direct yes/no detection off for a completed turn", () => {
+      expect(
+        runLiveTurn({
+          status: "completed",
+          source: "tool",
+          summary: "Fix pushed. Have you installed and reloaded?",
+        }),
+      ).not.toContainEqual(expect.objectContaining({ waitingForUser: true }));
+    });
+  });
 });
