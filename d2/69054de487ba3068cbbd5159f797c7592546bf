@@ -1,0 +1,38 @@
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 115,233,288,293,299,313,319-320,325
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 1562,1564,1566,1591-1620,1676,1680,1682,1779,1782
+  s_7f32b1e6b3c232::t_2194871e134db8 1679,1681,1780-1781
+CLAUDE.md
+  h_e08a86bb3a33a2 121
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/evals/routingEval.eval.ts
+  h_e08a86bb3a33a2 15-17,45-50,69,74-78,82-84,225,229,236
+  s_7f32b1e6b3c232::t_53b1441400628b 70-73,79-81,222-224,226-228,230
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 11-13,46-48,82-84,116-118,150-152,185-187,221-223,255-257,289-291,324-326,360-362,394-396,428-430,463-465,499-501,533-535,567-569,602-604,638-640,672-674,706-708,741-743,777-779,811-813
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d269054de487ba3068cbbd5159f797c7592546bf",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_7f32b1e6b3c232": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92f28c98-5423-45f9-92b1-37f780e31b3f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
