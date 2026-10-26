@@ -5571,6 +5571,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
+    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     (session as any).messageCount = 0;
@@ -6141,6 +6142,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
+    stubCheckpointManager(mgr);
     const loaded = await mgr.restoreLastSession();
     expect(loaded?.runState?.phase).toBe("running");
 
@@ -6236,6 +6238,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
+    stubCheckpointManager(mgr);
 
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
