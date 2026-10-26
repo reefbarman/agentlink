@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "d269054de487ba3068cbbd5159f797c7592546bf",
-  "createdAt": "2026-10-26T04:44:02.529Z",
+  "sourceSha": "40ac068492d4dac552eeb1cf7c1380225594781c",
+  "createdAt": "2026-10-26T05:20:42.690Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -51,7 +51,8 @@
         "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
         "b1a1960eec2317954a848c9922780b915471c19d",
         "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
-        "d269054de487ba3068cbbd5159f797c7592546bf"
+        "d269054de487ba3068cbbd5159f797c7592546bf",
+        "40ac068492d4dac552eeb1cf7c1380225594781c"
       ],
       "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
@@ -291,29 +292,35 @@
           "subject": "refactor(prompt): dedupe compatibility prompt rules",
           "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
           "breaking": false
+        },
+        {
+          "sha": "40ac068492d4dac552eeb1cf7c1380225594781c",
+          "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
+          "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.67.1",
-      "baselineRef": "desktop-v0.67.1",
-      "reserved": "0.67.1",
-      "commits": ["d269054de487ba3068cbbd5159f797c7592546bf"],
+      "published": "0.67.2",
+      "baselineRef": "desktop-v0.67.2",
+      "reserved": "0.67.2",
+      "commits": ["40ac068492d4dac552eeb1cf7c1380225594781c"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.67.2",
+      "version": "0.67.3",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.67.2",
+      "tag": "desktop-v0.67.3",
       "notes": [
         {
-          "sha": "d269054de487ba3068cbbd5159f797c7592546bf",
-          "subject": "refactor(prompt): dedupe compatibility prompt rules",
-          "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
+          "sha": "40ac068492d4dac552eeb1cf7c1380225594781c",
+          "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
+          "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
           "breaking": false
         }
       ]
@@ -346,13 +353,25 @@
       "published": "0.39.1",
       "baselineRef": "assistant-v0.39.1",
       "reserved": "0.39.1",
-      "commits": [],
+      "commits": ["40ac068492d4dac552eeb1cf7c1380225594781c"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "none",
-      "status": "skip",
-      "reason": "no shipped changes",
-      "notes": []
+      "bump": "patch",
+      "status": "release",
+      "version": "0.39.2",
+      "effectiveBump": "patch",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "assistant-v0.39.2",
+      "notes": [
+        {
+          "sha": "40ac068492d4dac552eeb1cf7c1380225594781c",
+          "subject": "fix(ask-agent): resume streaming when switching back to a chat with a running turn",
+          "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
+          "breaking": false
+        }
+      ]
     }
   },
   "decisions": {
@@ -664,6 +683,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "40ac068492d4dac552eeb1cf7c1380225594781c": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Switching back to an Ask Agent chat whose turn is still running now resumes the live streaming activity indicator instead of dropping it.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

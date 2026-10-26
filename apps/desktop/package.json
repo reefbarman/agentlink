@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/desktop",
-  "version": "0.67.2",
+  "version": "0.67.3",
   "private": true,
   "description": "Standalone AgentLink desktop chat",
   "license": "MIT",
