@@ -1,5 +1,5 @@
 CHANGELOG.md
-  h_e08a86bb3a33a2 5-6,61,64
+  h_e08a86bb3a33a2 5-6,23,26,61,64
 resources/builtin-skills/documentation/references/tools.md
   h_e08a86bb3a33a2 209,222
 packages/sandbox/src/sandboxedProcessLauncher.test.ts
