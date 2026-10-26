@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
-  "createdAt": "2026-10-26T03:14:06.652Z",
+  "sourceSha": "d269054de487ba3068cbbd5159f797c7592546bf",
+  "createdAt": "2026-10-26T04:44:02.529Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -50,7 +50,8 @@
         "34057d76818bb329653f52fbf76123205f7619ab",
         "c22a4cb82a4bde5aa590063007a09a49f2998c7b",
         "b1a1960eec2317954a848c9922780b915471c19d",
-        "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972"
+        "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
+        "d269054de487ba3068cbbd5159f797c7592546bf"
       ],
       "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
@@ -284,38 +285,35 @@
           "subject": "fix(webview): only stop following the transcript on real user scroll input",
           "summary": "Chat transcript auto-scroll now stops following only on real user scroll input, so layout shifts after sending no longer strand the view above new output.",
           "breaking": false
+        },
+        {
+          "sha": "d269054de487ba3068cbbd5159f797c7592546bf",
+          "subject": "refactor(prompt): dedupe compatibility prompt rules",
+          "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.67.0",
-      "baselineRef": "desktop-v0.67.0",
-      "reserved": "0.67.0",
-      "commits": [
-        "b1a1960eec2317954a848c9922780b915471c19d",
-        "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972"
-      ],
+      "published": "0.67.1",
+      "baselineRef": "desktop-v0.67.1",
+      "reserved": "0.67.1",
+      "commits": ["d269054de487ba3068cbbd5159f797c7592546bf"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "patch",
       "status": "release",
-      "version": "0.67.1",
+      "version": "0.67.2",
       "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.67.1",
+      "tag": "desktop-v0.67.2",
       "notes": [
         {
-          "sha": "b1a1960eec2317954a848c9922780b915471c19d",
-          "subject": "test(agent): require a call_native_tool validator for every deferred native tool",
-          "summary": "Exports the native tool schema lookup so tests can verify every deferred native tool has a matching validator; no behaviour change for users.",
-          "breaking": false
-        },
-        {
-          "sha": "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
-          "subject": "fix(webview): only stop following the transcript on real user scroll input",
-          "summary": "Chat transcript auto-scroll now stops following only on real user scroll input, so layout shifts after sending no longer strand the view above new output.",
+          "sha": "d269054de487ba3068cbbd5159f797c7592546bf",
+          "subject": "refactor(prompt): dedupe compatibility prompt rules",
+          "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
           "breaking": false
         }
       ]
@@ -345,28 +343,16 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.39.0",
-      "baselineRef": "assistant-v0.39.0",
-      "reserved": "0.39.0",
-      "commits": ["5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972"],
+      "published": "0.39.1",
+      "baselineRef": "assistant-v0.39.1",
+      "reserved": "0.39.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.39.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "assistant-v0.39.1",
-      "notes": [
-        {
-          "sha": "5f8a885bef584dfc85fc2ac8fc43fe09fc4f8972",
-          "subject": "fix(webview): only stop following the transcript on real user scroll input",
-          "summary": "Chat transcript auto-scroll now stops following only on real user scroll input, so layout shifts after sending no longer strand the view above new output.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
@@ -670,6 +656,14 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Chat transcript auto-scroll now stops following only on real user scroll input, so layout shifts after sending no longer strand the view above new output.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "d269054de487ba3068cbbd5159f797c7592546bf": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Compatibility system prompt rules for tool selection, narration and shell writes are deduplicated across the base and provider sections, with the shell-write rule made more explicit; the routing eval gains a prompt-profile override.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

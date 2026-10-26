@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-- The compatibility system prompt used by most non-Codex models states each tool-selection, narration and shell-write rule once instead of repeating them in the base and provider sections, making the prompt shorter without changing routing (the golden-task eval passes on both prompt profiles).
-
 ## 1.68.5
 
+- The compatibility system prompt used by most non-Codex models states each tool-selection, narration and shell-write rule once instead of repeating them in the base and provider sections, making the prompt shorter without changing routing (the golden-task eval passes on both prompt profiles).
 - Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.
 - Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.
 - The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.
