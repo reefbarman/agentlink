@@ -1,0 +1,34 @@
+CHANGELOG.md
+  s_fdf23206ca91bb::t_50e7e50d864c2a 5
+resources/builtin-skills/documentation/references/release-notes.md
+  s_fdf23206ca91bb::t_0de9b19e73b539 5
+resources/builtin-skills/documentation/references/tools.md
+  s_fdf23206ca91bb::t_6cbeb06dd42178 249
+src/agent/AgentSession.ts
+  s_fdf23206ca91bb::t_2a6ce4101bab21 362-365
+src/agent/AgentSessionManager.test.ts
+  s_fdf23206ca91bb::t_8baca01b4fa27c 3930-3944
+src/agent/AgentSessionManager.ts
+  s_fdf23206ca91bb::t_2428eaae0f3be9 8194-8197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb484ddb1599ddd8dc1043e82c0de9624853b1dd",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_fdf23206ca91bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e895a28c-a782-46b0-9a3d-105fb915d2fe",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
