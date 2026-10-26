@@ -1558,19 +1558,15 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Bias for action");
-    expect(result).toContain("`search_files` with `query`");
+    expect(result).toContain(
+      "`search_files` requires exactly one of two exclusive inputs",
+    );
     expect(result).toContain("Narrate your work");
     expect(result).toContain(
       "Default to acting quickly after task alignment is clear and any mode-specific alignment check has passed",
     );
     expect(result).toContain(
-      "If task alignment is clear and you believe you know where the change should go",
-    );
-    expect(result).toContain(
       "Keep routine discovery misses, retries, query reformulation, and fallback attempts internal",
-    );
-    expect(result).toContain(
-      "Do not use a progress update solely to announce deferred-tool discovery",
     );
   });
 
@@ -1590,10 +1586,37 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and fallback attempts",
     );
-    expect(result).toContain(
-      "Routine capability-plumbing calls never require narration",
-    );
   });
+
+  it.each([
+    ["openai-compatible:claude", "anthropic"],
+    ["codex", "openai"],
+  ] as const)(
+    "states compatibility-profile tool and narration rules once (%s)",
+    async (providerId, modelFamily) => {
+      const countOf = (text: string, needle: string) =>
+        text.split(needle).length - 1;
+      const result = await buildPromptArtifacts("code", tmpDir, {
+        providerId,
+        modelFamily,
+        model: "eval-compatibility-model",
+      });
+      expect(result.promptProfile.profile).toBe("compatibility");
+      const prompt = result.systemPrompt;
+      expect(countOf(prompt, "Known file path beats search")).toBe(1);
+      expect(countOf(prompt, "Known broad scope beats search")).toBe(1);
+      expect(countOf(prompt, "for known files")).toBe(0);
+      expect(countOf(prompt, "`search_files` for search")).toBe(0);
+      expect(
+        countOf(prompt, "`search_files` requires exactly one of two"),
+      ).toBe(1);
+      expect(countOf(prompt, "Narrate at the start of each unit of work")).toBe(
+        1,
+      );
+      expect(countOf(prompt, "inline interpreter scripts")).toBe(1);
+      expect(countOf(prompt, "stuck or wasteful")).toBe(0);
+    },
+  );
 
   it("keeps routine capability plumbing internal for compatible Claude reasoning profiles", async () => {
     const result = await buildPromptArtifacts("code", tmpDir, {
@@ -1650,12 +1673,13 @@ describe("buildSystemPrompt", () => {
       'Go directly to `read_file` with `view: "context"`',
     );
     expect(result).toContain(
-      '`read_file` with `view: "context"` for known files',
+      "returns bounded content plus metadata, git status, diagnostics",
     );
     expect(result).not.toContain("`get_context`");
-    expect(result).toContain("`search_files` for search");
-    expect(result).toContain("Use `query` for ranked search");
-    expect(result).toContain("use `regex` when you know the text or pattern");
+    expect(result).toContain(
+      "use `query` for ranked workspace search when the location or wording is not known",
+    );
+    expect(result).toContain("`regex` for exact text or patterns");
   });
 
   it("serves the compact reasoning profile to evaluated Codex models", async () => {
@@ -1752,9 +1776,11 @@ describe("buildSystemPrompt", () => {
       'Go directly to `read_file` with `view: "context"`',
     );
     expect(result).toContain(
-      '`read_file` with `view: "context"` for known files',
+      "returns bounded content plus metadata, git status, diagnostics",
     );
-    expect(result).toContain("`search_files` for search");
+    expect(result).toContain(
+      "`search_files` requires exactly one of two exclusive inputs",
+    );
     expect(result).toContain("`read_file` for exact reads");
   });
 

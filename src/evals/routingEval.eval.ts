@@ -12,6 +12,9 @@
  * - AGENTLINK_EVAL_MODEL     Model id sent to the endpoint
  * - AGENTLINK_EVAL_API_KEY   Bearer token (optional for local bridges)
  * - AGENTLINK_EVAL_FAMILY    "anthropic" (default) or "openai" prompt tuning
+ * - AGENTLINK_EVAL_PROMPT_PROFILE "compatibility" or "reasoning" to force a
+ *                            prompt profile (default: AgentLink's own choice,
+ *                            which is compatibility for non-Codex providers)
  * - AGENTLINK_EVAL_RUNS      Runs per task (default 2)
  * - AGENTLINK_EVAL_TASKS     Comma-separated task ids to run (default all)
  * - AGENTLINK_EVAL_PASS_RATE Minimum overall pass rate, 0-1 (default 0.8)
@@ -39,6 +42,12 @@ const env = process.env;
 const baseUrl = env.AGENTLINK_EVAL_BASE_URL?.replace(/\/+$/, "");
 const model = env.AGENTLINK_EVAL_MODEL;
 const family = env.AGENTLINK_EVAL_FAMILY === "openai" ? "openai" : "anthropic";
+const forcedProfile =
+  env.AGENTLINK_EVAL_PROMPT_PROFILE === "reasoning" ||
+  env.AGENTLINK_EVAL_PROMPT_PROFILE === "compatibility"
+    ? env.AGENTLINK_EVAL_PROMPT_PROFILE
+    : undefined;
+let resolvedProfile = "unknown";
 const runs = Math.max(1, Number(env.AGENTLINK_EVAL_RUNS ?? 2) || 2);
 const minPassRate = Number(env.AGENTLINK_EVAL_PASS_RATE ?? 0.8);
 const selectedIds = env.AGENTLINK_EVAL_TASKS?.split(",").map((id) => id.trim());
@@ -57,14 +66,22 @@ interface RunResult extends GoldenTaskGrade {
 }
 
 async function buildRequest(task: GoldenTask) {
-  const { systemPrompt } = await buildPromptArtifacts(task.mode, repoRoot, {
-    providerId: "openai-compatible:eval",
-    modelFamily: family,
-    model,
-    modeInstructionPlacement: "conversation",
-    composeEnabled: true,
-    approveForMe: true,
-  });
+  const { systemPrompt, promptProfile } = await buildPromptArtifacts(
+    task.mode,
+    repoRoot,
+    {
+      providerId: "openai-compatible:eval",
+      modelFamily: family,
+      model,
+      ...(forcedProfile && model
+        ? { promptProfileOverrides: { [model]: forcedProfile } }
+        : {}),
+      modeInstructionPlacement: "conversation",
+      composeEnabled: true,
+      approveForMe: true,
+    },
+  );
+  resolvedProfile = promptProfile.profile;
   const modeBlock = await buildModeInstructionBlock(task.mode, repoRoot);
   const unionMode = buildUnionAgentMode(BUILT_IN_MODES);
   const tools = createNativeToolDisclosureSnapshot([
@@ -202,13 +219,21 @@ describe.skipIf(!baseUrl || !model)("first-turn routing eval", () => {
       await fs.writeFile(
         reportPath,
         JSON.stringify(
-          { model, family, runs, passRate, rows, results },
+          {
+            model,
+            family,
+            promptProfile: resolvedProfile,
+            runs,
+            passRate,
+            rows,
+            results,
+          },
           null,
           2,
         ),
       );
       console.log(
-        `Routing pass rate ${(passRate * 100).toFixed(1)}% (${model}); report: ${path.relative(repoRoot, reportPath)}`,
+        `Routing pass rate ${(passRate * 100).toFixed(1)}% (${model}, ${resolvedProfile} prompt); report: ${path.relative(repoRoot, reportPath)}`,
       );
 
       expect(passRate).toBeGreaterThanOrEqual(minPassRate);
