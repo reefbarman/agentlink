@@ -3,6 +3,8 @@
 // `src/agent/condenseTargetWindow.ts` and the pure parts of
 // `src/agent/modelCondenseThresholds.ts` re-export these.
 
+import { usesCodexAlignedCondense } from "./codex/models.js";
+
 // Default condense targets assume a 256k usable-input window regardless of the
 // model's advertised context. Larger windows scale the default fraction and the
 // cache-hit bonus down so sessions condense at the same absolute point a 256k
@@ -117,14 +119,6 @@ export function clampCondenseThreshold(value: number): number {
   return Math.min(MAX_THRESHOLD, Math.max(MIN_THRESHOLD, value));
 }
 
-function isGpt56Model(modelId: string): boolean {
-  return /^gpt-5\.6(?:-|$)/i.test(modelId);
-}
-
-function isGpt61CodexAlignedModel(modelId: string): boolean {
-  return /^gpt-6\.1-(?:sol|terra)(?:-|$)/i.test(modelId);
-}
-
 /** Frontier models historically treated as large when capabilities are unavailable. */
 function isLegacyLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
@@ -140,7 +134,7 @@ function getBaseAutoCondenseThreshold(
   modelId: string,
   capabilities?: CondenseWindowCapabilities,
 ): number {
-  if (isGpt56Model(modelId) || isGpt61CodexAlignedModel(modelId)) {
+  if (usesCodexAlignedCondense(modelId)) {
     return CODEX_ALIGNED_DEFAULT_THRESHOLD;
   }
   if (

@@ -1,6 +1,7 @@
 import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
+  CODEX_ROUTING_TIER_GROUPS,
   getCodexModelCapabilities,
   getCodexModelMigration,
   getCodexResponsesRequestHeaders,
@@ -10,8 +11,45 @@ import {
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
   resolveCodexTextVerbosity,
+  usesCodexAlignedCondense,
 } from "./models.js";
 import { describe, expect, it } from "vitest";
+
+describe("Codex routing tiers", () => {
+  it("prefers the strongest current model first in each tier", () => {
+    expect(CODEX_ROUTING_TIER_GROUPS.deep_reasoning[0]).toBe("gpt-6-astra");
+    expect(CODEX_ROUTING_TIER_GROUPS.balanced.slice(0, 2)).toEqual([
+      "gpt-6.1-sol",
+      "gpt-6-sol",
+    ]);
+    expect(CODEX_ROUTING_TIER_GROUPS.cheap.slice(0, 2)).toEqual([
+      "gpt-6-luna",
+      "gpt-5.6-luna",
+    ]);
+  });
+
+  it("keeps Terra models balanced and behind every Sol", () => {
+    const balanced = CODEX_ROUTING_TIER_GROUPS.balanced;
+    const lastSol = Math.max(
+      ...balanced
+        .filter((id) => id.endsWith("-sol"))
+        .map((id) => balanced.indexOf(id)),
+    );
+    for (const terra of ["gpt-6.1-terra", "gpt-5.6-terra"]) {
+      expect(balanced.indexOf(terra)).toBeGreaterThan(lastSol);
+    }
+  });
+});
+
+describe("Codex-aligned condense", () => {
+  it("matches flagged models and their dated snapshots only", () => {
+    expect(usesCodexAlignedCondense("gpt-6.1-terra")).toBe(true);
+    expect(usesCodexAlignedCondense("GPT-5.6-Sol-2026-06-25")).toBe(true);
+    expect(usesCodexAlignedCondense("gpt-6-luna")).toBe(false);
+    expect(usesCodexAlignedCondense("gpt-6-astra")).toBe(false);
+    expect(usesCodexAlignedCondense("custom-gpt-5.6-sol")).toBe(false);
+  });
+});
 
 describe("Codex condense target", () => {
   it("declares the 500K default window for GPT-6.1 Sol only on ChatGPT sign-in", () => {

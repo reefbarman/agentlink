@@ -4,21 +4,19 @@ import {
   type PromptProfile,
   type PromptProfileResolution,
 } from "@agentlink/protocol/prompt-profile";
+import { CODEX_MODELS } from "./codex/models.js";
 
-/** Deliberate defaults for the maintained Codex roster, independent of auth transport. */
+/**
+ * Deliberate defaults for the maintained Codex roster, independent of auth
+ * transport. Set per model by `promptProfile` in CODEX_MODELS.
+ */
 export const CODEX_MODEL_PROMPT_PROFILES: Readonly<
   Record<string, PromptProfile>
-> = Object.freeze({
-  "gpt-6-astra": "reasoning",
-  "gpt-6.1-sol": "reasoning",
-  "gpt-6.1-terra": "reasoning",
-  "gpt-6-luna": "compatibility",
-  "gpt-5.6-sol": "reasoning",
-  "gpt-5.6-terra": "reasoning",
-  "gpt-5.6-luna": "compatibility",
-  "gpt-5.5": "reasoning",
-  "gpt-5.3-codex-spark": "compatibility",
-});
+> = Object.freeze(
+  Object.fromEntries(
+    CODEX_MODELS.map(({ id, promptProfile }) => [id, promptProfile]),
+  ),
+);
 
 const EVALUATED_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"]);
 

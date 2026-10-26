@@ -3,6 +3,7 @@ import {
   type CoreModelServiceTier,
   type CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
+import type { PromptProfile } from "@agentlink/protocol/prompt-profile";
 import type { CoreModelCapabilities } from "../modelRuntime.js";
 
 export type CodexAuthMethod = "oauth" | "apiKey";
@@ -21,9 +22,28 @@ export type CodexTextVerbosity = "low" | "medium" | "high";
 export const CODEX_RESPONSES_LITE_HEADER =
   "x-openai-internal-codex-responses-lite";
 
+export const CODEX_ROUTING_TIERS = [
+  "cheap",
+  "balanced",
+  "deep_reasoning",
+] as const;
+export type CodexRoutingTier = (typeof CODEX_ROUTING_TIERS)[number];
+
 export interface CodexModelDef {
   id: string;
   displayName: string;
+  /**
+   * Background-agent routing tier. Within a tier, CODEX_MODELS order is the
+   * routing and review preference order (first available model wins).
+   */
+  routingTier: CodexRoutingTier;
+  /** Automatic prompt profile on Codex/OpenAI providers. */
+  promptProfile: PromptProfile;
+  /**
+   * Condense at the Codex-aligned 90% default, like Codex auto-compaction.
+   * Set for models whose API pricing doubles above 272K input.
+   */
+  codexAlignedCondense?: boolean;
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens: number;
@@ -370,10 +390,19 @@ const CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS = 872_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
 const CODEX_OAUTH_GPT_6_1_SOL_DEFAULT_WINDOW_TOKENS = 500_000;
 
+/**
+ * Every maintained Codex model. Array order is the background routing and
+ * review preference order within each `routingTier`, so keep stronger models
+ * ahead of weaker ones in the same tier (Sols before Terras). The picker order
+ * is CODEX_PICKER_MODEL_IDS, not this array.
+ */
 export const CODEX_MODELS: CodexModelDef[] = [
+  // Current models, strongest first within each tier.
   {
     id: "gpt-6-astra",
     displayName: "GPT-6 Astra",
+    routingTier: "deep_reasoning",
+    promptProfile: "reasoning",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -387,6 +416,9 @@ export const CODEX_MODELS: CodexModelDef[] = [
     // Documented 1.05M window with a 922K input cap; no none/minimal effort.
     id: "gpt-6.1-sol",
     displayName: "GPT-6.1 Sol",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxInputTokens: 922_000,
     maxOutputTokens: 128_000,
@@ -398,32 +430,11 @@ export const CODEX_MODELS: CodexModelDef[] = [
     serviceTiers: CODEX_FAST_TIER,
   },
   {
-    // Documented 1.05M window, 128K output, `none` through `max` effort.
-    id: "gpt-6.1-terra",
-    displayName: "GPT-6.1 Terra",
-    contextWindow: CODEX_1M_CONTEXT_TOKENS,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
-    defaultTextVerbosity: "low",
-    serviceTiers: CODEX_FAST_TIER,
-  },
-  {
+    // Superseded by GPT-6.1 Sol; kept for API-key users and migration.
     id: "gpt-6-sol",
     displayName: "GPT-6 Sol",
-    contextWindow: CODEX_1M_CONTEXT_TOKENS,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
-    serviceTiers: CODEX_FAST_TIER,
-  },
-  {
-    id: "gpt-6-luna",
-    displayName: "GPT-6 Luna",
+    routingTier: "balanced",
+    promptProfile: "compatibility",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -435,30 +446,9 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.6-sol",
     displayName: "GPT-5.6 Sol",
-    contextWindow: CODEX_1M_CONTEXT_TOKENS,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
-    defaultTextVerbosity: "low",
-    serviceTiers: CODEX_FAST_TIER,
-  },
-  {
-    id: "gpt-5.6-terra",
-    displayName: "GPT-5.6 Terra",
-    contextWindow: CODEX_1M_CONTEXT_TOKENS,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
-    defaultTextVerbosity: "low",
-    serviceTiers: CODEX_FAST_TIER,
-  },
-  {
-    id: "gpt-5.6-luna",
-    displayName: "GPT-5.6 Luna",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -471,6 +461,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.5",
     displayName: "GPT-5.5",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -482,6 +474,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.4",
     displayName: "GPT-5.4",
+    routingTier: "balanced",
+    promptProfile: "compatibility",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -489,9 +483,74 @@ export const CODEX_MODELS: CodexModelDef[] = [
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
   },
+  // balanced (Terra-class): after the Sols, so Sol is preferred.
   {
+    // Documented 1.05M window, 128K output, `none` through `max` effort.
+    id: "gpt-6.1-terra",
+    displayName: "GPT-6.1 Terra",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
+  },
+  {
+    id: "gpt-5.6-terra",
+    displayName: "GPT-5.6 Terra",
+    routingTier: "balanced",
+    promptProfile: "reasoning",
+    codexAlignedCondense: true,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
+  },
+  // cheap (Luna-class).
+  {
+    id: "gpt-6-luna",
+    displayName: "GPT-6 Luna",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+    serviceTiers: CODEX_FAST_TIER,
+  },
+  {
+    id: "gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
+    codexAlignedCondense: true,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
+  },
+  // Older models, hidden from the picker.
+  {
+    // API-key only; ChatGPT sign-in remaps it to a served model.
     id: "gpt-5.4-pro",
     displayName: "GPT-5.4 Pro",
+    routingTier: "deep_reasoning",
+    promptProfile: "compatibility",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -502,6 +561,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.4-mini",
     displayName: "GPT-5.4 Mini",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -513,6 +574,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.4-nano",
     displayName: "GPT-5.4 Nano",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -524,6 +587,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.3-codex",
     displayName: "GPT-5.3 Codex",
+    routingTier: "balanced",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -539,6 +604,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
     // max output figure.
     id: "gpt-5.3-codex-spark",
     displayName: "GPT-5.3 Codex Spark",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
     contextWindow: 128_000,
     maxInputTokens: 100_000,
     maxOutputTokens: 28_000,
@@ -551,6 +618,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.2",
     displayName: "GPT-5.2",
+    routingTier: "balanced",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -562,6 +631,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.2-codex",
     displayName: "GPT-5.2 Codex",
+    routingTier: "balanced",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -573,6 +644,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.1-codex-mini",
     displayName: "GPT-5.1 Codex Mini",
+    routingTier: "cheap",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -584,6 +657,8 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.1-codex-max",
     displayName: "GPT-5.1 Codex Max",
+    routingTier: "deep_reasoning",
+    promptProfile: "compatibility",
     contextWindow: 400_000,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
@@ -597,6 +672,44 @@ export const CODEX_MODELS: CodexModelDef[] = [
 export const CODEX_MODEL_MAP = new Map(
   CODEX_MODELS.map((model) => [model.id, model]),
 );
+
+/** Background routing tier lists, in CODEX_MODELS preference order. */
+export const CODEX_ROUTING_TIER_GROUPS: Readonly<
+  Record<CodexRoutingTier, readonly string[]>
+> = Object.freeze(
+  Object.fromEntries(
+    CODEX_ROUTING_TIERS.map((tier) => [
+      tier,
+      Object.freeze(
+        CODEX_MODELS.filter((model) => model.routingTier === tier).map(
+          ({ id }) => id,
+        ),
+      ),
+    ]),
+  ) as Record<CodexRoutingTier, readonly string[]>,
+);
+
+/** The maintained model, or the one a dated snapshot id (`<id>-<date>`) belongs to. */
+function findCodexModelFamily(modelId: string): CodexModelDef | undefined {
+  const id = modelId.trim().toLowerCase();
+  const exact = CODEX_MODEL_MAP.get(id);
+  if (exact) return exact;
+  let best: CodexModelDef | undefined;
+  for (const model of CODEX_MODELS) {
+    if (
+      id.startsWith(`${model.id}-`) &&
+      (!best || model.id.length > best.id.length)
+    ) {
+      best = model;
+    }
+  }
+  return best;
+}
+
+/** Whether the model (or its snapshot) condenses at the Codex-aligned default. */
+export function usesCodexAlignedCondense(modelId: string): boolean {
+  return findCodexModelFamily(modelId)?.codexAlignedCondense === true;
+}
 
 export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
   if (auth.method === "apiKey") {

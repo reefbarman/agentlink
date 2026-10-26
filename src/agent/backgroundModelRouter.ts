@@ -11,6 +11,7 @@ import type {
 } from "./backgroundTypes.js";
 
 import type { BackgroundModelTierGroups } from "./background/acpAgentConfig.js";
+import { CODEX_ROUTING_TIER_GROUPS } from "@agentlink/core/codex";
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { getAutomaticBackgroundBudget } from "./background/backgroundBudgetPolicy.js";
@@ -33,7 +34,9 @@ interface TaskRouteRule {
 interface RoutingConfig {
   defaults: TaskRouteRule & { taskClass: string };
   taskClasses: Record<string, TaskRouteRule>;
+  /** Non-Codex built-in groups; Codex tiers come from CODEX_MODELS. */
   defaultTierGroups?: BackgroundModelTierGroups;
+  /** Review-only overrides; otherwise reviews use the tier group order. */
   reviewModelPreferences?: Partial<
     Record<string, Partial<Record<ModelTier, string[]>>>
   >;
@@ -52,6 +55,10 @@ interface TierMembership extends ModelTierClassification {
 }
 
 const routingConfig = routingConfigRaw as RoutingConfig;
+const builtinTierGroups: BackgroundModelTierGroups = {
+  codex: CODEX_ROUTING_TIER_GROUPS,
+  ...routingConfig.defaultTierGroups,
+};
 const MODEL_TIERS: readonly ModelTier[] = [
   "cheap",
   "balanced",
@@ -112,9 +119,7 @@ function buildTierMemberships(
   models: ModelInfo[],
 ): Map<string, TierMembership> {
   const memberships = new Map<string, TierMembership>();
-  for (const [group, tiers] of Object.entries(
-    routingConfig.defaultTierGroups ?? {},
-  )) {
+  for (const [group, tiers] of Object.entries(builtinTierGroups)) {
     for (const tier of MODEL_TIERS) {
       for (const [order, modelId] of (tiers[tier] ?? []).entries()) {
         if (!memberships.has(modelId)) {
@@ -205,7 +210,8 @@ function pickPreferredReviewModel(
   const providers = unique(candidates.map((candidate) => candidate.provider));
   for (const provider of providers) {
     const preferences =
-      routingConfig.reviewModelPreferences?.[provider]?.[tier];
+      routingConfig.reviewModelPreferences?.[provider]?.[tier] ??
+      builtinTierGroups[provider]?.[tier];
     for (const modelId of preferences ?? []) {
       const match = candidates.find(
         (candidate) =>

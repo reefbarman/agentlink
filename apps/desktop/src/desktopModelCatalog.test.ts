@@ -55,7 +55,7 @@ describe("desktop model catalog", () => {
     ).toMatchObject({ authenticated: true, readiness: { status: "ready" } });
   });
 
-  it("shows the same seven models for OpenAI API keys", () => {
+  it("shows the same eight models for OpenAI API keys", () => {
     const modelIds = buildDesktopCodexCatalog("apiKey").map(
       (model) => model.id,
     );
@@ -63,7 +63,7 @@ describe("desktop model catalog", () => {
     expect(modelIds).toEqual(
       buildDesktopCodexCatalog("oauth").map((model) => model.id),
     );
-    expect(modelIds).toHaveLength(7);
+    expect(modelIds).toHaveLength(8);
     expect(modelIds).not.toContain("gpt-5.4-pro");
     expect(modelIds).not.toContain("gpt-5.3-codex-spark");
   });
