@@ -13,6 +13,9 @@ const MAX_SESSIONS = 100;
 const MAX_PAYLOAD_BYTES = 32_768;
 const MAX_CURRENT_VIEWS = 50;
 const MAX_CURRENT_OBJECTS = 200;
+// Agents commonly stage review payloads in /tmp, which on macOS is not
+// os.tmpdir() (a per-user /var/folders path) and resolves to /private/tmp.
+const SHARED_TEMP_ROOT = "/tmp";
 
 export interface ReviewPublicationTarget {
   host: string;
@@ -560,7 +563,8 @@ function authorisedTarget(
     }
     const urls = input.text.match(/https:\/\/[^\s<>"')]+/g) ?? [];
     const targets = urls
-      .map(targetFromUrl)
+      // Prose often ends a URL with sentence punctuation ("…/pull/12.").
+      .map((url) => targetFromUrl(url.replace(/[.,;:!?]+$/, "")))
       .filter((item): item is ReviewPublicationTarget => Boolean(item));
     const named = new RegExp(
       `(?:^|[^\\w./-])${target.repository.replace(/\./g, "\\.")}(?:$|[^\\w./-])`,
@@ -594,6 +598,7 @@ function capturePayloadFiles(
         !isCommandPathInsideWorkspace(resolved, [
           ...request.workspaceRoots,
           os.tmpdir(),
+          ...(process.platform === "win32" ? [] : [SHARED_TEMP_ROOT]),
         ])
       )
         return undefined;
@@ -911,20 +916,35 @@ export function createReviewPublicationHost(options: {
         if (!data || typeof data !== "object" || Array.isArray(data)) return;
         const value = data as Record<string, unknown>;
         const urlTarget = targetFromUrl(value.html_url ?? value.url);
-        if (
-          action.kind === "read" &&
+        const urlMatches = Boolean(
           urlTarget &&
           action.target &&
-          targetKey(urlTarget) === targetKey(action.target) &&
-          value.number === action.target.pr &&
-          (action.endpoint
-            ? /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+$/.test(action.endpoint)
-            : true)
+          targetKey(urlTarget) === targetKey(action.target),
+        );
+        const hasUrl = value.html_url !== undefined || value.url !== undefined;
+        // `gh pr view <pr> --repo <repo> --json <fields>` already names the
+        // exact PR in its arguments, and a successful JSON object proves it
+        // resolved on this host. Agents rarely request url/number, so accept
+        // any field set, but reject identity fields that disagree.
+        const prViewSeen =
+          !action.endpoint &&
+          Object.keys(value).length > 0 &&
+          (hasUrl ? urlMatches : true) &&
+          (value.number === undefined || value.number === action.target?.pr);
+        const apiPullSeen =
+          action.endpoint !== undefined &&
+          /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+$/.test(action.endpoint) &&
+          urlMatches &&
+          value.number === action.target?.pr;
+        if (
+          action.kind === "read" &&
+          action.target &&
+          (prViewSeen || apiPullSeen)
         ) {
           if (facts.prs.size >= MAX_RECEIPTS)
             facts.prs.delete(facts.prs.keys().next().value!);
-          facts.prs.set(targetKey(urlTarget), {
-            target: urlTarget,
+          facts.prs.set(targetKey(action.target), {
+            target: action.target,
             revision: request.humanInputRevision,
           });
           return;

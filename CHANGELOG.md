@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Guardian now recognises Review-mode PR review posts. AgentLink lets a Review-mode session post comments and reviews on the PR you asked it to review, but three checks meant it never applied: the PR link at the end of the review prompt was read with its trailing full stop, the agent's usual `gh pr view --json headRefOid,…` read didn't count as having looked at the PR, and review bodies saved under `/tmp` were rejected. Guardian was then judging these posts against the stricter general `gh` rule and often denied them.
 - GPT-6.1 Terra (`gpt-6.1-terra`) is now in the Codex/OpenAI model picker for both ChatGPT sign-in and API keys, next to GPT-6.1 Sol. It uses OpenAI's documented 1.05M context window, 128K output limit, reasoning from `none` through `max` (default `medium`) and the Fast speed tier. GPT-5.6 Terra stays available.
 - The final status card now shows how long the ask took, timed by AgentLink from the previous stop (the agent stopping on its own or you pressing Stop). Interjections, questions and automatic resumes don't reset it. Shown in VS Code and browser chat.
 - Past-session search (`search_workspace_sessions`) now finds results in projects with long histories. Its index commits sessions in batches instead of one at a time, which had made indexing slower as the index grew (around 20 seconds per session on a 900-session project). Indexing a search starts keeps going in the background after the search replies, and the `include_worktrees` index now fills in the background too.

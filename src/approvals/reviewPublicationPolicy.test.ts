@@ -520,6 +520,104 @@ describe("review publication policy", () => {
     }
   });
 
+  describe("real review-session shapes", () => {
+    const observeIn = (
+      host: ReturnType<typeof createReviewPublicationHost>,
+      command: string,
+      output: unknown,
+    ) =>
+      host.observe({
+        ...request(command),
+        result: {
+          exit_code: 0,
+          output: JSON.stringify(output),
+          output_complete: true,
+          output_finalized: true,
+        },
+      });
+    const reviewPrompt =
+      "Review GitHub pull request https://github.com/reefbarman/agentlink/pull/12. Compare the pull request against its base branch, inspect the changed code and relevant surrounding behavior, run targeted validation when useful, and report actionable findings with file and line references. Do not modify the pull request branch unless the user explicitly asks for fixes.";
+
+    it("authorises the PR named by the Review worktree prompt despite trailing punctuation", () => {
+      const host = harness(snapshot(reviewPrompt)).host;
+      expect(host.prepare(request(COMMAND))).toMatchObject({
+        target: { repository: "reefbarman/agentlink", pr: 12 },
+      });
+    });
+
+    it("accepts a gh pr view read that omits url and number", () => {
+      const state = snapshot(reviewPrompt);
+      const host = createReviewPublicationHost({
+        getSessionSnapshot: () => state,
+      });
+      expect(host.prepare(request(COMMAND))).toBeUndefined();
+      observeIn(
+        host,
+        "gh pr view 12 --repo reefbarman/agentlink --json headRefOid,state,reviewDecision",
+        { headRefOid: "abc", state: "OPEN", reviewDecision: "" },
+      );
+      expect(host.prepare(request(COMMAND))).toMatchObject({
+        target: { repository: "reefbarman/agentlink", pr: 12 },
+      });
+    });
+
+    it.each([
+      [{ number: 13, headRefOid: "abc" }],
+      [{ url: "https://github.com/reefbarman/agentlink/pull/13" }],
+      [{ url: "https://github.com/other/repo/pull/12", number: 12 }],
+      [{}],
+    ])("rejects a gh pr view read with mismatched identity: %j", (output) => {
+      const host = createReviewPublicationHost({
+        getSessionSnapshot: () => snapshot(reviewPrompt),
+      });
+      observeIn(
+        host,
+        "gh pr view 12 --repo reefbarman/agentlink --json url,number,headRefOid",
+        output,
+      );
+      expect(host.prepare(request(COMMAND))).toBeUndefined();
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "accepts a review payload staged under /tmp",
+      () => {
+        const directory = mkdtempSync("/tmp/review-publication-");
+        try {
+          const payloadPath = path.join(directory, "review.json");
+          writeFileSync(
+            payloadPath,
+            JSON.stringify({
+              commit_id: "abc",
+              event: "COMMENT",
+              body: "Summary",
+              comments: [
+                { path: "src/a.ts", line: 3, side: "RIGHT", body: "x" },
+              ],
+            }),
+          );
+          const state = snapshot(reviewPrompt);
+          const host = createReviewPublicationHost({
+            getSessionSnapshot: () => state,
+          });
+          observeIn(
+            host,
+            "gh pr view 12 --repo reefbarman/agentlink --json headRefOid",
+            { headRefOid: "abc" },
+          );
+          const context = host.prepare(
+            request(
+              `gh api --method POST repos/reefbarman/agentlink/pulls/12/reviews --input ${payloadPath} --jq '{id,state,html_url}'`,
+            ),
+          );
+          expect(context).toMatchObject({ kind: "review" });
+          expect(context?.payloadFiles[0]?.reference).toBe(payloadPath);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
   it("records only completed, untransformed successful reads at their request revision", () => {
     const state = snapshot();
     const host = createReviewPublicationHost({
