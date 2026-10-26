@@ -1236,6 +1236,7 @@
     "release:plan": "node scripts/release-coordinator.mjs plan",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
+    "eval:routing": "npm run build:workspaces && vitest run --config vitest.eval.config.mts --silent=false",
     "benchmark:browser-gateway-bundle": "node esbuild.mjs --browser-gateway-report=benchmarks/browser-gateway-bundle-baseline.json",
     "desktop:build": "npm run build",
     "desktop:package": "npm run build && npm run package --workspace @agentlink/desktop --",
