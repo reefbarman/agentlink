@@ -3927,6 +3927,21 @@ describe("AgentSessionManager host injection", () => {
     expect(changes.mock.calls.length).toBe(notifyCount);
   });
 
+  it("closes the ask clock on an explicit stop but keeps it when steering", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    (session as unknown as { abort: () => void }).abort = vi.fn();
+
+    session.status = "streaming";
+    session.askStartedAt = 1_000;
+    mgr.interruptSession(session.id);
+    expect(session.askStartedAt).toBe(1_000);
+
+    session.status = "streaming";
+    mgr.stopSession(session.id);
+    expect(session.askStartedAt).toBeUndefined();
+  });
+
   it("owns stable MCP leases across fresh and inherited request contexts", async () => {
     const hub = {
       getToolDefs: vi.fn(() => []),

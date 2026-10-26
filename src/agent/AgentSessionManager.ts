@@ -8191,6 +8191,10 @@ export class AgentSessionManager {
     for (const currentId of subtreeIds.reverse()) {
       this.cancelPendingBackgroundQuestionsForSession(currentId);
       this.stopSingleSession(currentId);
+      // An explicit stop ends the ask, so the next message starts a fresh
+      // clock. Steering (interruptSession) keeps the ask open instead.
+      const session = this.sessions.get(currentId);
+      if (session) session.askStartedAt = undefined;
     }
   }
 

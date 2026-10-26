@@ -359,9 +359,10 @@ export class AgentSession {
   }
 
   /**
-   * In-memory start time of the current ask. Opened by the first run after a
-   * natural stop and closed by the host when the agent stops on its own, so
-   * interjections, user stops, retries and automatic resumes share one clock.
+   * In-memory start time of the current ask. Opened by the first run after the
+   * previous stop and closed by the host when the agent stops on its own or the
+   * user explicitly stops it, so interjections, steering, retries and
+   * automatic resumes share one clock.
    */
   askStartedAt: number | undefined;
 
