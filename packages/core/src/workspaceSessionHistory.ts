@@ -29,6 +29,15 @@ export const WORKSPACE_SESSION_INDEX_MESSAGE_MAX_CHARS = 1_200;
 export const WORKSPACE_SESSION_INDEX_CHUNK_MAX_CHARS = 4_000;
 export const WORKSPACE_SESSION_INDEX_CHUNK_MAX_MESSAGES = 10;
 export const WORKSPACE_SESSION_INDEX_MAX_CHUNKS = 400;
+/**
+ * Sessions committed together during reconciliation. Each index commit can
+ * cost time proportional to the whole index, so per-session commits make a
+ * large backfill quadratic.
+ */
+export const WORKSPACE_SESSION_INDEX_BATCH_SESSIONS = 25;
+const INDEX_BATCH_MAX_CHUNKS = 2_000;
+/** Flush a partial batch after this long so progress stays visible. */
+const INDEX_BATCH_MAX_MS = 2_000;
 
 const DEFAULT_SEARCH_SYNC_BUDGET_MS = 1_500;
 const DEFAULT_BACKGROUND_SYNC_BUDGET_MS = 30_000;
@@ -100,6 +109,11 @@ export interface WorkspaceSessionHistoryIndex {
   /** Indexed session IDs mapped to the revision they were built from. */
   listIndexed(): Promise<ReadonlyMap<string, string>>;
   publish(document: WorkspaceSessionIndexDocument): Promise<void>;
+  /**
+   * Optional all-or-nothing commit of several documents. Reconciliation uses
+   * it when present and retries documents singly if the batch fails.
+   */
+  publishBatch?(documents: WorkspaceSessionIndexDocument[]): Promise<void>;
   remove(sessionId: string): Promise<void>;
   query(request: {
     text: string;
@@ -128,7 +142,10 @@ export interface WorkspaceSessionHistoryOptions {
   isIndexableText?: (text: string) => boolean;
   /** Maximum time a search waits for index reconciliation. */
   searchSyncBudgetMs?: number;
-  /** Time budget for the background continuation a search may start. */
+  /**
+   * Time budget for reconciliation a search starts. It keeps running in the
+   * background after the search stops waiting.
+   */
   backgroundSyncBudgetMs?: number;
   now?: () => number;
 }
@@ -349,15 +366,16 @@ export class WorkspaceSessionHistory {
       WORKSPACE_SESSION_SEARCH_MAX_SESSIONS,
       WORKSPACE_SESSION_SEARCH_MAX_SESSIONS,
     );
-    const coverage = await this.synchronize({
-      maxDurationMs:
-        this.options.searchSyncBudgetMs ?? DEFAULT_SEARCH_SYNC_BUDGET_MS,
-    });
-    if (coverage.pendingSessions > 0 && !this.syncing) {
-      void this.startSync(
-        this.options.backgroundSyncBudgetMs ??
-          DEFAULT_BACKGROUND_SYNC_BUDGET_MS,
-      );
+    // Join or start reconciliation with the background budget, but wait only
+    // the search budget: a cold index keeps filling after this search replies.
+    const backgroundBudget =
+      this.options.backgroundSyncBudgetMs ?? DEFAULT_BACKGROUND_SYNC_BUDGET_MS;
+    await waitAtMost(
+      this.syncing ?? this.startSync(backgroundBudget),
+      this.options.searchSyncBudgetMs ?? DEFAULT_SEARCH_SYNC_BUDGET_MS,
+    );
+    if (this.getCoverage().pendingSessions > 0 && !this.syncing) {
+      void this.startSync(backgroundBudget);
     }
 
     let candidates: readonly WorkspaceSessionIndexCandidate[];
@@ -545,6 +563,55 @@ export class WorkspaceSessionHistory {
 
     let remaining = pending.length;
     let lastError: string | undefined;
+    let batch: Array<{
+      entry: WorkspaceSessionCatalogEntry;
+      document: WorkspaceSessionIndexDocument;
+    }> = [];
+    let batchChunks = 0;
+    let batchStartedAt = 0;
+    const settle = (
+      entry: WorkspaceSessionCatalogEntry,
+      revision: string | undefined,
+      error?: unknown,
+    ) => {
+      if (revision === undefined) {
+        lastError = errorMessage(error);
+        this.failedRevisions.set(entry.sessionId, entry.revision);
+      } else {
+        indexedNow.set(entry.sessionId, revision);
+        this.failedRevisions.delete(entry.sessionId);
+      }
+      remaining -= 1;
+    };
+    const flush = async () => {
+      const items = batch;
+      batch = [];
+      batchChunks = 0;
+      if (items.length === 0) return;
+      let committed = false;
+      if (index.publishBatch && items.length > 1) {
+        try {
+          await index.publishBatch(items.map((item) => item.document));
+          committed = true;
+        } catch {
+          // Retry singly below so one bad session cannot block the rest.
+        }
+      }
+      for (const { entry, document } of items) {
+        if (committed) {
+          settle(entry, document.revision);
+          continue;
+        }
+        try {
+          await index.publish(document);
+          settle(entry, document.revision);
+        } catch (error) {
+          settle(entry, undefined, error);
+        }
+      }
+      update(remaining, lastError);
+    };
+
     for (const entry of pending) {
       if (this.now() >= deadline) break;
       try {
@@ -554,22 +621,30 @@ export class WorkspaceSessionHistory {
           if (indexedNow.delete(entry.sessionId)) {
             await index.remove(entry.sessionId);
           }
-        } else {
-          const { document } = buildWorkspaceSessionIndexDocument(
-            record,
-            this.options.isIndexableText,
-          );
-          await index.publish(document);
-          indexedNow.set(entry.sessionId, document.revision);
-          this.failedRevisions.delete(entry.sessionId);
+          remaining -= 1;
+          update(remaining, lastError);
+          continue;
         }
+        const { document } = buildWorkspaceSessionIndexDocument(
+          record,
+          this.options.isIndexableText,
+        );
+        if (batch.length === 0) batchStartedAt = this.now();
+        batch.push({ entry, document });
+        batchChunks += document.chunks.length;
       } catch (error) {
-        lastError = errorMessage(error);
-        this.failedRevisions.set(entry.sessionId, entry.revision);
+        settle(entry, undefined, error);
+        update(remaining, lastError);
       }
-      remaining -= 1;
-      update(remaining, lastError);
+      if (
+        batch.length >= WORKSPACE_SESSION_INDEX_BATCH_SESSIONS ||
+        batchChunks >= INDEX_BATCH_MAX_CHUNKS ||
+        (batch.length > 0 && this.now() - batchStartedAt >= INDEX_BATCH_MAX_MS)
+      ) {
+        await flush();
+      }
     }
+    await flush();
   }
 
   private async readValidated(

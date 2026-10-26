@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `WorkspaceSessionHistory` commits index backfill in batches through a new optional `WorkspaceSessionHistoryIndex.publishBatch`, retrying a failed batch one session at a time. Reconciliation a search starts now runs on the background budget instead of stopping when the search stops waiting.
+
 ## 0.35.0 — 2026-10-26
 
 - Ask Agent dev servers now run inside the macOS sandbox with local port binding, and Approve for Me auto-approves new empty folders under ~/AgentLink; the sandbox launcher gains an additive allowLocalBinding option.</br>

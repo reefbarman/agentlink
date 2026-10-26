@@ -1963,15 +1963,18 @@ export class AgentSessionManager {
         }),
         discoverSiblings: () => discover(rootPath),
       });
+      const history = new WorkspaceSessionHistory({
+        source,
+        index: this.workspaceSessionHistoryIndexFactory(scope, "worktrees"),
+        isIndexableText: isWorkspaceHistoryIndexableText,
+      });
       entry = {
-        history: new WorkspaceSessionHistory({
-          source,
-          index: this.workspaceSessionHistoryIndexFactory(scope, "worktrees"),
-          isIndexableText: isWorkspaceHistoryIndexableText,
-        }),
+        history,
         listWorktreeRoots: () => source.listSiblingRoots(),
       };
       this.worktreeSessionHistories.set(key, entry);
+      // Backfill fully in the background, like the project-only index.
+      void history.synchronize();
     }
     return entry;
   }

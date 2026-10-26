@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildWorkspaceSessionIndexDocument,
+  WORKSPACE_SESSION_INDEX_BATCH_SESSIONS,
   handleReadWorkspaceSessionExcerpt,
   handleSearchWorkspaceSessions,
   WorkspaceSessionHistory,
@@ -289,6 +290,97 @@ describe("WorkspaceSessionHistory", () => {
       index: { failed_sessions: 1, complete: false },
     });
     expect(result.ok && result.index.note).toContain("disk full");
+  });
+
+  it("commits backfill in batches instead of one index commit per session", async () => {
+    const { source, index, history } = setup();
+    const batches: number[] = [];
+    const batched = Object.assign(index, {
+      async publishBatch(documents: WorkspaceSessionIndexDocument[]) {
+        batches.push(documents.length);
+        for (const document of documents) {
+          index.documents.set(document.sessionId, structuredClone(document));
+        }
+      },
+    });
+    for (let i = 0; i < WORKSPACE_SESSION_INDEX_BATCH_SESSIONS + 5; i += 1) {
+      source.add(record(`s${i}`, [["user", `topic ${i}`]]));
+    }
+
+    const coverage = await history.synchronize();
+
+    expect(batches).toEqual([WORKSPACE_SESSION_INDEX_BATCH_SESSIONS, 5]);
+    expect(batched.publishes).toBe(0);
+    expect(coverage).toMatchObject({
+      indexedSessions: WORKSPACE_SESSION_INDEX_BATCH_SESSIONS + 5,
+      complete: true,
+    });
+  });
+
+  it("retries a failed batch singly so one bad session cannot block the rest", async () => {
+    const { source, index, history } = setup();
+    const publish = index.publish.bind(index);
+    Object.assign(index, {
+      async publishBatch() {
+        throw new Error("batch rejected");
+      },
+      async publish(document: WorkspaceSessionIndexDocument) {
+        if (document.sessionId === "bad") throw new Error("bad session");
+        await publish(document);
+      },
+    });
+    for (const id of ["a", "bad", "c"]) {
+      source.add(record(id, [["user", `topic ${id}`]]));
+    }
+
+    const coverage = await history.synchronize();
+
+    expect([...index.documents.keys()].sort()).toEqual(["a", "c"]);
+    expect(coverage).toMatchObject({
+      indexedSessions: 2,
+      failedSessions: 1,
+      complete: false,
+      lastError: "bad session",
+    });
+  });
+
+  it("keeps indexing in the background after a search stops waiting", async () => {
+    const source = new FakeSource();
+    const index = new FakeIndex();
+    for (const id of ["a", "b", "c"]) {
+      source.add(record(id, [["user", `cold topic ${id}`]]));
+    }
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const history = new WorkspaceSessionHistory({
+      source: {
+        listSessions: () => source.listSessions(),
+        readSession: async (id) => {
+          await gate;
+          return source.readSession(id);
+        },
+      },
+      index,
+      searchSyncBudgetMs: 5,
+    });
+
+    const result = await history.search({ query: "cold" });
+    expect(result).toMatchObject({
+      ok: true,
+      index: { indexed_sessions: 0, pending_sessions: 3, complete: false },
+    });
+
+    // The search's own budget has long expired; indexing must still finish.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await vi.waitFor(() =>
+      expect(history.getCoverage()).toMatchObject({
+        indexedSessions: 3,
+        complete: true,
+      }),
+    );
   });
 
   it("chunks long transcripts by message span and size", () => {

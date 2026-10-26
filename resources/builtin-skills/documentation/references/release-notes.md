@@ -3,6 +3,7 @@
 ## Unreleased
 
 - The final status card now shows how long the ask took, timed by AgentLink from the agent's previous natural stop. Interjections, questions, automatic resumes and stopping then resending don't reset it. Shown in VS Code and browser chat.
+- Past-session search (`search_workspace_sessions`) now finds results in projects with long histories. Its index commits sessions in batches instead of one at a time, which had made indexing slower as the index grew (around 20 seconds per session on a 900-session project). Indexing a search starts keeps going in the background after the search replies, and the `include_worktrees` index now fills in the background too.
 
 ## 1.68.5
 

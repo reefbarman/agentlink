@@ -1,6 +1,7 @@
 import type {
   DerivedSessionRetrievalService,
   DerivedSessionScope,
+  PublishDerivedSessionRequest,
 } from "./DerivedSessionRetrievalService.js";
 import type {
   WorkspaceSessionHistoryIndex,
@@ -31,7 +32,7 @@ export function isWorkspaceHistoryIndexableText(text: string): boolean {
 export function createDerivedSessionWorkspaceHistoryIndex(options: {
   service: Pick<
     DerivedSessionRetrievalService,
-    "publish" | "deleteSession" | "inspect" | "recall"
+    "publish" | "publishBatch" | "deleteSession" | "inspect" | "recall"
   >;
   scope: DerivedSessionScope;
   surface?: string;
@@ -54,42 +55,26 @@ export function createDerivedSessionWorkspaceHistoryIndex(options: {
       );
     },
     async publish(document: WorkspaceSessionIndexDocument) {
-      const updatedAt = now();
-      const title = indexableTitle(document.title);
-      const outcome = await options.service.publish({
-        session: {
-          sessionId: document.sessionId,
-          surface,
-          scope,
-          title,
-          createdAt: nonNegative(document.createdAt),
-          lastActiveAt: nonNegative(document.lastActiveAt),
-          messageCount: document.messageCount,
-          sourceRevision: document.revision,
-          summary: title,
-          topics: [],
-          decisions: [],
-          openQuestions: [],
-          durableCandidateHints: [],
-          updatedAt,
-        },
-        chunks: document.chunks.map((chunk) => ({
-          id: chunk.id,
-          sessionId: document.sessionId,
-          sourceMessageIds: [],
-          startMessageIndex: chunk.startMessageIndex,
-          endMessageIndex: chunk.endMessageIndex,
-          sourceRevision: document.revision,
-          summary: chunk.text,
-          keywords: [],
-          entities: [],
-          createdAt: updatedAt,
-          updatedAt,
-        })),
-      });
+      const outcome = await options.service.publish(
+        toPublishRequest(document, surface, scope, now()),
+      );
       if (outcome.status !== "published") {
         throw new Error(
           `Workspace session index publication was not committed: ${outcome.status}`,
+        );
+      }
+    },
+    // One commit (and one native index refresh) for the whole batch.
+    async publishBatch(documents: WorkspaceSessionIndexDocument[]) {
+      const updatedAt = now();
+      const outcome = await options.service.publishBatch(
+        documents.map((document) =>
+          toPublishRequest(document, surface, scope, updatedAt),
+        ),
+      );
+      if (outcome.status !== "published") {
+        throw new Error(
+          `Workspace session index batch was not committed: ${outcome.status}`,
         );
       }
     },
@@ -114,6 +99,46 @@ export function createDerivedSessionWorkspaceHistoryIndex(options: {
           : { endMessageIndex: result.endMessageIndex }),
       }));
     },
+  };
+}
+
+function toPublishRequest(
+  document: WorkspaceSessionIndexDocument,
+  surface: string,
+  scope: DerivedSessionScope,
+  updatedAt: number,
+): PublishDerivedSessionRequest {
+  const title = indexableTitle(document.title);
+  return {
+    session: {
+      sessionId: document.sessionId,
+      surface,
+      scope,
+      title,
+      createdAt: nonNegative(document.createdAt),
+      lastActiveAt: nonNegative(document.lastActiveAt),
+      messageCount: document.messageCount,
+      sourceRevision: document.revision,
+      summary: title,
+      topics: [],
+      decisions: [],
+      openQuestions: [],
+      durableCandidateHints: [],
+      updatedAt,
+    },
+    chunks: document.chunks.map((chunk) => ({
+      id: chunk.id,
+      sessionId: document.sessionId,
+      sourceMessageIds: [],
+      startMessageIndex: chunk.startMessageIndex,
+      endMessageIndex: chunk.endMessageIndex,
+      sourceRevision: document.revision,
+      summary: chunk.text,
+      keywords: [],
+      entities: [],
+      createdAt: updatedAt,
+      updatedAt,
+    })),
   };
 }
 

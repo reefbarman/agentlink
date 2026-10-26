@@ -2,7 +2,7 @@ import {
   createDerivedSessionWorkspaceHistoryIndex,
   isWorkspaceHistoryIndexableText,
 } from "./workspaceSessionHistoryIndex.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DerivedSessionRetrievalService } from "./DerivedSessionRetrievalService.js";
 import { InMemoryRetrievalRepository } from "../retrieval/InMemoryRetrievalRepository.js";
@@ -72,6 +72,29 @@ describe("createDerivedSessionWorkspaceHistoryIndex", () => {
       scopes: [{ kind: "workspace", id: "project-1" }],
     });
     expect(inspection.sessions.map((s) => s.sessionId)).toEqual(["a"]);
+  });
+
+  it("backfills several sessions with one batch commit", async () => {
+    const service = new DerivedSessionRetrievalService(
+      new InMemoryRetrievalRepository(),
+    );
+    const publishBatch = vi.spyOn(service, "publishBatch");
+    const publish = vi.spyOn(service, "publish");
+    const history = project(service, "project-1", [
+      session("a", "first batched topic"),
+      session("b", "second batched topic"),
+      session("c", "third batched topic"),
+    ]);
+
+    await expect(history.synchronize()).resolves.toMatchObject({
+      indexedSessions: 3,
+      complete: true,
+    });
+    expect(publishBatch).toHaveBeenCalledTimes(1);
+    expect(publishBatch.mock.calls[0]?.[0]).toHaveLength(3);
+    expect(publish).not.toHaveBeenCalled();
+    const result = await history.search({ query: "third batched" });
+    expect(result.ok && result.sessions[0]?.session_id).toBe("c");
   });
 
   it("isolates projects and Ask Agent recall that share one store", async () => {
