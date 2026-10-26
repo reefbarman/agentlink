@@ -7,6 +7,7 @@ import { useCallback, useState } from "preact/hooks";
 import { ApprovalLayout } from "./ApprovalLayout.js";
 import {
   FilePermissionRuleEditor,
+  parentDirectoryPath,
   type FilePermissionRuleMode,
   type FilePermissionRuleScope,
 } from "./FilePermissionRuleEditor.js";
@@ -45,11 +46,29 @@ export function WriteCard({
   const [trustScope, setTrustScope] = useState<(typeof TRUST_SCOPES)[number]>(
     outsideWorkspace ? "pattern" : "all-files",
   );
-  const [pattern, setPattern] = useState(filePath);
+  // Outside the workspace, default to trusting the file's parent folder
+  // (prefix), matching the outside-path read card.
+  const dirPath = parentDirectoryPath(filePath);
+  const [pattern, setPattern] = useState(outsideWorkspace ? dirPath : filePath);
   const [mode, setMode] = useState<FilePermissionRuleMode>(
-    outsideWorkspace ? "exact" : "glob",
+    outsideWorkspace ? "prefix" : "glob",
   );
   const [scope, setScope] = useState<FilePermissionRuleScope>("skip");
+
+  // Switching between Prefix and Exact swaps the untouched default pattern
+  // between the parent folder and the file itself; edited patterns are kept.
+  const handleModeChange = useCallback(
+    (next: FilePermissionRuleMode) => {
+      setMode(next);
+      if (!outsideWorkspace) return;
+      if (next === "exact" && pattern === dirPath) {
+        setPattern(filePath);
+      } else if (next === "prefix" && pattern === filePath) {
+        setPattern(dirPath);
+      }
+    },
+    [outsideWorkspace, pattern, dirPath, filePath],
+  );
 
   const isSkipped = scope === "skip";
 
@@ -134,7 +153,7 @@ export function WriteCard({
           scope={scope}
           modeGroupName={`write-rule-mode-${request.id}`}
           onPatternChange={setPattern}
-          onModeChange={setMode}
+          onModeChange={handleModeChange}
           onScopeChange={setScope}
         />
       )}

@@ -2,7 +2,7 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "@agentlink/protocol/approval-transport";
-import type { ComponentChildren, RefObject } from "preact";
+import { Fragment, type ComponentChildren, type RefObject } from "preact";
 
 import { CommandCard } from "../../../approvals/webview/components/CommandCard";
 import { HookCard } from "../../../approvals/webview/components/HookCard";
@@ -64,57 +64,73 @@ export function ApprovalPanelEmbed({
           </span>
         </div>
       )}
-      {request.kind === "command" ? (
-        <CommandCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-          onSuggestRegex={onSuggestRegex}
-        />
-      ) : request.kind === "network" ? (
-        <NetworkCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
-      ) : request.kind === "write" ? (
-        <WriteCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-          onRevealDiff={onRevealDiff}
-        />
-      ) : request.kind === "rename" ? (
-        <RenameCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
-      ) : request.kind === "mcp" ? (
-        <McpCard request={request} submit={submit} followUpRef={followUpRef} />
-      ) : request.kind === "memory" ? (
-        <MemoryCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
-      ) : request.kind === "mode-switch" ? (
-        <ModeSwitchCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
-      ) : request.kind === "worktree" ? (
-        <WorktreeCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
-      ) : request.kind === "hook" ? (
-        <HookCard request={request} submit={submit} followUpRef={followUpRef} />
-      ) : (
-        <PathCard request={request} submit={submit} followUpRef={followUpRef} />
-      )}
+      {/* Key by request so a new approval of the same kind remounts with fresh
+          defaults instead of inheriting the previous card's rule state. */}
+      <Fragment key={request.id}>
+        {request.kind === "command" ? (
+          <CommandCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+            onSuggestRegex={onSuggestRegex}
+          />
+        ) : request.kind === "network" ? (
+          <NetworkCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "write" ? (
+          <WriteCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+            onRevealDiff={onRevealDiff}
+          />
+        ) : request.kind === "rename" ? (
+          <RenameCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "mcp" ? (
+          <McpCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "memory" ? (
+          <MemoryCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "mode-switch" ? (
+          <ModeSwitchCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "worktree" ? (
+          <WorktreeCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : request.kind === "hook" ? (
+          <HookCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        ) : (
+          <PathCard
+            request={request}
+            submit={submit}
+            followUpRef={followUpRef}
+          />
+        )}
+      </Fragment>
     </div>
   );
 }

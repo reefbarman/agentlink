@@ -66,12 +66,53 @@ describe("WriteCard", () => {
     expect(modes.map((mode) => mode.parentElement?.textContent)).toEqual(
       modeLabels,
     );
-    expect((modes[1] as HTMLInputElement).checked).toBe(true);
+    expect((modes[0] as HTMLInputElement).checked).toBe(true);
     expect(
       ["Session", "Project", "Global", "Skip"].map(
         (name) => screen.getByRole("button", { name }).textContent,
       ),
     ).toEqual(["Session", "Project", "Global", "Skip"]);
+  });
+
+  it("defaults outside writes to a parent-folder prefix and swaps for Exact", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    const request: ApprovalRequest = {
+      kind: "write",
+      id: "outside-write-2",
+      filePath: "/outside/project/src/example.ts",
+      writeOperation: "create",
+      outsideWorkspace: true,
+    };
+
+    render(
+      <WriteCard
+        request={request}
+        submit={submit}
+        followUpRef={createRef<string>()}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Auto Approval Rules" }),
+    );
+    const input = () =>
+      document.querySelector<HTMLInputElement>(".rule-pattern-input")!;
+    expect(input().value).toBe("/outside/project/src/");
+
+    fireEvent.click(screen.getByRole("radio", { name: "Exact" }));
+    expect(input().value).toBe("/outside/project/src/example.ts");
+    fireEvent.click(screen.getByRole("radio", { name: "Prefix" }));
+    expect(input().value).toBe("/outside/project/src/");
+
+    fireEvent.click(screen.getByRole("button", { name: "Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule & Accept" }));
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "accept-session",
+        trustScope: "pattern",
+        rulePattern: "/outside/project/src/",
+        ruleMode: "prefix",
+      }),
+    );
   });
 
   it("renders explicit non-file write choices without file trust controls", () => {

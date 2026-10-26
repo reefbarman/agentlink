@@ -7,6 +7,7 @@ import { useCallback, useState } from "preact/hooks";
 import { ApprovalLayout } from "./ApprovalLayout.js";
 import {
   FilePermissionRuleEditor,
+  parentDirectoryPath,
   type FilePermissionRuleMode,
   type FilePermissionRuleScope,
 } from "./FilePermissionRuleEditor.js";
@@ -20,8 +21,7 @@ interface PathCardProps {
 
 export function PathCard({ request, submit, followUpRef }: PathCardProps) {
   const filePath = request.filePath ?? "";
-  const dirPath =
-    filePath.substring(0, filePath.lastIndexOf("/") + 1) || filePath;
+  const dirPath = parentDirectoryPath(filePath);
 
   const [pattern, setPattern] = useState(dirPath);
   const [mode, setMode] = useState<FilePermissionRuleMode>("prefix");

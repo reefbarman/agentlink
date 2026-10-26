@@ -63,6 +63,7 @@ export function App({ vscodeApi }: AppProps) {
     case "command":
       return (
         <CommandCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -72,6 +73,7 @@ export function App({ vscodeApi }: AppProps) {
     case "network":
       return (
         <NetworkCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -79,11 +81,17 @@ export function App({ vscodeApi }: AppProps) {
       );
     case "path":
       return (
-        <PathCard request={request} submit={submit} followUpRef={followUpRef} />
+        <PathCard
+          key={request.id}
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
       );
     case "write":
       return (
         <WriteCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -92,6 +100,7 @@ export function App({ vscodeApi }: AppProps) {
     case "rename":
       return (
         <RenameCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -100,6 +109,7 @@ export function App({ vscodeApi }: AppProps) {
     case "memory":
       return (
         <MemoryCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -107,11 +117,17 @@ export function App({ vscodeApi }: AppProps) {
       );
     case "mcp":
       return (
-        <McpCard request={request} submit={submit} followUpRef={followUpRef} />
+        <McpCard
+          key={request.id}
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
       );
     case "mode-switch":
       return (
         <ModeSwitchCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -119,11 +135,17 @@ export function App({ vscodeApi }: AppProps) {
       );
     case "hook":
       return (
-        <HookCard request={request} submit={submit} followUpRef={followUpRef} />
+        <HookCard
+          key={request.id}
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
       );
     case "worktree":
       return (
         <WorktreeCard
+          key={request.id}
           request={request}
           submit={submit}
           followUpRef={followUpRef}

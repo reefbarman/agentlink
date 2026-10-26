@@ -11,6 +11,18 @@ export type FilePermissionRuleMode =
 export type FilePermissionRuleScope =
   (typeof FILE_PERMISSION_RULE_SCOPES)[number];
 
+/**
+ * Parent directory of a file path, keeping the trailing separator so prefix
+ * rules read as folder rules. Returns the input when it has no separator.
+ */
+export function parentDirectoryPath(filePath: string): string {
+  const separator = Math.max(
+    filePath.lastIndexOf("/"),
+    filePath.lastIndexOf("\\"),
+  );
+  return filePath.substring(0, separator + 1) || filePath;
+}
+
 const SCOPE_LABELS: Record<FilePermissionRuleScope, string> = {
   session: "Session",
   project: "Project",
