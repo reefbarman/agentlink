@@ -1,0 +1,37 @@
+src/approvals/webview/App.tsx
+  h_e08a86bb3a33a2 66,76,85,94,103,112,121,130,139,148
+  s_a213be77aa9a7f::t_fe718ca379b325 84,86-89,120,122-125,138,140-143
+src/approvals/webview/components/PathCard.tsx
+  h_e08a86bb3a33a2 10,24
+src/approvals/webview/components/FilePermissionRuleEditor.tsx
+  h_e08a86bb3a33a2 14-25
+src/approvals/webview/components/WriteCard.test.tsx
+  h_e08a86bb3a33a2 69,77-115
+  s_a213be77aa9a7f::t_364708147bec30 116-117
+src/approvals/webview/components/WriteCard.tsx
+  h_e08a86bb3a33a2 10,49-52,54,58-72,156
+src/agent/webview/components/ApprovalPanelEmbed.tsx
+  h_e08a86bb3a33a2 5,67-69,97,101,121,125-127,131-133
+  s_a213be77aa9a7f::t_198d28c0705a52 70-96,98-100,102-120,122-124,128-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "47acf1e59b4463acc2d0f24499edc2cf6ccfe264",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_a213be77aa9a7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f59d634e-24d4-4e9e-a142-b0a8ffaf0a60",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
