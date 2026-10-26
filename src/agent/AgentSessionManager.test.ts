@@ -180,20 +180,42 @@ vi.mock("./AgentSession.js", () => ({
 
 /**
  * sendMessage checkpoints the project root with real git before and after each
- * turn. Tests rooted at the shared /tmp then spend ~0.3-0.8s per send on git
- * work that grows with whatever else lives there, which exceeds the 5s
- * timeout under full-suite load. Use this in tests that do not verify
- * checkpoints. Call it before createSession, which creates the manager.
+ * turn. Most tests here root the manager at the shared /tmp, where that git
+ * work scales with everything else in /tmp (seconds per send on a busy
+ * machine) and blows the 5s timeout. So the default host's CheckpointManager
+ * is a no-op stub. Tests that verify real checkpoints call
+ * useRealCheckpoints() and use their own mkdtemp workspace, never /tmp.
  */
-function stubCheckpointManager(manager: AgentSessionManager): void {
-  (manager as any).host.createCheckpointManager = vi.fn(() => ({
-    baseCommit: null,
-    initialize: vi.fn(async () => true),
-    createCheckpoint: vi.fn(async () => null),
-    previewRevert: vi.fn(async () => null),
-    revertToCheckpoint: vi.fn(async () => false),
-    getDiffBetween: vi.fn(async () => ""),
-  }));
+const checkpointMode = vi.hoisted(() => ({ real: false }));
+
+vi.mock("./CheckpointManager.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./CheckpointManager.js")>();
+  class DefaultCheckpointManager {
+    constructor(
+      opts: ConstructorParameters<typeof actual.CheckpointManager>[0],
+    ) {
+      if (checkpointMode.real) return new actual.CheckpointManager(opts);
+      return {
+        baseCommit: null,
+        initialize: vi.fn(async () => true),
+        createCheckpoint: vi.fn(async () => null),
+        previewRevert: vi.fn(async () => null),
+        revertToCheckpoint: vi.fn(async () => false),
+        getDiffBetween: vi.fn(async () => ""),
+      } as never;
+    }
+  }
+  return { ...actual, CheckpointManager: DefaultCheckpointManager };
+});
+
+beforeEach(() => {
+  checkpointMode.real = false;
+});
+
+/** Opt this test into real git checkpoints. Use a mkdtemp workspace. */
+function useRealCheckpoints(): void {
+  checkpointMode.real = true;
 }
 
 async function flushPromises(): Promise<void> {
@@ -4642,7 +4664,6 @@ describe("AgentSessionManager condense thresholds", () => {
 
   it("defers terminal-turn condensing until a real continuation is accepted", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
-    stubCheckpointManager(mgr);
     mgr.setToolContext({
       approvalManager: { bindSessionProject: vi.fn() } as any,
       approvalPanel: {} as any,
@@ -5451,7 +5472,6 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
-    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     (session as any).messageCount = 0;
@@ -5571,7 +5591,6 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
-    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     (session as any).messageCount = 0;
@@ -6142,7 +6161,6 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
-    stubCheckpointManager(mgr);
     const loaded = await mgr.restoreLastSession();
     expect(loaded?.runState?.phase).toBe("running");
 
@@ -6238,7 +6256,6 @@ describe("AgentSessionManager in-flight persistence", () => {
       false,
       store,
     );
-    stubCheckpointManager(mgr);
 
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
@@ -6728,6 +6745,26 @@ describe("AgentSessionManager activity tracing", () => {
       });
     } finally {
       removeTempWorkspace(workspace);
+    }
+  });
+});
+
+describe("test checkpoint default", () => {
+  it("stubs default-host checkpoints unless a test opts into real git", async () => {
+    const { CheckpointManager } = await import("./CheckpointManager.js");
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-real-checkpoints-"),
+    );
+    try {
+      const opts = { workspaceDir: workspace, taskId: "agent" };
+      const stubbed = new CheckpointManager(opts);
+      expect(vi.isMockFunction(stubbed.createCheckpoint)).toBe(true);
+
+      useRealCheckpoints();
+      const real = new CheckpointManager(opts);
+      expect(vi.isMockFunction(real.createCheckpoint)).toBe(false);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 });
@@ -7603,7 +7640,6 @@ describe("AgentSessionManager checkpoints", () => {
 
   it("waits for an aborted run to settle before starting a replacement send", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
-    stubCheckpointManager(mgr);
     const session = await mgr.createSession("code");
     const messages: AgentMessage[] = [];
     Object.assign(session, {
