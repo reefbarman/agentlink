@@ -1,0 +1,50 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6,24,27
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 209,222
+packages/sandbox/src/sandboxedProcessLauncher.test.ts
+  h_e08a86bb3a33a2 219-242
+src/approvals/webview/components/CommandExecutionContext.tsx
+  h_e08a86bb3a33a2 95
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 312,315-318,331-333,1744-1747
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 9351-9366,9368-9379,9383-9385,9393,9398-9399
+  s_23815cc31d836f::t_f4974da33c2aae 9367,9380-9382,9386-9392,9394-9397
+packages/sandbox/src/sandboxedProcessLauncher.ts
+  h_e08a86bb3a33a2 67-74,174,199
+  s_0a55e6b9806580::t_2da022e649488c 198,200-213
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 12093-12095,12098-12099,12326-12360,12367-12368
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6,24,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94e6f49d28c7c7790ab84b1b3bd7bd90f5b722f2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0a55e6b9806580": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ec42b265-93de-4b1f-b32c-bf3481efd64a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_23815cc31d836f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94f486d1-d823-4a9e-adfd-97c39b6019a1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
