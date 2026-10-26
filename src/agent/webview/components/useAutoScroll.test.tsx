@@ -133,6 +133,7 @@ describe("useAutoScroll", () => {
 
     rerender(<Harness scrollAfterLayout />);
     animationFrames.shift()?.(0);
+    fireEvent.wheel(container, { deltaY: -600 });
     container.scrollTop = 0;
     fireEvent.scroll(container);
 
@@ -155,6 +156,7 @@ describe("useAutoScroll", () => {
 
     fireEvent.scroll(container);
     fireEvent.scroll(container);
+    fireEvent.wheel(container, { deltaY: -600 });
     container.scrollTop = 0;
     fireEvent.scroll(container);
 
@@ -173,11 +175,60 @@ describe("useAutoScroll", () => {
 
     resizeObservers[0].callback([], resizeObservers[0] as never);
     fireEvent.scroll(container);
+    fireEvent.wheel(container, { deltaY: -20 });
     container.scrollTop = 480;
     fireEvent.scroll(container);
 
     resizeObservers[0].callback([], resizeObservers[0] as never);
     expect(container.scrollTop).toBe(480);
+  });
+
+  it("keeps following when a layout shift lowers scrollTop without user input", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    let scrollHeight = 600;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: { configurable: true, writable: true, value: 500 },
+    });
+    fireEvent.scroll(container);
+
+    // The composer clears or the shelf resizes, clamping scrollTop, and new
+    // streamed content lands before the scroll event is dispatched. The
+    // event then sees a lower scrollTop below a taller max, with no input.
+    container.scrollTop = 300;
+    scrollHeight = 900;
+    fireEvent.scroll(container);
+
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(900);
+  });
+
+  it("treats touch drags and keyboard scrolling as user intent", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, writable: true, value: 500 },
+    });
+    fireEvent.scroll(container);
+
+    fireEvent.touchStart(container);
+    container.scrollTop = 200;
+    fireEvent.scroll(container);
+    fireEvent.touchEnd(container);
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(200);
+
+    container.scrollTop = 500;
+    fireEvent.scroll(container);
+    fireEvent.keyDown(container, { key: "PageUp" });
+    container.scrollTop = 350;
+    fireEvent.scroll(container);
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(350);
   });
 
   it("keeps following when content shrinkage clamps scrollTop downward", () => {
@@ -236,6 +287,7 @@ describe("useAutoScroll", () => {
     rerender(<Harness scrollAfterLayout />);
     animationFrames.shift()?.(0);
     const staleCallback = animationFrames[0];
+    fireEvent.wheel(container, { deltaY: -120 });
     container.scrollTop = 480;
     fireEvent.scroll(container);
 

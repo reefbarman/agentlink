@@ -428,6 +428,8 @@ describe("ChatView jump navigation", () => {
           ({ top: index * MESSAGE_HEIGHT - scrollTop }) as DOMRect;
       });
     const scrollTo = (value: number) => {
+      // Only real user input may pause following, so simulate the gesture.
+      fireEvent.wheel(transcript, { deltaY: value - scrollTop });
       scrollTop = value;
       fireEvent.scroll(transcript);
     };
