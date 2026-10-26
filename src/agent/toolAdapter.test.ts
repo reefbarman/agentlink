@@ -1202,6 +1202,79 @@ describe("tool usage telemetry project attribution", () => {
     expect(handleGetCallHierarchy).not.toHaveBeenCalled();
   });
 
+  it("invokes deferred MCP resource and prompt bridges through call_native_tool", async () => {
+    const mcpResourcePromptProvider = {
+      listResources: vi
+        .fn()
+        .mockReturnValue([{ serverName: "linear", uri: "linear://issues" }]),
+      readResource: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "resource-body-7f3a" }],
+      }),
+      listPrompts: vi.fn().mockReturnValue([]),
+      getPrompt: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "prompt-body-7f3a" }],
+      }),
+    };
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      mcpResourcePromptProvider,
+    });
+    const nativeToolDisclosure =
+      createNativeToolDisclosureSnapshot(getAgentTools());
+    expect(nativeToolDisclosure.deferredTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "list_mcp_resources",
+        "read_mcp_resource",
+        "list_mcp_prompts",
+        "get_mcp_prompt",
+      ]),
+    );
+    const call = (name: string, input: Record<string, unknown>) =>
+      runtime.executeTool({
+        name: "call_native_tool",
+        input: { name, input },
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          availableToolNames: new Set(["call_native_tool"]),
+          nativeToolDisclosure,
+        },
+      });
+
+    const listed = await call("list_mcp_resources", {});
+    expect(listed.isError).toBeFalsy();
+    expect(JSON.stringify(listed)).toContain("linear://issues");
+
+    const read = await call("read_mcp_resource", {
+      server: "linear",
+      uri: "linear://issues",
+    });
+    expect(JSON.stringify(read)).toContain("resource-body-7f3a");
+    expect(mcpResourcePromptProvider.readResource).toHaveBeenCalledWith(
+      "linear",
+      "linear://issues",
+    );
+
+    expect((await call("list_mcp_prompts", {})).isError).toBeFalsy();
+    const prompt = await call("get_mcp_prompt", {
+      server: "linear",
+      name: "summary",
+      arguments: { id: "1" },
+    });
+    expect(JSON.stringify(prompt)).toContain("prompt-body-7f3a");
+    expect(mcpResourcePromptProvider.getPrompt).toHaveBeenCalledWith(
+      "linear",
+      "summary",
+      { id: "1" },
+    );
+
+    const invalid = await call("read_mcp_resource", { server: "linear" });
+    expect(invalid).toMatchObject({
+      isError: true,
+      data: { status: "invalid_native_tool_input" },
+    });
+  });
+
   it("rejects forged pre-resolved native calls outside the frozen snapshot", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
     const nativeToolDisclosure = createNativeToolDisclosureSnapshot([

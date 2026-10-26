@@ -1593,6 +1593,23 @@ const fleetWorkflowKindSchema = z.enum([
   "persistent_goal",
 ]);
 
+// Validators for the deferred MCP resource/prompt bridges, which are reached
+// through call_native_tool. Shapes match MCP_META_TOOL_DEFINITIONS.
+export const listMcpResourcesSchema = {};
+
+export const readMcpResourceSchema = {
+  server: z.string(),
+  uri: z.string(),
+};
+
+export const listMcpPromptsSchema = {};
+
+export const getMcpPromptSchema = {
+  server: z.string(),
+  name: z.string(),
+  arguments: z.record(z.string(), z.string()).optional(),
+};
+
 export const detachBackgroundAgentSchema = {
   sessionId: z.string(),
 };

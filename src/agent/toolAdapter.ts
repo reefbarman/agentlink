@@ -423,6 +423,21 @@ const DEFERRED_AGENT_TOOL_SCHEMAS: Record<
 };
 
 /**
+ * Validators for deferred tools whose definitions come from MCP_META_TOOLS
+ * rather than DEFERRED_AGENT_TOOL_SCHEMAS. call_native_tool needs one to invoke
+ * a deferred target.
+ */
+const DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS: Record<
+  string,
+  Record<string, z.ZodTypeAny>
+> = {
+  list_mcp_resources: schemas.listMcpResourcesSchema,
+  read_mcp_resource: schemas.readMcpResourceSchema,
+  list_mcp_prompts: schemas.listMcpPromptsSchema,
+  get_mcp_prompt: schemas.getMcpPromptSchema,
+};
+
+/**
  * Read-only inventory of native adapter schemas. Stage 0 evaluation baselines
  * use this to detect drift across the currently fragmented tool registries
  * without making this adapter mapping a second mutable registry.
@@ -2391,7 +2406,9 @@ export function resolveAgentToolCall(
   }
 
   const targetSchema =
-    TOOL_SCHEMAS[target.name] ?? DEFERRED_AGENT_TOOL_SCHEMAS[target.name];
+    TOOL_SCHEMAS[target.name] ??
+    DEFERRED_AGENT_TOOL_SCHEMAS[target.name] ??
+    DEFERRED_MCP_BRIDGE_TOOL_SCHEMAS[target.name];
   if (!targetSchema) {
     return nativeToolResolutionError(
       request,
