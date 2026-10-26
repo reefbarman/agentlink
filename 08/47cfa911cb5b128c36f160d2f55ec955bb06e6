@@ -1,0 +1,27 @@
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 1276-1300
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 441-453,2337,2421
+  s_d17e1c62dad963::t_9863b72358679a 440
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0847cfa911cb5b128c36f160d2f55ec955bb06e6",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d17e1c62dad963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c11dd54-40d5-44a2-afa6-6b7d31c5f732",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
