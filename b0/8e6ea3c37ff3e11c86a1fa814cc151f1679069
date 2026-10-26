@@ -1,0 +1,45 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 73,85
+packages/core/src/condenseThresholds.ts
+  h_e08a86bb3a33a2 102-104,124-125,143
+src/agent/providers/codex/CodexProvider.test.ts
+  h_e08a86bb3a33a2 1994,1998
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 31,112,114
+packages/core/src/promptProfilePolicy.ts
+  h_e08a86bb3a33a2 14
+resources/builtin-skills/documentation/references/providers.md
+  h_e08a86bb3a33a2 72
+packages/core/src/codex/models.test.ts
+  h_e08a86bb3a33a2 148-171,283,287
+packages/core/src/codex/models.ts
+  h_e08a86bb3a33a2 165,191-192,400-409
+  s_1e6d9ba5b1bcd0::t_786a55fe478943 410-412
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 70-72
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b08e6ea3c37ff3e11c86a1fa814cc151f1679069",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1e6d9ba5b1bcd0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "feb65408-740c-4aa3-b060-9a9a41ba479d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
