@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "20773fa7229d5487952fa6615dfd07e78d8554b3",
-  "createdAt": "2026-10-26T00:52:54.022Z",
+  "sourceSha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
+  "createdAt": "2026-10-26T01:26:05.238Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -43,7 +43,10 @@
         "645c278b25a31024a497ba154692d29bb8e246cc",
         "fa66bf94b25e6a726a05accaa3f50382048f95b0",
         "188d9c224d1e0d9c396033c5cc3622ad9a6de05d",
-        "20773fa7229d5487952fa6615dfd07e78d8554b3"
+        "20773fa7229d5487952fa6615dfd07e78d8554b3",
+        "ae1956415d7db75c81d86984f1ae020c73731192",
+        "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
       ],
       "unknownPaths": ["vitest.eval.config.mts"],
       "breakingCommits": [],
@@ -235,29 +238,63 @@
           "subject": "fix(agent): let call_native_tool invoke deferred MCP resource and prompt tools",
           "summary": "Fixes deferred MCP resource and prompt tools (list/read resources, list/get prompts) so they can actually be invoked through call_native_tool instead of being discoverable but uninvocable.",
           "breaking": false
+        },
+        {
+          "sha": "ae1956415d7db75c81d86984f1ae020c73731192",
+          "subject": "fix(ask-agent): keep the inline transcript indicator instead of the pinned bar",
+          "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
+          "breaking": false
+        },
+        {
+          "sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+          "subject": "fix(ask-agent): keep Approve for Me on, approve open cards, restyle toggle",
+          "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
+          "breaking": false
+        },
+        {
+          "sha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
+          "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
+          "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.65.0",
-      "baselineRef": "desktop-v0.65.0",
-      "reserved": "0.65.0",
-      "commits": ["20773fa7229d5487952fa6615dfd07e78d8554b3"],
+      "published": "0.65.1",
+      "baselineRef": "desktop-v0.65.1",
+      "reserved": "0.65.1",
+      "commits": [
+        "ae1956415d7db75c81d86984f1ae020c73731192",
+        "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.65.1",
-      "effectiveBump": "patch",
+      "version": "0.66.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.65.1",
+      "tag": "desktop-v0.66.0",
       "notes": [
         {
-          "sha": "20773fa7229d5487952fa6615dfd07e78d8554b3",
-          "subject": "fix(agent): let call_native_tool invoke deferred MCP resource and prompt tools",
-          "summary": "Fixes deferred MCP resource and prompt tools (list/read resources, list/get prompts) so they can actually be invoked through call_native_tool instead of being discoverable but uninvocable.",
+          "sha": "ae1956415d7db75c81d86984f1ae020c73731192",
+          "subject": "fix(ask-agent): keep the inline transcript indicator instead of the pinned bar",
+          "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
+          "breaking": false
+        },
+        {
+          "sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+          "subject": "fix(ask-agent): keep Approve for Me on, approve open cards, restyle toggle",
+          "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
+          "breaking": false
+        },
+        {
+          "sha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
+          "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
+          "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
           "breaking": false
         }
       ]
@@ -287,25 +324,41 @@
       "notes": []
     },
     "assistant": {
-      "published": "0.37.0",
-      "baselineRef": "assistant-v0.37.0",
-      "reserved": "0.37.0",
-      "commits": ["20773fa7229d5487952fa6615dfd07e78d8554b3"],
+      "published": "0.37.1",
+      "baselineRef": "assistant-v0.37.1",
+      "reserved": "0.37.1",
+      "commits": [
+        "ae1956415d7db75c81d86984f1ae020c73731192",
+        "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+        "4d39db9a441a34ca0d27c821712e5c77dc2de62f"
+      ],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
+      "bump": "minor",
       "status": "release",
-      "version": "0.37.1",
-      "effectiveBump": "patch",
+      "version": "0.38.0",
+      "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "assistant-v0.37.1",
+      "tag": "assistant-v0.38.0",
       "notes": [
         {
-          "sha": "20773fa7229d5487952fa6615dfd07e78d8554b3",
-          "subject": "fix(agent): let call_native_tool invoke deferred MCP resource and prompt tools",
-          "summary": "Fixes deferred MCP resource and prompt tools (list/read resources, list/get prompts) so they can actually be invoked through call_native_tool instead of being discoverable but uninvocable.",
+          "sha": "ae1956415d7db75c81d86984f1ae020c73731192",
+          "subject": "fix(ask-agent): keep the inline transcript indicator instead of the pinned bar",
+          "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
+          "breaking": false
+        },
+        {
+          "sha": "8ef8a0222d12cd92eed58173eb9bb330c749eccc",
+          "subject": "fix(ask-agent): keep Approve for Me on, approve open cards, restyle toggle",
+          "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
+          "breaking": false
+        },
+        {
+          "sha": "4d39db9a441a34ca0d27c821712e5c77dc2de62f",
+          "subject": "feat(chat): offer yes/no cards when a turn ends without set_task_status",
+          "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
           "breaking": false
         }
       ]
@@ -556,6 +609,30 @@
       "bump": "patch",
       "breakingUnits": [],
       "summary": "Fixes deferred MCP resource and prompt tools (list/read resources, list/get prompts) so they can actually be invoked through call_native_tool instead of being discoverable but uninvocable.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "ae1956415d7db75c81d86984f1ae020c73731192": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Ask Agent now shows live activity inside the streaming reply and no longer shows the pinned status bar above the composer, avoiding duplicate indicators.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "8ef8a0222d12cd92eed58173eb9bb330c749eccc": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Ask Agent keeps Approve for Me shown as on during live updates, approves an open command or edit card when it is turned on, and restyles the active composer toggle with a soft accent tint.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "4d39db9a441a34ca0d27c821712e5c77dc2de62f": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "Chat now offers yes/no answer cards for trailing direct questions when a live turn ends without a set_task_status marker, in both the VS Code webview and the browser projection.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

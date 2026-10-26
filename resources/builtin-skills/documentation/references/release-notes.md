@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-- The Yes/No choice card now also appears when a turn ends with a direct question like "Have you reloaded?" but the agent never marked the turn finished. Turns marked completed, blocked or cancelled, turns that ended with an error, and turns restored from history still don't show it.
-
 ## 1.68.3
 
+- The Yes/No choice card now also appears when a turn ends with a direct question like "Have you reloaded?" but the agent never marked the turn finished. Turns marked completed, blocked or cancelled, turns that ended with an error, and turns restored from history still don't show it.
 - Linux VSIXs no longer ship macOS node-pty, and shared credential storage on Linux now requires Secret Service and fails with LinuxCredentialStoreUnavailableError instead of silently using the reboot-volatile kernel keyring unless linuxStore: "keyutils" is passed.
 - Desktop Ask Agent on macOS gets a per-chat sandboxed scratch folder with command, file write and present_files tools, and files it presents show as inline images or downloadable chips.
 - The CLI now ships Linux x64 and arm64 builds with installer and self-update support, and can use AGENTLINK_OPENAI_API_KEY, OPENAI_API_KEY or a provider's apiKeyEnv on hosts without Secret Service.
