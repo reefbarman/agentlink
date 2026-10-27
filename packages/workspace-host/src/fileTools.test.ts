@@ -268,7 +268,7 @@ describe("workspace file tools", () => {
     ).resolves.toMatchObject({
       isError: true,
       modelContent: expect.stringContaining(
-        "anchor_options_require_content_view",
+        "content_options_require_content_view",
       ),
     });
     const omitted = await test.tool("read_file").execute(
@@ -302,12 +302,29 @@ describe("workspace file tools", () => {
       working_set: { status: "unchanged", should_include_content: true },
     });
 
+    // Without packaged ripgrep this is node-host's VS Code-shaped fallback.
+    // Secrets are redacted before matching, so settings.json does not match.
     const search = await test
       .tool("search_files")
-      .execute({ path: ".", regex: "secret|hello", maxResults: 1 }, context());
-    expect(JSON.parse(String(search.modelContent)).matches).toEqual([
-      expect.objectContaining({ path: "visible.txt", line: 1 }),
-    ]);
+      .execute({ path: ".", regex: "secret|hello", context: 0 }, context());
+    expect(JSON.parse(String(search.modelContent))).toEqual({
+      total_matches: 1,
+      truncated: false,
+      results: "## visible.txt (1 match)\n> 1 | hello\n---",
+    });
+    const files = await test.tool("search_files").execute(
+      {
+        path: ".",
+        regex: "theme|hello",
+        output_mode: "files_with_matches",
+      },
+      context(),
+    );
+    expect(JSON.parse(String(files.modelContent))).toEqual({
+      total_files: 2,
+      truncated: false,
+      files: ["settings.json", "visible.txt"],
+    });
     const listed = await test
       .tool("list_files")
       .execute({ path: "." }, context());
@@ -446,6 +463,82 @@ describe("workspace file tools", () => {
     const pdf = await parsed({ path: "brief.pdf" });
     expect(pdf).toMatchObject({ file_type: "pdf", showing: "1-1" });
     expect(String(pdf.content)).toContain("Hello PDF");
+  });
+
+  it("suggests and auto-follows missing read_file paths like VS Code, only within read policy", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-follow-"),
+    );
+    try {
+      await fs.mkdir(path.join(root, "src/deep"), { recursive: true });
+      await fs.mkdir(path.join(root, "node_modules/pkg"), { recursive: true });
+      await fs.mkdir(path.join(root, "hidden"));
+      await fs.writeFile(path.join(root, "src/deep/target.ts"), "found\n");
+      await fs.writeFile(path.join(root, "node_modules/pkg/target.ts"), "x\n");
+      await fs.writeFile(path.join(root, "hidden/target.ts"), "scoped out\n");
+      await fs.writeFile(path.join(root, ".env"), "TOKEN=1\n");
+      await fs.mkdir(path.join(root, "config"));
+      await fs.writeFile(path.join(root, "config/.env"), "TOKEN=2\n");
+      const files = createWorkspaceFileTools({
+        projectRoot: root,
+        resolveScopes: () => [
+          { path: "src", kind: "directory" },
+          { path: "config", kind: "directory" },
+          { path: ".env", kind: "file" },
+        ],
+      });
+      const read = (await files.resolveTools(discovery)).find(
+        (tool) => tool.definition.name === "read_file",
+      )!;
+
+      await expect(
+        read.execute({ path: "target.ts" }, context()),
+      ).resolves.toMatchObject({
+        isError: true,
+        modelContent: JSON.stringify({
+          error: `File not found: target.ts. Working directory: ${root}`,
+          path: "target.ts",
+          suggestions: ["src/deep/target.ts"],
+        }),
+      });
+      // Protected files are never suggested, even when in scope.
+      const protectedMiss = JSON.parse(
+        String(
+          (await read.execute({ path: "other/.env" }, context())).modelContent,
+        ),
+      ) as Record<string, unknown>;
+      expect(protectedMiss).not.toHaveProperty("suggestions");
+
+      const followed = JSON.parse(
+        String(
+          (
+            await read.execute(
+              { path: "deep/target.ts", auto_follow_suggestion: true },
+              context(),
+            )
+          ).modelContent,
+        ),
+      ) as Record<string, unknown>;
+      expect(followed).toMatchObject({
+        content: "1 | found\n2 | ",
+        resolution: "auto_followed_suggestion",
+        auto_followed_from: "deep/target.ts",
+        resolved_path: "src/deep/target.ts",
+      });
+      await expect(
+        read.execute(
+          { path: "x.ts", view: "context", auto_follow_suggestion: true },
+          context(),
+        ),
+      ).resolves.toMatchObject({
+        isError: true,
+        modelContent: expect.stringContaining(
+          "content_options_require_content_view",
+        ),
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rechecks read scope for both read_file views", async () => {

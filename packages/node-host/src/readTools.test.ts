@@ -145,15 +145,103 @@ describe("node host read tools", () => {
     );
     expect(listed).toMatchObject({ count: 2, truncated: true });
     const search = await tool(directoryResolver, "search_files");
+    expect(
+      (
+        search.definition.input_schema.properties as Record<
+          string,
+          { maximum?: number }
+        >
+      ).max_results?.maximum,
+    ).toBe(2);
     const searched = content(
       await search.execute({ path: root, regex: "target" }, context),
     );
-    expect(searched).toMatchObject({ count: 2, truncated: true });
+    expect(searched).toMatchObject({ total_matches: 2, truncated: true });
     await expect(
       search.execute({ path: root, regex: "(" }, context),
     ).resolves.toMatchObject({
       isError: true,
-      modelContent: JSON.stringify({ error: "invalid_regex" }),
+      modelContent: expect.stringContaining('"error":"Invalid regex:'),
+    });
+
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("follows VS Code's search_files contract without ripgrep", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-regex-"),
+    );
+    const write = async (relative: string, text: string) => {
+      await fs.mkdir(path.dirname(path.join(root, relative)), {
+        recursive: true,
+      });
+      await fs.writeFile(path.join(root, relative), text, "utf8");
+    };
+    await write("a.ts", "one\nneedle here\nthree\nfour\nneedle again\n");
+    await write("src/b.ts", "Needle upper\n");
+    await write("src/c.md", "needle in markdown\n");
+    await write(".hidden/d.ts", "needle hidden\n");
+    await write("node_modules/e.ts", "needle dependency\n");
+    await write("multi.txt", "start\nfunction foo(\n  bar\n)\nend\n");
+    const resolver = createNodeHostReadTools({
+      resolveGrants: () => [{ rootPath: root, kind: "directory" }],
+      formatSearchPath: (absolute) => path.relative(root, absolute),
+    });
+    const search = await tool(resolver, "search_files");
+    const run = async (input: Record<string, unknown>) =>
+      content(await search.execute({ path: root, ...input }, context));
+
+    expect(await run({ regex: "needle", context: 0 })).toEqual({
+      total_matches: 3,
+      truncated: false,
+      results:
+        "## a.ts (2 matches)\n> 2 | needle here\n---\n> 5 | needle again\n---\n\n## src/c.md (1 match)\n> 1 | needle in markdown\n---",
+    });
+    expect(
+      await run({ regex: "needle", file_pattern: "a.ts", context_after: 1 }),
+    ).toMatchObject({
+      results:
+        "## a.ts (2 matches)\n  1 | one\n> 2 | needle here\n  3 | three\n  4 | four\n> 5 | needle again\n---",
+    });
+    expect(
+      await run({
+        regex: "needle",
+        case_insensitive: true,
+        output_mode: "files_with_matches",
+      }),
+    ).toEqual({
+      total_files: 3,
+      truncated: false,
+      files: ["a.ts", "src/b.ts", "src/c.md"],
+    });
+    expect(
+      await run({
+        regex: "needle",
+        output_mode: "count",
+        file_pattern: "*.ts",
+      }),
+    ).toEqual({
+      total_files: 1,
+      total_matches: 2,
+      truncated: false,
+      counts: [{ file: "a.ts", count: 2 }],
+    });
+    expect(
+      await run({ regex: "needle", max_results: 1, offset: 1, context: 0 }),
+    ).toMatchObject({
+      total_matches: 1,
+      truncated: true,
+      offset: 1,
+      results: "## a.ts (1 match)\n> 5 | needle again\n---",
+    });
+    expect(await run({ regex: "foo\\(\\n\\s+bar", context: 0 })).toMatchObject({
+      total_matches: 1,
+      results: "## multi.txt (1 match)\n> 2 | function foo(\n  bar\n---",
+    });
+    expect(await run({ regex: "absent" })).toEqual({
+      total_matches: 0,
+      truncated: false,
+      results: "No results found",
     });
 
     await fs.rm(root, { recursive: true, force: true });

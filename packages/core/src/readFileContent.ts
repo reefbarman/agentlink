@@ -195,6 +195,91 @@ export function planReadFileContentWindow(
   };
 }
 
+/** Default number of suggestions for a missing `read_file` path. */
+export const READ_FILE_SUGGESTION_LIMIT = 5;
+/** Directories read while looking for suggestions. */
+export const READ_FILE_SUGGESTION_DIRECTORY_BUDGET = 200;
+
+export interface ReadFileSuggestionEntry {
+  readonly name: string;
+  readonly isDirectory: boolean;
+}
+
+export interface FindReadFilePathSuggestionsOptions {
+  readonly roots: readonly string[];
+  /** List a directory; a rejection skips it, as in VS Code. */
+  readonly readDirectory: (
+    directory: string,
+  ) => Promise<readonly ReadFileSuggestionEntry[]>;
+  readonly joinPath: (directory: string, name: string) => string;
+  /** `/`-separated path of `fullPath` below `root`. */
+  readonly relativePath: (root: string, fullPath: string) => string;
+  readonly limit?: number;
+  readonly directoryBudget?: number;
+  /** Host policy for a candidate file; excluded files are never suggested. */
+  readonly include?: (fullPath: string, relativePath: string) => boolean;
+}
+
+/**
+ * VS Code's suggestions for a missing `read_file` path: a bounded walk that
+ * skips `.git` and `node_modules` and keeps files whose root-relative path
+ * equals or ends with the requested path, or whose name matches. A single
+ * root yields relative paths; several roots yield full paths.
+ */
+export async function findReadFilePathSuggestions(
+  inputPath: string,
+  options: FindReadFilePathSuggestionsOptions,
+): Promise<string[]> {
+  if (options.roots.length === 0) return [];
+  const limit = Math.max(0, options.limit ?? READ_FILE_SUGGESTION_LIMIT);
+  const directoryBudget = Math.max(
+    0,
+    options.directoryBudget ?? READ_FILE_SUGGESTION_DIRECTORY_BUDGET,
+  );
+  const normalizedInput = inputPath.replace(/\\/g, "/");
+  const basename = normalizedInput.slice(normalizedInput.lastIndexOf("/") + 1);
+  const suffix = normalizedInput.startsWith("./")
+    ? normalizedInput.slice(2)
+    : normalizedInput;
+  const suggestions = new Set<string>();
+  const stack = options.roots.map((root) => ({ current: root, root }));
+  let directoriesRead = 0;
+
+  while (
+    stack.length > 0 &&
+    suggestions.size < limit &&
+    directoriesRead < directoryBudget
+  ) {
+    const { current, root } = stack.pop()!;
+    directoriesRead += 1;
+    let entries: readonly ReadFileSuggestionEntry[];
+    try {
+      entries = await options.readDirectory(current);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (suggestions.size >= limit) break;
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const fullPath = options.joinPath(current, entry.name);
+      if (entry.isDirectory) {
+        stack.push({ current: fullPath, root });
+        continue;
+      }
+      const relPath = options.relativePath(root, fullPath);
+      if (
+        (relPath === suffix ||
+          relPath.endsWith(`/${suffix}`) ||
+          entry.name === basename) &&
+        (options.include?.(fullPath, relPath) ?? true)
+      ) {
+        suggestions.add(options.roots.length === 1 ? relPath : fullPath);
+      }
+    }
+  }
+  return [...suggestions];
+}
+
 function numberLines(lines: readonly string[], offset: number): string {
   return lines.map((line, index) => `${offset + index} | ${line}`).join("\n");
 }

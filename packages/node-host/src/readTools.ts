@@ -3,19 +3,25 @@ import {
   type AgentPrincipal,
   type HostToolResolver,
 } from "@agentlink/core";
+import {
+  parseRegexSearchFilesParams,
+  regexSearchFilesInputSchema,
+  SEARCH_FILES_DEFAULT_MAX_RESULTS,
+} from "@agentlink/core/search-files";
 import path from "node:path";
 
 import {
   createNodeHostLocalFileSystem,
   type NodeHostFileSystem,
 } from "./fileSystem.js";
+import { searchNodeHostFiles } from "./regexSearch.js";
 import { redactNodeHostStructuredConfig } from "./structuredConfigRedaction.js";
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_LINE_LENGTH = 500;
 const MAX_READ_LINES = 200;
 const MAX_LIST_ENTRIES = 200;
-const MAX_SEARCH_RESULTS = 100;
+const MAX_SEARCH_RESULTS = SEARCH_FILES_DEFAULT_MAX_RESULTS;
 const MAX_SEARCH_DEPTH = 5;
 
 type NodeReadGrantKind = "file" | "directory";
@@ -46,10 +52,14 @@ export interface CreateNodeHostReadToolsOptions<
   readonly resolveGrants: ResolveNodeHostReadGrants<TPrincipal>;
   readonly maxFileBytes?: number;
   readonly maxListEntries?: number;
+  /** Upper bound for search_files `max_results` (default and maximum 300). */
   readonly maxSearchResults?: number;
+  /** Maximum list_files depth (default and maximum 5). */
   readonly maxSearchDepth?: number;
   /** Optional host policy checked before files or directories are listed or read. */
   readonly shouldIncludePath?: (absolutePath: string) => boolean;
+  /** Display path for search_files results. Defaults to the absolute path. */
+  readonly formatSearchPath?: (absolutePath: string) => string;
   /** Filesystem used for every read. Defaults to this machine's filesystem. */
   readonly fileSystem?: NodeHostFileSystem;
 }
@@ -57,7 +67,8 @@ export interface CreateNodeHostReadToolsOptions<
 /**
  * Create read-only local tools that operate only inside host-provided grants.
  * C1 deliberately excludes semantic search, shell/ripgrep execution, writes,
- * and implicit current-working-directory access.
+ * and implicit current-working-directory access. `search_files` follows VS
+ * Code's regex contract through a Node filesystem walk.
  */
 export function createNodeHostReadTools<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
@@ -216,65 +227,57 @@ export function createNodeHostReadTools<
       defineTool<TPrincipal>({
         name: "search_files",
         description:
-          "Search text files only inside an explicit host-approved read grant. This is bounded regex search, not semantic search.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", minLength: 1 },
-            regex: { type: "string", minLength: 1, maxLength: 1_000 },
-            maxResults: {
-              type: "integer",
-              minimum: 1,
-              maximum: MAX_SEARCH_RESULTS,
-            },
-          },
-          required: ["path", "regex"],
-          additionalProperties: false,
-        },
+          "Search a file or directory inside an explicit host-approved read grant with a regex, matching VS Code's search_files contract. output_mode selects matching lines with context (content, default), file paths (files_with_matches), or per-file counts (count); file_pattern filters files by glob, context/context_before/context_after set context lines, case_insensitive and multiline adjust matching, and offset with max_results pages results. Hidden entries, .git and node_modules are skipped and structured-config secrets are redacted. This is not semantic search.",
+        inputSchema: regexSearchFilesInputSchema({
+          pathDescription: "Absolute file or directory inside a read grant.",
+          maxResults: maxSearchResults,
+        }),
         effect: "read",
+        parallelSafe: true,
         displayInput: (input) => ({ path: input.path, regex: input.regex }),
-        handler: async (input) => {
+        handler: async (input, context) => {
           const resolved = await resolve(input);
           if (!resolved.ok) return error(resolved.error);
-          const regexText = typeof input.regex === "string" ? input.regex : "";
-          let regex: RegExp;
-          try {
-            regex = new RegExp(regexText, "i");
-          } catch {
-            return error("invalid_regex");
+          if (options.shouldIncludePath?.(resolved.path) === false) {
+            return error("path_not_granted");
           }
-          const limit = readBoundedInteger(
-            input.maxResults,
-            maxSearchResults,
-            1,
-            maxSearchResults,
-          );
-          const matches: Array<{ path: string; line: number; text: string }> =
-            [];
-          await searchPath({
+          const params = parseRegexSearchFilesParams(input);
+          const result = await searchNodeHostFiles({
             files,
             target: resolved.path,
             rootPath: resolved.rootPath,
-            shouldIncludePath: options.shouldIncludePath,
-            maxDepth: maxSearchDepth,
-            depth: 0,
-            limit,
-            regex,
-            matches,
+            params: {
+              ...params,
+              max_results: Math.min(
+                params.max_results ?? maxSearchResults,
+                maxSearchResults,
+              ),
+            },
+            maxFileBytes,
+            ...(options.shouldIncludePath
+              ? { shouldIncludePath: options.shouldIncludePath }
+              : {}),
+            ...(options.formatSearchPath
+              ? { formatPath: options.formatSearchPath }
+              : {}),
+            ...(context?.signal ? { signal: context.signal } : {}),
           });
-          const payload = {
-            path: resolved.path,
-            matches,
-            count: matches.length,
-            truncated: matches.length >= limit,
-          };
+          const pick = (key: string) =>
+            result.payload[key] !== undefined
+              ? { [key]: result.payload[key] }
+              : {};
           return {
-            modelContent: JSON.stringify(payload),
+            modelContent: JSON.stringify(result.payload),
             displayContent: {
               path: resolved.path,
-              count: matches.length,
-              truncated: payload.truncated,
+              output_mode: params.output_mode ?? "content",
+              ...pick("total_matches"),
+              ...pick("total_files"),
+              ...pick("truncated"),
+              ...pick("offset"),
+              ...pick("error"),
             },
+            ...(result.isError ? { isError: true } : {}),
           };
         },
       }),
@@ -363,67 +366,6 @@ async function visitDirectory(options: {
         depth: options.depth + 1,
       });
     }
-  }
-}
-
-async function searchPath(options: {
-  readonly files: NodeHostFileSystem;
-  readonly target: string;
-  readonly rootPath: string;
-  readonly maxDepth: number;
-  readonly depth: number;
-  readonly limit: number;
-  readonly regex: RegExp;
-  readonly matches: Array<{ path: string; line: number; text: string }>;
-  readonly shouldIncludePath?: (absolutePath: string) => boolean;
-}): Promise<void> {
-  if (
-    options.matches.length >= options.limit ||
-    options.depth > options.maxDepth
-  )
-    return;
-  if (options.shouldIncludePath?.(path.resolve(options.target)) === false)
-    return;
-  const { files } = options;
-  const target = await files.realpath(options.target).catch(() => undefined);
-  if (
-    !target ||
-    target !== path.resolve(options.target) ||
-    !isPathWithin(target, options.rootPath)
-  )
-    return;
-  const stat = await files.stat(target).catch(() => undefined);
-  if (!stat) return;
-  if (stat.kind === "file") {
-    const bytes = await files.readFile(target).catch(() => undefined);
-    if (!bytes || bytes.length > MAX_FILE_BYTES || isBinary(bytes)) return;
-    const redacted = redactNodeHostStructuredConfig(
-      target,
-      bytes.toString("utf8"),
-    );
-    for (const [index, line] of redacted.content.split(/\r?\n/u).entries()) {
-      if (options.matches.length >= options.limit) return;
-      if (options.regex.test(line)) {
-        options.matches.push({
-          path: target,
-          line: index + 1,
-          text: boundText(line),
-        });
-      }
-    }
-    return;
-  }
-  if (stat.kind !== "directory") return;
-  for (const entry of await files.readDirectory(target)) {
-    if (options.matches.length >= options.limit) return;
-    if (entry.kind === "symlink") continue;
-    const child = path.join(target, entry.name);
-    if (options.shouldIncludePath?.(child) === false) continue;
-    await searchPath({
-      ...options,
-      target: child,
-      depth: options.depth + 1,
-    });
   }
 }
 

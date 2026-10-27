@@ -7,9 +7,11 @@ import {
   type HostTool,
   type HostToolResolveRequest,
   type HostToolResolver,
+  type HostToolResult,
 } from "@agentlink/core";
 import { planApplyDiff } from "@agentlink/core/apply-diff";
 import {
+  findReadFilePathSuggestions,
   planReadFileContentWindow,
   READ_FILE_IMAGE_MIME_TYPES,
   READ_FILE_MAX_IMAGE_BYTES,
@@ -34,7 +36,9 @@ import {
   getEscapingHint,
   isLiteralFilePatternPath,
   parseRipgrepCountOutput,
+  parseRegexSearchFilesParams,
   parseRipgrepOutput,
+  regexSearchFilesInputSchema,
   SEARCH_FILES_DEFAULT_MAX_RESULTS,
   SEARCH_FILES_MAX_OUTPUT_LINES,
   type RegexSearchFilesParams,
@@ -257,6 +261,9 @@ export function createWorkspaceFileTools(
         resolveGrants: () => nodeGrantsForScopes(scopes, "read"),
         shouldIncludePath: (absolutePath) =>
           shouldIncludeProjectReadPath(projectRoot, absolutePath),
+        // Fallback search (no packaged ripgrep) reports project paths.
+        formatSearchPath: (absolutePath) =>
+          toRelativePath(projectRoot, absolutePath),
         fileSystem: files,
       })(request),
       createNodeHostWriteTools({
@@ -642,82 +649,12 @@ function wrapProjectTool(
   });
 }
 
-const SEARCH_CONTEXT_LINES_LIMIT = 50;
 const SEARCH_STDERR_BYTES = 16_384;
 
 /** VS Code's regex `search_files` input; indexed `query` mode is VS Code-only. */
-const SEARCH_FILES_INPUT_SCHEMA: CoreModelJsonSchema = {
-  type: "object",
-  properties: {
-    path: {
-      type: "string",
-      minLength: 1,
-      description: "Project-relative file or directory to search.",
-    },
-    regex: {
-      type: "string",
-      minLength: 1,
-      maxLength: 1_000,
-      description: "Regular expression for exact search (ripgrep syntax).",
-    },
-    file_pattern: {
-      type: "string",
-      minLength: 1,
-      maxLength: 500,
-      description: "Glob pattern to filter files (e.g. '*.ts').",
-    },
-    context: {
-      type: "integer",
-      minimum: 0,
-      maximum: SEARCH_CONTEXT_LINES_LIMIT,
-      description:
-        "Number of context lines to show around each match (default: 1). Only used for content output mode. Overridden by context_before/context_after if specified.",
-    },
-    context_before: {
-      type: "integer",
-      minimum: 0,
-      maximum: SEARCH_CONTEXT_LINES_LIMIT,
-      description:
-        "Number of context lines to show BEFORE each match (like grep -B). Overrides 'context' for before-match lines.",
-    },
-    context_after: {
-      type: "integer",
-      minimum: 0,
-      maximum: SEARCH_CONTEXT_LINES_LIMIT,
-      description:
-        "Number of context lines to show AFTER each match (like grep -A). Overrides 'context' for after-match lines.",
-    },
-    case_insensitive: {
-      type: "boolean",
-      description: "Case-insensitive search (default: false).",
-    },
-    multiline: {
-      type: "boolean",
-      description:
-        "Enable multiline matching where . matches newlines and patterns can span lines (default: false).",
-    },
-    max_results: {
-      type: "integer",
-      minimum: 1,
-      maximum: SEARCH_FILES_DEFAULT_MAX_RESULTS,
-      description: `Maximum results (default: ${SEARCH_FILES_DEFAULT_MAX_RESULTS}).`,
-    },
-    offset: {
-      type: "integer",
-      minimum: 0,
-      description:
-        "Skip first N matches before returning results. Use with max_results for pagination (e.g. offset=100, max_results=100 for second page).",
-    },
-    output_mode: {
-      type: "string",
-      enum: ["content", "files_with_matches", "count"],
-      description:
-        "Output format: 'content' shows matching lines with context (default), 'files_with_matches' shows only file paths, 'count' shows match counts per file.",
-    },
-  },
-  required: ["path", "regex"],
-  additionalProperties: false,
-};
+const SEARCH_FILES_INPUT_SCHEMA = regexSearchFilesInputSchema({
+  pathDescription: "Project-relative file or directory to search.",
+});
 
 function createRipgrepSearchTool(
   runtime: FileToolsRuntime,
@@ -744,46 +681,12 @@ function createRipgrepSearchTool(
         executable,
         projectRoot,
         input.path,
-        regexSearchParams(input),
+        parseRegexSearchFilesParams(input),
         { sessionId: context.sessionId, turnId: context.turnId },
         context.signal,
       );
     },
   });
-}
-
-function regexSearchParams(
-  input: Record<string, unknown>,
-): RegexSearchFilesParams {
-  const integer = (value: unknown) =>
-    Number.isSafeInteger(value) ? Number(value) : undefined;
-  const mode = input.output_mode;
-  return {
-    regex: String(input.regex),
-    ...(typeof input.file_pattern === "string"
-      ? { file_pattern: input.file_pattern }
-      : {}),
-    ...(input.case_insensitive === true ? { case_insensitive: true } : {}),
-    ...(input.multiline === true ? { multiline: true } : {}),
-    ...(integer(input.context) !== undefined
-      ? { context: integer(input.context) }
-      : {}),
-    ...(integer(input.context_before) !== undefined
-      ? { context_before: integer(input.context_before) }
-      : {}),
-    ...(integer(input.context_after) !== undefined
-      ? { context_after: integer(input.context_after) }
-      : {}),
-    ...(mode === "content" || mode === "files_with_matches" || mode === "count"
-      ? { output_mode: mode }
-      : {}),
-    ...(integer(input.offset) !== undefined
-      ? { offset: integer(input.offset) }
-      : {}),
-    ...(integer(input.max_results) !== undefined
-      ? { max_results: integer(input.max_results) }
-      : {}),
-  };
 }
 
 async function executeRipgrepSearch(
@@ -1222,6 +1125,11 @@ function createWorkspaceReadFileTool(
           description:
             "Context view only. When true, include content even if dedupe_unchanged_content would otherwise omit it.",
         },
+        auto_follow_suggestion: {
+          type: "boolean",
+          description:
+            "When true, if path is not found and exactly one high-confidence suggestion exists, automatically read that suggested file and include resolution metadata.",
+        },
       },
       required: ["path"],
       additionalProperties: false,
@@ -1232,29 +1140,15 @@ function createWorkspaceReadFileTool(
     displayInput: (input) => ({ path: input.path, view: input.view }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const { files } = runtime;
-      const resolved = await resolveProjectPath(
-        files,
-        projectRoot,
-        input.path,
-        { allowAbsent: false },
-      );
-      if (!resolved.ok) return toolError(resolved.error);
-      const relativePath = toRelativePath(projectRoot, resolved.path);
-      const scopes = await resolveFileScopes(
-        files,
-        projectRoot,
-        resolveScopes,
-        discovery,
-      );
-      if (!scopeAllows(scopes, relativePath, "read")) {
-        return toolError("path_not_scoped");
-      }
-      const protection = protectedPath(relativePath);
-      if (protection.blockRead) {
-        return toolError(protection.reason ?? "protected_content");
-      }
-      if (isIgnoredPath(relativePath)) return toolError("path_ignored");
+      return await read(input, context);
+    },
+  });
+
+  async function read(
+    input: Record<string, unknown>,
+    context: Parameters<HostTool["execute"]>[1],
+  ): Promise<HostToolResult> {
+    {
       if (
         input.view !== undefined &&
         input.view !== "content" &&
@@ -1274,10 +1168,37 @@ function createWorkspaceReadFileTool(
         input.view === "context" &&
         (input.anchor !== undefined ||
           input.anchor_regex !== undefined ||
-          input.anchor_offset !== undefined)
+          input.anchor_offset !== undefined ||
+          input.auto_follow_suggestion !== undefined)
       ) {
-        return toolError("anchor_options_require_content_view");
+        return toolError("content_options_require_content_view");
       }
+      const { files } = runtime;
+      const scopes = await resolveFileScopes(
+        files,
+        projectRoot,
+        resolveScopes,
+        discovery,
+      );
+      const resolved = await resolveProjectPath(
+        files,
+        projectRoot,
+        input.path,
+        { allowAbsent: false },
+      );
+      if (!resolved.ok && resolved.error === "path_not_found") {
+        return await notFound(input, context, scopes);
+      }
+      if (!resolved.ok) return toolError(resolved.error);
+      const relativePath = toRelativePath(projectRoot, resolved.path);
+      if (!scopeAllows(scopes, relativePath, "read")) {
+        return toolError("path_not_scoped");
+      }
+      const protection = protectedPath(relativePath);
+      if (protection.blockRead) {
+        return toolError(protection.reason ?? "protected_content");
+      }
+      if (isIgnoredPath(relativePath)) return toolError("path_ignored");
       const stat = await files.lstat(resolved.path).catch(() => undefined);
       if (stat?.kind !== "file" || stat.nlink > 1) {
         return toolError("not_a_private_regular_file");
@@ -1362,8 +1283,78 @@ function createWorkspaceReadFileTool(
         modelContent: JSON.stringify(result.payload, null, 2),
         displayContent: result.display,
       };
-    },
-  });
+    }
+  }
+
+  /**
+   * VS Code's not-found payload with path suggestions. Only files a read
+   * would allow (scope, protection, ignore rules) are suggested, and a
+   * followed suggestion runs through every check again.
+   */
+  async function notFound(
+    input: Record<string, unknown>,
+    context: Parameters<HostTool["execute"]>[1],
+    scopes: readonly ResolvedWorkspaceFileScope[],
+  ): Promise<HostToolResult> {
+    const inputPath = String(input.path);
+    const suggestions = await findReadFilePathSuggestions(inputPath, {
+      roots: [projectRoot],
+      readDirectory: async (directory) =>
+        (await runtime.files.readDirectory(directory))
+          // Symlinks are never followed or suggested.
+          .filter(
+            (entry) => entry.kind === "file" || entry.kind === "directory",
+          )
+          .map((entry) => ({
+            name: entry.name,
+            isDirectory: entry.kind === "directory",
+          })),
+      joinPath: (directory, name) => path.join(directory, name),
+      relativePath: (root, fullPath) => toRelativePath(root, fullPath),
+      include: (fullPath, relativePath) =>
+        scopeAllows(scopes, relativePath, "read") &&
+        shouldIncludeProjectReadPath(projectRoot, fullPath),
+    });
+    if (input.auto_follow_suggestion === true && suggestions.length === 1) {
+      const [suggestedPath] = suggestions as [string];
+      const followed = await read(
+        { ...input, path: suggestedPath, auto_follow_suggestion: false },
+        context,
+      );
+      if (typeof followed.modelContent !== "string") return followed;
+      try {
+        const parsed = JSON.parse(followed.modelContent) as Record<
+          string,
+          unknown
+        >;
+        return {
+          ...followed,
+          modelContent: JSON.stringify(
+            {
+              ...parsed,
+              resolution: "auto_followed_suggestion",
+              auto_followed_from: inputPath,
+              resolved_path: suggestedPath,
+            },
+            null,
+            2,
+          ),
+        };
+      } catch {
+        return followed;
+      }
+    }
+    const payload = {
+      error: `File not found: ${inputPath}. Working directory: ${projectRoot}`,
+      path: inputPath,
+      ...(suggestions.length > 0 ? { suggestions } : {}),
+    };
+    return {
+      modelContent: JSON.stringify(payload),
+      displayContent: { path: inputPath, error: "path_not_found" },
+      isError: true,
+    };
+  }
 }
 
 /**
@@ -2776,16 +2767,7 @@ function sanitizeProjectResult(value: unknown, toolName: string): unknown {
     );
     return { ...record, entries, count: entries.length };
   }
-  // Fallback node-host search (no packaged ripgrep) returns a match array.
-  if (toolName === "search_files" && Array.isArray(record.matches)) {
-    const matches = record.matches.filter((match) => {
-      if (!match || typeof match !== "object") return false;
-      const matchPath = (match as { path?: unknown }).path;
-      if (typeof matchPath !== "string") return false;
-      return !isIgnoredPath(matchPath) && !protectedPath(matchPath).blockRead;
-    });
-    return { ...record, matches, count: matches.length };
-  }
+  // Fallback node-host search already applies shouldIncludeProjectReadPath.
   return value;
 }
 

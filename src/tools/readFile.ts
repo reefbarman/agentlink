@@ -34,6 +34,7 @@ import {
   extractPdfText as extractPdfTextFromBytes,
 } from "@agentlink/node-host";
 import {
+  findReadFilePathSuggestions,
   READ_FILE_IMAGE_MIME_TYPES,
   READ_FILE_MAX_IMAGE_BYTES,
   READ_FILE_MAX_PDF_BYTES,
@@ -395,63 +396,22 @@ export async function findLikelyPathSuggestions(
   const workspaceRoots = options.workspaceRoot
     ? [options.workspaceRoot]
     : getWorkspaceRoots();
-  if (workspaceRoots.length === 0) return [];
-
-  const limit = Math.max(0, options.limit ?? 5);
-  const directoryBudget = Math.max(
-    0,
-    options.directoryBudget ?? DEFAULT_SUGGESTION_DIRECTORY_BUDGET,
-  );
-  const normalizedInput = inputPath.replace(/\\/g, "/");
-  const basename = path.posix.basename(normalizedInput);
-  const suffix = normalizedInput.startsWith("./")
-    ? normalizedInput.slice(2)
-    : normalizedInput;
-  const suggestions = new Set<string>();
-  const stack = workspaceRoots.map((workspaceRoot) => ({
-    current: workspaceRoot,
-    workspaceRoot,
-  }));
-  let directoriesRead = 0;
-
-  while (
-    stack.length > 0 &&
-    suggestions.size < limit &&
-    directoriesRead < directoryBudget
-  ) {
-    const { current, workspaceRoot } = stack.pop()!;
-    directoriesRead += 1;
-    let entries: Dirent<string>[];
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (suggestions.size >= limit) break;
-      if (entry.name === "node_modules" || entry.name === ".git") continue;
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push({ current: fullPath, workspaceRoot });
-        continue;
-      }
-      const relPath = path
-        .relative(workspaceRoot, fullPath)
-        .replace(/\\/g, "/");
-      if (
-        relPath === suffix ||
-        relPath.endsWith(`/${suffix}`) ||
-        entry.name === basename
-      ) {
-        suggestions.add(
-          workspaceRoots.length === 1 ? relPath : path.resolve(fullPath),
-        );
-      }
-    }
-  }
-
-  return [...suggestions];
+  return findReadFilePathSuggestions(inputPath, {
+    roots: workspaceRoots,
+    readDirectory: async (directory) =>
+      ((await fs.readdir(directory, { withFileTypes: true })) as Dirent[]).map(
+        (entry) => ({
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+        }),
+      ),
+    joinPath: (directory, name) => path.resolve(path.join(directory, name)),
+    relativePath: (root, fullPath) =>
+      path.relative(root, fullPath).replace(/\\/g, "/"),
+    limit: options.limit ?? 5,
+    directoryBudget:
+      options.directoryBudget ?? DEFAULT_SUGGESTION_DIRECTORY_BUDGET,
+  });
 }
 
 export async function buildReadFileError(

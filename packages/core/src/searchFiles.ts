@@ -5,6 +5,8 @@
  * ripgrep process, path access, and file reads for secret redaction.
  */
 
+import type { CoreModelJsonSchema } from "./modelRuntime.js";
+
 export const SEARCH_FILES_DEFAULT_MAX_RESULTS = 300;
 /** Lines of ripgrep output VS Code keeps before stopping the process. */
 export const SEARCH_FILES_MAX_OUTPUT_LINES =
@@ -16,6 +18,113 @@ export const SEARCH_FILES_DEFAULT_EXCLUDE_GLOBS = [
 ] as const;
 
 export type SearchFilesOutputMode = "content" | "files_with_matches" | "count";
+
+/** Largest context window a standalone host accepts per side. */
+export const SEARCH_FILES_CONTEXT_LINES_LIMIT = 50;
+
+/**
+ * VS Code's regex-mode `search_files` input schema. Indexed `query` mode is
+ * VS Code-only. `maxResults` caps `max_results` for hosts with a lower bound.
+ */
+export function regexSearchFilesInputSchema(options: {
+  readonly pathDescription: string;
+  readonly maxResults?: number;
+}): CoreModelJsonSchema {
+  const maxResults = options.maxResults ?? SEARCH_FILES_DEFAULT_MAX_RESULTS;
+  const contextLines = (description: string) => ({
+    type: "integer",
+    minimum: 0,
+    maximum: SEARCH_FILES_CONTEXT_LINES_LIMIT,
+    description,
+  });
+  return {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        minLength: 1,
+        description: options.pathDescription,
+      },
+      regex: {
+        type: "string",
+        minLength: 1,
+        maxLength: 1_000,
+        description: "Regular expression for exact search (ripgrep syntax).",
+      },
+      file_pattern: {
+        type: "string",
+        minLength: 1,
+        maxLength: 500,
+        description: "Glob pattern to filter files (e.g. '*.ts').",
+      },
+      context: contextLines(
+        "Number of context lines to show around each match (default: 1). Only used for content output mode. Overridden by context_before/context_after if specified.",
+      ),
+      context_before: contextLines(
+        "Number of context lines to show BEFORE each match (like grep -B). Overrides 'context' for before-match lines.",
+      ),
+      context_after: contextLines(
+        "Number of context lines to show AFTER each match (like grep -A). Overrides 'context' for after-match lines.",
+      ),
+      case_insensitive: {
+        type: "boolean",
+        description: "Case-insensitive search (default: false).",
+      },
+      multiline: {
+        type: "boolean",
+        description:
+          "Enable multiline matching where . matches newlines and patterns can span lines (default: false).",
+      },
+      max_results: {
+        type: "integer",
+        minimum: 1,
+        maximum: maxResults,
+        description: `Maximum results (default: ${maxResults}).`,
+      },
+      offset: {
+        type: "integer",
+        minimum: 0,
+        description:
+          "Skip first N matches before returning results. Use with max_results for pagination (e.g. offset=100, max_results=100 for second page).",
+      },
+      output_mode: {
+        type: "string",
+        enum: ["content", "files_with_matches", "count"],
+        description:
+          "Output format: 'content' shows matching lines with context (default), 'files_with_matches' shows only file paths, 'count' shows match counts per file.",
+      },
+    },
+    required: ["path", "regex"],
+    additionalProperties: false,
+  };
+}
+
+/** Read validated tool input into regex search parameters. */
+export function parseRegexSearchFilesParams(
+  input: Readonly<Record<string, unknown>>,
+): RegexSearchFilesParams {
+  const integer = (value: unknown) =>
+    Number.isSafeInteger(value) ? Number(value) : undefined;
+  const mode = input.output_mode;
+  const optional = <K extends string>(key: K, value: number | undefined) =>
+    value !== undefined ? ({ [key]: value } as Record<K, number>) : {};
+  return {
+    regex: String(input.regex),
+    ...(typeof input.file_pattern === "string"
+      ? { file_pattern: input.file_pattern }
+      : {}),
+    ...(input.case_insensitive === true ? { case_insensitive: true } : {}),
+    ...(input.multiline === true ? { multiline: true } : {}),
+    ...optional("context", integer(input.context)),
+    ...optional("context_before", integer(input.context_before)),
+    ...optional("context_after", integer(input.context_after)),
+    ...(mode === "content" || mode === "files_with_matches" || mode === "count"
+      ? { output_mode: mode }
+      : {}),
+    ...optional("offset", integer(input.offset)),
+    ...optional("max_results", integer(input.max_results)),
+  };
+}
 
 /** The regex-mode `search_files` parameters shared by every surface. */
 export interface RegexSearchFilesParams {

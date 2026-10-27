@@ -223,8 +223,14 @@ describe("node host file tools with an injected filesystem", () => {
     });
     const searched = await (
       await findTool(tools, "search_files")
-    ).execute({ path: VIRTUAL_ROOT, regex: "BETA" }, context);
-    expect(String(searched.modelContent)).toContain('"line":2');
+    ).execute(
+      { path: VIRTUAL_ROOT, regex: "BETA", case_insensitive: true },
+      context,
+    );
+    expect(JSON.parse(String(searched.modelContent))).toMatchObject({
+      total_matches: 1,
+      results: `## ${VIRTUAL_ROOT}/notes.txt (1 match)\n  1 | alpha\n> 2 | beta\n---`,
+    });
     expect([...operations]).toEqual(
       expect.arrayContaining(["realpath", "stat", "readFile", "readDirectory"]),
     );
