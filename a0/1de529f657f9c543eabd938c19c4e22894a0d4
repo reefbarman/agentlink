@@ -1,0 +1,54 @@
+packages/node-host/src/regexSearch.ts
+  h_e08a86bb3a33a2 1-419
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 10,14,39,41,264-266,655-657,684,1128-1132,1143-1151,1171-1172,1174,1189-1191,1288-1357,2770
+  s_3d890af8f718d7::t_2a10dc84800753 1175-1188,1192-1199,1201,1286-1287
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/tools/readFile.ts
+  h_e08a86bb3a33a2 37,399-414
+packages/workspace-host/src/fileTools.test.ts
+  h_e08a86bb3a33a2 306,309-312,314-324,468-538
+  s_3d890af8f718d7::t_bf9423f42aa6f9 271,305,313,325-327,539-543
+packages/node-host/src/readTools.ts
+  h_e08a86bb3a33a2 6-10,17,24,55,57,61-62,70-71,230-234,236,238,241-242,244-245,249-263,265-268,270,273-278,280
+packages/core/src/readFileContent.ts
+  h_e08a86bb3a33a2 198-282
+packages/node-host/README.md
+  h_e08a86bb3a33a2 57
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 26,28,110
+  s_3d890af8f718d7::t_1f07f158f18cb7 27
+packages/core/src/searchFiles.ts
+  h_e08a86bb3a33a2 8-9,22-128
+packages/node-host/src/fileSystem.test.ts
+  h_e08a86bb3a33a2 227-228,230-233
+  s_3d890af8f718d7::t_47882b4e8576c6 226,229
+packages/node-host/src/readTools.test.ts
+  h_e08a86bb3a33a2 148-155,159,164-244
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_e08a86bb3a33a2 299
+resources/builtin-skills/documentation/references/release-notes.md
+  s_3d890af8f718d7::t_96683daa7aef44 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a01de529f657f9c543eabd938c19c4e22894a0d4",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_3d890af8f718d7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17c04c3a-082d-4280-8125-8922de3b86ca",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
