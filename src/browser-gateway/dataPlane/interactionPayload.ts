@@ -148,6 +148,12 @@ function approvalRequest(value: unknown): ApprovalRequest {
   copyOptional(result, "humanOnlyReason", source.humanOnlyReason, stringValue);
   copyOptional(
     result,
+    "automaticReviewPaused",
+    source.automaticReviewPaused,
+    booleanValue,
+  );
+  copyOptional(
+    result,
     "recoveryAttempt",
     source.recoveryAttempt,
     recoveryAttempt,

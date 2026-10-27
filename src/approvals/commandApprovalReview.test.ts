@@ -1171,6 +1171,20 @@ describe("command review denial circuit", () => {
     });
   });
 
+  it("clears the denial history when the user resumes automatic review", () => {
+    const circuit = createCommandReviewTurnCircuit();
+    circuit.record(result("deny"));
+    circuit.record(result("deny"));
+    expect(circuit.record(result("deny")).interrupted).toBe(true);
+    circuit.resume();
+    expect(circuit.interrupted).toBe(false);
+    expect(circuit.record(result("deny"))).toMatchObject({
+      interrupted: false,
+      consecutiveDenials: 1,
+      denialsInRecentWindow: 1,
+    });
+  });
+
   it("interrupts at ten denials in the most recent fifty reviews", () => {
     const circuit = createCommandReviewTurnCircuit();
     for (let index = 0; index < 9; index++) {

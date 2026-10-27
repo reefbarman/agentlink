@@ -200,6 +200,11 @@ export interface CommandReviewCircuitDecision {
 export interface CommandReviewTurnCircuit {
   readonly interrupted: boolean;
   record(result: CommandApprovalReviewResult): CommandReviewCircuitDecision;
+  /**
+   * Clear the denial history after the user explicitly turns automatic
+   * review back on for the rest of this turn.
+   */
+  resume(): void;
   hasRejectedRecovery(actionKey: string): boolean;
   rejectRecovery(actionKey: string): void;
 }
@@ -239,6 +244,11 @@ export function createCommandReviewTurnCircuit(): CommandReviewTurnCircuit {
     hasRejectedRecovery: (actionKey) => rejectedRecoveries.has(actionKey),
     rejectRecovery: (actionKey) => {
       rejectedRecoveries.add(actionKey);
+    },
+    resume() {
+      recentDenials.length = 0;
+      consecutiveDenials = 0;
+      interrupted = false;
     },
     record(result) {
       const explicitDenial =

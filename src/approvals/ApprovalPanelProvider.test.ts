@@ -669,6 +669,49 @@ describe("ApprovalPanelProvider forwarded approval attention", () => {
   });
 });
 
+describe("ApprovalPanelProvider resume automatic review", () => {
+  it("accepts resume-review only for cards where automatic review is paused", async () => {
+    const { provider } = createProvider();
+    const pending: Array<{
+      request: ApprovalRequest;
+      respond: (msg: DecisionMessage) => boolean;
+    }> = [];
+    provider.onForwardApproval = ({ request }, respond) => {
+      pending.push({ request, respond });
+    };
+    const resume = (index: number) =>
+      pending[index]!.respond({
+        type: "decision",
+        id: pending[index]!.request.id,
+        approvalKind: "command",
+        decision: "resume-review",
+      });
+
+    const ordinary = provider.enqueueCommandApproval("rm -rf a", "rm -rf a", {
+      sessionId: "session-1",
+    });
+    expect(pending[0]!.request.automaticReviewPaused).toBeUndefined();
+    expect(resume(0)).toBe(false);
+    pending[0]!.respond({
+      type: "decision",
+      id: ordinary.id,
+      approvalKind: "command",
+      decision: "reject",
+    });
+    await ordinary.promise;
+
+    const paused = provider.enqueueCommandApproval("rm -rf b", "rm -rf b", {
+      sessionId: "session-1",
+      automaticReviewPaused: true,
+    });
+    expect(pending[1]!.request.automaticReviewPaused).toBe(true);
+    expect(resume(1)).toBe(true);
+    await expect(paused.promise).resolves.toMatchObject({
+      decision: "resume-review",
+    });
+  });
+});
+
 describe("ApprovalPanelProvider command rule decisions", () => {
   it("rejects malformed rule decisions and preserves valid tri-state rules", async () => {
     const { provider } = createProvider();

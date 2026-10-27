@@ -9989,6 +9989,99 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result)).toMatchObject({ approval: { by: "human" } });
   });
 
+  it("re-reviews the command after the user resumes paused automatic review", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(
+      (
+        _command: string,
+        _full: string,
+        options?: { [key: string]: unknown },
+      ) => ({
+        promise: Promise.resolve(
+          options?.automaticReviewPaused && !options.commandReview
+            ? { decision: "resume-review" }
+            : { decision: "reject" },
+        ),
+      }),
+    );
+    const review = vi.fn(async () => ({
+      outcome: "deny" as const,
+      risk: "high" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Deletion scope is not confirmed",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const circuit = createCommandReviewTurnCircuit();
+    const providers = {
+      terminalProvider,
+      getCommandApprovalPolicy: () => "approve-for-me" as const,
+      commandApprovalReviewer: { review },
+      commandReviewTurnCircuit: circuit,
+      retainedCommandReviewDenials: createRetainedCommandReviewDenials(),
+      isSessionActive: () => true,
+    };
+    const approvalManager = {
+      isCommandApproved: () => false,
+      findMatchingCommandRule: () => undefined,
+    } as never;
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    for (const command of ["rm -rf one", "rm -rf two", "rm -rf three"]) {
+      await handleExecuteCommand(
+        { command },
+        approvalManager,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        "session-review-resume",
+        undefined,
+        providers,
+      );
+    }
+    expect(circuit.interrupted).toBe(true);
+    expect(enqueueCommandApproval).toHaveBeenLastCalledWith(
+      "rm -rf three",
+      "rm -rf three",
+      expect.objectContaining({ automaticReviewPaused: true }),
+    );
+
+    review.mockResolvedValueOnce({
+      outcome: "allow" as never,
+      risk: "low" as never,
+      userAuthorization: "high" as never,
+      rationale: "Scoped cleanup",
+      model: "review-model",
+      status: "reviewed" as const,
+    });
+    const result = await handleExecuteCommand(
+      { command: "rm -rf four" },
+      approvalManager,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-resume",
+      undefined,
+      providers,
+    );
+
+    // The paused card was shown without a review, the user resumed, and
+    // Guardian reviewed the same command again and approved it.
+    expect(enqueueCommandApproval).toHaveBeenLastCalledWith(
+      "rm -rf four",
+      "rm -rf four",
+      expect.objectContaining({
+        automaticReviewPaused: true,
+        commandReview: undefined,
+      }),
+    );
+    expect(review).toHaveBeenCalledTimes(4);
+    expect(circuit.interrupted).toBe(false);
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "model_reviewer", outcome: "allow" },
+    });
+  });
+
   it("does not execute when a pending human approval resolves after cancellation", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>

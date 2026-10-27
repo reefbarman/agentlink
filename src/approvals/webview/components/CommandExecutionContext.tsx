@@ -19,6 +19,8 @@ interface CommandExecutionContextProps {
   approvalRulesSupported?: boolean;
   /** Only the computer running AgentLink can approve this command. */
   thisMachineOnly?: boolean;
+  /** Turns automatic review back on for this turn and re-reviews the command. */
+  onResumeAutomaticReview?: () => void;
 }
 
 /** "1 hour", "90 minutes", "45 seconds". */
@@ -45,6 +47,7 @@ export function CommandExecutionContext({
   nativeEscalation = false,
   approvalRulesSupported = false,
   thisMachineOnly = false,
+  onResumeAutomaticReview,
 }: CommandExecutionContextProps) {
   const hostSandbox =
     !security && !nativeEscalation ? commandSandbox : undefined;
@@ -117,6 +120,9 @@ export function CommandExecutionContext({
   const showHandoffContext = Boolean(
     review || humanOnlyReason || recoveryAttempt,
   );
+  // Keep the explanation open when it offers an action, so the button is
+  // visible without expanding the section first.
+  const handoffContextOpen = Boolean(onResumeAutomaticReview);
   const reviewerLabel =
     security?.approvalReviewerSnapshot === "auto-review"
       ? "Auto reviewer"
@@ -221,7 +227,10 @@ export function CommandExecutionContext({
       )}
 
       {showHandoffContext && (
-        <details class="command-context command-handoff-context">
+        <details
+          class="command-context command-handoff-context"
+          open={handoffContextOpen}
+        >
           <summary class="command-context-summary">
             <span aria-hidden="true" class="codicon codicon-info" />
             <span class="command-context-summary-copy">
@@ -282,6 +291,17 @@ export function CommandExecutionContext({
                 <div>
                   <strong>Human approval required</strong>
                   <div>{humanOnlyReason}</div>
+                  {onResumeAutomaticReview && (
+                    <button
+                      type="button"
+                      class="btn btn-secondary command-context-action"
+                      title="Turn Guardian review back on for the rest of this turn and let it review this command"
+                      onClick={onResumeAutomaticReview}
+                    >
+                      <span aria-hidden="true" class="codicon codicon-shield" />
+                      Resume automatic review
+                    </button>
+                  )}
                 </div>
               </div>
             )}

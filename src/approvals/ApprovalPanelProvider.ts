@@ -33,7 +33,18 @@ import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
 // ── Response types ──────────────────────────────────────────────────────────
 
 export interface CommandApprovalResponse {
-  decision: "run-once" | "edit" | "session" | "project" | "global" | "reject";
+  /**
+   * "resume-review" approves nothing: it asks the host to turn automatic
+   * review back on for this turn and review the command again.
+   */
+  decision:
+    | "run-once"
+    | "edit"
+    | "session"
+    | "project"
+    | "global"
+    | "reject"
+    | "resume-review";
   /** True when the provider resolved this request from its attributed recent cache. */
   recentApproval?: boolean;
   /** Host-only marker for an exact coordinator one-shot decision. */
@@ -180,6 +191,8 @@ interface InternalRequest {
   recoveryAttempt?: CommandRecoveryAttempt;
   /** Concise guardrail reason shown instead of reviewer output. */
   humanOnlyReason?: string;
+  /** Automatic review is paused for this turn and may be resumed from the card. */
+  automaticReviewPaused?: boolean;
   /** Fingerprint of the applicable command rules when this action was reviewed. */
   commandPolicyFingerprint?: string;
   security?: TerminalExecutionSecuritySummary;
@@ -307,6 +320,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd?: string;
       commandReview?: CommandReviewSummary;
       humanOnlyReason?: string;
+      automaticReviewPaused?: boolean;
       recoveryAttempt?: CommandRecoveryAttempt;
       commandPolicyFingerprint?: string;
       security?: TerminalExecutionSecuritySummary;
@@ -342,6 +356,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         cwd: options?.cwd,
         commandReview: options?.commandReview,
         humanOnlyReason: options?.humanOnlyReason,
+        ...(options?.automaticReviewPaused
+          ? { automaticReviewPaused: true }
+          : {}),
         recoveryAttempt: options?.recoveryAttempt,
         commandPolicyFingerprint: options?.commandPolicyFingerprint,
         security: options?.security,
@@ -912,6 +929,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd: request.cwd,
       commandReview: request.commandReview,
       humanOnlyReason: request.humanOnlyReason,
+      ...(request.automaticReviewPaused ? { automaticReviewPaused: true } : {}),
       recoveryAttempt: request.recoveryAttempt,
       security: request.security,
       managedNetwork: request.managedNetwork,
@@ -1062,7 +1080,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
     // Record for repeat auto-approve within TTL window.
     // Skip rejections and edited commands (user wanted to review those).
-    const isRejection = message.decision === "reject";
+    // Resuming automatic review approves nothing, so it is never recorded.
+    const isRejection =
+      message.decision === "reject" || message.decision === "resume-review";
     const isEdited =
       entry.request.kind === "command" && !!message.editedCommand;
     if (
@@ -1204,9 +1224,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         ],
         memory: ["accept", "reject"],
       };
+    const resumeReview =
+      request.kind === "command" &&
+      request.automaticReviewPaused === true &&
+      message.decision === "resume-review";
     if (
       !message.decision ||
-      !allowedDecisions[request.kind].includes(message.decision)
+      (!resumeReview &&
+        !allowedDecisions[request.kind].includes(message.decision))
     ) {
       return false;
     }

@@ -8948,6 +8948,12 @@ body.approval-resizing {
 .approval-panel-embed .command-context-detail-row strong {
   color: var(--vscode-foreground);
 }
+.approval-panel-embed .command-context-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
 .approval-panel-embed .terminal-box {
   background: var(--vscode-terminal-background, #1e1e1e);
   border: 1px solid var(--vscode-terminal-border, var(--vscode-panel-border));

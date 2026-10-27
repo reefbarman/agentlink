@@ -209,6 +209,31 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.queryByText(/unsandboxed/i)).toBeNull();
   });
 
+  it("offers to resume automatic review only when it is paused", () => {
+    const paused = request("sandbox");
+    paused.humanOnlyReason =
+      "Automatic command review stopped after repeated denials in this turn. Your direct approval is required.";
+    paused.automaticReviewPaused = true;
+    const { container, submit } = renderCard(paused);
+
+    const handoff = container.querySelector<HTMLDetailsElement>(
+      "details.command-handoff-context",
+    );
+    expect(handoff?.open).toBe(true);
+    fireEvent.click(screen.getByText("Resume automatic review"));
+    expect(submit).toHaveBeenCalledWith({
+      id: paused.id,
+      decision: "resume-review",
+      followUp: undefined,
+    });
+
+    cleanup();
+    const notPaused = request("sandbox");
+    notPaused.humanOnlyReason = paused.humanOnlyReason;
+    renderCard(notPaused);
+    expect(screen.queryByText("Resume automatic review")).toBeNull();
+  });
+
   it("presents native escalation with the standard card and rule controls", () => {
     const approval = request("native", "native-escalation");
     approval.subCommands = [{ command: "npm test" }];

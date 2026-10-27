@@ -161,6 +161,11 @@ export interface ApprovalRequest {
   commandReview?: CommandReviewSummary;
   /** For commands: concise non-reviewer reason automatic approval was skipped. */
   humanOnlyReason?: string;
+  /**
+   * For commands: Approve for Me paused automatic review after repeated
+   * denials in this turn. The card may offer a "resume-review" decision.
+   */
+  automaticReviewPaused?: boolean;
   /** For commands: the sandbox already launched this command before this approval. */
   recoveryAttempt?: CommandRecoveryAttempt;
   /** Host-owned token-free route/confinement evidence for this exact command. */

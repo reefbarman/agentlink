@@ -5363,6 +5363,19 @@ async function approveSubCommands(
     return { command: cmd, tier: tierByCommand.get(cmd) };
   });
 
+  // Offer to turn automatic review back on only when the paused circuit is
+  // the reason Guardian did not decide, so resuming would actually review.
+  const automaticReviewPaused =
+    circuitInterrupted &&
+    !options?.recoveryAttempt &&
+    !options?.skipAutomaticReviewer &&
+    policy === "approve-for-me" &&
+    rulePolicy.decision !== "prompt" &&
+    Boolean(
+      reviewProviders?.commandReviewTurnCircuit &&
+      reviewProviders.commandApprovalReviewer,
+    );
+
   // Show dialog with full command + enriched sub-command entries
   let humanApprovalRequested = false;
   const { promise, commitApprovalRecording = () => {} } =
@@ -5376,6 +5389,7 @@ async function approveSubCommands(
         cwd,
         commandReview,
         humanOnlyReason,
+        ...(automaticReviewPaused ? { automaticReviewPaused: true } : {}),
         recoveryAttempt: options?.recoveryAttempt,
         commandPolicyFingerprint,
         security: options?.security,
@@ -5429,6 +5443,30 @@ async function approveSubCommands(
     hasPolicyDrift(reviewProviders, sessionId, options.routeContext)
   ) {
     return { approved: false, policyDrift: true };
+  }
+
+  if (response.decision === "resume-review") {
+    if (!automaticReviewPaused) {
+      return {
+        approved: false,
+        reason: "Automatic review is not paused for this command.",
+        ...(priorReview ? { priorReview } : {}),
+      };
+    }
+    // The user turned automatic review back on for the rest of this turn.
+    // Nothing was approved; review this exact command again from the start.
+    reviewProviders?.commandReviewTurnCircuit?.resume();
+    return approveSubCommands(
+      subCommands,
+      fullCommand,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      reason,
+      cwd,
+      workspaceRoots,
+      options,
+    );
   }
 
   if (response.decision === "reject") {

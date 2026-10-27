@@ -190,6 +190,14 @@ export function CommandCard({
     });
   }, [request.id, rules, isEdited, command, submit, followUpRef]);
 
+  const handleResumeAutomaticReview = useCallback(() => {
+    submit({
+      id: request.id,
+      decision: "resume-review",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, submit, followUpRef]);
+
   const handleReject = useCallback(
     (reason?: string) => {
       submit({ id: request.id, decision: "reject", rejectionReason: reason });
@@ -472,6 +480,11 @@ export function CommandCard({
             nativeEscalation && !hostUnsandboxed && !recoveryAttempt
           }
           thisMachineOnly={hostUnsandboxed}
+          onResumeAutomaticReview={
+            request.automaticReviewPaused && !recoveryAttempt
+              ? handleResumeAutomaticReview
+              : undefined
+          }
         />
       )}
     </ApprovalLayout>
