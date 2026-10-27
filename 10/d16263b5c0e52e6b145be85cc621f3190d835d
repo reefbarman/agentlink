@@ -1,0 +1,47 @@
+CHANGELOG.md
+  s_cc4d97498b06e7::t_035b58e4f87915 9
+packages/node-host/src/credentialsHelperClient.ts
+  s_cc4d97498b06e7::t_ea98f50aac1a89 16,136
+resources/builtin-skills/documentation/references/troubleshooting.md
+  s_cc4d97498b06e7::t_2000dfc9d87bf0 63
+packages/node-host/src/keychainSecretStorage.ts
+  s_cc4d97498b06e7::t_51d34a1d683717 409-417
+  s_cc4d97498b06e7::t_1796ff1a1fd7ff 234-237
+  s_cc4d97498b06e7::t_19d46a72502967 384-387
+  s_cc4d97498b06e7::t_ae9190c829ee64 6
+  s_cc4d97498b06e7::t_344f32ec351079 433-494
+packages/node-host/src/keychainSecretStorage.test.ts
+  s_cc4d97498b06e7::t_ac33c7bc2b763e 1,275-279,289-292,317-320
+  s_cc4d97498b06e7::t_d4f76ebc84f291 257-274,280-288,293-316,321-336
+resources/builtin-skills/documentation/references/package-contract.md
+  s_cc4d97498b06e7::t_0779523b9f6daa 12
+src/packageContributions.test.ts
+  s_cc4d97498b06e7::t_b4896ac9d5baed 42
+package.json
+  s_cc4d97498b06e7::t_0779523b9f6daa 5
+package-lock.json
+  s_cc4d97498b06e7::t_c26c9892b664b3 3,9
+resources/builtin-skills/documentation/references/release-notes.md
+  s_cc4d97498b06e7::t_fdcac153edc5d5 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10d16263b5c0e52e6b145be85cc621f3190d835d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_cc4d97498b06e7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "70d867e9-697d-44a1-943a-848d899ac33d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
