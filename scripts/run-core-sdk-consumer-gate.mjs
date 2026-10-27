@@ -56,7 +56,10 @@ async function packPackage(packageName, packDirectory, cacheDirectory) {
     { cwd: ROOT, env: { npm_config_cache: cacheDirectory } },
   );
   const parsed = JSON.parse(stdout);
-  const artifact = parsed[0];
+  // npm 10 prints an array; npm 12 keys workspace results by package name.
+  const artifact = Array.isArray(parsed)
+    ? parsed[0]
+    : parsed[`@agentlink/${packageName}`];
   const filename = artifact?.filename;
   if (!filename)
     throw new Error(`npm pack returned no ${packageName} artifact`);

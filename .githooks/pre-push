@@ -1,0 +1,6 @@
+#!/bin/sh
+# Blocks a push unless `npm run preflight` passed for every pushed branch tip.
+# Opt in once per clone: git config core.hooksPath .githooks
+# Skip once: git push --no-verify, or AGENTLINK_SKIP_PREFLIGHT=1 git push
+[ "${AGENTLINK_SKIP_PREFLIGHT:-}" = "1" ] && exit 0
+exec node "$(git rev-parse --show-toplevel)/scripts/preflight.mjs" --check-push "$@"

@@ -39,7 +39,10 @@ afterEach(async () => {
 
 async function tempDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "audit-checkpoint-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  // Retries ENOTEMPTY when a sidecar write lands during removal under load.
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   return dir;
 }
 

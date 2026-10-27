@@ -57,13 +57,9 @@ describe("browser gateway helper lifecycle", () => {
       helperVersion: "1.20.1",
       helperGenerationId: "helper-generation-1",
       dataPlaneMode: "on",
-      dataPlaneFeatures: [
-        "typed-background-results-v1",
-        "transcript-block-detail-v1",
-        "transcript-display-media-v1",
-        "transcript-image-attribution-v1",
-        "transcript-work-summary-v1",
-      ],
+      // The advertised list is pinned by the test above; this one checks that
+      // discovery and health carry the same identity.
+      dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
       uptimeMs: 1_000,
       activeClientLeases: 1,
       coreOwners: 2,

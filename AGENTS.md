@@ -75,6 +75,19 @@ Run full verification before considering the task complete:
 
 Both must pass cleanly (zero exit code, no warnings).
 
+### Before pushing: `npm run preflight`
+
+Changes go straight to `main`, so CI is the first place a bad push is caught, and every red `main` blocks releases. Focused tests and a passing working tree are **not** enough: most CI failures came from full-suite tests nobody ran (hardcoded feature lists and model counts), CI-only gates (`cli:bundle`, `test:core-sdk-consumer`, a clean `npm ci`), or a commit that differed from the validated working tree.
+
+1. Commit the change, then run `npm run preflight` (about 8 to 10 minutes). It checks out the exact `HEAD` commit in a temporary worktree, so uncommitted files and other agents' work in this checkout are excluded, then runs `npm ci`, `lint`, `build`, `npm test` and `test:core-sdk-consumer`, plus `cli:bundle` with the packaged CLI smoke test when CLI, package, or dependency files changed, and `actionlint` when workflows changed.
+2. On failure it prints the failing tests or errors and the full log path. Fix, commit, and rerun. A pass is recorded against the commit's tree, so rerunning an unchanged tree returns immediately.
+3. Add `--linux` when touching platform-specific code (terminals, shells, sandbox, keychain, paths): it reruns lint, build and test in a `node:<.nvmrc major>` container through Docker/Colima, which catches Linux-only failures.
+4. If someone else pushed first, rebase and rerun preflight: the rebased tree is a different tree.
+
+The opt-in `.githooks/pre-push` hook refuses a push whose branch tip has no passing preflight. Enable it with `git config core.hooksPath .githooks`; skip once with `git push --no-verify`.
+
+When changing a shared catalogue (browser gateway data-plane features, model catalogues, the tool registry, package contributions), search for tests across `src/`, `packages/` and `apps/` that pin it, and prefer asserting against the exported source of truth over a second hardcoded copy.
+
 ### Spikes / experiments / one-off scripts / docs-only changes
 
 Full-project lint + test is **not required** by default.
@@ -94,7 +107,7 @@ Recurring causes of slow or flaky tests in this repo:
 - **Never run real git or recursive file work on the shared `/tmp`.** Its size depends on the machine, so tests that do will time out unpredictably. Use `fs.mkdtempSync(path.join(os.tmpdir(), "..."))` and clean up. `AgentSessionManager.test.ts` stubs checkpoints by default; call `useRealCheckpoints()` with a temp workspace only when a test verifies real checkpoints.
 - **Wait for the work, not the clock.** Await the promise or event that signals completion instead of polling with wall-clock deadlines or short sleeps.
 - **Heavy tests (LanceDB, real subprocesses, git) need a timeout that holds under full-suite load**, not one tuned on an idle run.
-- **Root `npm test` does not run `apps/`.** When a change can affect the CLI, desktop, or server, run `npx vitest run` in each affected `apps/<name>` folder.
+- **Root `npm test` stops at the first failing stage.** It runs root vitest, then `packages/*` and `apps/*` tests (`test:workspaces`), then the `scripts/*.test.mjs` suites, chained with `&&`, so a root failure hides workspace and script failures. After fixing one, rerun until the whole chain passes. For a quick check of one app, run `npx vitest run` in its `apps/<name>` folder.
 - **Before blaming your change for a failure, check it on clean `main`** (rebuild `packages/core` first, since tests import its build output).
 
 ## Adding or Changing Tools

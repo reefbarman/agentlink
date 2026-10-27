@@ -73,7 +73,10 @@ jobs:
 
   package:
     name: Package ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    # linux-arm64 builds on an arm64 runner so apply-seccomp compiles natively
+    # against the host glibc and static libseccomp (as in ci.yml). The x64
+    # runner has no arm64 libc headers or libseccomp for cross-compiling.
+    runs-on: ${{ matrix.target == 'linux-arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -131,8 +134,7 @@ jobs:
         if: matrix.target == 'linux-x64' || matrix.target == 'linux-arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc libseccomp-dev gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends gcc libseccomp-dev
           node scripts/build-apply-seccomp.mjs --target "${{ matrix.target }}"
 
       - name: Build target bundle
