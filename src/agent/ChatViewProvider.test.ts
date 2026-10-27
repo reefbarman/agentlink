@@ -9438,6 +9438,49 @@ describe("ChatViewProvider session state sync", () => {
     expect(disposeAttention).toHaveBeenCalledOnce();
   });
 
+  it("shows session-targeted status attention until an inline write approval resolves", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const disposeAttention = vi.fn();
+    const showAlert = vi.fn(() => ({ dispose: disposeAttention }));
+    provider.setPendingInteractionAlertProvider(showAlert);
+
+    const approvalPromise = provider.requestApproval(
+      {
+        id: "write-skill",
+        kind: "write",
+        title: "Write SKILL.md",
+        targetPath: "/tmp/skills/demo/SKILL.md",
+        choices: [{ label: "Accept", value: "accept", isPrimary: true }],
+        fileWrite: { operation: "create", outsideWorkspace: true },
+      },
+      "session-1",
+    );
+
+    expect(showAlert).toHaveBeenCalledWith(
+      "Write approval required",
+      expect.objectContaining({
+        command: "agentLink.focusApproval",
+        arguments: [{ sessionId: "session-1" }],
+      }),
+    );
+    expect(disposeAttention).not.toHaveBeenCalled();
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "write-skill",
+        approvalKind: "write",
+        decision: "accept",
+      }),
+    ).toBe(true);
+    await expect(approvalPromise).resolves.toMatchObject({
+      decision: "accept",
+    });
+    expect(disposeAttention).toHaveBeenCalledOnce();
+  });
+
   it("clears question attention when its session is no longer active", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

@@ -1336,6 +1336,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     string,
     { attention: vscode.Disposable; recovered: boolean; sessionId: string }
   >();
+  /** Status bar attention for inline chat approvals (diff writes, MCP, memory, ...). */
+  private readonly approvalAttentionById = new Map<string, vscode.Disposable>();
   private showPendingInteractionAlert:
     | ((message: string, command: vscode.Command) => vscode.Disposable)
     | undefined;
@@ -1597,6 +1599,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingApprovals.clear();
     this.approvalSessionIndex.clear();
     this.pendingFileWriteApprovalIds.clear();
+    for (const attention of this.approvalAttentionById.values()) {
+      attention.dispose();
+    }
+    this.approvalAttentionById.clear();
 
     for (const [id, pending] of this.pendingForwardedApprovals) {
       // Send a synthetic rejection so the approval chain unblocks.
@@ -3465,6 +3471,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private clearApprovalRequest(sessionId: string, id: string): void {
+    this.clearApprovalAttention(id);
     if (this.approvalSessionById.get(id) !== sessionId) return;
     const presentation = this.approvalPresentationById.get(id);
     const wasVisible = this.visibleApprovalId === id;
@@ -3857,8 +3864,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.pendingFileWriteApprovalIds.delete(id);
         resolve(result);
       });
+      this.showApprovalAttention(id, ownerSessionId, request.kind);
       this.showApprovalRequest(ownerSessionId, approvalRequest);
     });
+  }
+
+  /**
+   * Inline chat approvals bypass ApprovalPanelProvider, so they need their own
+   * status bar attention, matching questions and panel-queued approvals.
+   */
+  private showApprovalAttention(
+    id: string,
+    sessionId: string,
+    kind: string,
+  ): void {
+    if (this.approvalAttentionById.has(id) || !this.showPendingInteractionAlert)
+      return;
+    const label: Record<string, string> = {
+      mcp: "Tool approval required",
+      write: "Write approval required",
+      rename: "Rename approval required",
+      command: "Command approval required",
+      "mode-switch": "Mode switch approval required",
+      memory: "Memory approval required",
+      worktree: "Worktree approval required",
+      hook: "Hook approval required",
+    };
+    this.approvalAttentionById.set(
+      id,
+      this.showPendingInteractionAlert(label[kind] ?? "Approval required", {
+        command: "agentLink.focusApproval",
+        title: "Focus pending AgentLink approval",
+        arguments: [{ sessionId }],
+      }),
+    );
+  }
+
+  private clearApprovalAttention(id: string): void {
+    const attention = this.approvalAttentionById.get(id);
+    if (!attention) return;
+    attention.dispose();
+    this.approvalAttentionById.delete(id);
   }
 
   /**
