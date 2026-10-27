@@ -17,3 +17,4 @@ benchmarks/
 tmp/
 native-builds/
 .agentlink-smoke/
+.agentlink/skills/
