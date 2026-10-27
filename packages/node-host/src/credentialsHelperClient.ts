@@ -13,7 +13,7 @@ import { spawn as spawnProcess } from "node:child_process";
 export const CREDENTIALS_HELPER_ENV = "AGENTLINK_CREDENTIALS_HELPER";
 
 /** Prompts wait for the user, so allow time to answer one. */
-const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+export const CREDENTIALS_HELPER_TIMEOUT_MS = 5 * 60_000;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 let configuredHelperPath: string | undefined;
@@ -133,7 +133,7 @@ function runHelper(
       child.kill();
       // Keep the caller's serialization lock until close confirms the process
       // that owns a possible Keychain prompt is actually gone.
-    }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    }, options.timeoutMs ?? CREDENTIALS_HELPER_TIMEOUT_MS);
     child.on("error", (error: NodeJS.ErrnoException) =>
       finish(() =>
         reject(

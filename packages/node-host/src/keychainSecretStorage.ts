@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  CREDENTIALS_HELPER_TIMEOUT_MS,
   CredentialsHelperUnavailableError,
   createCredentialsHelperEntry,
   describeSharedCredential,
@@ -230,6 +231,10 @@ function serializeHelperAccess(
       // A prompt can legitimately wait for the user. Other consumers should
       // keep waiting rather than time out and start independent requests.
       lockTimeoutMs: Math.max(options.lockTimeoutMs ?? 0, 5 * 60_000),
+      // A crashed owner never releases the queue, which left every consumer
+      // (and so the model catalog) waiting forever. Its helper can outlive
+      // it with a prompt open, so wait out the helper's own timeout first.
+      reclaimDeadOwnerAfterMs: CREDENTIALS_HELPER_TIMEOUT_MS,
     });
   return {
     getPassword: () => run(() => helper.getPassword()),
@@ -376,7 +381,10 @@ function safeLockSegment(value: string): string {
 async function withFileLock<T>(
   lockPath: string,
   operation: () => Promise<T>,
-  options: KeychainSecretStorageOptions,
+  options: KeychainSecretStorageOptions & {
+    /** Reclaim a lock whose owner process is gone once it is this old. */
+    reclaimDeadOwnerAfterMs?: number;
+  },
 ): Promise<T> {
   const lockTimeoutMs = options.lockTimeoutMs ?? 60_000;
   const retryDelayMs = options.retryDelayMs ?? 50;
@@ -398,6 +406,15 @@ async function withFileLock<T>(
       break;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
+      if (
+        options.reclaimDeadOwnerAfterMs !== undefined &&
+        (await reclaimDeadOwnerFileLock(
+          lockPath,
+          options.reclaimDeadOwnerAfterMs,
+        ))
+      ) {
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new Error("agentlink_keychain_helper_lock_timeout");
       }
@@ -410,6 +427,68 @@ async function withFileLock<T>(
     await handle.close();
     const currentOwner = await fs.readFile(lockPath, "utf-8").catch(() => null);
     if (currentOwner === ownerToken) await fs.rm(lockPath, { force: true });
+  }
+}
+
+/**
+ * Remove a file lock whose owner can no longer hold it: one written before
+ * this boot, or one whose owner process (from its `<pid>:<token>` record) is
+ * gone and that has outlived `deadOwnerAfterMs`. An unreadable record (a crash
+ * between create and write) counts as a dead owner. Returns true when the
+ * lock was removed, so the caller can retry at once.
+ */
+async function reclaimDeadOwnerFileLock(
+  lockPath: string,
+  deadOwnerAfterMs: number,
+): Promise<boolean> {
+  let owner: string;
+  let modifiedAt: number;
+  try {
+    [owner, modifiedAt] = await Promise.all([
+      fs.readFile(lockPath, "utf-8"),
+      fs.stat(lockPath).then((stats) => stats.mtimeMs),
+    ]);
+  } catch (error) {
+    // Released between our create attempt and this read: retry now.
+    if (isMissingError(error)) return true;
+    throw error;
+  }
+  const bootedAt = Date.now() - os.uptime() * 1000;
+  const writtenBeforeBoot = modifiedAt < bootedAt;
+  if (!writtenBeforeBoot) {
+    if (Date.now() - modifiedAt < deadOwnerAfterMs) return false;
+    const pid = Number(owner.split(":", 1)[0]);
+    if (Number.isSafeInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+      return false;
+    }
+  }
+
+  // Move the lock aside before deleting it, so a live owner that replaced
+  // the dead one after our read keeps its lock.
+  const stalePath = `${lockPath}.stale-${randomUUID()}`;
+  try {
+    await fs.rename(lockPath, stalePath);
+  } catch (error) {
+    if (isMissingError(error)) return true;
+    throw error;
+  }
+  const movedOwner = await fs.readFile(stalePath, "utf-8").catch(() => null);
+  if (movedOwner !== owner) {
+    await fs.link(stalePath, lockPath).catch(() => undefined);
+    await fs.rm(stalePath, { force: true });
+    return false;
+  }
+  await fs.rm(stalePath, { force: true });
+  return true;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to another user.
+    return errorCode(error) !== "ESRCH";
   }
 }
 

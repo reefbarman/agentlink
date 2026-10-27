@@ -39,7 +39,7 @@ const installScript = fs.readFileSync(
   "utf8",
 );
 const contributorInstructions = fs.readFileSync(
-  path.join(root, "CLAUDE.md"),
+  path.join(root, "AGENTS.md"),
   "utf8",
 );
 

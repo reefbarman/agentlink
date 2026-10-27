@@ -60,6 +60,7 @@ The prompt names the copy, so it says which surface is asking. The item it asks 
 - The helper only serves VS Code and AgentLink's own signed CLI and Desktop. It accepts no code and does nothing but get, store and delete AgentLink's items.
 - Builds without the helper (unsigned previews, Linux, Windows, source runs) use the Keychain directly, as before, and can still prompt after another surface writes.
 - If prompts continue from **AgentLink Credentials** after **Always Allow**, check whether the copy was rebuilt with a different signing certificate.
+- Helper requests from every window wait in one queue. If a host crashes while holding it, AgentLink takes the queue back once the host is gone and its prompt window (five minutes) has passed, or right away after a restart. Until then, credential reads wait and chat can show "Checking model setup".
 
 ### Credentials on Linux
 

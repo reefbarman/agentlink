@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -251,6 +252,86 @@ process.stdout.write(JSON.stringify(reply));
         undefined,
       ]);
       expect((await helper.readState()).requests).toHaveLength(2);
+    });
+
+    describe("when a previous owner left the prompt queue locked", () => {
+      const exitedPid = () => spawnSync(process.execPath, ["-e", ""]).pid!;
+      const minutesAgo = (minutes: number) =>
+        new Date(Date.now() - minutes * 60_000);
+      const bootedAt = () => new Date(Date.now() - os.uptime() * 1000);
+
+      async function lockedQueue(owner: string, modifiedAt: Date) {
+        const lockRoot = await fs.mkdtemp(
+          path.join(os.tmpdir(), "agentlink-keychain-helper-queue-"),
+        );
+        temporaryRoots.push(lockRoot);
+        const lockPath = path.join(lockRoot, "credentials-helper.lock");
+        await fs.writeFile(lockPath, owner);
+        await fs.utimes(lockPath, modifiedAt, modifiedAt);
+        return { lockRoot, lockPath };
+      }
+
+      it.each([
+        [
+          "an owner that crashed",
+          () => `${exitedPid()}:crashed`,
+          () => minutesAgo(10),
+        ],
+        ["an unreadable owner record", () => "", () => minutesAgo(10)],
+        [
+          "an owner from before this boot whose pid was reused",
+          () => `${process.pid}:before-boot`,
+          () => new Date(bootedAt().getTime() - 60_000),
+        ],
+      ])("reclaims the lock of %s", async (_name, owner, modifiedAt) => {
+        const helper = await fakeHelper("ok");
+        const { lockRoot, lockPath } = await lockedQueue(owner(), modifiedAt());
+        const storage = await helper.storage(
+          "codex-oauth-credentials",
+          lockRoot,
+        );
+
+        await expect(storage.get()).resolves.toBeUndefined();
+        expect((await helper.readState()).requests).toHaveLength(1);
+        await expect(fs.stat(lockPath)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await fs.readdir(lockRoot)).not.toContainEqual(
+          expect.stringContaining(".stale-"),
+        );
+      });
+
+      it.each([
+        ["a live owner", () => `${process.pid}:live`, () => minutesAgo(10)],
+        [
+          "a crashed owner whose helper may still be prompting",
+          () => `${exitedPid()}:crashed`,
+          () => minutesAgo(1),
+        ],
+      ])("keeps waiting for %s", async (_name, owner, modifiedAt) => {
+        const helper = await fakeHelper("ok");
+        const lockOwner = owner();
+        const { lockRoot, lockPath } = await lockedQueue(
+          lockOwner,
+          modifiedAt(),
+        );
+        const storage = await helper.storage(
+          "codex-oauth-credentials",
+          lockRoot,
+        );
+
+        let settled = false;
+        const read = storage.get().finally(() => {
+          settled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(settled).toBe(false);
+        await expect(fs.readFile(lockPath, "utf-8")).resolves.toBe(lockOwner);
+
+        await fs.rm(lockPath);
+        await expect(read).resolves.toBeUndefined();
+        expect((await helper.readState()).requests).toHaveLength(1);
+      });
     });
 
     it("reports a Keychain error without retrying directly and prompting twice", async () => {
