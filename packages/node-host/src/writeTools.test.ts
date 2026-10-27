@@ -276,7 +276,7 @@ describe("node host write tools", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("applies canonical unique SEARCH/REPLACE blocks only to a hash-pinned grant", async () => {
+  it("applies unique SEARCH/REPLACE blocks only to a hash-pinned grant", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
     );
@@ -303,9 +303,10 @@ describe("node host write tools", () => {
       ),
     ).resolves.toMatchObject({
       displayContent: expect.objectContaining({
+        status: "accepted",
         operation: "modified",
-        blocksApplied: 1,
         contentHash: hash("alpha\nBETA\ngamma"),
+        post_edit_content_hash: hash("alpha\nBETA\ngamma"),
       }),
     });
     await expect(fs.readFile(target, "utf8")).resolves.toBe(
@@ -314,7 +315,61 @@ describe("node host write tools", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("fails closed and leaves the file untouched for malformed, ambiguous, missing, or stale patches", async () => {
+  it("accepts VS Code block_options, unified hunks, and requires the hash unless host-prepared", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
+    );
+    const target = path.join(root, "record.txt");
+    await fs.writeFile(target, "repeat\nmid\nrepeat", "utf8");
+    const resolver = createNodeHostApplyDiffTools({
+      resolveGrants: () => [{ rootPath: root, kind: "directory" }],
+    });
+    const apply = await applyDiffTool(resolver);
+    expect(apply.definition.input_schema).toMatchObject({
+      required: ["path", "diff", "expectedContentHash"],
+    });
+
+    await apply.execute(
+      {
+        path: target,
+        diff: diff("repeat", "R2"),
+        block_options: [{ index: 0, occurrence: 2 }],
+        expectedContentHash: hash("repeat\nmid\nrepeat"),
+      },
+      context(),
+    );
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("repeat\nmid\nR2");
+
+    await apply.execute(
+      {
+        path: target,
+        diff: "@@ -1,2 +1,2 @@\n repeat\n-mid\n+MID",
+        expectedContentHash: hash("repeat\nmid\nR2"),
+      },
+      context(),
+    );
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("repeat\nMID\nR2");
+
+    const prepared = await applyDiffTool(
+      createNodeHostApplyDiffTools({
+        resolveGrants: () => [{ rootPath: root, kind: "directory" }],
+        contentHashInput: "host_prepared",
+      }),
+    );
+    expect(prepared.definition.input_schema).toMatchObject({
+      required: ["path", "diff"],
+    });
+    // Execution still refuses an unpinned write.
+    await expect(
+      prepared.execute({ path: target, diff: diff("MID", "x") }, context()),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({ error: "expected_content_hash_required" }),
+    });
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("fails closed and leaves the file untouched for ambiguous, missing, or stale patches", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
     );
@@ -325,52 +380,42 @@ describe("node host write tools", () => {
       resolveGrants: () => [{ rootPath: root, kind: "directory" }],
     });
     const apply = await applyDiffTool(resolver);
-    const assertError = async (
-      patch: string,
-      expectedContentHash: string,
-      code: string,
-    ) => {
-      await expect(
-        apply.execute(
-          { path: target, diff: patch, expectedContentHash },
-          context(),
-        ),
-      ).resolves.toMatchObject({
-        isError: true,
-        modelContent: JSON.stringify({ error: code }),
-      });
+    const failure = async (patch: string, expectedContentHash: string) => {
+      const result = await apply.execute(
+        { path: target, diff: patch, expectedContentHash },
+        context(),
+      );
+      expect(result.isError).toBe(true);
       await expect(fs.readFile(target, "utf8")).resolves.toBe(original);
+      return JSON.parse(String(result.modelContent)) as Record<string, any>;
     };
 
-    await assertError(
-      diff("repeat", "changed"),
-      hash(original),
-      "search_ambiguous",
-    );
-    await assertError(
-      diff("missing", "changed"),
-      hash(original),
-      "search_not_found",
-    );
-    await assertError(
-      "@@ -1 +1 @@\n-old\n+new",
-      hash(original),
-      "invalid_diff",
-    );
-    await assertError(
-      diff("needle", "changed"),
-      hash("stale"),
-      "content_hash_mismatch",
-    );
-    await assertError(
-      `${diff("needle", "changed")}\nnot-a-block`,
-      hash(original),
-      "invalid_diff",
-    );
+    const ambiguous = await failure(diff("repeat", "changed"), hash(original));
+    expect(ambiguous).toMatchObject({
+      error: "All search/replace blocks failed",
+      failed_block_details: [
+        expect.objectContaining({
+          reason: "ambiguous_exact",
+          retry_options: expect.objectContaining({
+            replace_all_example: { index: 0, replace_all: true },
+          }),
+        }),
+      ],
+    });
+    expect(
+      (await failure(diff("missing", "changed"), hash(original)))
+        .failed_block_details[0],
+    ).toMatchObject({ reason: "not_found" });
+    expect(
+      (await failure("@@ -1 +1 @@\n-old\n+new", hash(original))).error,
+    ).toBe("All search/replace blocks failed");
+    expect(await failure(diff("needle", "changed"), hash("stale"))).toEqual({
+      error: "content_hash_mismatch",
+    });
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("does not partially apply a later failing block", async () => {
+  it("reports VS Code partial results, and atomic=true applies nothing on a later failing block", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
     );
@@ -383,16 +428,31 @@ describe("node host write tools", () => {
     const apply = await applyDiffTool(resolver);
     const patch = `${diff("first", "FIRST")}\n${diff("missing", "changed")}`;
 
-    await expect(
-      apply.execute(
-        { path: target, diff: patch, expectedContentHash: hash(original) },
-        context(),
-      ),
-    ).resolves.toMatchObject({
-      isError: true,
-      modelContent: JSON.stringify({ error: "search_not_found" }),
+    const atomic = await apply.execute(
+      {
+        path: target,
+        diff: patch,
+        atomic: true,
+        expectedContentHash: hash(original),
+      },
+      context(),
+    );
+    expect(atomic.isError).toBe(true);
+    expect(JSON.parse(String(atomic.modelContent))).toMatchObject({
+      error: "Atomic apply_diff validation failed",
     });
     await expect(fs.readFile(target, "utf8")).resolves.toBe(original);
+
+    const partial = await apply.execute(
+      { path: target, diff: patch, expectedContentHash: hash(original) },
+      context(),
+    );
+    expect(JSON.parse(String(partial.modelContent))).toMatchObject({
+      status: "accepted",
+      partial: true,
+      failed_blocks: [1],
+    });
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("FIRST\nsecond");
     await fs.rm(root, { recursive: true, force: true });
   });
 

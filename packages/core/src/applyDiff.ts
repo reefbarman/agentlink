@@ -1,0 +1,1589 @@
+/**
+ * VS Code's `apply_diff` engine: SEARCH/REPLACE and unified-hunk parsing,
+ * exact/whitespace-flexible/escape-normalized matching, per-block
+ * `occurrence`/`replace_all` selection, marker-leak detection, and the
+ * model-facing failure payloads. VS Code's handler (`src/tools/applyDiff.ts`)
+ * and the standalone hosts share this module so every surface parses and
+ * reports edits identically. It performs no I/O; hosts own reading, review,
+ * authorization, and writing.
+ */
+import { createHash } from "node:crypto";
+
+export const APPLY_DIFF_SEARCH_REPLACE_FORMAT = [
+  "<<<<<<< SEARCH",
+  "exact content to find",
+  "======= DIVIDER =======",
+  "replacement content",
+  ">>>>>>> REPLACE",
+].join("\n");
+
+export const APPLY_DIFF_INPUT_GRAMMAR = [
+  "Use SEARCH/REPLACE blocks in this exact format:",
+  "Strip renderer // marker prefixes, not payload comments.",
+  APPLY_DIFF_SEARCH_REPLACE_FORMAT,
+  "Use the DIVIDER marker shown above; in this form a bare ======= line is literal payload, so ordinary Git conflict hunks are representable. An @@ hunk header inside a SEARCH/REPLACE block is also literal payload.",
+  "Marker recognition trims surrounding whitespace, and <<<<<<< SEARCH> remains a reserved compatibility spelling. If payload must contain a standalone line whose trimmed text equals <<<<<<< SEARCH, <<<<<<< SEARCH>, ======= DIVIDER =======, or >>>>>>> REPLACE, use unified-diff input with an @@ hunk and standard space/-/+ line prefixes instead; every unified hunk-body line must carry one of those prefixes.",
+].join("\n");
+
+export interface SearchReplaceBlock {
+  search: string;
+  replace: string;
+  index: number;
+}
+
+export interface TrackedSpan {
+  start: number;
+  end: number;
+  valid: boolean;
+  range?: { startLine: number; endLine: number };
+}
+
+export interface MatchCandidate extends TrackedSpan {
+  occurrence: number;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+}
+
+export interface ApplyDiffBlockOption {
+  index: number;
+  occurrence?: number;
+  replace_all?: true;
+}
+
+export type BlockApplyResult =
+  | {
+      index: number;
+      status: "applied";
+      matchType: "exact" | "flexible" | "escape_normalized";
+      selection: "unique" | "occurrence" | "replace_all";
+      selectedOccurrence?: number;
+      replacementCount: number;
+      postEditSpans: TrackedSpan[];
+    }
+  | {
+      index: number;
+      status: "failed";
+      reason:
+        | "empty_search"
+        | "not_found"
+        | "ambiguous_exact"
+        | "ambiguous_flexible"
+        | "ambiguous_escape"
+        | "occurrence_out_of_range";
+      exactOccurrences: number;
+      availableOccurrences?: number;
+      candidateLocations?: MatchCandidate[];
+      candidateLocationsOmitted?: number;
+    };
+
+/** Model-facing failure payload shared by every `apply_diff` host. */
+export interface ApplyDiffFailurePayload {
+  error: string;
+  path: string;
+  hint?: string;
+  atomic?: boolean;
+  no_changes_applied?: boolean;
+  failed_blocks?: unknown[];
+  failed_block_details?: unknown[];
+  malformed_blocks?: number;
+  next_steps?: string[];
+  [key: string]: unknown;
+}
+
+const MAX_AMBIGUOUS_CANDIDATES = 12;
+
+const SEARCH_MARKER = "<<<<<<< SEARCH";
+const DIVIDER_MARKER = "======= DIVIDER =======";
+const REPLACE_MARKER = ">>>>>>> REPLACE";
+const TOLERATED_SEARCH_MARKER = `${SEARCH_MARKER}>`;
+
+// Legacy delimiter for backward compatibility
+const LEGACY_DIVIDER = "=======";
+
+// ── Unified diff support ───────────────────────────────────────────────────
+
+/**
+ * Detect whether a diff string is in unified diff format (--- / +++ / @@ headers).
+ */
+export function isUnifiedDiff(diff: string): boolean {
+  // The first structural opener owns the grammar. Hunk headers inside a
+  // SEARCH/REPLACE block are payload, just as prefixed markers inside a hunk are.
+  for (const line of diff.split("\n")) {
+    if (isSearchMarkerLine(line)) return false;
+    // File headers are optional for abbreviated unified diffs.
+    if (/^@@\s+[+-]/.test(line)) return true;
+  }
+  return false;
+}
+
+/**
+ * Parse a unified diff into SearchReplaceBlock[].
+ *
+ * Each @@ hunk becomes one block:
+ * - Context lines (no prefix or space prefix) appear in both search and replace
+ * - `-` lines appear only in search
+ * - `+` lines appear only in replace
+ * - File headers (`---`, `+++`) and `\ No newline at end of file` are skipped
+ */
+export function parseUnifiedDiff(diff: string): ApplyDiffParseResult {
+  const lines = diff.split("\n");
+  const blocks: SearchReplaceBlock[] = [];
+  const malformedBlockDetails: MalformedApplyDiffBlock[] = [];
+  let blockIndex = 0;
+  let i = 0;
+
+  while (i < lines.length) {
+    // Skip until we find a hunk header
+    if (!lines[i].startsWith("@@ ")) {
+      i++;
+      continue;
+    }
+
+    const hunkHeader = lines[i].match(
+      /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/,
+    );
+    if (!hunkHeader) {
+      i++;
+      continue;
+    }
+    const expectedSearchLines = Number(hunkHeader[1] ?? 1);
+    const expectedReplaceLines = Number(hunkHeader[2] ?? 1);
+
+    // Found a hunk header — skip it and parse exactly the declared old/new
+    // line counts. This distinguishes body lines such as `--- old` from file
+    // headers without weakening hunk-body prefix validation.
+    i++;
+    const searchLines: string[] = [];
+    const replaceLines: string[] = [];
+    let malformed: MalformedApplyDiffBlock | undefined;
+    let previousBodyPrefix: " " | "+" | "-" | undefined;
+
+    while (
+      i < lines.length &&
+      (searchLines.length < expectedSearchLines ||
+        replaceLines.length < expectedReplaceLines)
+    ) {
+      const line = lines[i];
+
+      if (line === "\\ No newline at end of file") {
+        if (previousBodyPrefix !== "+" && previousBodyPrefix !== "-") {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "invalid_unified_line",
+          };
+          break;
+        }
+        i++;
+        continue;
+      }
+
+      if (line.startsWith("-")) {
+        searchLines.push(line.slice(1));
+        previousBodyPrefix = "-";
+      } else if (line.startsWith("+")) {
+        replaceLines.push(line.slice(1));
+        previousBodyPrefix = "+";
+      } else if (line.startsWith(" ")) {
+        const content = line.slice(1);
+        searchLines.push(content);
+        replaceLines.push(content);
+        previousBodyPrefix = " ";
+      } else {
+        malformed = {
+          index: blockIndex,
+          line: i + 1,
+          reason: "invalid_unified_line",
+        };
+        break;
+      }
+      if (
+        searchLines.length > expectedSearchLines ||
+        replaceLines.length > expectedReplaceLines
+      ) {
+        malformed = {
+          index: blockIndex,
+          line: i + 1,
+          reason: "invalid_unified_hunk_counts",
+        };
+        break;
+      }
+      i++;
+    }
+
+    if (
+      !malformed &&
+      (searchLines.length !== expectedSearchLines ||
+        replaceLines.length !== expectedReplaceLines)
+    ) {
+      malformed = {
+        index: blockIndex,
+        line: Math.min(i + 1, lines.length),
+        reason: "invalid_unified_hunk_counts",
+      };
+    }
+
+    // Counts may be followed only by an exact no-newline marker, the next hunk
+    // or file, or the final split artifact. Never silently discard extra body
+    // lines after the declared counts.
+    if (!malformed && i < lines.length) {
+      if (lines[i] === "\\ No newline at end of file") {
+        if (previousBodyPrefix !== "+" && previousBodyPrefix !== "-") {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "invalid_unified_line",
+          };
+        } else {
+          i++;
+        }
+      }
+      if (!malformed && i < lines.length) {
+        const line = lines[i];
+        const atBoundary =
+          line.startsWith("@@ ") ||
+          (line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) ||
+          (line === "" && i === lines.length - 1);
+        if (!atBoundary) {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: line.startsWith("\\ ")
+              ? "invalid_unified_line"
+              : "invalid_unified_hunk_counts",
+          };
+        } else if (line === "") {
+          i++;
+        }
+      }
+    }
+
+    if (malformed) {
+      malformedBlockDetails.push(malformed);
+      blockIndex++;
+      continue;
+    }
+    if (searchLines.length > 0 || replaceLines.length > 0) {
+      blocks.push({
+        search: searchLines.join("\n"),
+        replace: replaceLines.join("\n"),
+        index: blockIndex,
+      });
+      blockIndex++;
+    }
+  }
+
+  return {
+    blocks,
+    malformedBlocks: malformedBlockDetails.length,
+    malformedBlockDetails,
+  };
+}
+
+// ── Search/replace block support ───────────────────────────────────────────
+
+/**
+ * Parse search/replace blocks from the diff string.
+ * Format:
+ * <<<<<<< SEARCH
+ * content to find
+ * ======= DIVIDER =======
+ * replacement content
+ * >>>>>>> REPLACE
+ */
+export interface MalformedApplyDiffBlock {
+  index: number;
+  line: number;
+  reason:
+    | "missing_divider"
+    | "missing_replace_marker"
+    | "duplicate_divider"
+    | "replace_before_divider"
+    | "unexpected_search_marker"
+    | "invalid_unified_line"
+    | "invalid_unified_hunk_counts";
+}
+
+export interface ApplyDiffParseResult {
+  blocks: SearchReplaceBlock[];
+  malformedBlocks: number;
+  malformedBlockDetails: MalformedApplyDiffBlock[];
+}
+
+function isSearchMarkerLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === SEARCH_MARKER || trimmed === TOLERATED_SEARCH_MARKER;
+}
+
+export function parseSearchReplaceBlocks(diff: string): ApplyDiffParseResult {
+  const blocks: SearchReplaceBlock[] = [];
+  const lines = diff.split("\n");
+
+  let i = 0;
+  let blockIndex = 0;
+  const malformedBlockDetails: MalformedApplyDiffBlock[] = [];
+
+  // Detect whether this diff uses the new or legacy delimiter.
+  // If the new delimiter appears anywhere, use strict mode (only match new delimiter).
+  // Otherwise fall back to the legacy bare "=======" for backward compatibility.
+  const useNewDelimiter = lines.some((l) => l.trim() === DIVIDER_MARKER);
+
+  while (i < lines.length) {
+    // Look for the exact SEARCH marker, retaining compatibility with the
+    // historically tolerated single trailing ">" spelling.
+    if (isSearchMarkerLine(lines[i])) {
+      const searchMarkerLine = i + 1;
+      i++;
+      const searchLines: string[] = [];
+      const replaceLines: string[] = [];
+      let inReplace = false;
+      let foundReplace = false;
+      let malformed: MalformedApplyDiffBlock | undefined;
+
+      while (i < lines.length) {
+        const trimmed = lines[i].trim();
+
+        const isDivider = useNewDelimiter
+          ? trimmed === DIVIDER_MARKER
+          : trimmed === LEGACY_DIVIDER || trimmed === DIVIDER_MARKER;
+
+        if (isDivider && !inReplace) {
+          inReplace = true;
+          i++;
+          continue;
+        }
+
+        // A second divider inside the replace section means the block is
+        // malformed — the LLM likely included marker syntax as content.
+        // Reject the block rather than silently writing markers to the file.
+        if (isDivider && inReplace) {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "duplicate_divider",
+          };
+          break;
+        }
+
+        if (isSearchMarkerLine(lines[i])) {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "unexpected_search_marker",
+          };
+          // Leave i on this marker so the outer loop can recover it as the
+          // next positional block, including the tolerated SEARCH> spelling.
+          break;
+        }
+
+        if (trimmed === REPLACE_MARKER) {
+          if (!inReplace) {
+            malformed = {
+              index: blockIndex,
+              line: i + 1,
+              reason: "replace_before_divider",
+            };
+            i++;
+            break;
+          }
+          blocks.push({
+            search: searchLines.join("\n"),
+            replace: replaceLines.join("\n"),
+            index: blockIndex,
+          });
+          foundReplace = true;
+          blockIndex++;
+          i++;
+          break;
+        }
+
+        if (inReplace) {
+          replaceLines.push(lines[i]);
+        } else {
+          searchLines.push(lines[i]);
+        }
+        i++;
+      }
+
+      if (!foundReplace) {
+        malformedBlockDetails.push(
+          malformed ?? {
+            index: blockIndex,
+            line: Math.max(searchMarkerLine, lines.length),
+            reason: inReplace ? "missing_replace_marker" : "missing_divider",
+          },
+        );
+        blockIndex++;
+      }
+    } else {
+      i++;
+    }
+  }
+
+  return {
+    blocks,
+    malformedBlocks: malformedBlockDetails.length,
+    malformedBlockDetails,
+  };
+}
+
+/**
+ * Parse `apply_diff` input with VS Code's grammar selection: unified diff when
+ * an `@@` hunk opens the input, otherwise canonical SEARCH/REPLACE blocks.
+ */
+export function parseApplyDiff(
+  diff: string,
+): ApplyDiffParseResult & { readonly unified: boolean } {
+  const unified = isUnifiedDiff(diff);
+  return {
+    unified,
+    ...(unified ? parseUnifiedDiff(diff) : parseSearchReplaceBlocks(diff)),
+  };
+}
+
+/**
+ * Apply search/replace blocks to content sequentially.
+ * Returns the new content, failed block indices, and per-block outcomes.
+ */
+export function applyBlocks(
+  content: string,
+  blocks: SearchReplaceBlock[],
+  blockOptions: ReadonlyMap<number, ApplyDiffBlockOption> = new Map(),
+): {
+  result: string;
+  failedBlocks: number[];
+  blockResults: BlockApplyResult[];
+} {
+  let result = content;
+  const failedBlocks: number[] = [];
+  const blockResults: BlockApplyResult[] = [];
+
+  const shiftTrackedSpans = (
+    start: number,
+    end: number,
+    delta: number,
+  ): void => {
+    for (const prior of blockResults) {
+      if (prior.status === "applied") {
+        const preserved: TrackedSpan[] = [];
+        for (const span of prior.postEditSpans) {
+          if (!span.valid) {
+            preserved.push(span);
+          } else if (span.start >= end) {
+            preserved.push({
+              ...span,
+              start: span.start + delta,
+              end: span.end + delta,
+            });
+          } else if (span.end <= start) {
+            preserved.push(span);
+          } else {
+            // Preserve provenance for the unaffected portions of an earlier
+            // replacement rather than invalidating its entire span.
+            let retained = false;
+            if (span.start < start) {
+              preserved.push({ ...span, end: start });
+              retained = true;
+            }
+            if (span.end > end) {
+              preserved.push({
+                ...span,
+                start: end + delta,
+                end: span.end + delta,
+              });
+              retained = true;
+            }
+            if (!retained) preserved.push({ ...span, valid: false });
+          }
+        }
+        prior.postEditSpans.splice(0, prior.postEditSpans.length, ...preserved);
+        continue;
+      }
+
+      for (const span of prior.candidateLocations ?? []) {
+        if (span.start >= end) {
+          span.start += delta;
+          span.end += delta;
+        } else if (span.end > start) {
+          span.valid = false;
+        }
+      }
+    }
+  };
+
+  const recordApplied = (
+    block: SearchReplaceBlock,
+    matchType: "exact" | "flexible" | "escape_normalized",
+    replacements: Array<{ start: number; end: number; replacement: string }>,
+    selection: "unique" | "occurrence" | "replace_all",
+    selectedOccurrence?: number,
+  ): void => {
+    const postEditSpans: TrackedSpan[] = [];
+    for (const replacement of replacements) {
+      const delta =
+        replacement.replacement.length - (replacement.end - replacement.start);
+      shiftTrackedSpans(replacement.start, replacement.end, delta);
+      for (const span of postEditSpans) {
+        if (span.start >= replacement.end) {
+          span.start += delta;
+          span.end += delta;
+        } else if (span.end > replacement.start) {
+          span.valid = false;
+        }
+      }
+      postEditSpans.push({
+        start: replacement.start,
+        end: replacement.start + replacement.replacement.length,
+        valid: true,
+      });
+    }
+    blockResults.push({
+      index: block.index,
+      status: "applied",
+      matchType,
+      selection,
+      ...(selectedOccurrence !== undefined && { selectedOccurrence }),
+      replacementCount: replacements.length,
+      postEditSpans,
+    });
+  };
+
+  for (const block of blocks) {
+    if (block.search.length === 0) {
+      failedBlocks.push(block.index);
+      blockResults.push({
+        index: block.index,
+        status: "failed",
+        reason: "empty_search",
+        exactOccurrences: 0,
+      });
+      continue;
+    }
+
+    const option = blockOptions.get(block.index);
+    const exactOffsets = findExactMatchOffsets(result, block.search);
+    const occurrences = exactOffsets.length;
+
+    if (option?.replace_all) {
+      if (occurrences === 0) {
+        failedBlocks.push(block.index);
+        blockResults.push({
+          index: block.index,
+          status: "failed",
+          reason: "not_found",
+          exactOccurrences: 0,
+        });
+        continue;
+      }
+      const replacements = exactOffsets
+        .map(({ start, end }) => ({ start, end, replacement: block.replace }))
+        .sort((left, right) => right.start - left.start);
+      for (const replacement of replacements) {
+        result =
+          result.slice(0, replacement.start) +
+          replacement.replacement +
+          result.slice(replacement.end);
+      }
+      recordApplied(block, "exact", replacements, "replace_all");
+      continue;
+    }
+
+    if (occurrences > 0) {
+      const selectedOccurrence = option?.occurrence;
+      if (
+        selectedOccurrence !== undefined &&
+        selectedOccurrence > occurrences
+      ) {
+        const candidates = describeMatchCandidates(result, exactOffsets);
+        failedBlocks.push(block.index);
+        blockResults.push({
+          index: block.index,
+          status: "failed",
+          reason: "occurrence_out_of_range",
+          exactOccurrences: occurrences,
+          availableOccurrences: occurrences,
+          candidateLocations: candidates.locations,
+          ...(candidates.omitted > 0 && {
+            candidateLocationsOmitted: candidates.omitted,
+          }),
+        });
+        continue;
+      }
+      if (occurrences > 1 && selectedOccurrence === undefined) {
+        failedBlocks.push(block.index);
+        const candidates = describeMatchCandidates(result, exactOffsets);
+        blockResults.push({
+          index: block.index,
+          status: "failed",
+          reason: "ambiguous_exact",
+          exactOccurrences: occurrences,
+          candidateLocations: candidates.locations,
+          ...(candidates.omitted > 0 && {
+            candidateLocationsOmitted: candidates.omitted,
+          }),
+        });
+        continue;
+      }
+      const selected = exactOffsets[(selectedOccurrence ?? 1) - 1];
+      result =
+        result.slice(0, selected.start) +
+        block.replace +
+        result.slice(selected.end);
+      recordApplied(
+        block,
+        "exact",
+        [{ ...selected, replacement: block.replace }],
+        selectedOccurrence === undefined ? "unique" : "occurrence",
+        selectedOccurrence,
+      );
+      continue;
+    }
+
+    const flexAnalysis = analyzeFlexibleMatch(result, block.search);
+    const escAnalysis = flexAnalysis.match
+      ? undefined
+      : analyzeEscapeNormalizedMatch(result, block.search);
+    const matchType =
+      flexAnalysis.matchCount > 0 ? "flexible" : "escape_normalized";
+    const selectedOccurrence = option?.occurrence;
+    const candidateOffsets =
+      flexAnalysis.matchCount > 0
+        ? flexAnalysis.candidateOffsets
+        : selectedOccurrence === undefined && escAnalysis?.match
+          ? [escAnalysis.match]
+          : normalizeEscapeCandidates(escAnalysis?.candidateOffsets ?? []);
+    const selectedCandidate =
+      selectedOccurrence === undefined
+        ? candidateOffsets.length === 1
+          ? candidateOffsets[0]
+          : undefined
+        : candidateOffsets[selectedOccurrence - 1];
+
+    if (selectedCandidate) {
+      const replacement = isEscapeMatch(selectedCandidate)
+        ? selectedCandidate.transformReplace(block.replace)
+        : block.replace;
+      result =
+        result.slice(0, selectedCandidate.start) +
+        replacement +
+        result.slice(selectedCandidate.end);
+      recordApplied(
+        block,
+        matchType,
+        [{ ...selectedCandidate, replacement }],
+        selectedOccurrence === undefined ? "unique" : "occurrence",
+        selectedOccurrence,
+      );
+      continue;
+    }
+
+    const candidates = describeMatchCandidates(result, candidateOffsets);
+    failedBlocks.push(block.index);
+    blockResults.push({
+      index: block.index,
+      status: "failed",
+      reason:
+        selectedOccurrence !== undefined &&
+        selectedOccurrence > candidateOffsets.length
+          ? "occurrence_out_of_range"
+          : flexAnalysis.matchCount > 1
+            ? "ambiguous_flexible"
+            : (escAnalysis?.ambiguousVariantCount ?? 0) > 0
+              ? "ambiguous_escape"
+              : "not_found",
+      exactOccurrences: 0,
+      ...(selectedOccurrence !== undefined && {
+        availableOccurrences: candidateOffsets.length,
+      }),
+      ...(candidates.locations.length > 0 && {
+        candidateLocations: candidates.locations,
+      }),
+      ...(candidates.omitted > 0 && {
+        candidateLocationsOmitted: candidates.omitted,
+      }),
+    });
+  }
+
+  for (const blockResult of blockResults) {
+    if (blockResult.status === "applied") {
+      for (const span of blockResult.postEditSpans) {
+        if (span.valid) {
+          span.range = offsetRangeToLines(result, span.start, span.end);
+        }
+      }
+      continue;
+    }
+    if (blockResult.candidateLocations) {
+      blockResult.candidateLocations = blockResult.candidateLocations.filter(
+        (candidate) => candidate.valid,
+      );
+      for (const candidate of blockResult.candidateLocations) {
+        const range = offsetRangeToLines(
+          result,
+          candidate.start,
+          candidate.end,
+        );
+        candidate.startLine = range.startLine;
+        candidate.endLine = range.endLine;
+        candidate.snippet = snippetAtOffset(result, candidate.start);
+      }
+    }
+  }
+
+  return { result, failedBlocks, blockResults };
+}
+
+/**
+ * Normalize a line for whitespace-agnostic comparison:
+ * - Trim leading and trailing whitespace
+ * - Collapse all internal whitespace runs to a single space
+ *
+ * This handles ALL whitespace mismatches between agent-provided SEARCH
+ * blocks and actual file content: tabs vs spaces, mid-line tabs (Go
+ * struct alignment), any tab width, mixed indentation, and trailing
+ * whitespace — in one simple expression.
+ *
+ * Safe because the normalized form is only used for *finding* the match
+ * location, not for the replacement content. The ambiguity check (reject
+ * if 2+ locations match) prevents false positives.
+ */
+export function normalizeForComparison(line: string): string {
+  return line.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Try to find a unique match for `search` within `content` using
+ * whitespace-flexible line-by-line comparison (tabs ≈ spaces in leading
+ * indentation, trailing whitespace ignored).
+ *
+ * Returns the character offset range { start, end } in the original content,
+ * or null if no unique match (0 or 2+) is found.
+ */
+function analyzeFlexibleMatch(
+  content: string,
+  search: string,
+): {
+  match: { start: number; end: number } | null;
+  matchCount: number;
+  candidateOffsets: Array<{ start: number; end: number }>;
+} {
+  const contentLines = content.split("\n");
+  const searchLines = search.split("\n");
+
+  if (searchLines.length === 0) {
+    return { match: null, matchCount: 0, candidateOffsets: [] };
+  }
+
+  const normSearch = searchLines.map(normalizeForComparison);
+  const normContent = contentLines.map(normalizeForComparison);
+
+  const candidateLineStarts: number[] = [];
+
+  for (let i = 0; i <= normContent.length - normSearch.length; i++) {
+    let isMatch = true;
+    for (let j = 0; j < normSearch.length; j++) {
+      if (normContent[i + j] !== normSearch[j]) {
+        isMatch = false;
+        break;
+      }
+    }
+    if (isMatch) candidateLineStarts.push(i);
+  }
+
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < contentLines.length - 1; i++) {
+    lineOffsets.push(lineOffsets[i] + contentLines[i].length + 1);
+  }
+  const candidateOffsets = candidateLineStarts.map((lineStart) => {
+    const start = lineOffsets[lineStart];
+    let end = start;
+    for (let i = 0; i < searchLines.length; i++) {
+      end += contentLines[lineStart + i].length;
+      if (i < searchLines.length - 1) end += 1;
+    }
+    return { start, end };
+  });
+  const matchCount = candidateOffsets.length;
+  return {
+    match: matchCount === 1 ? candidateOffsets[0] : null,
+    matchCount,
+    candidateOffsets,
+  };
+}
+
+export function tryFlexibleMatch(
+  content: string,
+  search: string,
+): { start: number; end: number } | null {
+  return analyzeFlexibleMatch(content, search).match;
+}
+
+// ── Escape-normalized matching ─────────────────────────────────────────────
+
+/**
+ * All JSON escape sequences that JSON.parse interprets, mapped to the literal
+ * text that might appear in the file.
+ *
+ * When an LLM generates JSON for a tool call, it may under-escape backslash
+ * sequences. For example, a file containing literal \n (2 chars: \ + n)
+ * should be represented in JSON as \\n, but the LLM may write \n which
+ * JSON.parse turns into a real newline character (0x0A).
+ *
+ * Each entry maps the interpreted character to one or more literal sequences
+ * that might appear in the file (ordered from most to least common).
+ */
+const ESCAPE_PAIRS: Array<{ interpreted: string; literal: string[] }> = [
+  { interpreted: "\n", literal: ["\\n", "\\\\n"] }, // newline -> \n or \\n
+  { interpreted: "\t", literal: ["\\t"] }, // tab -> \t
+  { interpreted: "\r", literal: ["\\r"] }, // CR -> \r
+];
+
+/**
+ * Try to match search content against file content when escape sequences
+ * have been corrupted during JSON serialization/deserialization.
+ *
+ * JSON.parse turns \\n -> \n (newline), \\t -> \t (tab), etc. When the file
+ * has literal escape sequences (e.g., \n as 2 chars), the search content
+ * will have the interpreted character instead.
+ *
+ * Strategy: For each escape pair, try replacing the interpreted character
+ * in the search with the literal text, then check for a unique match.
+ * Tries each escape individually first, then all relevant escapes combined.
+ *
+ * Returns the match range and a transform function that converts the
+ * replacement content to use the same escape style as the file.
+ */
+type EscapeMatch = {
+  start: number;
+  end: number;
+  transformReplace: (replace: string) => string;
+};
+
+function analyzeEscapeNormalizedMatch(
+  content: string,
+  search: string,
+): {
+  match: EscapeMatch | null;
+  ambiguousVariantCount: number;
+  candidateOffsets: EscapeMatch[];
+} {
+  const relevantPairs = ESCAPE_PAIRS.filter((p) =>
+    search.includes(p.interpreted),
+  );
+  if (relevantPairs.length === 0) {
+    return { match: null, ambiguousVariantCount: 0, candidateOffsets: [] };
+  }
+
+  const seenVariants = new Set<string>();
+  const candidateOffsets: EscapeMatch[] = [];
+  let match: EscapeMatch | null = null;
+  let ambiguousVariantCount = 0;
+
+  const tryVariant = (
+    variant: string,
+    transformReplace: (replace: string) => string,
+  ): void => {
+    if (variant === search || seenVariants.has(variant)) return;
+    seenVariants.add(variant);
+
+    const offsets = findExactMatchOffsets(content, variant).map((offset) => ({
+      ...offset,
+      transformReplace,
+    }));
+    candidateOffsets.push(...offsets);
+    if (offsets.length === 1 && match === null) {
+      match = offsets[0];
+    } else if (offsets.length > 1) {
+      ambiguousVariantCount++;
+    }
+  };
+
+  for (const pair of relevantPairs) {
+    for (const lit of pair.literal) {
+      const interpreted = pair.interpreted;
+      const variant = search.replaceAll(interpreted, lit);
+      tryVariant(variant, (replace: string) =>
+        replace.replaceAll(interpreted, lit),
+      );
+    }
+  }
+
+  if (relevantPairs.length > 1) {
+    let variant = search;
+    const transforms: Array<{ interpreted: string; literal: string }> = [];
+    for (const pair of relevantPairs) {
+      const lit = pair.literal[0];
+      variant = variant.replaceAll(pair.interpreted, lit);
+      transforms.push({ interpreted: pair.interpreted, literal: lit });
+    }
+    tryVariant(variant, (replace: string) => {
+      let transformed = replace;
+      for (const t of transforms) {
+        transformed = transformed.replaceAll(t.interpreted, t.literal);
+      }
+      return transformed;
+    });
+  }
+
+  return { match, ambiguousVariantCount, candidateOffsets };
+}
+
+export function tryEscapeNormalizedMatch(
+  content: string,
+  search: string,
+): {
+  start: number;
+  end: number;
+  transformReplace: (replace: string) => string;
+} | null {
+  return analyzeEscapeNormalizedMatch(content, search).match;
+}
+
+function findExactMatchOffsets(
+  text: string,
+  search: string,
+): Array<{ start: number; end: number }> {
+  if (search.length === 0) return [];
+  const offsets: Array<{ start: number; end: number }> = [];
+  let pos = 0;
+  while ((pos = text.indexOf(search, pos)) !== -1) {
+    offsets.push({ start: pos, end: pos + search.length });
+    pos += search.length;
+  }
+  return offsets;
+}
+
+function lineAtOffset(content: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < Math.min(offset, content.length); i++) {
+    if (content[i] === "\n") line++;
+  }
+  return line;
+}
+
+function offsetRangeToLines(
+  content: string,
+  start: number,
+  end: number,
+): { startLine: number; endLine: number } {
+  return {
+    startLine: lineAtOffset(content, start),
+    endLine: lineAtOffset(content, Math.max(start, end - 1)),
+  };
+}
+
+function snippetAtOffset(content: string, offset: number): string {
+  const lineStart = content.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const nextBreak = content.indexOf("\n", offset);
+  const lineEnd = nextBreak < 0 ? content.length : nextBreak;
+  return previewSearch(content.slice(lineStart, lineEnd));
+}
+
+function describeMatchCandidates(
+  content: string,
+  offsets: Array<{ start: number; end: number }>,
+): { locations: MatchCandidate[]; omitted: number } {
+  const unique = new Map<string, { start: number; end: number }>();
+  for (const offset of offsets) {
+    unique.set(`${offset.start}:${offset.end}`, offset);
+  }
+  const sorted = [...unique.values()].sort(
+    (left, right) => left.start - right.start,
+  );
+  return {
+    locations: sorted
+      .slice(0, MAX_AMBIGUOUS_CANDIDATES)
+      .map(({ start, end }, index) => ({
+        start,
+        end,
+        occurrence: index + 1,
+        ...offsetRangeToLines(content, start, end),
+        snippet: snippetAtOffset(content, start),
+        valid: true,
+      })),
+    omitted: Math.max(0, sorted.length - MAX_AMBIGUOUS_CANDIDATES),
+  };
+}
+
+function isEscapeMatch(
+  candidate: { start: number; end: number } | EscapeMatch,
+): candidate is EscapeMatch {
+  return "transformReplace" in candidate;
+}
+
+function normalizeEscapeCandidates(candidates: EscapeMatch[]): EscapeMatch[] {
+  const unique = new Map<string, EscapeMatch>();
+  for (const candidate of candidates) {
+    unique.set(`${candidate.start}:${candidate.end}`, candidate);
+  }
+  return [...unique.values()].sort((left, right) => left.start - right.start);
+}
+
+function contentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * Return the marker line an applied SEARCH/REPLACE span would write into the
+ * file, if any. Callers reject such edits to prevent marker corruption.
+ */
+export function findMarkerLineInAppliedSpans(
+  proposed: string,
+  blockResults: BlockApplyResult[],
+): string | undefined {
+  const appliedSpans = blockResults.flatMap((result) =>
+    result.status === "applied"
+      ? result.postEditSpans.filter((span) => span.valid)
+      : [],
+  );
+  if (appliedSpans.length === 0) return undefined;
+
+  let lineStart = 0;
+  for (const line of proposed.split("\n")) {
+    const lineEnd = lineStart + line.length;
+    const marker = [
+      SEARCH_MARKER,
+      TOLERATED_SEARCH_MARKER,
+      DIVIDER_MARKER,
+      REPLACE_MARKER,
+    ].find((candidate) => line.trim() === candidate);
+    if (
+      marker &&
+      appliedSpans.some((span) =>
+        span.start === span.end
+          ? span.start >= lineStart && span.start <= lineEnd
+          : span.start <= lineEnd && span.end >= lineStart,
+      )
+    ) {
+      return marker;
+    }
+    lineStart = lineEnd + 1;
+  }
+  return undefined;
+}
+
+export function buildMarkerSyntaxFailurePayload(
+  path: string,
+  options: { atomic?: boolean; preEditContent?: string } = {},
+): ApplyDiffFailurePayload {
+  return {
+    error:
+      "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    hint: "SEARCH/REPLACE input cannot safely distinguish standalone tool-marker payload lines. Retry with a unified-diff @@ hunk, or use write_file for a complete replacement.",
+    path,
+    ...(options.atomic ? { atomic: true, no_changes_applied: true } : {}),
+    ...(options.preEditContent !== undefined
+      ? { pre_edit_content_hash: contentHash(options.preEditContent) }
+      : {}),
+  };
+}
+
+function previewSearch(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= 80) return compact;
+  return `${compact.slice(0, 77)}...`;
+}
+
+export function describeTransformedBlockResult(
+  result: BlockApplyResult,
+): Record<string, unknown> {
+  if (result.status === "failed") {
+    return describeBlockResult(result, {
+      includeCandidateLocations: false,
+      includeRecoveryOptions: false,
+    });
+  }
+  return {
+    index: result.index,
+    status: "unverified_after_transform",
+    proposal_status: "applied",
+    reason: "final_content_differs_from_reviewed_content",
+    match_type: result.matchType,
+    selection: result.selection,
+    replacement_count: result.replacementCount,
+    ...(result.selectedOccurrence !== undefined
+      ? { selected_occurrence: result.selectedOccurrence }
+      : {}),
+  };
+}
+
+export function describeBlockResult(
+  result: BlockApplyResult,
+  options: {
+    includeCandidateLocations?: boolean;
+    includeRecoveryOptions?: boolean;
+  } = {},
+): Record<string, unknown> {
+  const includeCandidateLocations = options.includeCandidateLocations ?? true;
+  const includeRecoveryOptions = options.includeRecoveryOptions ?? true;
+  if (result.status === "applied") {
+    const ranges = result.postEditSpans
+      .flatMap((span) =>
+        span.range
+          ? [
+              {
+                start_line: span.range.startLine,
+                end_line: span.range.endLine,
+              },
+            ]
+          : [],
+      )
+      .sort((left, right) => left.start_line - right.start_line);
+    return {
+      index: result.index,
+      status: result.status,
+      match_type: result.matchType,
+      selection: result.selection,
+      replacement_count: result.replacementCount,
+      ...(result.selectedOccurrence !== undefined
+        ? { selected_occurrence: result.selectedOccurrence }
+        : {}),
+      ...(ranges.length === 1 ? { post_edit_range: ranges[0] } : {}),
+      ...(ranges.length > 1 ? { post_edit_ranges: ranges } : {}),
+    };
+  }
+  return {
+    index: result.index,
+    status: result.status,
+    reason: result.reason,
+    exact_occurrences: result.exactOccurrences,
+    ...(result.availableOccurrences !== undefined
+      ? { available_occurrences: result.availableOccurrences }
+      : {}),
+    ...(includeCandidateLocations && result.candidateLocations?.length
+      ? {
+          candidate_locations: result.candidateLocations.map((candidate) => ({
+            start_line: candidate.startLine,
+            end_line: candidate.endLine,
+            snippet: candidate.snippet,
+            ...(includeRecoveryOptions && {
+              block_option: {
+                index: result.index,
+                occurrence: candidate.occurrence,
+              },
+            }),
+          })),
+        }
+      : {}),
+    ...(includeCandidateLocations && result.candidateLocationsOmitted
+      ? { candidate_locations_omitted: result.candidateLocationsOmitted }
+      : {}),
+    ...(includeCandidateLocations &&
+    includeRecoveryOptions &&
+    result.candidateLocations?.length &&
+    (result.reason === "ambiguous_exact" ||
+      result.reason === "ambiguous_flexible" ||
+      result.reason === "ambiguous_escape" ||
+      result.reason === "occurrence_out_of_range")
+      ? {
+          retry_options: {
+            occurrence_examples: result.candidateLocations.map((candidate) => ({
+              index: result.index,
+              occurrence: candidate.occurrence,
+            })),
+            ...(result.reason === "ambiguous_exact"
+              ? {
+                  replace_all_example: {
+                    index: result.index,
+                    replace_all: true,
+                  },
+                  replace_all_safety:
+                    "Use only when every exact occurrence should be replaced.",
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function formatFailedBlockMessage(
+  result: BlockApplyResult,
+  blocks: SearchReplaceBlock[],
+): string {
+  const block = blocks[result.index];
+  const preview = block ? previewSearch(block.search) : "";
+  if (result.status !== "failed") {
+    return `Block ${result.index}: applied`;
+  }
+
+  const reason =
+    result.reason === "empty_search"
+      ? "Search content was empty"
+      : result.reason === "occurrence_out_of_range"
+        ? `Requested occurrence is out of range (${result.availableOccurrences ?? 0} available)`
+        : result.reason === "ambiguous_exact"
+          ? `Ambiguous exact match (${result.exactOccurrences} occurrences found)`
+          : result.reason === "ambiguous_flexible"
+            ? "No exact match, and whitespace-normalized search matched multiple locations"
+            : result.reason === "ambiguous_escape"
+              ? "No exact match, and escape-normalized search matched multiple locations"
+              : "Search content not found (including whitespace/escape-normalized matching)";
+
+  return preview
+    ? `Block ${result.index}: ${reason} — search preview: ${preview}`
+    : `Block ${result.index}: ${reason}`;
+}
+
+export function describeMalformedBlock(
+  detail: MalformedApplyDiffBlock,
+): Record<string, unknown> {
+  const violatedRule =
+    detail.reason === "missing_divider"
+      ? `Block ended before the required ${DIVIDER_MARKER} marker.`
+      : detail.reason === "missing_replace_marker"
+        ? `Block ended before the required ${REPLACE_MARKER} marker.`
+        : detail.reason === "duplicate_divider"
+          ? `Found a second ${DIVIDER_MARKER} marker after replacement content began.`
+          : detail.reason === "replace_before_divider"
+            ? `Found ${REPLACE_MARKER} before ${DIVIDER_MARKER}.`
+            : detail.reason === "unexpected_search_marker"
+              ? `Found a new ${SEARCH_MARKER} before the current block was closed.`
+              : detail.reason === "invalid_unified_line"
+                ? "Unified-diff hunk body lines must begin with a space, +, or -, and only the exact standard \\ No newline at end of file marker may be unprefixed."
+                : "Unified-diff hunk body line counts did not match the @@ header.";
+  return {
+    index: detail.index,
+    line: detail.line,
+    reason: detail.reason,
+    violated_marker_rule: violatedRule,
+    recovery:
+      "Use the canonical SEARCH/DIVIDER/REPLACE order. Bare ======= is literal payload in DIVIDER mode; for standalone tool-marker payload lines, use a unified-diff @@ hunk.",
+  };
+}
+
+export function buildFailedBlocksPayload(
+  paramsPath: string,
+  blocks: SearchReplaceBlock[],
+  blockResults: BlockApplyResult[],
+  error = "All search/replace blocks failed",
+  preEditContent?: string,
+  malformedBlockDetails: MalformedApplyDiffBlock[] = [],
+): ApplyDiffFailurePayload {
+  const failedDetails = blockResults.map((result) =>
+    describeBlockResult(result),
+  );
+  const failedSearches = blockResults.map((result) =>
+    formatFailedBlockMessage(result, blocks),
+  );
+
+  const hasRecoveryOptions = blockResults.some(
+    (result) =>
+      result.status === "failed" &&
+      (result.reason === "ambiguous_exact" ||
+        result.reason === "ambiguous_flexible" ||
+        result.reason === "ambiguous_escape" ||
+        result.reason === "occurrence_out_of_range"),
+  );
+  return {
+    error,
+    failed_blocks: failedSearches,
+    failed_block_details: failedDetails,
+    path: paramsPath,
+    ...(malformedBlockDetails.length > 0
+      ? {
+          malformed_blocks: malformedBlockDetails.length,
+          malformed_block_details: malformedBlockDetails.map(
+            describeMalformedBlock,
+          ),
+        }
+      : {}),
+    ...(preEditContent !== undefined && {
+      pre_edit_content_hash: contentHash(preEditContent),
+    }),
+    ...(hasRecoveryOptions && {
+      next_steps: [
+        "Prefer expanding SEARCH content with stable surrounding context until it is unique. Re-read the file before retrying if it may have changed since this validation.",
+        "Occurrence options are evaluated in block order after earlier successful blocks; options for multiple ambiguous blocks may not be independent.",
+        "For whitespace- or escape-normalized candidates, preserve the selected location's indentation and escaping in replacement text.",
+      ],
+    }),
+  };
+}
+
+export function buildAtomicFailurePayload(
+  paramsPath: string,
+  blocks: SearchReplaceBlock[],
+  blockResults: BlockApplyResult[],
+  malformedBlockDetails: MalformedApplyDiffBlock[],
+  error: string,
+  preEditContent?: string,
+): ApplyDiffFailurePayload {
+  const failedResults = blockResults.filter(
+    (result) => result.status === "failed",
+  );
+  const hasAppliedBlocks = blockResults.some(
+    (result) => result.status === "applied",
+  );
+  const failedDetails = failedResults.map((result) =>
+    describeBlockResult(result, {
+      includeCandidateLocations: !hasAppliedBlocks,
+      includeRecoveryOptions: !hasAppliedBlocks,
+    }),
+  );
+  return {
+    ...buildFailedBlocksPayload(
+      paramsPath,
+      blocks,
+      failedResults,
+      error,
+      preEditContent,
+      malformedBlockDetails,
+    ),
+    failed_block_details: failedDetails,
+    atomic: true,
+    no_changes_applied: true,
+    ...(malformedBlockDetails.length > 0
+      ? { malformed_blocks: malformedBlockDetails.length }
+      : {}),
+  };
+}
+
+/** VS Code's payload when the diff contains no parseable block. */
+export function buildNoValidBlocksPayload(
+  paramsPath: string,
+  parsed: ApplyDiffParseResult,
+  atomic?: boolean,
+): ApplyDiffFailurePayload {
+  return {
+    error: "No valid search/replace blocks found in diff",
+    path: paramsPath,
+    hint:
+      parsed.malformedBlocks > 0
+        ? "One or more blocks violated the marker grammar. Use malformed_block_details for the exact line and rule."
+        : APPLY_DIFF_INPUT_GRAMMAR,
+    expected_format: APPLY_DIFF_SEARCH_REPLACE_FORMAT,
+    ...(parsed.malformedBlocks > 0 && {
+      malformed_blocks: parsed.malformedBlocks,
+      malformed_block_details: parsed.malformedBlockDetails.map(
+        describeMalformedBlock,
+      ),
+    }),
+    ...(atomic && {
+      atomic: true,
+      no_changes_applied: true,
+    }),
+  };
+}
+
+/**
+ * Validate `block_options` against the parsed blocks with VS Code's messages.
+ * Returns the option map, or an error message plus detail fields.
+ */
+export function validateApplyDiffBlockOptions(
+  paramsPath: string,
+  blocks: readonly SearchReplaceBlock[],
+  options: readonly ApplyDiffBlockOption[] | undefined,
+):
+  | {
+      readonly ok: true;
+      readonly blockOptions: Map<number, ApplyDiffBlockOption>;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly details: Record<string, unknown>;
+    } {
+  const parsedBlockIndices = new Set(blocks.map((block) => block.index));
+  const blockOptions = new Map<number, ApplyDiffBlockOption>();
+  for (const option of options ?? []) {
+    if (blockOptions.has(option.index)) {
+      return {
+        ok: false,
+        message: "Duplicate block option index",
+        details: { path: paramsPath, block_index: option.index },
+      };
+    }
+    if (!parsedBlockIndices.has(option.index)) {
+      return {
+        ok: false,
+        message: "Block option index does not identify a valid block",
+        details: {
+          path: paramsPath,
+          block_index: option.index,
+          valid_block_indices: [...parsedBlockIndices],
+        },
+      };
+    }
+    if (
+      (option.occurrence === undefined) ===
+      (option.replace_all === undefined)
+    ) {
+      return {
+        ok: false,
+        message:
+          "Each block option must specify exactly one of occurrence or replace_all",
+        details: { path: paramsPath, block_index: option.index },
+      };
+    }
+    if (
+      option.occurrence !== undefined &&
+      (!Number.isInteger(option.occurrence) || option.occurrence < 1)
+    ) {
+      return {
+        ok: false,
+        message: "Block occurrence must be a positive integer",
+        details: {
+          path: paramsPath,
+          block_index: option.index,
+          occurrence: option.occurrence,
+        },
+      };
+    }
+    blockOptions.set(option.index, option);
+  }
+  return { ok: true, blockOptions };
+}
+
+export interface ApplyDiffPlanInput {
+  readonly diff: string;
+  readonly block_options?: readonly ApplyDiffBlockOption[];
+  readonly atomic?: boolean;
+}
+
+/**
+ * The outcome of VS Code's pre-review validation for one file: either a
+ * failure payload (nothing may be written) or the content to review and write
+ * together with VS Code's success-report fields.
+ */
+export type ApplyDiffPlan =
+  | {
+      readonly status: "failed";
+      readonly payload: ApplyDiffFailurePayload;
+    }
+  | {
+      readonly status: "ready";
+      readonly content: string;
+      readonly changed: boolean;
+      readonly report: Record<string, unknown>;
+    };
+
+/**
+ * Run VS Code's `apply_diff` validation against `content` without I/O. Hosts
+ * that review before writing call this once for the review and again under
+ * their write lock against the pinned baseline, so the written content is the
+ * reviewed content.
+ */
+export function planApplyDiff(
+  paramsPath: string,
+  content: string,
+  input: ApplyDiffPlanInput,
+): ApplyDiffPlan {
+  const parsed = parseApplyDiff(input.diff);
+  const { blocks, malformedBlocks, malformedBlockDetails } = parsed;
+  if (blocks.length === 0) {
+    return {
+      status: "failed",
+      payload: buildNoValidBlocksPayload(paramsPath, parsed, input.atomic),
+    };
+  }
+  const options = validateApplyDiffBlockOptions(
+    paramsPath,
+    blocks,
+    input.block_options,
+  );
+  if (!options.ok) {
+    return {
+      status: "failed",
+      payload: { ...options.details, error: options.message, path: paramsPath },
+    };
+  }
+  const applied = applyBlocks(content, blocks, options.blockOptions);
+  const { failedBlocks, blockResults } = applied;
+  if (input.atomic && (failedBlocks.length > 0 || malformedBlocks > 0)) {
+    return {
+      status: "failed",
+      payload: buildAtomicFailurePayload(
+        paramsPath,
+        blocks,
+        blockResults,
+        malformedBlockDetails,
+        "Atomic apply_diff validation failed",
+        content,
+      ),
+    };
+  }
+  if (
+    !parsed.unified &&
+    findMarkerLineInAppliedSpans(applied.result, blockResults)
+  ) {
+    return {
+      status: "failed",
+      payload: buildMarkerSyntaxFailurePayload(paramsPath, {
+        atomic: input.atomic,
+      }),
+    };
+  }
+  if (failedBlocks.length === blocks.length) {
+    return {
+      status: "failed",
+      payload: buildFailedBlocksPayload(
+        paramsPath,
+        blocks,
+        blockResults,
+        undefined,
+        content,
+        malformedBlockDetails,
+      ),
+    };
+  }
+  const changed = applied.result !== content;
+  const report: Record<string, unknown> = {
+    ...(changed
+      ? {}
+      : { note: "No changes resulted from the diff application" }),
+    ...(failedBlocks.length > 0 || malformedBlocks > 0
+      ? { partial: true }
+      : {}),
+    ...(failedBlocks.length > 0
+      ? {
+          failed_blocks: failedBlocks,
+          failed_block_details: blockResults
+            .filter((blockResult) => blockResult.status === "failed")
+            .map((blockResult) =>
+              describeBlockResult(blockResult, {
+                includeRecoveryOptions: false,
+              }),
+            ),
+        }
+      : {}),
+    ...(malformedBlocks > 0
+      ? {
+          malformed_blocks: malformedBlocks,
+          malformed_block_details: malformedBlockDetails.map(
+            describeMalformedBlock,
+          ),
+        }
+      : {}),
+    ...((
+      changed
+        ? shouldReportBlockResults(blocks.length, malformedBlocks, blockResults)
+        : blocks.length > 1 || failedBlocks.length > 0 || malformedBlocks > 0
+    )
+      ? {
+          block_results: blockResults.map((blockResult) =>
+            describeBlockResult(blockResult, { includeRecoveryOptions: false }),
+          ),
+        }
+      : {}),
+  };
+  return { status: "ready", content: applied.result, changed, report };
+}
+
+/** Whether a block result should be reported in `block_results` on success. */
+export function shouldReportBlockResults(
+  blockCount: number,
+  malformedBlocks: number,
+  blockResults: readonly BlockApplyResult[],
+): boolean {
+  return (
+    blockCount > 1 ||
+    malformedBlocks > 0 ||
+    blockResults.some(
+      (blockResult) =>
+        blockResult.status === "failed" ||
+        (blockResult.status === "applied" && blockResult.matchType !== "exact"),
+    )
+  );
+}

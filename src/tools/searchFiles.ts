@@ -1,6 +1,19 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
+import {
+  buildRipgrepSearchArgs,
+  emptyContentSearchResult,
+  filePatternGlobArgs,
+  formatContentSearchResults,
+  formatCountSearchResults,
+  formatFilesWithMatchesResults,
+  getEscapingHint,
+  isLiteralFilePatternPath,
+  parseRipgrepCountOutput,
+  SEARCH_FILES_DEFAULT_MAX_RESULTS,
+  type SearchFileRedactionView,
+} from "@agentlink/core/search-files";
 import type {
   PathAccessProvider,
   SearchFilesParams,
@@ -12,7 +25,6 @@ import {
   getRipgrepBinPath,
   execRipgrepSearch,
   parseRipgrepOutput,
-  truncateLine,
 } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
@@ -24,8 +36,6 @@ import {
   redactStructuredSecrets,
 } from "../shared/structuredSecretRedaction.js";
 
-const DEFAULT_MAX_RESULTS = 300;
-
 import {
   errorResult,
   handleToolError,
@@ -33,6 +43,14 @@ import {
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
 import { getSearchInputError } from "../core/tools/searchInputValidation.js";
+
+export {
+  expandSimpleBraceGlob,
+  getEscapingHint,
+  needsMultiline,
+  needsPcre2,
+  sanitizeRegex,
+} from "@agentlink/core/search-files";
 
 export interface SearchFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
@@ -97,85 +115,6 @@ function createLegacySearchFilesProviders(
   };
 }
 
-/**
- * Fix common regex escaping mistakes that Claude makes.
- *
- * Claude often double-escapes regex patterns due to JSON string escaping
- * confusion. For example, it sends `\\s` (literal backslash + s) when it
- * means `\s` (whitespace metacharacter). This function collapses the most
- * common double-escaped sequences back to single-escaped form.
- *
- * Also strips `\"` which is not a valid ripgrep escape.
- */
-export function sanitizeRegex(regex: string): string {
-  // Collapse \\X → \X for known regex metacharacters and escape sequences.
-  // Covers: \s \S \d \D \w \W \b \B \n \t \r \f and punctuation escapes
-  // like \( \) \{ \} \[ \] \. \| \+ \* \? \^ \$ \/
-  return regex
-    .replace(/\\\\([sSdDwWbBntrf(){}[\].|+*?^$/])/g, "\\$1")
-    .replace(/\\["/]/g, (m) => m[1]);
-}
-
-/**
- * Check if a regex pattern appears to be double-escaped and return a hint.
- */
-/**
- * Check if a sanitized regex requires multiline mode (contains \n).
- */
-export function needsMultiline(sanitizedRegex: string): boolean {
-  // After sanitization, a literal \n in the regex means the agent wants to match newlines.
-  // We look for the two-character sequence backslash + 'n' not preceded by another backslash.
-  return /(?<!\\)\\n/.test(sanitizedRegex);
-}
-
-/**
- * Detect if a regex uses look-around assertions that require PCRE2.
- * Matches (?=...), (?!...), (?<=...), (?<!...) patterns.
- */
-export function needsPcre2(regex: string): boolean {
-  return /\(\?[=!]|\(\?<[=!]/.test(regex);
-}
-
-/** Glob metacharacters that indicate a true glob pattern (not a literal file path). */
-const GLOB_META = /[*?[\]{}]/;
-const DEFAULT_EXCLUDE_GLOBS = ["!**/.git/**", "!**/node_modules/**"] as const;
-
-/**
- * Expand a simple single brace group in a glob pattern, e.g. `*.{ts,tsx}`.
- * Falls back to the original pattern when the input is malformed or too complex.
- */
-export function expandSimpleBraceGlob(filePattern: string): string[] {
-  const firstOpen = filePattern.indexOf("{");
-  const firstClose = filePattern.indexOf("}", firstOpen + 1);
-  if (firstOpen === -1 || firstClose === -1) {
-    return [filePattern];
-  }
-
-  if (filePattern.indexOf("{", firstOpen + 1) !== -1) {
-    return [filePattern];
-  }
-
-  const prefix = filePattern.slice(0, firstOpen);
-  const suffix = filePattern.slice(firstClose + 1);
-  const body = filePattern.slice(firstOpen + 1, firstClose);
-  const options = body
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (options.length <= 1) {
-    return [filePattern];
-  }
-
-  return options.map((option) => `${prefix}${option}${suffix}`);
-}
-
-function addDefaultExcludeGlobs(args: string[]): void {
-  for (const glob of DEFAULT_EXCLUDE_GLOBS) {
-    args.push("--glob", glob);
-  }
-}
-
 async function addFilePatternArgs(
   args: string[],
   dirPath: string,
@@ -191,9 +130,7 @@ async function addFilePatternArgs(
     return resolvedFile;
   }
 
-  for (const glob of expandSimpleBraceGlob(filePattern)) {
-    args.push("--glob", glob);
-  }
+  args.push(...filePatternGlobArgs(filePattern));
   return defaultSearchTarget;
 }
 
@@ -208,13 +145,9 @@ export async function resolveFilePatternAsPath(
   filePattern: string,
   searchDir: string,
 ): Promise<string | undefined> {
-  if (!filePattern.includes("/") && !filePattern.includes("\\")) {
-    return undefined; // bare filename — valid glob usage
+  if (!isLiteralFilePatternPath(filePattern)) {
+    return undefined;
   }
-  if (GLOB_META.test(filePattern)) {
-    return undefined; // contains glob characters — valid glob usage
-  }
-  // Looks like a literal file path — try to resolve it
   const candidate = path.isAbsolute(filePattern)
     ? filePattern
     : path.resolve(searchDir, filePattern);
@@ -235,19 +168,6 @@ export async function resolveFilePatternAsPath(
     }
   } catch {
     // file doesn't exist
-  }
-  return undefined;
-}
-
-export function getEscapingHint(regex: string): string | undefined {
-  // Look for patterns like \\s, \\d, \\(, \\{ that suggest double-escaping
-  if (/\\\\[sSdDwWbBntrf(){}[\].|+*?^$/]/.test(regex)) {
-    return (
-      "Your regex appears double-escaped (e.g. \\\\s instead of \\s). " +
-      "The regex parameter is passed directly to ripgrep — only single " +
-      "backslash escapes are needed (e.g. \\s, \\d, \\(). JSON string " +
-      "escaping is handled automatically by the transport layer."
-    );
   }
   return undefined;
 }
@@ -354,64 +274,14 @@ export async function handleSearchFiles(
       ...(pathIsFile ? { file_pattern: undefined } : {}),
     };
 
-    const maxResults = effectiveParams.max_results ?? DEFAULT_MAX_RESULTS;
+    const maxResults =
+      effectiveParams.max_results ?? SEARCH_FILES_DEFAULT_MAX_RESULTS;
+    const offset = effectiveParams.offset ?? 0;
     const outputMode = effectiveParams.output_mode ?? "content";
+    const formatPath = (file: string) => formatResultPath(file, searchDir);
 
-    // Ripgrep regex search
     const rgPath = await getRipgrepBinPath();
-
-    // --- files_with_matches mode ---
-    if (outputMode === "files_with_matches") {
-      return withWarning(
-        await searchFilesOnly(
-          rgPath,
-          searchDir,
-          defaultSearchTarget,
-          effectiveParams,
-        ),
-        warning,
-      );
-    }
-
-    // --- count mode ---
-    if (outputMode === "count") {
-      return withWarning(
-        await searchCount(
-          rgPath,
-          searchDir,
-          defaultSearchTarget,
-          effectiveParams,
-        ),
-        warning,
-      );
-    }
-
-    // --- content mode (default) ---
-    const contextBefore = params.context_before ?? params.context ?? 1;
-    const contextAfter = params.context_after ?? params.context ?? 1;
-    const offset = params.offset ?? 0;
-    const sanitized = sanitizeRegex(params.regex!);
-    const args = ["--json", "-e", sanitized, "--no-messages"];
-
-    // Use asymmetric -B/-A when they differ, symmetric -C when equal
-    if (contextBefore === contextAfter) {
-      args.push("--context", String(contextBefore));
-    } else {
-      args.push("-B", String(contextBefore), "-A", String(contextAfter));
-    }
-
-    if (params.case_insensitive) {
-      args.push("--ignore-case");
-    }
-    if (params.multiline || needsMultiline(sanitized)) {
-      args.push("--multiline", "--multiline-dotall");
-    }
-    if (needsPcre2(sanitized)) {
-      args.push("--pcre2");
-    }
-
-    addDefaultExcludeGlobs(args);
-
+    const args = buildRipgrepSearchArgs(effectiveParams);
     // Handle file_pattern: if it looks like a literal file path that exists,
     // use it as the search target instead of --glob to avoid glob matching issues.
     // Normalize simple brace globs like src/**/*.{ts,tsx} into multiple --glob args.
@@ -421,7 +291,6 @@ export async function handleSearchFiles(
       effectiveParams.file_pattern,
       defaultSearchTarget,
     );
-
     args.push(searchTarget);
 
     let output: string;
@@ -437,13 +306,35 @@ export async function handleSearchFiles(
       });
     }
 
+    if (outputMode === "files_with_matches") {
+      return withWarning(
+        jsonResult(
+          formatFilesWithMatchesResults(output, {
+            maxResults,
+            offset,
+            formatPath,
+          }),
+          true,
+        ),
+        warning,
+      );
+    }
+
+    if (outputMode === "count") {
+      return withWarning(
+        jsonResult(
+          formatCountSearchResults(
+            parseRipgrepCountOutput(output, defaultSearchTarget),
+            { maxResults, offset, formatPath },
+          ),
+          true,
+        ),
+        warning,
+      );
+    }
+
     if (!output.trim()) {
-      return jsonResult({
-        total_matches: 0,
-        truncated: false,
-        results: "No results found",
-        ...(warning && { warning }),
-      });
+      return jsonResult(emptyContentSearchResult(warning));
     }
 
     const { results: fileResults, totalMatches } = parseRipgrepOutput(
@@ -451,259 +342,48 @@ export async function handleSearchFiles(
       searchDir,
     );
 
-    // Format output — keep ## file.ts + "> linenum | content" format
-    const formatted: string[] = [];
-    let matchCount = 0;
-    let skipped = 0;
-    let redactionCount = 0;
-    let withheldFiles = 0;
-
+    const redactionViews = new Map<string, SearchFileRedactionView>();
     for (const file of fileResults) {
-      if (matchCount >= maxResults) break;
-
-      const relPath = formatResultPath(file.file, searchDir);
       const absoluteFile = path.resolve(searchDir, file.file);
-      let visibleLines: string[] | undefined;
-      let withheldMessage: string | undefined;
-      if (isStructuredConfigPath(absoluteFile)) {
-        try {
-          const redacted = redactStructuredSecrets(
-            absoluteFile,
-            await fs.readFile(absoluteFile, "utf8"),
-          );
-          redactionCount += redacted.redactionCount;
-          if (redacted.status) {
-            withheldMessage =
-              "[CONTENT WITHHELD: invalid structured configuration]";
-          } else {
-            visibleLines = redacted.content.split("\n");
-          }
-        } catch {
-          withheldMessage =
-            "[CONTENT WITHHELD: structured configuration could not be read safely]";
-        }
-        if (withheldMessage) withheldFiles += 1;
-      }
-      const fileLines: string[] = [];
-      let fileMatchCount = 0;
-
-      for (const result of file.searchResults) {
-        if (matchCount >= maxResults) break;
-
-        const groupMatches = result.lines.filter((l) => l.isMatch).length;
-
-        // Skip this group entirely if all its matches fall within the offset
-        if (offset > 0 && skipped + groupMatches <= offset) {
-          skipped += groupMatches;
-          continue;
-        }
-
-        // Emit match lines individually so adjacent matches merged into one
-        // ripgrep group still respect offset and max_results.
-        const groupLines: string[] = [];
-        let countable = 0;
-        for (const line of result.lines) {
-          if (line.isMatch) {
-            if (skipped < offset) {
-              skipped += 1;
-              // Context collected so far belonged to a skipped match.
-              groupLines.length = 0;
-              continue;
-            }
-            if (matchCount + countable >= maxResults) break;
-            countable += 1;
-            skipped += 1;
-          }
-          const prefix = line.isMatch ? ">" : " ";
-          const visibleText =
-            withheldMessage ??
-            (visibleLines
-              ? visibleLines
-                  .slice(
-                    line.line - 1,
-                    line.line -
-                      1 +
-                      Math.max(1, line.text.trimEnd().split("\n").length),
-                  )
-                  .join("\n")
-              : line.text);
-          groupLines.push(
-            `${prefix} ${line.line} | ${truncateLine(visibleText).trimEnd()}`,
-          );
-        }
-        if (countable > 0) {
-          fileLines.push(...groupLines, "---");
-        }
-        fileMatchCount += countable;
-        matchCount += countable;
-      }
-
-      if (fileLines.length > 0) {
-        const countLabel =
-          fileMatchCount === 1 ? "1 match" : `${fileMatchCount} matches`;
-        formatted.push(
-          `## ${relPath} (${countLabel})\n${fileLines.join("\n")}`,
+      if (!isStructuredConfigPath(absoluteFile)) continue;
+      try {
+        const redacted = redactStructuredSecrets(
+          absoluteFile,
+          await fs.readFile(absoluteFile, "utf8"),
         );
+        redactionViews.set(
+          file.file,
+          redacted.status
+            ? {
+                withheldMessage:
+                  "[CONTENT WITHHELD: invalid structured configuration]",
+                redactionCount: redacted.redactionCount,
+              }
+            : {
+                visibleLines: redacted.content.split("\n"),
+                redactionCount: redacted.redactionCount,
+              },
+        );
+      } catch {
+        redactionViews.set(file.file, {
+          withheldMessage:
+            "[CONTENT WITHHELD: structured configuration could not be read safely]",
+          redactionCount: 0,
+        });
       }
     }
 
-    const result = {
-      total_matches: Math.min(totalMatches, maxResults),
-      truncated: totalMatches > maxResults + offset,
-      ...(offset > 0 && { offset }),
-      results: formatted.join("\n\n"),
-      ...((redactionCount > 0 || withheldFiles > 0) && {
-        redaction: {
-          type: "structured_secret_values",
-          count: redactionCount,
-          withheld_files: withheldFiles,
-        },
+    return jsonResult(
+      formatContentSearchResults(fileResults, totalMatches, {
+        maxResults,
+        offset,
+        formatPath,
+        redactionViews,
+        warning,
       }),
-      ...(warning && { warning }),
-    };
-
-    return jsonResult(result, true);
+      true,
+    );
   } catch (err) {
     return handleToolError(err, { path: params.path });
   }
-}
-
-// --- files_with_matches mode ---
-
-async function searchFilesOnly(
-  rgPath: string,
-  searchDir: string,
-  defaultSearchTarget: string,
-  params: {
-    regex: string;
-    file_pattern?: string;
-    case_insensitive?: boolean;
-    multiline?: boolean;
-    max_results?: number;
-    offset?: number;
-  },
-): Promise<ToolResult> {
-  const sanitized = sanitizeRegex(params.regex!);
-  const args = ["--files-with-matches", "-e", sanitized, "--no-messages"];
-
-  if (params.case_insensitive) args.push("--ignore-case");
-  if (params.multiline || needsMultiline(sanitized))
-    args.push("--multiline", "--multiline-dotall");
-  if (needsPcre2(sanitized)) args.push("--pcre2");
-  addDefaultExcludeGlobs(args);
-  const searchTarget = await addFilePatternArgs(
-    args,
-    searchDir,
-    params.file_pattern,
-    defaultSearchTarget,
-  );
-  args.push(searchTarget);
-
-  let output: string;
-  try {
-    output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const hint = getEscapingHint(params.regex!);
-    return errorResult(message, {
-      regex: params.regex,
-      ...(hint && { hint }),
-    });
-  }
-
-  const files = output.trim().split("\n").filter(Boolean);
-  const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
-  const offsetVal = params.offset ?? 0;
-  const sliced = files.slice(offsetVal, offsetVal + maxResults);
-  const limited = sliced.map((file) => formatResultPath(file, searchDir));
-
-  return jsonResult(
-    {
-      total_files: limited.length,
-      truncated: files.length > offsetVal + maxResults,
-      ...(offsetVal > 0 && { offset: offsetVal }),
-      files: limited,
-    },
-    true,
-  );
-}
-
-// --- count mode ---
-
-async function searchCount(
-  rgPath: string,
-  searchDir: string,
-  defaultSearchTarget: string,
-  params: {
-    regex: string;
-    file_pattern?: string;
-    case_insensitive?: boolean;
-    multiline?: boolean;
-    max_results?: number;
-    offset?: number;
-  },
-): Promise<ToolResult> {
-  const sanitized = sanitizeRegex(params.regex!);
-  const args = ["--count", "--with-filename", "-e", sanitized, "--no-messages"];
-
-  if (params.case_insensitive) args.push("--ignore-case");
-  if (params.multiline || needsMultiline(sanitized))
-    args.push("--multiline", "--multiline-dotall");
-  if (needsPcre2(sanitized)) args.push("--pcre2");
-  addDefaultExcludeGlobs(args);
-  const searchTarget = await addFilePatternArgs(
-    args,
-    searchDir,
-    params.file_pattern,
-    defaultSearchTarget,
-  );
-  args.push(searchTarget);
-
-  let output: string;
-  try {
-    output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const hint = getEscapingHint(params.regex!);
-    return errorResult(message, {
-      regex: params.regex,
-      ...(hint && { hint }),
-    });
-  }
-
-  const lines = output.trim().split("\n").filter(Boolean);
-  const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
-  const offsetVal = params.offset ?? 0;
-  let totalMatches = 0;
-  const allCounts: Array<{ file: string; count: number }> = [];
-
-  for (const line of lines) {
-    const sepIdx = line.lastIndexOf(":");
-    const bareCount = sepIdx === -1 ? Number.parseInt(line, 10) : Number.NaN;
-    const file =
-      sepIdx === -1
-        ? formatResultPath(defaultSearchTarget, searchDir)
-        : formatResultPath(line.substring(0, sepIdx), searchDir);
-    const count =
-      sepIdx === -1
-        ? bareCount
-        : Number.parseInt(line.substring(sepIdx + 1), 10);
-    if (!isNaN(count)) {
-      allCounts.push({ file, count });
-      totalMatches += count;
-    }
-  }
-
-  const sliced = allCounts.slice(offsetVal, offsetVal + maxResults);
-
-  return jsonResult(
-    {
-      total_files: sliced.length,
-      total_matches: totalMatches,
-      truncated: allCounts.length > offsetVal + maxResults,
-      ...(offsetVal > 0 && { offset: offsetVal }),
-      counts: sliced,
-    },
-    true,
-  );
 }

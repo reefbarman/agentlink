@@ -1957,6 +1957,13 @@ export class AskAgentSandboxWorkspace {
     if (authorization.decision === "deny") {
       return errorResult(authorization.reason ?? "edit_denied");
     }
+    // apply_diff pins the reviewed baseline hash into a host-prepared input.
+    const executeInput =
+      (authorization.decision === "allow" ||
+        authorization.decision === "require_user") &&
+      authorization.preparedInput
+        ? { ...authorization.preparedInput }
+        : validation.input;
     if (authorization.decision === "require_user") {
       const display = authorization.displayContent;
       if (!isFileApprovalDisplay(display)) {
@@ -2028,7 +2035,7 @@ export class AskAgentSandboxWorkspace {
         sessionId: request.sessionId,
         turnId: request.turnId,
         toolName,
-        input: validation.input,
+        input: executeInput,
         displayContent: display,
       });
       if (!pending.ok) return errorResult(pending.reason);
@@ -2070,7 +2077,7 @@ export class AskAgentSandboxWorkspace {
       }
       // Registered synchronously after the last check, so a revoke either
       // refuses this edit above or waits for the write to finish.
-      const commit = tool.executeValidated(validation.input, {
+      const commit = tool.executeValidated(executeInput, {
         principal: PRINCIPAL,
         sessionId: request.sessionId,
         turnId: request.turnId,

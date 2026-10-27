@@ -3,6 +3,20 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as readline from "readline";
 import * as vscode from "vscode";
+import { SEARCH_FILES_MAX_OUTPUT_LINES } from "@agentlink/core/search-files";
+
+export {
+  parseRipgrepOutput,
+  truncateLine,
+  type RgBegin,
+  type RgContext,
+  type RgEnd,
+  type RgMatch,
+  type RgMessage,
+  type SearchFileResult,
+  type SearchLineResult,
+  type SearchResult,
+} from "@agentlink/core/search-files";
 
 const isWindows = process.platform.startsWith("win");
 const binName = isWindows ? "rg.exe" : "rg";
@@ -10,9 +24,7 @@ const SYSTEM_RG_PROBE_TIMEOUT_MS = 2_000;
 
 let cachedRgPath: string | undefined;
 
-const MAX_RESULTS = 300;
-const MAX_LINES = MAX_RESULTS * 5;
-const MAX_LINE_LENGTH = 500;
+const MAX_LINES = SEARCH_FILES_MAX_OUTPUT_LINES;
 
 // --- Binary discovery ---
 
@@ -91,66 +103,7 @@ export async function getRipgrepBinPath(): Promise<string> {
   );
 }
 
-// --- Ripgrep JSON output types ---
-
-export interface RgBegin {
-  type: "begin";
-  data: { path: { text: string } };
-}
-
-export interface RgMatch {
-  type: "match";
-  data: {
-    path: { text: string };
-    lines: { text: string };
-    line_number: number;
-    absolute_offset: number;
-  };
-}
-
-export interface RgContext {
-  type: "context";
-  data: {
-    path: { text: string };
-    lines: { text: string };
-    line_number: number;
-  };
-}
-
-export interface RgEnd {
-  type: "end";
-  data: { path: { text: string } };
-}
-
-export type RgMessage = RgBegin | RgMatch | RgContext | RgEnd;
-
-// --- Search result types ---
-
-export interface SearchLineResult {
-  line: number;
-  text: string;
-  isMatch: boolean;
-}
-
-export interface SearchResult {
-  lines: SearchLineResult[];
-}
-
-export interface SearchFileResult {
-  file: string;
-  searchResults: SearchResult[];
-}
-
 // --- Execution helpers ---
-
-export function truncateLine(
-  line: string,
-  maxLength: number = MAX_LINE_LENGTH,
-): string {
-  return line.length > maxLength
-    ? line.substring(0, maxLength) + " [truncated...]"
-    : line;
-}
 
 /**
  * Execute ripgrep with --json output and parse results into structured data.
@@ -296,88 +249,4 @@ export async function execRipgrepFiles(
       reject(new Error(`ripgrep process error: ${error.message}`));
     });
   });
-}
-
-/**
- * Parse ripgrep --json output into structured search results.
- */
-export function parseRipgrepOutput(
-  output: string,
-  _cwd: string,
-): { results: SearchFileResult[]; totalMatches: number } {
-  const results: SearchFileResult[] = [];
-  let currentFile: SearchFileResult | null = null;
-  let totalMatches = 0;
-
-  for (const line of output.split("\n")) {
-    if (!line) continue;
-
-    try {
-      const parsed = JSON.parse(line) as RgMessage;
-
-      if (parsed.type === "begin") {
-        // A capped stream may omit the previous file's `end` event. Preserve
-        // any captured matches before starting the next file rather than
-        // silently dropping inspectable results.
-        if (
-          currentFile?.searchResults.some((result) =>
-            result.lines.some((line) => line.isMatch),
-          )
-        ) {
-          results.push(currentFile);
-        }
-        currentFile = {
-          file: parsed.data.path.text,
-          searchResults: [],
-        };
-      } else if (parsed.type === "end") {
-        if (currentFile) {
-          results.push(currentFile);
-          currentFile = null;
-        }
-      } else if (
-        (parsed.type === "match" || parsed.type === "context") &&
-        currentFile
-      ) {
-        if (parsed.type === "match") {
-          totalMatches++;
-        }
-
-        const lineResult: SearchLineResult = {
-          line: parsed.data.line_number,
-          text: truncateLine(parsed.data.lines.text),
-          isMatch: parsed.type === "match",
-        };
-
-        const lastResult =
-          currentFile.searchResults[currentFile.searchResults.length - 1];
-        if (lastResult?.lines.length > 0) {
-          const lastLine = lastResult.lines[lastResult.lines.length - 1];
-          // If contiguous with last result, add to it
-          if (parsed.data.line_number <= lastLine.line + 1) {
-            lastResult.lines.push(lineResult);
-          } else {
-            currentFile.searchResults.push({ lines: [lineResult] });
-          }
-        } else {
-          currentFile.searchResults.push({ lines: [lineResult] });
-        }
-      }
-    } catch {
-      // Skip unparseable lines
-    }
-  }
-
-  // execRipgrepSearch intentionally caps large JSON streams and can stop
-  // before ripgrep emits the final `end` event. Keep the in-progress file when
-  // it contains a captured match so totalMatches never refers to hidden data.
-  if (
-    currentFile?.searchResults.some((result) =>
-      result.lines.some((line) => line.isMatch),
-    )
-  ) {
-    results.push(currentFile);
-  }
-
-  return { results, totalMatches };
 }

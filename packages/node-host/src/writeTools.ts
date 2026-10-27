@@ -5,6 +5,11 @@ import {
   type MultiFileWriteChange,
   type MultiFileWriteTransactionProvider,
 } from "@agentlink/core";
+import {
+  APPLY_DIFF_INPUT_GRAMMAR,
+  planApplyDiff,
+  type ApplyDiffBlockOption,
+} from "@agentlink/core/apply-diff";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -53,17 +58,19 @@ export interface CreateNodeHostWriteToolsOptions<
   readonly fileSystem?: NodeHostFileSystem;
 }
 
-export type NodeHostApplyDiffFailure =
-  | "invalid_diff"
-  | "no_valid_blocks"
-  | "empty_search"
-  | "search_not_found"
-  | "search_ambiguous";
-
-interface StrictSearchReplaceBlock {
-  readonly search: string;
-  readonly replace: string;
+export interface CreateNodeHostApplyDiffToolsOptions<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> extends CreateNodeHostWriteToolsOptions<TPrincipal> {
+  /**
+   * `required` (default): the model must send `expectedContentHash`.
+   * `host_prepared`: the schema marks it optional because the host's
+   * authorizer pins the reviewed baseline through `preparedInput`. Execution
+   * always requires the hash either way.
+   */
+  readonly contentHashInput?: "required" | "host_prepared";
 }
+
+const MAX_APPLY_DIFF_BLOCK_OPTIONS = 64;
 
 export interface CreateNodeHostMultiFileWriteToolsOptions<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
@@ -180,15 +187,19 @@ export function createNodeHostWriteTools<
 }
 
 /**
- * Create a strict, all-or-nothing C5 patch resolver. It accepts canonical
- * SEARCH/REPLACE blocks only; no unified diffs, fuzzy matching, occurrence
- * selection, or partial application are exposed without a review surface.
+ * Create VS Code's `apply_diff` over an explicit write grant: SEARCH/REPLACE
+ * or unified hunks, whitespace/escape-tolerant matching, `block_options`
+ * occurrence/replace_all selection, `atomic`, and VS Code's result and
+ * failure payloads (`@agentlink/core/apply-diff`). Every write is pinned to a
+ * SHA-256 baseline, so the written content is exactly what `planApplyDiff`
+ * produced for that baseline. Core approval is required.
  */
 export function createNodeHostApplyDiffTools<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 >(
-  options: CreateNodeHostWriteToolsOptions<TPrincipal>,
+  options: CreateNodeHostApplyDiffToolsOptions<TPrincipal>,
 ): HostToolResolver<TPrincipal> {
+  const hostPrepared = options.contentHashInput === "host_prepared";
   const maxFileBytes = boundedPositiveInteger(
     options.maxFileBytes ?? MAX_FILE_BYTES,
     "maxFileBytes",
@@ -205,19 +216,69 @@ export function createNodeHostApplyDiffTools<
     return [
       defineTool<TPrincipal>({
         name: "apply_diff",
-        description:
-          "Apply canonical SEARCH/REPLACE blocks atomically to one explicitly granted, SHA-256-pinned text file. Every search must match exactly once.",
+        description: hostPrepared
+          ? "Edit one existing granted text file with SEARCH/REPLACE blocks or unified-diff hunks. Each block requires a unique match by default; block_options can select a 1-based occurrence or replace all exact matches, and atomic=true requires every block to succeed. The host reviews the exact result before writing."
+          : "Edit one existing granted, SHA-256-pinned text file with SEARCH/REPLACE blocks or unified-diff hunks. Each block requires a unique match by default; block_options can select a 1-based occurrence or replace all exact matches, and atomic=true requires every block to succeed.",
         inputSchema: {
           type: "object",
           properties: {
             path: { type: "string", minLength: 1 },
-            diff: { type: "string", minLength: 1, maxLength: MAX_FILE_BYTES },
+            diff: {
+              type: "string",
+              minLength: 1,
+              maxLength: MAX_FILE_BYTES,
+              description: APPLY_DIFF_INPUT_GRAMMAR,
+            },
+            block_options: {
+              type: "array",
+              maxItems: MAX_APPLY_DIFF_BLOCK_OPTIONS,
+              description:
+                "Optional per-block controls. Use occurrence to select a 1-based exact/flexible/escape-normalized match, or replace_all to replace every exact match. Unlisted blocks retain unique-match safety.",
+              items: {
+                type: "object",
+                properties: {
+                  index: {
+                    type: "integer",
+                    minimum: 0,
+                    description:
+                      "Zero-based positional SEARCH/REPLACE block index, counting malformed block slots before the target",
+                  },
+                  occurrence: {
+                    type: "integer",
+                    minimum: 1,
+                    description:
+                      "Select this 1-based matching occurrence for the block",
+                  },
+                  replace_all: {
+                    type: "boolean",
+                    const: true,
+                    description:
+                      "Replace every exact occurrence for this block",
+                  },
+                },
+                required: ["index"],
+                additionalProperties: false,
+              },
+            },
+            atomic: {
+              type: "boolean",
+              description:
+                "When true, require every parsed block to succeed and no malformed blocks before review or applying any change.",
+            },
             expectedContentHash: {
               type: "string",
               pattern: "^[a-f0-9]{64}$",
+              ...(hostPrepared
+                ? {
+                    description:
+                      "Optional SHA-256 of the file you read. When omitted, the host pins the baseline it reviews.",
+                  }
+                : {}),
             },
           },
-          required: ["path", "diff", "expectedContentHash"],
+          required: hostPrepared
+            ? ["path", "diff"]
+            : ["path", "diff", "expectedContentHash"],
           additionalProperties: false,
         },
         effect: "write",
@@ -227,9 +288,10 @@ export function createNodeHostApplyDiffTools<
           if (!sameTurn(request, context)) return error("write_turn_mismatch");
           const target = await resolveWriteTarget(files, input.path, grants);
           if (!target.ok) return error(target.error);
-          const diff = typeof input.diff === "string" ? input.diff : "";
-          const parsed = parseStrictSearchReplaceBlocks(diff);
-          if (!parsed.ok) return error(parsed.error);
+          if (typeof input.diff !== "string" || !input.diff) {
+            return error("invalid_diff");
+          }
+          const diff = input.diff;
           return await withWriteLock(files, target.path, async () => {
             const current = await readPinnedText(
               files,
@@ -237,36 +299,61 @@ export function createNodeHostApplyDiffTools<
               input.expectedContentHash,
             );
             if (!current.ok) return error(current.error);
-            const applied = applyStrictBlocks(current.content, parsed.blocks);
-            if (!applied.ok) return error(applied.error);
-            if (Buffer.byteLength(applied.content, "utf8") > maxFileBytes) {
+            const plan = planApplyDiff(target.path, current.content, {
+              diff,
+              block_options: applyDiffBlockOptions(input.block_options),
+              atomic: input.atomic === true,
+            });
+            if (plan.status === "failed") {
+              return {
+                modelContent: JSON.stringify(plan.payload),
+                displayContent: {
+                  path: target.path,
+                  error: plan.payload.error,
+                },
+                isError: true,
+              };
+            }
+            const baselineHash = String(input.expectedContentHash);
+            if (!plan.changed) {
+              const display = {
+                status: "accepted",
+                path: target.path,
+                operation: "modified",
+                contentHash: baselineHash,
+                post_edit_content_hash: baselineHash,
+                ...plan.report,
+              };
+              return {
+                modelContent: JSON.stringify(display),
+                displayContent: display,
+              };
+            }
+            if (Buffer.byteLength(plan.content, "utf8") > maxFileBytes) {
               return error("file_too_large");
             }
             const committed = await atomicWrite(
               files,
               target.path,
-              applied.content,
+              plan.content,
               {
                 expectedAbsent: false,
-                expectedContentHash: String(input.expectedContentHash),
+                expectedContentHash: baselineHash,
               },
             );
             if (!committed.ok) return error(committed.error);
+            const result = {
+              status: "accepted",
+              path: target.path,
+              operation: "modified",
+              contentHash: committed.contentHash,
+              post_edit_content_hash: committed.contentHash,
+              durability: committed.durability,
+              ...plan.report,
+            };
             return {
-              modelContent: JSON.stringify({
-                path: target.path,
-                operation: "modified",
-                contentHash: committed.contentHash,
-                blocksApplied: parsed.blocks.length,
-                durability: committed.durability,
-              }),
-              displayContent: {
-                path: target.path,
-                operation: "modified",
-                contentHash: committed.contentHash,
-                blocksApplied: parsed.blocks.length,
-                durability: committed.durability,
-              },
+              modelContent: JSON.stringify(result),
+              displayContent: result,
             };
           });
         },
@@ -536,80 +623,22 @@ async function readPinnedText(
   return { ok: true, content: bytes.toString("utf8") };
 }
 
-function parseStrictSearchReplaceBlocks(
-  diff: string,
-):
-  | { readonly ok: true; readonly blocks: readonly StrictSearchReplaceBlock[] }
-  | { readonly ok: false; readonly error: NodeHostApplyDiffFailure } {
-  const lines = diff.split("\n");
-  const blocks: StrictSearchReplaceBlock[] = [];
-  let index = 0;
-  while (index < lines.length) {
-    if (lines[index]?.trim() !== "<<<<<<< SEARCH") {
-      if (lines[index]?.trim()) return { ok: false, error: "invalid_diff" };
-      index += 1;
-      continue;
-    }
-    index += 1;
-    const search: string[] = [];
-    while (
-      index < lines.length &&
-      lines[index]?.trim() !== "======= DIVIDER ======="
-    ) {
-      if (isReservedMarker(lines[index]!))
-        return { ok: false, error: "invalid_diff" };
-      search.push(lines[index]!);
-      index += 1;
-    }
-    if (index === lines.length) return { ok: false, error: "invalid_diff" };
-    index += 1;
-    const replace: string[] = [];
-    while (index < lines.length && lines[index]?.trim() !== ">>>>>>> REPLACE") {
-      if (isReservedMarker(lines[index]!))
-        return { ok: false, error: "invalid_diff" };
-      replace.push(lines[index]!);
-      index += 1;
-    }
-    if (index === lines.length) return { ok: false, error: "invalid_diff" };
-    index += 1;
-    const searchText = search.join("\n");
-    if (!searchText) return { ok: false, error: "empty_search" };
-    blocks.push({ search: searchText, replace: replace.join("\n") });
-  }
-  return blocks.length > 0
-    ? { ok: true, blocks }
-    : { ok: false, error: "no_valid_blocks" };
-}
-
-function applyStrictBlocks(
-  content: string,
-  blocks: readonly StrictSearchReplaceBlock[],
-):
-  | { readonly ok: true; readonly content: string }
-  | { readonly ok: false; readonly error: NodeHostApplyDiffFailure } {
-  let result = content;
-  for (const block of blocks) {
-    const first = result.indexOf(block.search);
-    if (first === -1) return { ok: false, error: "search_not_found" };
-    if (result.indexOf(block.search, first + block.search.length) !== -1) {
-      return { ok: false, error: "search_ambiguous" };
-    }
-    result = `${result.slice(0, first)}${block.replace}${result.slice(first + block.search.length)}`;
-  }
-  return { ok: true, content: result };
+/** Read already schema-validated `block_options` into the engine's shape. */
+export function applyDiffBlockOptions(
+  value: unknown,
+): ApplyDiffBlockOption[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(isRecord).map((option) => ({
+    index: Number(option.index),
+    ...(option.occurrence !== undefined
+      ? { occurrence: Number(option.occurrence) }
+      : {}),
+    ...(option.replace_all === true ? { replace_all: true as const } : {}),
+  }));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isReservedMarker(line: string): boolean {
-  const marker = line.trim();
-  return (
-    marker === "<<<<<<< SEARCH" ||
-    marker === "======= DIVIDER =======" ||
-    marker === ">>>>>>> REPLACE"
-  );
 }
 
 async function verifyPrecondition(

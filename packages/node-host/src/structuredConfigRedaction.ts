@@ -62,7 +62,20 @@ interface ValueSpan {
 export interface NodeHostStructuredConfigRedaction {
   readonly content: string;
   readonly redacted: boolean;
+  /** Number of secret values replaced (0 when the file was withheld). */
+  readonly redactionCount?: number;
   readonly status?: "withheld_invalid_jsonc" | "withheld_unsupported_config";
+}
+
+/**
+ * Whether `redactNodeHostStructuredConfig` may change this path's content.
+ * Callers can skip reading other files, as VS Code's search does.
+ */
+export function isNodeHostStructuredConfigPath(filePath: string): boolean {
+  return (
+    isStructuredJsonConfigPath(filePath) ||
+    (!/\.jsonc?$/iu.test(filePath) && shouldWithholdUnsupportedConfig(filePath))
+  );
 }
 
 /**
@@ -110,7 +123,7 @@ export function redactNodeHostStructuredConfig(
       replacementPreservingLines(redacted.slice(span.start, span.end)) +
       redacted.slice(span.end);
   }
-  return { content: redacted, redacted: true };
+  return { content: redacted, redacted: true, redactionCount: spans.length };
 }
 
 function isStructuredJsonConfigPath(filePath: string): boolean {

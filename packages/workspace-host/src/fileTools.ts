@@ -7,10 +7,29 @@ import {
   type HostToolResolveRequest,
   type HostToolResolver,
 } from "@agentlink/core";
+import { planApplyDiff } from "@agentlink/core/apply-diff";
 import {
+  buildRipgrepSearchArgs,
+  emptyContentSearchResult,
+  filePatternGlobArgs,
+  formatContentSearchResults,
+  formatCountSearchResults,
+  formatFilesWithMatchesResults,
+  getEscapingHint,
+  isLiteralFilePatternPath,
+  parseRipgrepCountOutput,
+  parseRipgrepOutput,
+  SEARCH_FILES_DEFAULT_MAX_RESULTS,
+  SEARCH_FILES_MAX_OUTPUT_LINES,
+  type RegexSearchFilesParams,
+  type SearchFileRedactionView,
+} from "@agentlink/core/search-files";
+import {
+  applyDiffBlockOptions,
   createNodeHostApplyDiffTools,
   createNodeHostReadTools,
   createNodeHostWriteTools,
+  isNodeHostStructuredConfigPath,
   redactNodeHostStructuredConfig,
 } from "@agentlink/node-host";
 import { createHash, randomUUID } from "node:crypto";
@@ -33,7 +52,7 @@ import {
 } from "./workspaceReadFileContext.js";
 
 const MAX_CONTEXT_BYTES = 1_000_000;
-const MAX_SEARCH_RESULTS = 100;
+
 const MAX_SEARCH_OUTPUT_BYTES = 2_000_000;
 const SEARCH_TIMEOUT_MS = 10_000;
 const POLICY_REVISION = "standalone-cli-files-v1";
@@ -196,6 +215,8 @@ export function createWorkspaceFileTools(
       createNodeHostApplyDiffTools({
         resolveGrants: () => nodeGrantsForScopes(scopes, "write"),
         fileSystem: files,
+        // authorizeToolCall pins the reviewed baseline through preparedInput.
+        contentHashInput: "host_prepared",
       })(request),
     ]);
     const tools = [...reads, ...writes, ...diffs];
@@ -260,9 +281,18 @@ export function createWorkspaceFileTools(
         request.input,
         scopes,
       );
+      if (prepared.ok === "no_write") {
+        // A failed or no-op diff writes nothing; executing it returns VS
+        // Code's detailed result against the same pinned baseline.
+        return { decision: "allow", preparedInput: prepared.preparedInput };
+      }
       if (!prepared.ok) {
         return { decision: "deny", reason: prepared.reason };
       }
+      const preparedInput =
+        request.toolName === "apply_diff"
+          ? { preparedInput: prepared.preparedInput }
+          : {};
       if (
         options.canWritePath &&
         !(await options.canWritePath(request, prepared.display.path))
@@ -276,12 +306,13 @@ export function createWorkspaceFileTools(
         !prepared.display.protected &&
         options.approvalPolicy?.hasSessionGrant?.(prepared.display, request)
       ) {
-        return { decision: "allow" };
+        return { decision: "allow", ...preparedInput };
       }
       return {
         decision: "require_user",
         summary: `${prepared.display.operation === "created" ? "Create" : "Modify"} ${prepared.display.path}`,
         displayContent: prepared.display,
+        ...preparedInput,
       };
     } catch (error) {
       const code =
@@ -322,6 +353,9 @@ export function createWorkspaceFileTools(
         request.input,
         scopes,
       );
+      if (prepared.ok === "no_write") {
+        return { ok: false, reason: "Pending file proposal no longer applies" };
+      }
       if (!prepared.ok) return prepared;
       return sameApprovalDisplay(prepared.display, request.displayContent)
         ? { ok: true }
@@ -493,6 +527,83 @@ function wrapProjectTool(
   });
 }
 
+const SEARCH_CONTEXT_LINES_LIMIT = 50;
+const SEARCH_STDERR_BYTES = 16_384;
+
+/** VS Code's regex `search_files` input; indexed `query` mode is VS Code-only. */
+const SEARCH_FILES_INPUT_SCHEMA: CoreModelJsonSchema = {
+  type: "object",
+  properties: {
+    path: {
+      type: "string",
+      minLength: 1,
+      description: "Project-relative file or directory to search.",
+    },
+    regex: {
+      type: "string",
+      minLength: 1,
+      maxLength: 1_000,
+      description: "Regular expression for exact search (ripgrep syntax).",
+    },
+    file_pattern: {
+      type: "string",
+      minLength: 1,
+      maxLength: 500,
+      description: "Glob pattern to filter files (e.g. '*.ts').",
+    },
+    context: {
+      type: "integer",
+      minimum: 0,
+      maximum: SEARCH_CONTEXT_LINES_LIMIT,
+      description:
+        "Number of context lines to show around each match (default: 1). Only used for content output mode. Overridden by context_before/context_after if specified.",
+    },
+    context_before: {
+      type: "integer",
+      minimum: 0,
+      maximum: SEARCH_CONTEXT_LINES_LIMIT,
+      description:
+        "Number of context lines to show BEFORE each match (like grep -B). Overrides 'context' for before-match lines.",
+    },
+    context_after: {
+      type: "integer",
+      minimum: 0,
+      maximum: SEARCH_CONTEXT_LINES_LIMIT,
+      description:
+        "Number of context lines to show AFTER each match (like grep -A). Overrides 'context' for after-match lines.",
+    },
+    case_insensitive: {
+      type: "boolean",
+      description: "Case-insensitive search (default: false).",
+    },
+    multiline: {
+      type: "boolean",
+      description:
+        "Enable multiline matching where . matches newlines and patterns can span lines (default: false).",
+    },
+    max_results: {
+      type: "integer",
+      minimum: 1,
+      maximum: SEARCH_FILES_DEFAULT_MAX_RESULTS,
+      description: `Maximum results (default: ${SEARCH_FILES_DEFAULT_MAX_RESULTS}).`,
+    },
+    offset: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Skip first N matches before returning results. Use with max_results for pagination (e.g. offset=100, max_results=100 for second page).",
+    },
+    output_mode: {
+      type: "string",
+      enum: ["content", "files_with_matches", "count"],
+      description:
+        "Output format: 'content' shows matching lines with context (default), 'files_with_matches' shows only file paths, 'count' shows match counts per file.",
+    },
+  },
+  required: ["path", "regex"],
+  additionalProperties: false,
+};
+
 function createRipgrepSearchTool(
   runtime: FileToolsRuntime,
   executable: string,
@@ -504,21 +615,8 @@ function createRipgrepSearchTool(
   return defineTool({
     name: "search_files",
     description:
-      "Run bounded case-insensitive regex search with the host-packaged ripgrep binary using a project-relative path. This is not semantic search.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", minLength: 1 },
-        regex: { type: "string", minLength: 1, maxLength: 1_000 },
-        maxResults: {
-          type: "integer",
-          minimum: 1,
-          maximum: MAX_SEARCH_RESULTS,
-        },
-      },
-      required: ["path", "regex"],
-      additionalProperties: false,
-    },
+      "Search a project-relative file or directory with ripgrep regex, matching VS Code's search_files contract.",
+    inputSchema: SEARCH_FILES_INPUT_SCHEMA,
     effect: "read",
     parallelSafe: true,
     displayInput: (input) => ({ path: input.path, regex: input.regex }),
@@ -526,19 +624,12 @@ function createRipgrepSearchTool(
       if (typeof input.path !== "string" || typeof input.regex !== "string") {
         return toolError("invalid_search_input");
       }
-      const limit = boundedInteger(
-        input.maxResults,
-        MAX_SEARCH_RESULTS,
-        1,
-        MAX_SEARCH_RESULTS,
-      );
       return await executeRipgrepSearch(
         runtime,
         executable,
         projectRoot,
         input.path,
-        input.regex,
-        limit,
+        regexSearchParams(input),
         { sessionId: context.sessionId, turnId: context.turnId },
         context.signal,
       );
@@ -546,30 +637,291 @@ function createRipgrepSearchTool(
   });
 }
 
+function regexSearchParams(
+  input: Record<string, unknown>,
+): RegexSearchFilesParams {
+  const integer = (value: unknown) =>
+    Number.isSafeInteger(value) ? Number(value) : undefined;
+  const mode = input.output_mode;
+  return {
+    regex: String(input.regex),
+    ...(typeof input.file_pattern === "string"
+      ? { file_pattern: input.file_pattern }
+      : {}),
+    ...(input.case_insensitive === true ? { case_insensitive: true } : {}),
+    ...(input.multiline === true ? { multiline: true } : {}),
+    ...(integer(input.context) !== undefined
+      ? { context: integer(input.context) }
+      : {}),
+    ...(integer(input.context_before) !== undefined
+      ? { context_before: integer(input.context_before) }
+      : {}),
+    ...(integer(input.context_after) !== undefined
+      ? { context_after: integer(input.context_after) }
+      : {}),
+    ...(mode === "content" || mode === "files_with_matches" || mode === "count"
+      ? { output_mode: mode }
+      : {}),
+    ...(integer(input.offset) !== undefined
+      ? { offset: integer(input.offset) }
+      : {}),
+    ...(integer(input.max_results) !== undefined
+      ? { max_results: integer(input.max_results) }
+      : {}),
+  };
+}
+
 async function executeRipgrepSearch(
   runtime: FileToolsRuntime,
   executable: string,
   projectRoot: string,
   target: string,
-  regex: string,
-  limit: number,
+  requested: RegexSearchFilesParams,
   identity: { readonly sessionId: string; readonly turnId: string },
   signal?: AbortSignal,
 ) {
   if (signal?.aborted) return toolError("search_cancelled");
   const available = await runtime.files.canExecute(executable);
   if (!available) return toolError("packaged_ripgrep_unavailable");
-  return await new Promise<
-    | ReturnType<typeof toolError>
-    | {
-        modelContent: string;
-        displayContent: { path: string; count: number; truncated: boolean };
-      }
-  >((resolve) => {
-    const matches: Array<{ path: string; line: number; text: string }> = [];
+  const stat = await runtime.files.lstat(target).catch(() => undefined);
+  if (stat?.kind !== "file" && stat?.kind !== "directory") {
+    return toolError("path must point to either a file or directory");
+  }
+  const pathIsFile = stat.kind === "file";
+  const searchDir = pathIsFile ? path.dirname(target) : target;
+  const warnings: string[] = [];
+  if (pathIsFile && requested.file_pattern) {
+    warnings.push(
+      "Ignored file_pattern because path already scopes the search to a single file",
+    );
+  }
+  const params: RegexSearchFilesParams = pathIsFile
+    ? { ...requested, file_pattern: undefined }
+    : requested;
+  const maxResults = params.max_results ?? SEARCH_FILES_DEFAULT_MAX_RESULTS;
+  const offset = params.offset ?? 0;
+  const outputMode = params.output_mode ?? "content";
+
+  const args = [
+    "--no-config",
+    "--max-filesize",
+    "1000K",
+    ...buildRipgrepSearchArgs(params),
+  ];
+  let searchTarget = target;
+  if (params.file_pattern) {
+    const literal = await literalFilePatternTarget(
+      runtime.files,
+      projectRoot,
+      searchDir,
+      params.file_pattern,
+    );
+    if (literal) searchTarget = literal;
+    else args.push(...filePatternGlobArgs(params.file_pattern));
+  }
+  args.push("--", searchTarget);
+
+  const run = await runRipgrep(
+    runtime,
+    executable,
+    args,
+    searchDir,
+    identity,
+    signal,
+  );
+  if (!run.ok) {
+    if (run.error !== "ripgrep_failed") return toolError(run.error);
+    const hint = getEscapingHint(params.regex);
+    const payload = {
+      error: `ripgrep error: ${run.stderr || `exit code ${run.exitCode ?? "unknown"}`}`,
+      regex: params.regex,
+      ...(hint ? { hint } : {}),
+    };
+    return { modelContent: JSON.stringify(payload), isError: true };
+  }
+  if (run.bounded) {
+    warnings.push(
+      "Search output reached the host time or size bound; results may be incomplete",
+    );
+  }
+  const warning = warnings.length > 0 ? warnings.join("; ") : undefined;
+  const absolute = (file: string) => path.resolve(searchDir, file);
+  const included = (file: string) =>
+    shouldIncludeProjectReadPath(projectRoot, absolute(file));
+  const formatPath = (file: string) =>
+    toRelativePath(projectRoot, absolute(file));
+
+  let payload: Record<string, unknown>;
+  if (outputMode === "files_with_matches") {
+    payload = formatFilesWithMatchesResults(
+      run.lines.filter(included).join("\n"),
+      { maxResults, offset, formatPath },
+    );
+    if (warning) payload = { ...payload, warning };
+  } else if (outputMode === "count") {
+    payload = formatCountSearchResults(
+      parseRipgrepCountOutput(run.lines.join("\n"), searchTarget).filter(
+        (entry) => included(entry.file),
+      ),
+      { maxResults, offset, formatPath },
+    );
+    if (warning) payload = { ...payload, warning };
+  } else {
+    const parsed = parseRipgrepOutput(run.lines.join("\n"));
+    const fileResults = parsed.results.filter((file) => included(file.file));
+    const totalMatches = fileResults.reduce(
+      (total, file) =>
+        total +
+        file.searchResults.reduce(
+          (count, group) =>
+            count + group.lines.filter((line) => line.isMatch).length,
+          0,
+        ),
+      0,
+    );
+    payload =
+      fileResults.length === 0
+        ? emptyContentSearchResult(warning)
+        : formatContentSearchResults(fileResults, totalMatches, {
+            maxResults,
+            offset,
+            formatPath,
+            redactionViews: await searchRedactionViews(
+              runtime.files,
+              projectRoot,
+              fileResults.map((file) => file.file),
+              absolute,
+            ),
+            warning,
+          });
+  }
+  return {
+    modelContent: JSON.stringify(payload),
+    displayContent: {
+      path: target,
+      output_mode: outputMode,
+      ...pickDefined(payload, [
+        "total_matches",
+        "total_files",
+        "truncated",
+        "offset",
+      ]),
+    },
+  };
+}
+
+function pickDefined(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    keys
+      .filter((key) => value[key] !== undefined)
+      .map((key) => [key, value[key]]),
+  );
+}
+
+/**
+ * VS Code treats a separator-containing, glob-free `file_pattern` naming an
+ * existing file inside the search directory as the search target. Standalone
+ * also requires a private regular file the project read policy allows.
+ */
+async function literalFilePatternTarget(
+  files: WorkspaceFileSystem,
+  projectRoot: string,
+  searchDir: string,
+  filePattern: string,
+): Promise<string | undefined> {
+  if (!isLiteralFilePatternPath(filePattern) || path.isAbsolute(filePattern)) {
+    return undefined;
+  }
+  const candidate = path.resolve(searchDir, filePattern);
+  if (!isPathWithin(candidate, searchDir)) return undefined;
+  if (!shouldIncludeProjectReadPath(projectRoot, candidate)) return undefined;
+  const stat = await files.lstat(candidate).catch(() => undefined);
+  return stat?.kind === "file" ? candidate : undefined;
+}
+
+/** Redacted views for matched structured configuration files, as in VS Code. */
+async function searchRedactionViews(
+  files: WorkspaceFileSystem,
+  projectRoot: string,
+  matchedFiles: readonly string[],
+  absolute: (file: string) => string,
+): Promise<Map<string, SearchFileRedactionView>> {
+  const views = new Map<string, SearchFileRedactionView>();
+  for (const file of matchedFiles) {
+    const relativePath = toRelativePath(projectRoot, absolute(file));
+    if (!isNodeHostStructuredConfigPath(relativePath)) continue;
+    const withheld = {
+      withheldMessage:
+        "[CONTENT WITHHELD: structured configuration could not be read safely]",
+      redactionCount: 0,
+    };
+    const stat = await files.lstat(absolute(file)).catch(() => undefined);
+    if (stat?.kind !== "file" || stat.size > MAX_CONTEXT_BYTES) {
+      views.set(file, withheld);
+      continue;
+    }
+    const bytes = await files.readFile(absolute(file)).catch(() => undefined);
+    if (!bytes) {
+      views.set(file, withheld);
+      continue;
+    }
+    const redacted = redactNodeHostStructuredConfig(
+      relativePath,
+      bytes.toString("utf8"),
+    );
+    views.set(
+      file,
+      redacted.status
+        ? {
+            withheldMessage:
+              "[CONTENT WITHHELD: invalid structured configuration]",
+            redactionCount: 0,
+          }
+        : {
+            visibleLines: redacted.content.split("\n"),
+            redactionCount: redacted.redactionCount ?? 0,
+          },
+    );
+  }
+  return views;
+}
+
+type RipgrepRun =
+  | {
+      readonly ok: true;
+      readonly lines: readonly string[];
+      /** Stopped by the host time or byte bound rather than ripgrep. */
+      readonly bounded: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly error: string;
+      readonly stderr?: string;
+      readonly exitCode?: number | null;
+    };
+
+/**
+ * Run the host-packaged ripgrep through the execution backend, keeping at
+ * most VS Code's output line cap within the host byte and time bounds.
+ */
+async function runRipgrep(
+  runtime: FileToolsRuntime,
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+  identity: { readonly sessionId: string; readonly turnId: string },
+  signal?: AbortSignal,
+): Promise<RipgrepRun> {
+  return await new Promise<RipgrepRun>((resolve) => {
+    const lines: string[] = [];
     let buffered = "";
+    let stderr = "";
     let outputBytes = 0;
-    let truncated = false;
+    let bounded = false;
+    let lineCapped = false;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let child: WorkspaceProcessHandle | undefined;
@@ -579,68 +931,43 @@ async function executeRipgrepSearch(
       child?.signal("SIGTERM");
     };
     const abort = terminate;
-    const finish = (
-      result:
-        | ReturnType<typeof toolError>
-        | {
-            modelContent: string;
-            displayContent: { path: string; count: number; truncated: boolean };
-          },
-    ) => {
+    const finish = (result: RipgrepRun) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
       resolve(result);
     };
-    const stopForBound = () => {
-      truncated = true;
-      terminate();
-    };
-    const consumeLine = (line: string) => {
-      if (!line.trim() || matches.length >= limit) return;
-      try {
-        const event = JSON.parse(line) as {
-          type?: string;
-          data?: {
-            path?: { text?: string };
-            line_number?: number;
-            lines?: { text?: string };
-          };
-        };
-        if (
-          event.type === "match" &&
-          typeof event.data?.path?.text === "string" &&
-          typeof event.data.line_number === "number" &&
-          typeof event.data.lines?.text === "string"
-        ) {
-          const matchedPath = path.isAbsolute(event.data.path.text)
-            ? path.resolve(event.data.path.text)
-            : path.resolve(projectRoot, event.data.path.text);
-          if (!shouldIncludeProjectReadPath(projectRoot, matchedPath)) return;
-          matches.push({
-            path: matchedPath,
-            line: event.data.line_number,
-            text: event.data.lines.text.replace(/[\r\n]+$/u, "").slice(0, 500),
-          });
-          if (matches.length >= limit) stopForBound();
-        }
-      } catch {
-        // Ignore malformed or partial protocol lines from the subprocess.
+    const pushLine = (line: string) => {
+      if (lineCapped || !line) return;
+      if (lines.length >= SEARCH_FILES_MAX_OUTPUT_LINES) {
+        lineCapped = true;
+        terminate();
+        return;
       }
+      lines.push(line.replace(/\r$/u, ""));
     };
     const decoder = new StringDecoder("utf8");
     const onStdout = (chunk: Buffer) => {
-      if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) return;
+      if (lineCapped || outputBytes > MAX_SEARCH_OUTPUT_BYTES) return;
       outputBytes += chunk.length;
       if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) {
-        stopForBound();
+        bounded = true;
+        terminate();
         return;
       }
       buffered += decoder.write(chunk);
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) consumeLine(line);
+      const parts = buffered.split("\n");
+      buffered = parts.pop() ?? "";
+      for (const line of parts) pushLine(line);
+    };
+    const onStderr = (chunk: Buffer) => {
+      if (stderr.length < SEARCH_STDERR_BYTES) {
+        stderr = (stderr + chunk.toString("utf8")).slice(
+          0,
+          SEARCH_STDERR_BYTES,
+        );
+      }
     };
     const onExit = (exit: {
       readonly exitCode?: number;
@@ -648,66 +975,56 @@ async function executeRipgrepSearch(
     }) => {
       const code = exit.exitCode ?? null;
       const exitSignal = exit.signal ?? null;
-      if (buffered) consumeLine(buffered);
+      if (buffered && !bounded) pushLine(buffered);
       if (signal?.aborted) {
-        finish(toolError("search_cancelled"));
+        finish({ ok: false, error: "search_cancelled" });
         return;
       }
-      if (code !== 0 && code !== 1 && !truncated && exitSignal === null) {
-        finish(toolError(`packaged_ripgrep_exit_${code ?? "unknown"}`));
+      const stopped = bounded || lineCapped;
+      if (
+        lines.length === 0 &&
+        !stopped &&
+        exitSignal === null &&
+        code !== 0 &&
+        code !== 1
+      ) {
+        finish({
+          ok: false,
+          error: "ripgrep_failed",
+          stderr: stderr.trim(),
+          exitCode: code,
+        });
         return;
       }
-      const payload = {
-        path: target,
-        matches,
-        count: matches.length,
-        truncated,
-      };
-      finish({
-        modelContent: JSON.stringify(payload),
-        displayContent: { path: target, count: matches.length, truncated },
-      });
+      finish({ ok: true, lines, bounded });
     };
     try {
       child = launchFileToolProcess(
         runtime,
         {
           executable,
-          args: [
-            "--json",
-            "--ignore-case",
-            "--no-config",
-            "--max-filesize",
-            "1000K",
-            "--glob",
-            "!.git/**",
-            "--glob",
-            "!node_modules/**",
-            "--regexp",
-            regex,
-            "--",
-            target,
-          ],
-          cwd: projectRoot,
+          args,
+          cwd,
           environment: runtime.searchEnvironment,
           ...identity,
         },
         (stream, chunk) => {
           if (stream === "stdout") onStdout(chunk);
+          else onStderr(chunk);
         },
       );
     } catch {
-      finish(toolError("packaged_ripgrep_failed"));
+      finish({ ok: false, error: "packaged_ripgrep_failed" });
       return;
     }
     const launched = child;
     if (terminateRequested) launched.signal("SIGTERM");
     launched.started.then(
       () => launched.exited.then(onExit),
-      () => finish(toolError("packaged_ripgrep_failed")),
+      () => finish({ ok: false, error: "packaged_ripgrep_failed" }),
     );
     timeout = setTimeout(() => {
-      truncated = true;
+      bounded = true;
       terminate();
     }, SEARCH_TIMEOUT_MS);
     signal?.addEventListener("abort", abort, { once: true });
@@ -919,11 +1236,11 @@ function projectDescription(name: string): string {
     case "list_files":
       return "List bounded project files using a project-relative directory path.";
     case "search_files":
-      return "Run bounded regex text search using a project-relative path. This is not semantic search.";
+      return "Search a project-relative file or directory with a ripgrep regex. output_mode selects matching lines with context (content, default), file paths (files_with_matches), or per-file counts (count); file_pattern filters files by glob, context/context_before/context_after set context lines, case_insensitive and multiline adjust matching, and offset with max_results pages results. Ignored and protected paths are excluded and structured-config secrets are redacted. Indexed natural-language query search is not available on this surface.";
     case "write_file":
       return 'Propose a reviewed project-relative file replacement. Existing files require the SHA-256 hash returned by read_file with view "context"; new files require expectedAbsent=true.';
     case "apply_diff":
-      return "Propose reviewed canonical SEARCH/DIVIDER/REPLACE blocks for one project-relative file pinned by its SHA-256 hash.";
+      return "Edit one existing project-relative file with SEARCH/REPLACE blocks or unified-diff hunks, reviewed before writing. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate. expectedContentHash is optional: when omitted, the baseline shown for review is pinned. Ambiguous failures include candidate locations plus copy-ready block_options.";
     default:
       return name;
   }
@@ -936,7 +1253,13 @@ async function prepareWriteApproval(
   input: Readonly<Record<string, unknown>>,
   scopes: readonly ResolvedWorkspaceFileScope[],
 ): Promise<
-  | { ok: true; display: WorkspaceFileApprovalDisplay }
+  | {
+      ok: true;
+      display: WorkspaceFileApprovalDisplay;
+      /** Input executed after approval; apply_diff gains its pinned baseline. */
+      preparedInput: Readonly<Record<string, unknown>>;
+    }
+  | { ok: "no_write"; preparedInput: Readonly<Record<string, unknown>> }
   | { ok: false; reason: string }
 > {
   const resolved = await resolveProjectPath(files, projectRoot, input.path, {
@@ -970,6 +1293,7 @@ async function prepareWriteApproval(
   let operation: "created" | "modified";
   let expectedContentHash: string | undefined;
   let expectedAbsent: true | undefined;
+  let effectiveInput: Readonly<Record<string, unknown>> = input;
   if (toolName === "write_file") {
     if (typeof input.content !== "string")
       return { ok: false, reason: "Invalid content" };
@@ -993,13 +1317,27 @@ async function prepareWriteApproval(
   } else {
     if (!stat || current === undefined)
       return { ok: false, reason: "Patch target is missing" };
-    expectedContentHash = stringValue(input.expectedContentHash);
-    if (!expectedContentHash || contentHash(current) !== expectedContentHash) {
+    if (typeof input.diff !== "string" || !input.diff) {
+      return { ok: false, reason: "Invalid patch" };
+    }
+    const currentHash = contentHash(current);
+    const suppliedHash = stringValue(input.expectedContentHash);
+    if (suppliedHash !== undefined && suppliedHash !== currentHash) {
       return { ok: false, reason: "File baseline changed before review" };
     }
-    const applied = applyStrictDiff(current, input.diff);
-    if (!applied.ok) return { ok: false, reason: applied.reason };
-    proposed = applied.content;
+    // VS Code reads the file itself; standalone review pins the baseline it
+    // shows, so the write applies to exactly the reviewed content.
+    expectedContentHash = currentHash;
+    effectiveInput = { ...input, expectedContentHash };
+    const plan = planApplyDiff(relativePath, current, {
+      diff: input.diff,
+      block_options: applyDiffBlockOptions(input.block_options),
+      atomic: input.atomic === true,
+    });
+    if (plan.status === "failed" || !plan.changed) {
+      return { ok: "no_write", preparedInput: effectiveInput };
+    }
+    proposed = plan.content;
     operation = "modified";
   }
   const proposedBytes = Buffer.byteLength(proposed, "utf8");
@@ -1008,7 +1346,7 @@ async function prepareWriteApproval(
   }
   const proposedContentHash = contentHash(proposed);
   const scopeDigest = fileScopeDigest(scopes);
-  const inputDigest = contentHash(JSON.stringify(input));
+  const inputDigest = contentHash(JSON.stringify(effectiveInput));
   const operationDigest = contentHash(
     JSON.stringify({
       policyRevision: POLICY_REVISION,
@@ -1040,6 +1378,7 @@ async function prepareWriteApproval(
       operationDigest,
       policyRevision: POLICY_REVISION,
     },
+    preparedInput: effectiveInput,
   };
 }
 
@@ -1118,58 +1457,6 @@ async function nearestExistingAncestor(
     if (parent === current) return undefined;
     current = parent;
   }
-}
-
-function applyStrictDiff(
-  content: string,
-  input: unknown,
-): { ok: true; content: string } | { ok: false; reason: string } {
-  if (typeof input !== "string" || !input.trim()) {
-    return { ok: false, reason: "Invalid patch" };
-  }
-  const lines = input.split("\n");
-  let index = 0;
-  let result = content;
-  let blocks = 0;
-  while (index < lines.length) {
-    if (!lines[index]?.trim()) {
-      index += 1;
-      continue;
-    }
-    if (lines[index]?.trim() !== "<<<<<<< SEARCH") {
-      return { ok: false, reason: "Invalid patch marker" };
-    }
-    index += 1;
-    const search: string[] = [];
-    while (
-      index < lines.length &&
-      lines[index]?.trim() !== "======= DIVIDER ======="
-    ) {
-      search.push(lines[index++]!);
-    }
-    if (index >= lines.length || search.length === 0) {
-      return { ok: false, reason: "Invalid patch block" };
-    }
-    index += 1;
-    const replacement: string[] = [];
-    while (index < lines.length && lines[index]?.trim() !== ">>>>>>> REPLACE") {
-      replacement.push(lines[index++]!);
-    }
-    if (index >= lines.length)
-      return { ok: false, reason: "Invalid patch block" };
-    index += 1;
-    const searchText = search.join("\n");
-    const first = result.indexOf(searchText);
-    if (first < 0) return { ok: false, reason: "Patch search was not found" };
-    if (result.indexOf(searchText, first + searchText.length) >= 0) {
-      return { ok: false, reason: "Patch search is ambiguous" };
-    }
-    result = `${result.slice(0, first)}${replacement.join("\n")}${result.slice(first + searchText.length)}`;
-    blocks += 1;
-  }
-  return blocks > 0
-    ? { ok: true, content: result }
-    : { ok: false, reason: "Patch has no blocks" };
 }
 
 function renderReviewDiff(
@@ -1488,6 +1775,7 @@ function sanitizeProjectResult(value: unknown, toolName: string): unknown {
     );
     return { ...record, entries, count: entries.length };
   }
+  // Fallback node-host search (no packaged ripgrep) returns a match array.
   if (toolName === "search_files" && Array.isArray(record.matches)) {
     const matches = record.matches.filter((match) => {
       if (!match || typeof match !== "object") return false;
@@ -1642,17 +1930,6 @@ function contentHash(content: string | Uint8Array): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-function boundedInteger(
-  value: unknown,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-): number {
-  return Number.isSafeInteger(value)
-    ? Math.max(minimum, Math.min(maximum, Number(value)))
-    : fallback;
 }
 
 function toolErrorCode(error: unknown): string {

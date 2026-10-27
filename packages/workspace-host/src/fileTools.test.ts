@@ -314,7 +314,7 @@ describe("workspace file tools", () => {
     }
   });
 
-  it("uses fixed packaged ripgrep arguments and filters protected bounded results", async () => {
+  it("runs packaged ripgrep with VS Code's search_files contract and filters protected results", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "workspace-files-ripgrep-"),
     );
@@ -322,15 +322,27 @@ describe("workspace file tools", () => {
       const executable = path.join(root, "fake-rg.mjs");
       const argumentsPath = path.join(root, "ripgrep-arguments.json");
       await fs.writeFile(
+        path.join(root, "settings.json"),
+        '{\n  "token": "abc123secret"\n}\n',
+      );
+      const at = (name: string) => JSON.stringify(path.join(root, name));
+      await fs.writeFile(
         executable,
         `#!${process.execPath}\n` +
           `import { writeFileSync } from "node:fs";\n` +
-          `writeFileSync(${JSON.stringify(argumentsPath)}, JSON.stringify(process.argv.slice(2)));\n` +
-          `for (const match of [\n` +
-          `  { path: ".env", line: 1, text: "TOKEN=secret\\n" },\n` +
-          `  { path: "visible.txt", line: 2, text: "Needle\\n" },\n` +
-          `  { path: "other.txt", line: 3, text: "Needle again\\n" },\n` +
-          `]) process.stdout.write(JSON.stringify({ type: "match", data: { path: { text: match.path }, line_number: match.line, lines: { text: match.text } } }) + "\\n");\n`,
+          `const args = process.argv.slice(2);\n` +
+          `writeFileSync(${JSON.stringify(argumentsPath)}, JSON.stringify(args));\n` +
+          `const out = (line) => process.stdout.write(line + "\\n");\n` +
+          `if (args.includes("(")) { process.stderr.write("regex parse error\\n"); process.exit(2); }\n` +
+          `if (args.includes("--files-with-matches")) { for (const f of [${at(".env")}, ${at("visible.txt")}, ${at("other.txt")}]) out(f); process.exit(0); }\n` +
+          `if (args.includes("--count")) { out(${at(".env")} + ":1"); out(${at("visible.txt")} + ":1"); out(${at("other.txt")} + ":2"); process.exit(0); }\n` +
+          `const event = (type, file, line, text) => out(JSON.stringify({ type, data: { path: { text: file }, line_number: line, lines: { text } } }));\n` +
+          `for (const [file, lines] of [\n` +
+          `  [${at(".env")}, [["match", 1, "TOKEN=secret\\n"]]],\n` +
+          `  [${at("visible.txt")}, [["context", 1, "before\\n"], ["match", 2, "Needle\\n"]]],\n` +
+          `  [${at("settings.json")}, [["match", 2, '  "token": "abc123secret"\\n']]],\n` +
+          `  [${at("other.txt")}, [["match", 3, "Needle again\\n"]]],\n` +
+          `]) { out(JSON.stringify({ type: "begin", data: { path: { text: file } } })); for (const [type, line, text] of lines) event(type, file, line, text); out(JSON.stringify({ type: "end", data: { path: { text: file } } })); }\n`,
       );
       await fs.chmod(executable, 0o755);
       const files = createWorkspaceFileTools({
@@ -341,32 +353,96 @@ describe("workspace file tools", () => {
       const search = tools.find(
         (tool) => tool.definition.name === "search_files",
       )!;
+      expect(search.definition.input_schema).toMatchObject({
+        required: ["path", "regex"],
+        properties: {
+          output_mode: { enum: ["content", "files_with_matches", "count"] },
+          file_pattern: expect.any(Object),
+          offset: expect.any(Object),
+        },
+      });
+      const run = async (input: Record<string, unknown>) =>
+        JSON.parse(
+          String((await search.execute(input, context())).modelContent),
+        ) as Record<string, any>;
 
-      const result = await search.execute(
-        { path: ".", regex: "needle", maxResults: 1 },
-        context(),
-      );
-      expect(JSON.parse(String(result.modelContent))).toEqual({
-        path: ".",
-        matches: [{ path: "visible.txt", line: 2, text: "Needle" }],
-        count: 1,
+      await expect(
+        run({
+          path: ".",
+          regex: "needle",
+          case_insensitive: true,
+          max_results: 1,
+        }),
+      ).resolves.toEqual({
+        total_matches: 1,
         truncated: true,
+        results: "## visible.txt (1 match)\n  1 | before\n> 2 | Needle\n---",
       });
       expect(JSON.parse(await fs.readFile(argumentsPath, "utf8"))).toEqual([
-        "--json",
-        "--ignore-case",
         "--no-config",
         "--max-filesize",
         "1000K",
-        "--glob",
-        "!.git/**",
-        "--glob",
-        "!node_modules/**",
-        "--regexp",
+        "--json",
+        "-e",
         "needle",
+        "--no-messages",
+        "--context",
+        "1",
+        "--ignore-case",
+        "--glob",
+        "!**/.git/**",
+        "--glob",
+        "!**/node_modules/**",
         "--",
         root,
       ]);
+
+      const redacted = await run({
+        path: ".",
+        regex: "token",
+        file_pattern: "*.{json,txt}",
+        context: 0,
+        offset: 1,
+      });
+      expect(redacted).toMatchObject({
+        total_matches: 3,
+        truncated: false,
+        offset: 1,
+        redaction: { type: "structured_secret_values", count: 1 },
+      });
+      expect(redacted.results).toContain("## settings.json (1 match)");
+      expect(redacted.results).not.toContain("abc123secret");
+      expect(redacted.results).not.toContain(".env");
+      expect(JSON.parse(await fs.readFile(argumentsPath, "utf8"))).toEqual(
+        expect.arrayContaining(["--context", "0", "--glob", "*.json"]),
+      );
+
+      await expect(
+        run({ path: ".", regex: "needle", output_mode: "files_with_matches" }),
+      ).resolves.toEqual({
+        total_files: 2,
+        truncated: false,
+        files: ["visible.txt", "other.txt"],
+      });
+      await expect(
+        run({ path: ".", regex: "needle", output_mode: "count", offset: 1 }),
+      ).resolves.toEqual({
+        total_files: 1,
+        total_matches: 3,
+        truncated: false,
+        offset: 1,
+        counts: [{ file: "other.txt", count: 2 }],
+      });
+
+      const invalid = await search.execute(
+        { path: ".", regex: "(" },
+        context(),
+      );
+      expect(invalid.isError).toBe(true);
+      expect(JSON.parse(String(invalid.modelContent))).toMatchObject({
+        error: "ripgrep error: regex parse error",
+        regex: "(",
+      });
 
       const controller = new AbortController();
       controller.abort();
@@ -562,6 +638,88 @@ describe("workspace file tools", () => {
         protectionReason: "instruction_file",
       });
     }
+  });
+
+  it("reviews VS Code-shaped apply_diff input and pins the reviewed baseline when the hash is omitted", async () => {
+    const test = await fixture();
+    const filePath = path.join(test.root, "edit.txt");
+    const original = "one\ntwo\none\n";
+    await fs.writeFile(filePath, original);
+    const block = (search: string, replace: string) =>
+      [
+        "<<<<<<< SEARCH",
+        search,
+        "======= DIVIDER =======",
+        replace,
+        ">>>>>>> REPLACE",
+      ].join("\n");
+    const authorize = (toolCallId: string, input: Record<string, unknown>) =>
+      test.files.authorizeToolCall({
+        principal,
+        sessionId: "session",
+        turnId: "turn",
+        model,
+        toolCallId,
+        toolName: "apply_diff",
+        input,
+        effect: "write",
+      });
+
+    const reviewed = await authorize("occurrence", {
+      path: "edit.txt",
+      diff: block("one", "ONE"),
+      block_options: [{ index: 0, occurrence: 2 }],
+    });
+    expect(reviewed).toMatchObject({
+      decision: "require_user",
+      preparedInput: { expectedContentHash: hash(original) },
+      displayContent: {
+        expectedContentHash: hash(original),
+        proposedContentHash: hash("one\ntwo\nONE\n"),
+      },
+    });
+    if (reviewed.decision !== "require_user" || !reviewed.preparedInput) {
+      throw new Error("Expected a pinned review");
+    }
+    const written = await test
+      .tool("apply_diff")
+      .execute({ ...reviewed.preparedInput }, context());
+    expect(written.isError).not.toBe(true);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
+      "one\ntwo\nONE\n",
+    );
+
+    // A diff that cannot apply writes nothing, so it skips review and
+    // returns VS Code's recovery payload against the pinned baseline.
+    const failing = await authorize("missing", {
+      path: "edit.txt",
+      diff: block("absent", "x"),
+    });
+    expect(failing).toMatchObject({ decision: "allow" });
+    if (failing.decision !== "allow" || !failing.preparedInput) {
+      throw new Error("Expected a pinned failure");
+    }
+    const failed = await test
+      .tool("apply_diff")
+      .execute({ ...failing.preparedInput }, context());
+    expect(failed.isError).toBe(true);
+    expect(JSON.parse(String(failed.modelContent))).toMatchObject({
+      failed_block_details: [expect.objectContaining({ reason: "not_found" })],
+    });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
+      "one\ntwo\nONE\n",
+    );
+
+    await expect(
+      authorize("stale", {
+        path: "edit.txt",
+        diff: block("two", "TWO"),
+        expectedContentHash: hash(original),
+      }),
+    ).resolves.toMatchObject({
+      decision: "deny",
+      reason: "File baseline changed before review",
+    });
   });
 
   it("limits session grants to one tool and a verified content-hash chain", async () => {
@@ -812,14 +970,26 @@ describe("workspace file tools", () => {
                 "stdout",
                 Buffer.from(
                   launch.request.executable === ripgrep
-                    ? `${JSON.stringify({
-                        type: "match",
-                        data: {
-                          path: { text: `${projectRoot}/notes.txt` },
-                          line_number: 2,
-                          lines: { text: "beta\n" },
+                    ? [
+                        {
+                          type: "begin",
+                          data: { path: { text: `${projectRoot}/notes.txt` } },
                         },
-                      })}\n`
+                        {
+                          type: "match",
+                          data: {
+                            path: { text: `${projectRoot}/notes.txt` },
+                            line_number: 2,
+                            lines: { text: "beta\n" },
+                          },
+                        },
+                        {
+                          type: "end",
+                          data: { path: { text: `${projectRoot}/notes.txt` } },
+                        },
+                      ]
+                        .map((event) => `${JSON.stringify(event)}\n`)
+                        .join("")
                     : " M notes.txt\n",
                 ),
               );
@@ -859,9 +1029,10 @@ describe("workspace file tools", () => {
         { path: ".", regex: "beta" },
         context(),
       );
-      expect(JSON.parse(String(search.modelContent))).toMatchObject({
-        matches: [{ path: "notes.txt", line: 2, text: "beta" }],
-        count: 1,
+      expect(JSON.parse(String(search.modelContent))).toEqual({
+        total_matches: 1,
+        truncated: false,
+        results: "## notes.txt (1 match)\n> 2 | beta\n---",
       });
 
       const authorization = await files.authorizeToolCall({

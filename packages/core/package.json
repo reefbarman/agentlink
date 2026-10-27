@@ -316,6 +316,30 @@
         "default": "./dist/cjs/contextCondense.cjs"
       }
     },
+    "./apply-diff": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/applyDiff.d.ts",
+        "default": "./dist/applyDiff.js"
+      },
+      "require": {
+        "types": "./dist/cjs/applyDiff.d.cts",
+        "default": "./dist/cjs/applyDiff.cjs"
+      }
+    },
+    "./search-files": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/searchFiles.d.ts",
+        "default": "./dist/searchFiles.js"
+      },
+      "require": {
+        "types": "./dist/cjs/searchFiles.d.cts",
+        "default": "./dist/cjs/searchFiles.cjs"
+      }
+    },
     "./todo-tool": {
       "browser": null,
       "edge": null,
