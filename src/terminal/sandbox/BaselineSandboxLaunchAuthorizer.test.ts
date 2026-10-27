@@ -318,25 +318,39 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
 
   it("drops only oversized host-inherited entries and records token-free metadata", async () => {
     const test = await fixture();
-    const authorizer = new BaselineSandboxLaunchAuthorizer({
-      workspaceRoots: [test.workspace],
-      privateDirectoryPrefix: path.join(test.privateRoot, "al-budget-"),
-      homeDirectory: path.join(test.root, "real-home"),
-      hostTemporaryDirectory: os.tmpdir(),
-      environmentBudgetBytes: 2_250,
-      hostEnvironment: {
-        PATH: "/usr/bin:/bin",
-        HOST_LARGE_B: "b".repeat(600),
-        HOST_LARGE_A: "a".repeat(600),
-      },
-      environmentPolicy: { set: { POLICY_VALUE: "policy-protected" } },
+    const createAuthorizer = (environmentBudgetBytes?: number) =>
+      new BaselineSandboxLaunchAuthorizer({
+        workspaceRoots: [test.workspace],
+        privateDirectoryPrefix: path.join(test.privateRoot, "al-budget-"),
+        homeDirectory: path.join(test.root, "real-home"),
+        hostTemporaryDirectory: os.tmpdir(),
+        environmentBudgetBytes,
+        hostEnvironment: {
+          PATH: "/usr/bin:/bin",
+          HOST_LARGE_B: "b".repeat(600),
+          HOST_LARGE_A: "a".repeat(600),
+        },
+        environmentPolicy: { set: { POLICY_VALUE: "policy-protected" } },
+      });
+    const launchRequest = request(test.workspace, {
+      env: { COMMAND_VALUE: "command-protected" },
     });
     try {
+      // Protected entries include private paths under the checkout, so their
+      // size depends on where the repository lives. Measure the full
+      // environment, then leave room for everything except one large entry.
+      const measured = await authorizeAndActivate(
+        createAuthorizer(),
+        launchRequest,
+      );
+      const fullBytes = measured.metadata.environmentBudget?.estimatedBytes;
+      expect(measured.metadata.environmentBudget?.dropped).toEqual([]);
+      measured.finalize?.();
+      expect(fullBytes).toEqual(expect.any(Number));
+
       const launch = await authorizeAndActivate(
-        authorizer,
-        request(test.workspace, {
-          env: { COMMAND_VALUE: "command-protected" },
-        }),
+        createAuthorizer(fullBytes! - 307),
+        launchRequest,
       );
       expect(launch.policy.environment.values.POLICY_VALUE).toBe(
         "policy-protected",

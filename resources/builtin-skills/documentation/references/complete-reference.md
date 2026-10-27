@@ -2297,7 +2297,7 @@ Common causes:
 
 ## Development
 
-Development requires Node.js 22.19 or newer. The included `.nvmrc` selects the minimum supported version with nvm.
+Development requires Node.js 22.19 or newer. The included `.nvmrc` selects the Node major that CI uses (the latest 22.x) with nvm.
 
 ```sh
 nvm install

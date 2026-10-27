@@ -92,7 +92,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.source.outputs.sha
         with:
-          node-version: 22.x
+          node-version-file: .nvmrc
 
       - name: Plan releases
         id: plan
@@ -135,7 +135,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
@@ -164,13 +164,28 @@ jobs:
           TAGS=$(node -p 'const p=require("./.release/last-plan.json"); Object.values(p.units).filter(u=>u.status==="release").map(u=>u.tag).join(", ")')
           git add -A -- . ':!release-plan.json'
           git commit -m "chore(release): ${TAGS}" -m "Prepared from ${SOURCE_SHA}."
-          # Fast-forward only: if main moved, this fails and the next CI run replans.
-          git push origin "HEAD:refs/heads/main"
+          # Fast-forward only. If main moved, the plan no longer describes
+          # main, and rebasing would release commits that were never planned
+          # or verified. Skip without failing: the newer push's CI run replans.
+          main_moved() {
+            git fetch --quiet origin main
+            [ "$(git rev-parse FETCH_HEAD)" != "$SOURCE_SHA" ]
+          }
+          skip() {
+            echo "::notice::main moved past ${SOURCE_SHA}; skipping this release. The newer CI run will replan."
+            echo "Skipped: main moved past \`${SOURCE_SHA}\` while preparing ${TAGS}. The newer CI run will replan." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          if main_moved; then skip; fi
+          if ! git push origin "HEAD:refs/heads/main"; then
+            if main_moved; then skip; fi
+            exit 1
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   vscode:
     needs: [plan, prepare]
-    if: contains(format(',{0},', needs.plan.outputs.units), ',vscode,')
+    if: needs.prepare.outputs.sha != '' && contains(format(',{0},', needs.plan.outputs.units), ',vscode,')
     permissions:
       contents: write
       # Marketplace publishing signs in to Microsoft Entra ID with GitHub OIDC.
@@ -183,7 +198,7 @@ jobs:
 
   desktop:
     needs: [plan, prepare]
-    if: contains(format(',{0},', needs.plan.outputs.units), ',desktop,')
+    if: needs.prepare.outputs.sha != '' && contains(format(',{0},', needs.plan.outputs.units), ',desktop,')
     permissions:
       contents: write
     uses: ./.github/workflows/desktop-release.yml
@@ -198,7 +213,7 @@ jobs:
 
   cli:
     needs: [plan, prepare]
-    if: contains(format(',{0},', needs.plan.outputs.units), ',cli,')
+    if: needs.prepare.outputs.sha != '' && contains(format(',{0},', needs.plan.outputs.units), ',cli,')
     permissions:
       contents: write
     uses: ./.github/workflows/cli-release.yml
@@ -209,7 +224,7 @@ jobs:
 
   sdk:
     needs: [plan, prepare]
-    if: contains(format(',{0},', needs.plan.outputs.units), ',sdk,')
+    if: needs.prepare.outputs.sha != '' && contains(format(',{0},', needs.plan.outputs.units), ',sdk,')
     permissions:
       contents: write
     uses: ./.github/workflows/sdk-release.yml
@@ -220,7 +235,7 @@ jobs:
 
   assistant:
     needs: [plan, prepare]
-    if: contains(format(',{0},', needs.plan.outputs.units), ',assistant,')
+    if: needs.prepare.outputs.sha != '' && contains(format(',{0},', needs.plan.outputs.units), ',assistant,')
     permissions:
       contents: write
       packages: write

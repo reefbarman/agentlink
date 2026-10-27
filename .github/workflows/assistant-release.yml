@@ -49,7 +49,7 @@ jobs:
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version-file: .nvmrc
           cache: npm
       - name: Install shells used by terminal tests
         run: |
@@ -97,7 +97,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Package architecture-specific editor extension

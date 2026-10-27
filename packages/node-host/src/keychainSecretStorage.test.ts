@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,6 +16,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexOAuthRuntime } from "./codexOAuthRuntime.js";
+import { spawnSync } from "node:child_process";
 
 const values = new Map<string, string>();
 let getPasswordCalls = 0;
@@ -259,6 +259,15 @@ process.stdout.write(JSON.stringify(reply));
       const minutesAgo = (minutes: number) =>
         new Date(Date.now() - minutes * 60_000);
       const bootedAt = () => new Date(Date.now() - os.uptime() * 1000);
+      /**
+       * `minutes` ago, but never before this boot: CI runners are often up for
+       * less than ten minutes, and a pre-boot lock is reclaimed regardless of
+       * its owner.
+       */
+      const minutesAgoThisBoot = (minutes: number) =>
+        new Date(
+          Math.max(minutesAgo(minutes).getTime(), bootedAt().getTime() + 5_000),
+        );
 
       async function lockedQueue(owner: string, modifiedAt: Date) {
         const lockRoot = await fs.mkdtemp(
@@ -302,11 +311,15 @@ process.stdout.write(JSON.stringify(reply));
       });
 
       it.each([
-        ["a live owner", () => `${process.pid}:live`, () => minutesAgo(10)],
+        [
+          "a live owner",
+          () => `${process.pid}:live`,
+          () => minutesAgoThisBoot(10),
+        ],
         [
           "a crashed owner whose helper may still be prompting",
           () => `${exitedPid()}:crashed`,
-          () => minutesAgo(1),
+          () => minutesAgoThisBoot(1),
         ],
       ])("keeps waiting for %s", async (_name, owner, modifiedAt) => {
         const helper = await fakeHelper("ok");

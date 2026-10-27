@@ -2,7 +2,7 @@
 
 ## Building & Installing
 
-Development requires Node.js 22.19 or newer. With nvm, run `nvm install` once to install the version in `.nvmrc`, then use `nvm use` when returning to the project.
+Development requires Node.js 22.19 or newer. `.nvmrc` names the Node major that CI runs (the latest 22.x). With nvm, run `nvm install` once to install it, then use `nvm use` when returning to the project.
 
 ```sh
 nvm install

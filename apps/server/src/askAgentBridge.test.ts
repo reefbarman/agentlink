@@ -1719,13 +1719,18 @@ describe("Ask Agent bridge", () => {
       );
     };
     // A turn that waits until the test finishes it.
+    let started = false;
     fake.setScript((sessionId) => {
       fake.turn(sessionId, { type: "text.delta", text: "working" });
+      started = true;
     });
     const first = snapshotOf(
       await call("/api/ask-agent/session").then((r) => r.body),
     ).session.foreground.sessionId;
     const send = call("/api/ask-agent/send", { text: "long job" });
+    // The script runs on a timer; under load the rest of the turn must not
+    // overtake its first delta.
+    await vi.waitFor(() => expect(started).toBe(true));
     await vi.waitFor(async () =>
       expect(await activityOf()).toEqual({ [first]: "running" }),
     );

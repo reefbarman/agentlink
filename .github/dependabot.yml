@@ -36,6 +36,12 @@ updates:
           - "@modelcontextprotocol/*"
           - "@agentclientprotocol/*"
           - "@anthropic-ai/*"
+      # vitest and its plugins pin each other with exact peer versions; a lone
+      # major bump breaks `npm ci` with ERESOLVE (as vitest 5 did on 10-08).
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
       minor-and-patch:
         update-types:
           - minor
