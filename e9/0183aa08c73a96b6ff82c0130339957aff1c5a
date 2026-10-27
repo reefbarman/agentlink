@@ -1,0 +1,43 @@
+package.json
+  h_e08a86bb3a33a2 1263-1264
+  s_cc4d97498b06e7::t_20894181a37ac9 5
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 76-79,137
+.githooks/pre-push
+  h_e08a86bb3a33a2 1-6
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  h_e08a86bb3a33a2 60-62
+package-lock.json
+  s_cc4d97498b06e7::t_a309bb5f594c25 3,9
+resources/builtin-skills/documentation/references/package-contract.md
+  s_cc4d97498b06e7::t_20894181a37ac9 12
+scripts/run-core-sdk-consumer-gate.mjs
+  h_e08a86bb3a33a2 59-62
+scripts/preflight.mjs
+  h_e08a86bb3a33a2 1-476
+AGENTS.md
+  h_e08a86bb3a33a2 78-90,110
+scripts/preflight.test.mjs
+  h_e08a86bb3a33a2 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e90183aa08c73a96b6ff82c0130339957aff1c5a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_cc4d97498b06e7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "70d867e9-697d-44a1-943a-848d899ac33d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
