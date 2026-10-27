@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createHash } from "node:crypto";
-import { defineTool, type HostTool } from "@agentlink/core";
+import {
+  defineTool,
+  type CoreModelBackend,
+  type CoreModelStreamRequest,
+  type HostTool,
+} from "@agentlink/core";
+import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
   createWorkspaceHost,
   type CreateWorkspaceHostOptions,
@@ -1347,6 +1353,85 @@ describe("createWorkspaceHost", () => {
       });
       // Not the core's default of 16.
       expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("sends each session's own Codex conversation state and request controls to the model", async () => {
+    // VS Code keeps one ResponsesConversationState per session
+    // (AgentSession.codexConversationState) so a WebSocket-to-HTTP fallback
+    // sticks for that conversation. The host must route its per-session state
+    // through the engine and kernel to the backend on every turn.
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-codex-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const requests: CoreModelStreamRequest[] = [];
+    const backend: CoreModelBackend = {
+      providerId: "recording",
+      displayName: "Recording",
+      condenseModel: "recording-model",
+      listModels: () => [
+        {
+          id: "recording-model",
+          displayName: "Recording model",
+          providerId: "recording",
+          contextWindow: 32_768,
+          maxOutputTokens: 4_096,
+          authenticated: true,
+        },
+      ],
+      getCapabilities: () => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+      }),
+      async *stream(request) {
+        requests.push(request);
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "model_stop",
+          reason: "end_turn",
+          assistantMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+          },
+        };
+        yield { type: "done" };
+      },
+      complete: async () => ({ text: "unused" }),
+    };
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "codex-state",
+      providers: [{ type: "backend", backend }],
+      defaultModel: { providerId: "recording", modelId: "recording-model" },
+      requestLimits: { maxRetries: 2 },
+    });
+    try {
+      const first = (await host.createSession()).sessionId;
+      const second = (await host.createSession()).sessionId;
+      await host.runTurn(first, "one");
+      await host.runTurn(first, "two");
+      await host.runTurn(second, "three");
+      expect(requests).toHaveLength(3);
+      const states = requests.map(
+        (request) => request.providerHints?.codex?.conversationState,
+      );
+      expect(states[0]).toBeInstanceOf(ResponsesConversationState);
+      expect(states[1]).toBe(states[0]);
+      expect(states[2]).toBeInstanceOf(ResponsesConversationState);
+      expect(states[2]).not.toBe(states[0]);
+      expect(requests[0]!.providerHints?.codex?.sessionId).toBe(first);
+      expect(requests[2]!.providerHints?.codex?.sessionId).toBe(second);
+      for (const request of requests) {
+        expect(request.executionControls?.maxRetries).toBe(2);
+      }
     } finally {
       await host.close();
       await fs.rm(parent, { recursive: true, force: true });
