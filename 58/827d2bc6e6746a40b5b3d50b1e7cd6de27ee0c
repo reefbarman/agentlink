@@ -1,0 +1,60 @@
+.nvmrc
+  h_e08a86bb3a33a2 1
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 67
+.github/workflows/release-coordinator.yml
+  h_e08a86bb3a33a2 95,138,167-183,188,201,216,227,238
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 1722,1725,1731-1733
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.test.ts
+  h_e08a86bb3a33a2 321,327,333-336,339-350,352-353
+  s_143613e8dce985::t_b753f412c34372 322-326,328-332
+.github/workflows/sdk-release.yml
+  h_e08a86bb3a33a2 48
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 32,71,105,125-144,154
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2300
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 51,99
+DEVELOPMENT.md
+  h_e08a86bb3a33a2 5
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 53,92
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_e08a86bb3a33a2 19,262-270,317,322
+  s_18a93d72a392aa::t_7ea32908880a82 314-316,318
+.github/workflows/assistant-release.yml
+  h_e08a86bb3a33a2 52,100
+.github/dependabot.yml
+  h_e08a86bb3a33a2 39-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58827d2bc6e6746a40b5b3d50b1e7cd6de27ee0c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_143613e8dce985": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f154a5a-a8d0-45af-83c9-3fae80f5d3d7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_18a93d72a392aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4d49448c-102e-4253-8a56-5c8e154fb2a0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
