@@ -19,7 +19,9 @@ await build({
   format: "cjs",
   outfile: "dist/cjs/index.cjs",
   sourcemap: true,
-  external: ["@agentlink/*", "@modelcontextprotocol/*", "@napi-rs/*"],
+  // unpdf carries PDF.js (about 1.7 MB) and is loaded lazily on the first PDF
+  // read, so CJS consumers resolve it at runtime instead of inlining it.
+  external: ["@agentlink/*", "@modelcontextprotocol/*", "@napi-rs/*", "unpdf"],
 });
 
 await mkdir("dist/cjs", { recursive: true });

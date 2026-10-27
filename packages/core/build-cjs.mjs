@@ -29,6 +29,7 @@ const modules = [
   "openAiResponses",
   "promptProfilePolicy",
   "providerStreamWatchdog",
+  "readFileContent",
   "searchFiles",
   "sessionRepository",
   "sessionTranscriptRecall",
@@ -53,6 +54,7 @@ const focusedSubpathModules = new Set([
   "condenseThresholds",
   "contextCondense",
   "findAndReplace",
+  "readFileContent",
   "searchFiles",
   "todoTool",
 ]);

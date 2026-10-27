@@ -56,6 +56,8 @@ A grant is an absolute file or directory root. The provider canonicalizes both t
 
 Results are bounded: text files are capped at 1 MB, reads at 200 lines, listing at 200 entries, regex search at 100 matches and five directory levels, and individual displayed lines at 500 characters. High-confidence JSON/JSONC settings paths use VS Code's narrow eligibility rules and line-preserving secret redaction; malformed eligible settings are withheld without exposing their original values. Known credential TOML paths and unsupported settings/config formats remain withheld until a portable scanner can redact them safely. Source config modules and ordinary JSON files remain exact text. Search uses Node filesystem APIs only, with no shell/ripgrep process or semantic index. Binary, ungranted, oversized, and invalid-regex requests fail closed as tool errors.
 
+The package also exports the media helpers behind VS Code's `read_file` content view, for hosts that build that view themselves: `convertBmpToPng(...)` and `convertPpmToPng(...)` turn BMP and PPM bytes into PNG (decoded size is bounded), and `extractPdfText(...)` returns a PDF's merged page text through a lazily loaded `unpdf`. The line windowing and anchor logic lives in `@agentlink/core/read-file-content`.
+
 These tools do not create grants or an approval UI. The embedding host authenticates the principal, obtains/records user consent, and resolves grants per turn.
 
 ## VS Code instructions, rules, and skills

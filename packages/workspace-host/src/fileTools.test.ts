@@ -28,6 +28,31 @@ const model = {
   source: "runtime" as const,
 };
 
+/** A one-page PDF with a single line of Helvetica text and a valid xref. */
+function minimalPdf(text: string): Buffer {
+  const stream = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((object, index) => {
+    offsets.push(body.length);
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    body += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  }
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body, "latin1");
+}
+
 async function fixture() {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "workspace-files-"),
@@ -226,19 +251,24 @@ describe("workspace file tools", () => {
     await expect(
       test
         .tool("read_file")
-        .execute({ path: "visible.txt", limit: 201 }, context()),
-    ).resolves.toMatchObject({
-      isError: true,
-      modelContent: expect.stringContaining("content_limit_exceeds_200"),
-    });
-    await expect(
-      test
-        .tool("read_file")
-        .execute({ path: "visible.txt", include_symbols: false }, context()),
+        .execute({ path: "visible.txt", refresh: true }, context()),
     ).resolves.toMatchObject({
       isError: true,
       modelContent: expect.stringContaining(
         "context_options_require_context_view",
+      ),
+    });
+    await expect(
+      test
+        .tool("read_file")
+        .execute(
+          { path: "visible.txt", view: "context", anchor: "world" },
+          context(),
+        ),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: expect.stringContaining(
+        "anchor_options_require_content_view",
       ),
     });
     const omitted = await test.tool("read_file").execute(
@@ -285,6 +315,137 @@ describe("workspace file tools", () => {
       "settings.json",
       "visible.txt",
     ]);
+  });
+
+  it("returns VS Code's read_file content view with anchors, images, and PDF text", async () => {
+    const test = await fixture();
+    const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
+    await fs.writeFile(path.join(test.root, "notes.txt"), lines.join("\n"));
+    const read = (input: Record<string, unknown>) =>
+      test.tool("read_file").execute(input, context());
+    const parsed = async (input: Record<string, unknown>) =>
+      JSON.parse(String((await read(input)).modelContent)) as Record<
+        string,
+        unknown
+      >;
+
+    const whole = await parsed({ path: "notes.txt", include_symbols: false });
+    expect(whole).toMatchObject({
+      total_lines: 30,
+      showing: "1-30",
+      size: lines.join("\n").length,
+      content: expect.stringMatching(/^1 \| line 1\n2 \| line 2/u),
+    });
+    expect(whole).not.toHaveProperty("truncated");
+    expect(whole).not.toHaveProperty("path");
+
+    expect(
+      await parsed({
+        path: "notes.txt",
+        anchor: "line 20",
+        anchor_offset: -2,
+        limit: 3,
+      }),
+    ).toMatchObject({
+      showing: "18-20",
+      truncated: true,
+      anchor_match: {
+        mode: "literal",
+        pattern: "line 20",
+        line: 20,
+        anchor_offset: -2,
+      },
+      content: "18 | line 18\n19 | line 19\n20 | line 20",
+    });
+    expect(
+      await parsed({
+        path: "notes.txt",
+        anchor_regex: "^line 2\\d$",
+        limit: 1,
+      }),
+    ).toMatchObject({
+      showing: "20-20",
+      anchor_match: { mode: "regex", line: 20 },
+    });
+    expect(
+      await parsed({ path: "notes.txt", anchor: "absent", limit: 1 }),
+    ).toMatchObject({
+      showing: "1-1",
+      anchor_match: { status: "not_found", mode: "literal" },
+    });
+    await expect(
+      read({ path: "notes.txt", anchor: "a", anchor_regex: "b" }),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({
+        error: "Specify only one of 'anchor' or 'anchor_regex' (not both).",
+        path: "notes.txt",
+      }),
+    });
+    expect(await parsed({ path: "notes.txt", offset: 99 })).toMatchObject({
+      total_lines: 30,
+      showing: "0-0",
+      content: "",
+      path: "notes.txt",
+    });
+
+    // A window past the standalone output budget ends early with next_read.
+    const wide = Array.from({ length: 300 }, () => "x".repeat(1_000));
+    await fs.writeFile(path.join(test.root, "wide.txt"), wide.join("\n"));
+    const budgeted = await parsed({ path: "wide.txt" });
+    expect(budgeted).toMatchObject({
+      truncated: true,
+      content_truncation: {
+        reason: "output_budget",
+        next_read: { offset: expect.any(Number) },
+      },
+    });
+    expect(String(budgeted.content).length).toBeLessThanOrEqual(128_000);
+
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await fs.writeFile(path.join(test.root, "pixel.png"), png);
+    await expect(read({ path: "pixel.png" })).resolves.toMatchObject({
+      modelContent: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: png.toString("base64"),
+          },
+        },
+      ],
+      displayContent: { path: "pixel.png", image: "image/png" },
+    });
+    await fs.writeFile(
+      path.join(test.root, "pixel.ppm"),
+      Buffer.from("P3\n1 1\n255\n255 0 0\n", "ascii"),
+    );
+    await expect(read({ path: "pixel.ppm" })).resolves.toMatchObject({
+      modelContent: [{ type: "image", source: { media_type: "image/png" } }],
+    });
+    await fs.writeFile(
+      path.join(test.root, "blob.bin"),
+      Buffer.from([1, 0, 2]),
+    );
+    await expect(read({ path: "blob.bin" })).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({
+        error: "Binary file detected",
+        path: "blob.bin",
+      }),
+    });
+
+    await fs.writeFile(
+      path.join(test.root, "brief.pdf"),
+      minimalPdf("Hello PDF"),
+    );
+    const pdf = await parsed({ path: "brief.pdf" });
+    expect(pdf).toMatchObject({ file_type: "pdf", showing: "1-1" });
+    expect(String(pdf.content)).toContain("Hello PDF");
   });
 
   it("rechecks read scope for both read_file views", async () => {

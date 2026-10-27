@@ -43,6 +43,9 @@ export * from "./skillTools.js";
 export * from "./webImageErrors.js";
 export * from "./webImageRuntime.js";
 export * from "./globMatcher.js";
+export { convertBmpToPng } from "./bmpToPng.js";
+export { convertPpmToPng } from "./ppmToPng.js";
+export { extractPdfText } from "./pdfText.js";
 export * from "./webImageTools.js";
 export type {
   PublicFetchRequest,

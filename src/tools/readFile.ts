@@ -28,8 +28,19 @@ import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { errorResult } from "@agentlink/protocol/tool-result";
 import { getSearchInputError } from "../core/tools/searchInputValidation.js";
-import { convertBmpToPng } from "./bmpToPng.js";
-import { convertPpmToPng } from "./ppmToPng.js";
+import {
+  convertBmpToPng,
+  convertPpmToPng,
+  extractPdfText as extractPdfTextFromBytes,
+} from "@agentlink/node-host";
+import {
+  READ_FILE_IMAGE_MIME_TYPES,
+  READ_FILE_MAX_IMAGE_BYTES,
+  READ_FILE_MAX_PDF_BYTES,
+  planReadFileContentWindow,
+  readFileImageTooLargeError,
+  readFilePdfTooLargeError,
+} from "@agentlink/core/read-file-content";
 import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
@@ -38,26 +49,19 @@ import {
 
 // --- Image support ---
 
-/** Only types accepted by the Anthropic Messages API (image content blocks). */
-const IMAGE_EXTENSIONS: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-};
+const IMAGE_EXTENSIONS = READ_FILE_IMAGE_MIME_TYPES;
 
 const IMAGE_CONVERTERS: Record<string, (data: Buffer) => Buffer> = {
   ".bmp": convertBmpToPng,
   ".ppm": convertPpmToPng,
 };
 
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_IMAGE_SIZE = READ_FILE_MAX_IMAGE_BYTES;
 
 // --- PDF support ---
 
 const PDF_EXTENSION = ".pdf";
-const MAX_PDF_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_PDF_SIZE = READ_FILE_MAX_PDF_BYTES;
 
 // --- Concurrency control ---
 // Concurrent read_file calls can overwhelm VS Code's language server
@@ -514,78 +518,8 @@ export function canonicalizeReadFileResult(result: ToolResult): ToolResult {
   };
 }
 
-// unpdf's bundled PDF.js runs a startup polyfill that does
-// `globalThis.navigator ??= {}` (then sets `.platform` / `.userAgent`). In some
-// hosts (e.g. VS Code's Electron Node runtime, Node 21+) `globalThis.navigator`
-// is defined as a getter-only property that resolves to a nullish value, so the
-// `??=` triggers a write that throws "Cannot set property navigator ... which
-// has only a getter". That surfaces to us as unpdf's "Serverless PDF.js bundle
-// could not be resolved" error. Pre-installing a writable navigator object
-// avoids the failing assignment without disturbing real Navigator instances.
-function ensurePdfNavigatorShim(): void {
-  try {
-    let current: unknown;
-    try {
-      current = (globalThis as { navigator?: unknown }).navigator;
-    } catch {
-      current = undefined;
-    }
-    if (current != null) return; // real navigator present; polyfill short-circuits
-    Object.defineProperty(globalThis, "navigator", {
-      value: { platform: "", userAgent: "" },
-      writable: true,
-      configurable: true,
-      enumerable: false,
-    });
-  } catch {
-    // If navigator can't be redefined we fall through; the import may still
-    // succeed on hosts where the property is already writable.
-  }
-}
-
-// PDF.js refuses to run if `Object.prototype` or `Array.prototype` have any
-// enumerable properties — its worker does `for (const k in {})` / `for (const k
-// in [])` and throws "The `Array.prototype` contains unexpected enumerable
-// property ...". The VS Code extension host shares a single global prototype
-// chain across all extensions, and some of them pollute it (e.g. a legacy
-// `Array.prototype.move`). We can't control who added it, so before loading
-// PDF.js we make any such properties non-enumerable. This preserves the
-// method's behavior (it stays callable) and only hides it from `for...in`,
-// which is the correct state for a prototype method anyway.
-function deEnumeratePrototypePollution(): void {
-  for (const proto of [Object.prototype, Array.prototype]) {
-    let keys: string[];
-    try {
-      keys = Object.keys(proto); // own enumerable string-keyed properties
-    } catch {
-      continue;
-    }
-    for (const key of keys) {
-      try {
-        const desc = Object.getOwnPropertyDescriptor(proto, key);
-        if (!desc || !desc.enumerable || !desc.configurable) continue;
-        Object.defineProperty(proto, key, { ...desc, enumerable: false });
-      } catch {
-        // Non-configurable or otherwise unmodifiable — skip; PDF.js may still
-        // throw, but there is nothing safe we can do about it here.
-      }
-    }
-  }
-}
-
 async function extractPdfText(filePath: string): Promise<string> {
-  const data = await fs.readFile(filePath);
-  ensurePdfNavigatorShim();
-  deEnumeratePrototypePollution();
-  // Lazy-import unpdf so the PDF.js runtime is only loaded when a PDF is
-  // actually read, never at extension activation. unpdf is a serverless build
-  // of PDF.js with no native canvas / worker dependencies, so it survives the
-  // single-file esbuild bundle (unlike pdf-parse, whose @napi-rs/canvas +
-  // pdf.worker file loads break under bundling and crashed activation).
-  const { extractText, getDocumentProxy } = await import("unpdf");
-  const pdf = await getDocumentProxy(new Uint8Array(data));
-  const { text } = await extractText(pdf, { mergePages: true });
-  return text;
+  return extractPdfTextFromBytes(await fs.readFile(filePath));
 }
 
 async function readPdfFile(
@@ -603,7 +537,7 @@ async function readPdfFile(
         {
           type: "text",
           text: JSON.stringify({
-            error: `PDF too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_PDF_SIZE / 1024 / 1024} MB`,
+            error: readFilePdfTooLargeError(stat.size),
             path: params.path,
           }),
         },
@@ -612,13 +546,14 @@ async function readPdfFile(
   }
 
   const raw = await extractPdfText(filePath);
-  const allLines = raw.split("\n");
-  const totalLines = allLines.length;
-  const offset = Math.max(1, params.offset ?? 1);
+  const window = planReadFileContentWindow(raw, {
+    ...(params.offset !== undefined ? { offset: params.offset } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+  });
 
-  if (offset > totalLines) {
+  if (window.status === "empty") {
     const emptyResult: Record<string, unknown> = {
-      total_lines: totalLines,
+      total_lines: window.totalLines,
       showing: "0-0",
       content: "",
       path: params.path,
@@ -633,47 +568,29 @@ async function readPdfFile(
     };
   }
 
-  const defaultLimit = 2000;
-  const rawLimit = params.limit ?? defaultLimit;
-  if (rawLimit <= 0) {
+  if (window.status === "error") {
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify({
-            error: `Invalid limit: ${rawLimit}. Must be a positive number.`,
-            path: params.path,
-          }),
+          text: JSON.stringify({ error: window.error, path: params.path }),
         },
       ],
     };
   }
 
-  const limit = Math.min(rawLimit, totalLines - offset + 1);
-  const lines = allLines.slice(offset - 1, offset - 1 + limit);
-  const numbered = lines
-    .map((line, i) => {
-      const lineNum = offset + i;
-      return `${lineNum} | ${line}`;
-    })
-    .join("\n");
-
   const result: Record<string, unknown> = {
-    total_lines: totalLines,
-    showing: `${offset}-${offset + lines.length - 1}`,
+    total_lines: window.totalLines,
+    showing: window.showing,
   };
-
-  const showingAll = offset === 1 && lines.length === totalLines;
-  if (!showingAll) {
-    result.truncated = true;
-  }
+  if (window.truncated) result.truncated = true;
 
   result.size = stat.size;
   result.modified = stat.mtime.toISOString();
   const gitStatus = await getGitStatus(filePath);
   if (gitStatus) result.git_status = gitStatus;
   result.file_type = "pdf";
-  result.content = numbered;
+  result.content = window.numbered;
 
   return {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -796,7 +713,7 @@ async function handleReadFileImpl(
             {
               type: "text",
               text: JSON.stringify({
-                error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
+                error: readFileImageTooLargeError(stat.size),
                 path: params.path,
               }),
             },
@@ -829,7 +746,7 @@ async function handleReadFileImpl(
               {
                 type: "text",
                 text: JSON.stringify({
-                  error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
+                  error: readFileImageTooLargeError(stat.size),
                   path: params.path,
                 }),
               },
@@ -871,25 +788,15 @@ async function handleReadFileImpl(
       ? redactStructuredSecrets(filePath, raw)
       : undefined;
     const visibleRaw = structuredRedaction?.content ?? raw;
-    const allLines = visibleRaw.split("\n");
-    const totalLines = allLines.length;
+    const window = planReadFileContentWindow(visibleRaw, params);
 
-    let anchorHit:
-      | {
-          mode: "literal" | "regex";
-          pattern: string;
-          line: number;
-        }
-      | undefined;
-
-    if (params.anchor && params.anchor_regex) {
+    if (window.status === "error") {
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              error:
-                "Specify only one of 'anchor' or 'anchor_regex' (not both).",
+              error: window.error,
               path: params.path,
             }),
           },
@@ -897,60 +804,9 @@ async function handleReadFileImpl(
       };
     }
 
-    if (params.anchor_regex && params.offset == null) {
-      let anchorRegex: RegExp;
-      try {
-        anchorRegex = new RegExp(params.anchor_regex, "m");
-      } catch (err) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: `Invalid anchor_regex: ${err instanceof Error ? err.message : String(err)}`,
-                path: params.path,
-              }),
-            },
-          ],
-        };
-      }
-
-      const match = visibleRaw.match(anchorRegex);
-      if (match && match.index != null) {
-        const prefix = visibleRaw.slice(0, match.index);
-        const line = prefix.split("\n").length;
-        anchorHit = {
-          mode: "regex",
-          pattern: params.anchor_regex,
-          line,
-        };
-      }
-    } else if (params.anchor && params.offset == null) {
-      const idx = visibleRaw.indexOf(params.anchor);
-      if (idx >= 0) {
-        const prefix = visibleRaw.slice(0, idx);
-        const line = prefix.split("\n").length;
-        anchorHit = {
-          mode: "literal",
-          pattern: params.anchor,
-          line,
-        };
-      }
-    }
-
-    const baseOffset = anchorHit
-      ? anchorHit.line
-      : Math.max(1, params.offset ?? 1);
-    const shouldApplyAnchorOffset = params.offset == null && !!anchorHit;
-    const anchorOffset =
-      shouldApplyAnchorOffset && Number.isFinite(params.anchor_offset)
-        ? Math.trunc(params.anchor_offset as number)
-        : 0;
-    const offset = Math.max(1, baseOffset + anchorOffset);
-
-    if (offset > totalLines) {
+    if (window.status === "empty") {
       const emptyResult: Record<string, unknown> = {
-        total_lines: totalLines,
+        total_lines: window.totalLines,
         showing: "0-0",
         content: "",
         path: params.path,
@@ -969,65 +825,19 @@ async function handleReadFileImpl(
       };
     }
 
-    const defaultLimit = 2000;
-    const rawLimit = params.limit ?? defaultLimit;
-    if (rawLimit <= 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: `Invalid limit: ${rawLimit}. Must be a positive number.`,
-              path: params.path,
-            }),
-          },
-        ],
-      };
-    }
-    const limit = Math.min(rawLimit, totalLines - offset + 1);
-
-    const lines = allLines.slice(offset - 1, offset - 1 + limit);
-
-    const numbered = lines
-      .map((line, i) => {
-        const lineNum = offset + i;
-        return `${lineNum} | ${line}`;
-      })
-      .join("\n");
-
     // Build response with metadata first, content last
     const result: Record<string, unknown> = {
-      total_lines: totalLines,
-      showing: `${offset}-${offset + lines.length - 1}`,
+      total_lines: window.totalLines,
+      showing: window.showing,
     };
 
     // Truncation info — always set when not all lines are shown
-    const showingAll = offset === 1 && lines.length === totalLines;
-    if (!showingAll) {
+    if (window.truncated) {
       result.truncated = true;
     }
 
-    if (anchorHit) {
-      result.anchor_match = {
-        mode: anchorHit.mode,
-        pattern: anchorHit.pattern,
-        line: anchorHit.line,
-        anchor_offset: Number.isFinite(params.anchor_offset)
-          ? Math.trunc(params.anchor_offset as number)
-          : 0,
-      };
-    } else if (
-      (params.anchor || params.anchor_regex) &&
-      params.offset == null
-    ) {
-      result.anchor_match = {
-        status: "not_found",
-        ...(params.anchor && { mode: "literal", pattern: params.anchor }),
-        ...(params.anchor_regex && {
-          mode: "regex",
-          pattern: params.anchor_regex,
-        }),
-      };
+    if (window.anchorMatch) {
+      result.anchor_match = window.anchorMatch;
     }
 
     // File metadata
@@ -1083,7 +893,7 @@ async function handleReadFileImpl(
     }
 
     // Content last so metadata is visible at the top
-    result.content = numbered;
+    result.content = window.numbered;
 
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

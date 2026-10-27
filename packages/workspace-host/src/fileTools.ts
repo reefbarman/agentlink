@@ -2,12 +2,22 @@ import {
   defineTool,
   type AgentPrincipal,
   type AuthorizeToolCall,
+  type CoreModelContentBlock,
   type CoreModelJsonSchema,
   type HostTool,
   type HostToolResolveRequest,
   type HostToolResolver,
 } from "@agentlink/core";
 import { planApplyDiff } from "@agentlink/core/apply-diff";
+import {
+  planReadFileContentWindow,
+  READ_FILE_IMAGE_MIME_TYPES,
+  READ_FILE_MAX_IMAGE_BYTES,
+  READ_FILE_MAX_PDF_BYTES,
+  readFileImageTooLargeError,
+  readFilePdfTooLargeError,
+  type ReadFileContentWindowParams,
+} from "@agentlink/core/read-file-content";
 import {
   buildFindAndReplacePattern,
   FIND_AND_REPLACE_MAX_GLOB_FILES,
@@ -32,10 +42,13 @@ import {
 } from "@agentlink/core/search-files";
 import {
   applyDiffBlockOptions,
+  convertBmpToPng,
+  convertPpmToPng,
   createNodeHostApplyDiffTools,
   createNodeHostGlobMatcher,
   createNodeHostReadTools,
   createNodeHostWriteTools,
+  extractPdfText,
   isNodeHostStructuredConfigPath,
   redactNodeHostStructuredConfig,
 } from "@agentlink/node-host";
@@ -59,6 +72,18 @@ import {
 } from "./workspaceReadFileContext.js";
 
 const MAX_CONTEXT_BYTES = 1_000_000;
+/**
+ * Standalone output budget for content-view text. VS Code spills oversized
+ * tool results to a temporary file; standalone hosts have no such file, so a
+ * window that would exceed this ends early with `content_truncation.next_read`.
+ */
+const MAX_CONTENT_VIEW_CHARS = 128_000;
+const CONTENT_VIEW_IMAGE_CONVERTERS: Readonly<
+  Record<string, (data: Buffer) => Buffer>
+> = {
+  ".bmp": convertBmpToPng,
+  ".ppm": convertPpmToPng,
+};
 
 const MAX_SEARCH_OUTPUT_BYTES = 2_000_000;
 const SEARCH_TIMEOUT_MS = 10_000;
@@ -265,7 +290,6 @@ export function createWorkspaceFileTools(
       tool.definition.name === "read_file"
         ? createWorkspaceReadFileTool(
             runtime,
-            tool,
             request,
             projectRoot,
             resolveScopes,
@@ -1125,7 +1149,6 @@ async function runRipgrep(
 
 function createWorkspaceReadFileTool(
   runtime: FileToolsRuntime,
-  contentTool: HostTool,
   discovery: HostToolResolveRequest,
   projectRoot: string,
   resolveScopes: ResolveWorkspaceFileScopes,
@@ -1136,7 +1159,7 @@ function createWorkspaceReadFileTool(
   return defineTool({
     name: "read_file",
     description:
-      'Read a project-relative text file with line numbers. Use view "context" for a VS Code-shaped first-pass pack with bounded content, file metadata, Git status, optional symbols and diagnostics, and session working-set state. The default "content" view keeps the narrower exact text reader.',
+      'Read a project-relative file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, numbered content (default 200 lines, max 400; 2,000 characters per line and 20,000 total), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Use the default view "content" for exact content, images, PDF text, anchors, or a specific line slice; very large content windows end early with content_truncation.next_read. anchor, anchor_regex and anchor_offset are content-only; use numeric offset in context view.',
     inputSchema: {
       type: "object",
       properties: {
@@ -1146,19 +1169,59 @@ function createWorkspaceReadFileTool(
           description:
             "Project-relative path. Absolute paths and project escapes are rejected.",
         },
-        view: { type: "string", enum: ["content", "context"] },
-        offset: { type: "integer", minimum: 1 },
+        view: {
+          type: "string",
+          enum: ["content", "context"],
+          description:
+            'Read view (default "content"). "content": exact text with optional anchors, images, PDF text, and symbols. "context": compact first-pass orientation pack with bounded symbols, diagnostics, git status, content hash, and opt-in unchanged-range dedupe. anchor, anchor_regex and anchor_offset require "content"; use numeric offset for "context".',
+        },
+        offset: {
+          type: "integer",
+          minimum: 1,
+          description: "Starting line number (1-indexed, default: 1)",
+        },
         limit: {
           type: "integer",
           minimum: 1,
-          maximum: 400,
           description:
-            "Maximum lines: 200 for the default content view, 400 for context.",
+            "Maximum number of lines to read (content default: 2000; context default: 200, capped at 400).",
         },
-        include_symbols: { type: "boolean" },
-        character_offset: { type: "integer", minimum: 0 },
-        dedupe_unchanged_content: { type: "boolean" },
-        refresh: { type: "boolean" },
+        include_symbols: {
+          type: "boolean",
+          description:
+            "Include the symbol outline in either view. Default: true. Set to false to skip symbol lookup and suppress the outline.",
+        },
+        anchor: {
+          type: "string",
+          description:
+            'Content view only. Literal anchor text to locate in the file and jump near it. Ignored if offset is explicitly provided. For view "context", use numeric offset instead.',
+        },
+        anchor_regex: {
+          type: "string",
+          description:
+            'Content view only. Regex anchor pattern to locate in the file and jump near it. Ignored if offset is explicitly provided. For view "context", use numeric offset instead.',
+        },
+        anchor_offset: {
+          type: "integer",
+          description:
+            "Content view only. Line offset applied after resolving an anchor (e.g. -20 to show context above).",
+        },
+        character_offset: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Context view only. Zero-based UTF-16 character offset within the starting line (default: 0). Use content_truncation.next_read to page a long line.",
+        },
+        dedupe_unchanged_content: {
+          type: "boolean",
+          description:
+            "Context view only. When true, omit content for an unchanged exact range already returned in this session. Default: false.",
+        },
+        refresh: {
+          type: "boolean",
+          description:
+            "Context view only. When true, include content even if dedupe_unchanged_content would otherwise omit it.",
+        },
       },
       required: ["path"],
       additionalProperties: false,
@@ -1201,39 +1264,38 @@ function createWorkspaceReadFileTool(
       }
       if (
         input.view !== "context" &&
-        typeof input.limit === "number" &&
-        input.limit > 200
-      ) {
-        return toolError("content_limit_exceeds_200");
-      }
-      if (
-        input.view !== "context" &&
-        (input.include_symbols !== undefined ||
-          input.character_offset !== undefined ||
+        (input.character_offset !== undefined ||
           input.dedupe_unchanged_content !== undefined ||
           input.refresh !== undefined)
       ) {
         return toolError("context_options_require_context_view");
       }
-      if (input.view !== "context") {
-        const contentInput = { ...input };
-        delete contentInput.view;
-        delete contentInput.include_symbols;
-        delete contentInput.character_offset;
-        delete contentInput.dedupe_unchanged_content;
-        delete contentInput.refresh;
-        return projectResult(
-          await contentTool.execute(
-            { ...contentInput, path: resolved.path },
-            context,
-          ),
-          projectRoot,
-          "read_file",
-        );
+      if (
+        input.view === "context" &&
+        (input.anchor !== undefined ||
+          input.anchor_regex !== undefined ||
+          input.anchor_offset !== undefined)
+      ) {
+        return toolError("anchor_options_require_content_view");
       }
       const stat = await files.lstat(resolved.path).catch(() => undefined);
       if (stat?.kind !== "file" || stat.nlink > 1) {
         return toolError("not_a_private_regular_file");
+      }
+      if (input.view !== "context") {
+        return await readWorkspaceContentView({
+          runtime,
+          projectRoot,
+          discovery,
+          relativePath,
+          absolutePath: resolved.path,
+          inputPath: String(input.path),
+          size: stat.size,
+          modifiedMs: stat.mtimeMs,
+          input,
+          enrichReadFileContext,
+          signal: context.signal,
+        });
       }
       if (stat.size > MAX_CONTEXT_BYTES) return toolError("file_too_large");
       const bytes = await files.readFile(resolved.path);
@@ -1302,6 +1364,280 @@ function createWorkspaceReadFileTool(
       };
     },
   });
+}
+
+/**
+ * VS Code's `read_file` content view over the workspace filesystem: anchors,
+ * images, PDF text, and the same payload fields. The caller has already
+ * checked scope, protection, ignore rules, and that the path is a private
+ * regular file.
+ */
+async function readWorkspaceContentView(request: {
+  readonly runtime: FileToolsRuntime;
+  readonly projectRoot: string;
+  readonly discovery: HostToolResolveRequest;
+  readonly relativePath: string;
+  readonly absolutePath: string;
+  readonly inputPath: string;
+  readonly size: number;
+  readonly modifiedMs: number;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly enrichReadFileContext: CreateWorkspaceFileToolsOptions["enrichReadFileContext"];
+  readonly signal?: AbortSignal;
+}) {
+  const { runtime, relativePath, input, size } = request;
+  const { files } = runtime;
+  const fail = (error: string) => ({
+    modelContent: JSON.stringify({ error, path: request.inputPath }),
+    displayContent: { path: relativePath, error },
+    isError: true as const,
+  });
+  const modified = new Date(request.modifiedMs).toISOString();
+  // Like VS Code's getGitStatus, a failed probe only omits git_status.
+  const gitStatus = async () => {
+    const git = await readGitStatus(
+      runtime,
+      request.projectRoot,
+      relativePath,
+      request.discovery,
+    ).catch(() => undefined);
+    return git?.status === "available" ? git.value : undefined;
+  };
+  const ext = path.extname(relativePath).toLowerCase();
+
+  if (ext === ".pdf") {
+    if (size > READ_FILE_MAX_PDF_BYTES) {
+      return fail(readFilePdfTooLargeError(size));
+    }
+    let text: string;
+    try {
+      text = await extractPdfText(await files.readFile(request.absolutePath));
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+    const window = planReadFileContentWindow(text, {
+      ...integerParam("offset", input.offset),
+      ...integerParam("limit", input.limit),
+      maxContentChars: MAX_CONTENT_VIEW_CHARS,
+    });
+    if (window.status === "error") return fail(window.error);
+    const git = await gitStatus();
+    if (window.status === "empty") {
+      return {
+        modelContent: JSON.stringify({
+          total_lines: window.totalLines,
+          showing: "0-0",
+          content: "",
+          path: request.inputPath,
+          size,
+          modified,
+          file_type: "pdf",
+          ...(git ? { git_status: git } : {}),
+        }),
+        displayContent: { path: relativePath, lines: 0, fileType: "pdf" },
+      };
+    }
+    return {
+      modelContent: JSON.stringify(
+        {
+          total_lines: window.totalLines,
+          showing: window.showing,
+          ...(window.truncated ? { truncated: true } : {}),
+          size,
+          modified,
+          ...(git ? { git_status: git } : {}),
+          file_type: "pdf",
+          ...contentTruncation(window),
+          content: window.numbered,
+        },
+        null,
+        2,
+      ),
+      displayContent: {
+        path: relativePath,
+        lines: window.lineCount,
+        truncated: window.truncated,
+        fileType: "pdf",
+      },
+    };
+  }
+
+  const converter = Object.hasOwn(CONTENT_VIEW_IMAGE_CONVERTERS, ext)
+    ? CONTENT_VIEW_IMAGE_CONVERTERS[ext]
+    : undefined;
+  const mimeType = Object.hasOwn(READ_FILE_IMAGE_MIME_TYPES, ext)
+    ? READ_FILE_IMAGE_MIME_TYPES[ext]
+    : undefined;
+  if (converter || mimeType) {
+    if (size > READ_FILE_MAX_IMAGE_BYTES) {
+      return fail(readFileImageTooLargeError(size));
+    }
+  }
+  if (converter) {
+    let png: Buffer;
+    try {
+      png = converter(Buffer.from(await files.readFile(request.absolutePath)));
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+    return imageResult(relativePath, "image/png", png);
+  }
+
+  if (!mimeType && size > MAX_CONTEXT_BYTES) {
+    return toolError("file_too_large");
+  }
+  const bytes = await files.readFile(request.absolutePath);
+  // VS Code treats a file as binary when its first 8 KB contain a NUL byte.
+  if (bytes.subarray(0, 8192).includes(0)) {
+    return mimeType
+      ? imageResult(relativePath, mimeType, Buffer.from(bytes))
+      : fail("Binary file detected");
+  }
+  if (size > MAX_CONTEXT_BYTES) return toolError("file_too_large");
+
+  const redacted = redactNodeHostStructuredConfig(
+    request.absolutePath,
+    Buffer.from(bytes).toString("utf8"),
+  );
+  const anchorParams: ReadFileContentWindowParams = {
+    ...integerParam("offset", input.offset),
+    ...integerParam("limit", input.limit),
+    ...(typeof input.anchor === "string" ? { anchor: input.anchor } : {}),
+    ...(typeof input.anchor_regex === "string"
+      ? { anchor_regex: input.anchor_regex }
+      : {}),
+    ...integerParam("anchor_offset", input.anchor_offset),
+    maxContentChars: MAX_CONTENT_VIEW_CHARS,
+  };
+  const window = planReadFileContentWindow(redacted.content, anchorParams);
+  if (window.status === "error") return fail(window.error);
+  const language = detectWorkspaceReadFileLanguage(relativePath);
+  const redaction = redacted.redacted
+    ? {
+        redaction: {
+          type: "structured_secret_values",
+          ...(redacted.status ? { status: redacted.status } : {}),
+        },
+      }
+    : {};
+  if (window.status === "empty") {
+    const git = await gitStatus();
+    return {
+      modelContent: JSON.stringify({
+        total_lines: window.totalLines,
+        showing: "0-0",
+        content: "",
+        path: request.inputPath,
+        size,
+        modified,
+        ...(git ? { git_status: git } : {}),
+        ...(language ? { language } : {}),
+        ...redaction,
+      }),
+      displayContent: { path: relativePath, lines: 0 },
+    };
+  }
+  // Symbols are skipped for JSON, where every key would be a symbol.
+  const includeSymbols =
+    input.include_symbols !== false &&
+    language !== "json" &&
+    language !== "jsonc";
+  const [git, enrichment] = await Promise.all([
+    gitStatus(),
+    request.enrichReadFileContext
+      ? Promise.resolve(
+          request.enrichReadFileContext(request.discovery, relativePath, {
+            includeSymbols,
+            ...(request.signal ? { signal: request.signal } : {}),
+          }),
+        ).catch(() => undefined)
+      : undefined,
+  ]);
+  return {
+    modelContent: JSON.stringify(
+      {
+        total_lines: window.totalLines,
+        showing: window.showing,
+        ...(window.truncated ? { truncated: true } : {}),
+        ...(window.anchorMatch ? { anchor_match: window.anchorMatch } : {}),
+        size,
+        modified,
+        ...redaction,
+        ...(git ? { git_status: git } : {}),
+        ...(includeSymbols && enrichment?.symbols
+          ? { symbols: enrichment.symbols }
+          : {}),
+        ...(language ? { language } : {}),
+        ...(enrichment?.diagnostics
+          ? { diagnostics: enrichment.diagnostics }
+          : {}),
+        ...contentTruncation(window),
+        content: window.numbered,
+      },
+      null,
+      2,
+    ),
+    displayContent: {
+      path: relativePath,
+      lines: window.lineCount,
+      truncated: window.truncated,
+    },
+  };
+}
+
+type ImageMediaType = Extract<
+  CoreModelContentBlock,
+  { type: "image" }
+>["source"]["media_type"];
+
+function imageResult(relativePath: string, mimeType: string, data: Buffer) {
+  return {
+    modelContent: [
+      {
+        type: "image" as const,
+        source: {
+          type: "base64" as const,
+          // READ_FILE_IMAGE_MIME_TYPES lists only model-accepted image types.
+          media_type: mimeType as ImageMediaType,
+          data: data.toString("base64"),
+        },
+      },
+    ] satisfies CoreModelContentBlock[],
+    displayContent: { path: relativePath, image: mimeType, bytes: data.length },
+  };
+}
+
+function integerParam<K extends string>(
+  key: K,
+  value: unknown,
+): Partial<Record<K, number>> {
+  return typeof value === "number" && Number.isFinite(value)
+    ? ({ [key]: Math.trunc(value) } as Partial<Record<K, number>>)
+    : {};
+}
+
+function contentTruncation(
+  window: Extract<
+    ReturnType<typeof planReadFileContentWindow>,
+    { status: "window" }
+  >,
+): Record<string, unknown> {
+  if (!window.budget) return {};
+  return {
+    content_truncation: {
+      reason: "output_budget",
+      max_characters: window.budget.maxContentChars,
+      ...(window.budget.lineCut
+        ? {
+            line_cut: true,
+            note: 'The line was cut to fit; use view "context" with character_offset to page it.',
+          }
+        : {}),
+      ...(window.budget.nextOffset !== undefined
+        ? { next_read: { offset: window.budget.nextOffset } }
+        : {}),
+    },
+  };
 }
 
 function relativePathSchema(schema: CoreModelJsonSchema): CoreModelJsonSchema {
