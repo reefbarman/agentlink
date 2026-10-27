@@ -1,0 +1,146 @@
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 288-290,2565-2572
+apps/server/src/publisher.test.ts
+  h_e08a86bb3a33a2 40-47,805-810,864-869
+apps/server/src/workspaceRoutes.test.ts
+  h_e08a86bb3a33a2 100-107
+apps/server/src/managedProviderRoutes.test.ts
+  h_e08a86bb3a33a2 52-59
+apps/server/src/storageRoutes.test.ts
+  h_e08a86bb3a33a2 21-28
+.github/workflows/assistant-release.yml
+  h_e08a86bb3a33a2 319
+apps/server/src/jobRoutes.test.ts
+  h_e08a86bb3a33a2 38-40
+apps/server/src/taskWorkspace.test.ts
+  h_e08a86bb3a33a2 47-54
+apps/server/src/backup.test.ts
+  h_e08a86bb3a33a2 28-30
+apps/server/src/taskAudit.test.ts
+  h_e08a86bb3a33a2 27-29
+apps/server/src/maintenance.test.ts
+  h_e08a86bb3a33a2 25-32
+apps/server/src/mcpRegistry.test.ts
+  h_e08a86bb3a33a2 23-30
+apps/server/src/managedProviders.test.ts
+  h_e08a86bb3a33a2 28-33
+.github/workflows/sdk-release.yml
+  h_e08a86bb3a33a2 95,118
+apps/server/src/fileLock.test.ts
+  h_e08a86bb3a33a2 16-21
+apps/server/src/personaRoutes.test.ts
+  h_e08a86bb3a33a2 37-39
+apps/server/src/onboardingRoutes.test.ts
+  h_e08a86bb3a33a2 50-52
+apps/server/src/SessionApprovalModes.test.ts
+  h_e08a86bb3a33a2 15-22
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 229-236
+apps/server/src/memoryRoutes.test.ts
+  h_e08a86bb3a33a2 37-39
+apps/server/src/commandWorker.test.ts
+  h_e08a86bb3a33a2 40-47
+apps/server/src/codexSignIn.test.ts
+  h_e08a86bb3a33a2 14-19
+apps/server/src/releasedUpgrade.test.ts
+  h_e08a86bb3a33a2 193-198,231-236,299-304,338-343,375-380,394-399,416-421,448-453,469-474,499-504,526-531
+apps/server/src/watches.test.ts
+  h_e08a86bb3a33a2 47-49
+apps/server/src/pushService.test.ts
+  h_e08a86bb3a33a2 30-32
+apps/server/src/FileSessionEventLog.test.ts
+  h_e08a86bb3a33a2 21-28
+apps/server/src/taskStore.test.ts
+  h_e08a86bb3a33a2 143-150,201-208
+apps/server/src/briefings.test.ts
+  h_e08a86bb3a33a2 42-44
+apps/server/src/jobStore.test.ts
+  h_e08a86bb3a33a2 18-23
+apps/server/src/pushLog.test.ts
+  h_e08a86bb3a33a2 15-17
+apps/server/src/usageReport.test.ts
+  h_e08a86bb3a33a2 23-25
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 343-345
+apps/server/src/runnerManager.test.ts
+  h_e08a86bb3a33a2 89-96
+apps/server/src/assistantUpdater.test.ts
+  h_e08a86bb3a33a2 47-54,656-663
+apps/server/src/taskTools.test.ts
+  h_e08a86bb3a33a2 56-58
+apps/server/src/taskResultDelivery.test.ts
+  h_e08a86bb3a33a2 54-56
+apps/server/src/ServerAccessStore.test.ts
+  h_e08a86bb3a33a2 17-22
+apps/server/src/taskRoutes.test.ts
+  h_e08a86bb3a33a2 45-47
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 83-90,176-183,372-379,515-522,778-785,988-995
+apps/server/src/projectCatalog.test.ts
+  h_e08a86bb3a33a2 26-28
+apps/server/src/serverProcess.test.ts
+  h_e08a86bb3a33a2 38-43
+apps/server/src/assistantMcpTools.test.ts
+  h_e08a86bb3a33a2 33-40
+apps/server/src/assistantMemory.test.ts
+  h_e08a86bb3a33a2 26-33
+apps/server/src/projectClone.test.ts
+  h_e08a86bb3a33a2 33-41
+scripts/release-classify.test.mjs
+  h_e08a86bb3a33a2 52,62-72,76,79
+apps/server/src/projectChats.test.ts
+  h_e08a86bb3a33a2 53-55
+apps/server/src/jobRunner.test.ts
+  h_e08a86bb3a33a2 203-210
+apps/server/src/jobTools.test.ts
+  h_e08a86bb3a33a2 20-22
+apps/server/src/projectFiles.test.ts
+  h_e08a86bb3a33a2 16-18
+apps/server/src/mcpRoutes.test.ts
+  h_e08a86bb3a33a2 41-48
+apps/server/src/inboxStore.test.ts
+  h_e08a86bb3a33a2 30-32
+apps/server/src/taskDataDeletion.test.ts
+  h_e08a86bb3a33a2 60-67
+apps/server/src/guidedInstall.test.ts
+  h_e08a86bb3a33a2 26-31
+apps/server/src/personaTools.test.ts
+  h_e08a86bb3a33a2 20-22
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 122-125
+apps/server/src/updateDeployment.test.ts
+  h_e08a86bb3a33a2 29-34
+apps/server/src/githubRoutes.test.ts
+  h_e08a86bb3a33a2 109-111
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 143-144,231
+apps/server/src/localCertificateAuthority.test.ts
+  h_e08a86bb3a33a2 29-36
+apps/server/src/persona.test.ts
+  h_e08a86bb3a33a2 35-37
+apps/server/src/taskRepositories.test.ts
+  h_e08a86bb3a33a2 23-30
+apps/server/src/assistantServer.test.ts
+  h_e08a86bb3a33a2 59-66,148-155
+apps/server/src/repositorySnapshots.test.ts
+  h_e08a86bb3a33a2 17-24
+apps/server/src/backupAgent.test.ts
+  h_e08a86bb3a33a2 30-32
+apps/server/src/serverConfig.test.ts
+  h_e08a86bb3a33a2 17-22
+apps/server/src/dataVersion.test.ts
+  h_e08a86bb3a33a2 16-21
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0841ea5c17339012ee38fc81885cbf0b0828f4a",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
