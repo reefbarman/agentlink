@@ -1,0 +1,87 @@
+packages/node-host/src/writeTools.ts
+  h_e08a86bb3a33a2 8-12,61-70,73,190-195,200,202,219-221,229-266,271-276,279-281,291-294,302-332,338,341,345-346,350-353,355-356,626-637
+  s_80c9a7538f1fe6::t_aa9100275274fe 74,226-228,267,347-349
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 172,174
+src/tools/searchFiles.ts
+  h_e08a86bb3a33a2 4-16,47-54,133,148-149,278-279,281,284,309-317,323-330,335,337,345,348,352,354-365,367-372,376-382,384
+  s_0038550c93d8b2::t_1a178a06c8cd44 277,318-322,331-334,349-351,353,385
+src/util/ripgrep.ts
+  h_e08a86bb3a33a2 6-19,27
+packages/node-host/src/structuredConfigRedaction.ts
+  h_e08a86bb3a33a2 65-66,71-80,126
+  s_0038550c93d8b2::t_3b1ce61cc74c2d 70
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 8,31,49,54
+packages/core/src/searchFiles.ts
+  h_e08a86bb3a33a2 1-489
+packages/core/src/searchFiles.test.ts
+  h_e08a86bb3a33a2 1-129
+packages/node-host/README.md
+  h_e08a86bb3a33a2 173
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/core/src/applyDiff.ts
+  h_e08a86bb3a33a2 1-1589
+src/tools/applyDiff.ts
+  h_e08a86bb3a33a2 14-28,43-56,120-122,130,137-143,145,465-468
+  s_80c9a7538f1fe6::t_f42716aed9375f 129,131
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 10,12-28,32,55,218-219,284-288,292-295,309,315,356-358,530-606,618-619,632,640-671,679,686-799,801-842,844-919,921,923-924,934,941-946,948,952,955-956,960-970,978,980,983,985-989,991-996,999,1013,1017,1024,1027,1239,1243,1258-1262,1296,1320-1325,1328-1338,1340,1349,1381,1778
+  s_0038550c93d8b2::t_689b66312a8a2c 672-673,800,843,984,990,1006-1007,1256-1257,1339
+packages/core/package.json
+  h_e08a86bb3a33a2 319-342
+packages/core/src/applyDiff.test.ts
+  h_e08a86bb3a33a2 1-97
+packages/node-host/src/writeTools.test.ts
+  h_e08a86bb3a33a2 279,306,309,318,323,328-330,332-339,341-349,351-357,359-374,376,383-384,387-388,390,393-414,418,431,434-436,439-442,445-455
+  s_0038550c93d8b2::t_9d3d707b9d6a49 377-382,385-386,389,391-392,432-433,437-438
+packages/workspace-host/src/fileTools.test.ts
+  h_e08a86bb3a33a2 324-326,333-342,356-364,366-367,370-374,376,385-388,390,400-442,643-719,973-975,981-985,987-988,1032
+  s_b22c089608b22f::t_ef6d92f2366f8a 317,327-328,343-345,365,369,375,377,379,389,391,393,395,443-446,720-724,976-980,986,990-992,1033-1035
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 1960-1966,2038,2080
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 33,51,82,100
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 106
+resources/builtin-skills/documentation/references/release-notes.md
+  s_b22c089608b22f::t_6e1856a4633bbf 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b32f62cf3645b9587910aa417ef356bd732f5f0d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0038550c93d8b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bfe7f9be-e9ce-4144-8696-6fd9a881f9b6",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_80c9a7538f1fe6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f5e8a95f-5ab8-44b0-944d-f00519abdc37",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_b22c089608b22f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75005af2-3996-4d34-8d50-11bac70fea68",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
