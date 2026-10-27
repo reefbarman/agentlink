@@ -44,7 +44,14 @@ describe.skipIf(!git)("task workspaces", { timeout: 30_000 }, () => {
     const dir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "task-workspace-")),
     );
-    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const source = path.join(dir, "upstream", "demo");
     await fs.mkdir(source, { recursive: true });
     const run = (cwd: string, ...args: string[]) =>

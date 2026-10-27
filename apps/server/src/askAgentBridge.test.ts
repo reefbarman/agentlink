@@ -285,7 +285,9 @@ async function startBridge(
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-bridge-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const events = new SessionEventHub();
   const fake = createFakeOperations(events);
   const file = stateFile ?? path.join(dir, "settings", "ask-agent.json");
@@ -2560,7 +2562,14 @@ describe("Ask Agent bridge", () => {
 
   it("carries the Assistant's inbox status in every snapshot", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-agent-status-"));
-    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const events = new SessionEventHub();
     const fake = createFakeOperations(events);
     let status = { inboxUnread: 2, revision: 5 };

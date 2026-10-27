@@ -44,7 +44,14 @@ const DISCOVERY: AssistantUpdateDiscovery = {
 };
 async function setup(overrides: Partial<AssistantUpdaterOptions> = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "updater-test-"));
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const deployDirectory = path.join(root, "deploy");
   const updaterDirectory = path.join(root, "updater");
   let jobState: "running" | "stopped" | "missing" = "running";
@@ -646,7 +653,14 @@ describe("private Assistant updater", () => {
 
 it("creates only a fixed privileged job and never starts a conflicting existing container", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "updater-docker-"));
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const socket = path.join(root, "engine.sock");
   const calls: Array<{ method: string; url: string; body: unknown }> = [];
   let conflict = false;

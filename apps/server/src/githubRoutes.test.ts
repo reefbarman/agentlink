@@ -106,7 +106,9 @@ function fakePublisher() {
 
 async function setup(options: { readonly publisher?: boolean } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "github-routes-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const connections = await openGitHubConnections({
     file: path.join(dir, "connections.json"),
   });

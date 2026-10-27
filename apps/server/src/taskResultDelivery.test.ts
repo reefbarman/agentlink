@@ -51,7 +51,9 @@ function task(overrides: Partial<TaskRun> = {}): TaskRun {
 
 async function setup(results: TaskDeliveryResult[] = []) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-deliveries-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const file = path.join(dir, "deliveries.json");
   const records = new Map<string, TaskRun>();
   const deliver = vi.fn(

@@ -23,7 +23,12 @@ const container = resolve("deploy/container");
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0))
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
 });
 
 function fixture() {

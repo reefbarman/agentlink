@@ -97,7 +97,14 @@ async function startHarness(
   } = {},
 ) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-routes-"));
-  cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(parent, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const eventLog = options.eventLog
     ? await openFileSessionEventLog({ directory: path.join(parent, "events") })
     : undefined;

@@ -37,7 +37,14 @@ async function fixture(
   const parent = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "command-worker-")),
   );
-  cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(parent, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const root = path.join(parent, "projects");
   await fs.mkdir(path.join(root, "home"), { recursive: true });
   const worker: CommandWorker = await startCommandWorker({

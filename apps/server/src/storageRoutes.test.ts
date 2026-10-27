@@ -18,7 +18,14 @@ async function write(file: string, bytes: number) {
 describe("storage report", () => {
   it("measures each area of the data root and the project folders", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "storage-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const data = path.join(root, "data");
     await write(
       path.join(data, "workspace", "projects", "home", "a.json"),

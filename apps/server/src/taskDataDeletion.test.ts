@@ -57,7 +57,14 @@ describe("task data deletion", () => {
 
   it("removes a task's chats, their events and its Inbox entries", async () => {
     const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "task-data-"));
-    cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dataRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     for (const folder of taskProjectDataFolders(dataRoot, PROJECT)) {
       await fs.mkdir(folder, { recursive: true });
       await fs.writeFile(path.join(folder, "session.json"), "marker-9031");

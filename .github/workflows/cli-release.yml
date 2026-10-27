@@ -149,6 +149,7 @@ jobs:
           TARGET=$(git rev-parse HEAD)
           {
             node scripts/release-coordinator.mjs notes --unit cli --version "$VERSION" && printf '\n' || true
+            # shellcheck disable=SC2016 # backticks are Markdown, not shell
             printf '%s\n' 'Preview for macOS Apple Silicon and Linux (x64 and arm64, glibc). This standalone CLI includes Node, ripgrep, and the OS credential-store runtime. It is unsigned and not notarised. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli`, which verifies the checksum and links `~/.local/bin/agentlink`. See the [CLI installation guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/standalone-cli.md) for manual setup and limitations.'
           } > notes.md
           node scripts/release-publish.mjs \

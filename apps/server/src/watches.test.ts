@@ -44,7 +44,9 @@ afterEach(async () => {
 
 async function tempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   return dir;
 }
 

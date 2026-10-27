@@ -22,7 +22,14 @@ const MINUTE = 60_000;
 
 async function setup(options: { running?: string[] } = {}) {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "maintenance-"));
-  cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dataRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   let clock = 1_000_000;
   const running = [...(options.running ?? [])];
   const changes: MaintenanceStatus["state"][] = [];

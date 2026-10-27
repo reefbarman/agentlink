@@ -30,7 +30,15 @@ describe.skipIf(!git)("git cloner", () => {
     const dir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "project-clone-")),
     );
-    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    // Retries ENOTEMPTY when a git child is still writing during removal.
+    cleanup.push(() =>
+      fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const source = path.join(dir, "source");
     await fs.mkdir(source);
     const run = (...args: string[]) =>

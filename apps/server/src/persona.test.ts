@@ -32,7 +32,9 @@ const QUIET = { start: "22:00", end: "07:00", allowApprovals: true };
 
 async function tempFile() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "persona-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   return path.join(dir, "settings", "persona.json");
 }
 

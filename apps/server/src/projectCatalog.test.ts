@@ -23,7 +23,9 @@ async function setup() {
   const dir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "project-catalog-")),
   );
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const home = path.join(dir, "home");
   await fs.mkdir(home);
   const file = path.join(dir, "data", "settings", "projects.json");

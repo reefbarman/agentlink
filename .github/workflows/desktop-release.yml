@@ -140,6 +140,8 @@ jobs:
           security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
           rm -f "$CERT"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # Splitting is intended: one argument per existing keychain path.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           echo "AGENTLINK_SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           security find-identity -v -p codesigning "$KEYCHAIN"
@@ -226,6 +228,7 @@ jobs:
           TARGET=$(git rev-parse HEAD)
           {
             node scripts/release-coordinator.mjs notes --unit desktop --version "$VERSION" && printf '\n' || true
+            # shellcheck disable=SC2016 # backticks are Markdown, not shell
             printf '%s\n\n' 'Standalone AgentLink Desktop preview for macOS Apple Silicon. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop`, or download the `arm64` DMG. Intel Macs are no longer supported.'
             printf '%s\n' "This preview is signed with an Apple Development certificate (Team ID J2896P4NN3) but not notarised, so macOS still asks you to confirm the first launch. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with \`xattr -dr com.apple.quarantine AgentLink.app\` after extraction."
           } > notes.md

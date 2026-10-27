@@ -190,7 +190,12 @@ describe("released-image upgrade", () => {
         await fs.readFile(path.join(fx.deploy, ".upgrade-state"), "utf8"),
       ).not.toContain("status=rolled-back");
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -223,7 +228,12 @@ describe("released-image upgrade", () => {
         run(fx, ["--release-manifest", fx.manifestPath, "--validate-release"]),
       ).rejects.toMatchObject({ code: 1 });
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -286,7 +296,12 @@ describe("released-image upgrade", () => {
         await fs.readdir(path.join(fx.deploy, ".upgrade-failed")),
       ).toHaveLength(1);
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -320,7 +335,12 @@ describe("released-image upgrade", () => {
         config,
       );
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -352,7 +372,12 @@ describe("released-image upgrade", () => {
       ).rejects.toMatchObject({ code: 1 });
       await expect(fs.access(fx.calls)).rejects.toThrow();
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
   it("validates strictly and refuses invalid manifests before Docker", async () => {
@@ -366,7 +391,12 @@ describe("released-image upgrade", () => {
       run(fx, ["--release-manifest", fx.manifestPath, "--validate-release"]),
     ).rejects.toMatchObject({ code: 1 });
     await expect(fs.access(fx.calls)).rejects.toThrow();
-    await fs.rm(fx.root, { recursive: true, force: true });
+    await fs.rm(fx.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   });
 
   it("validates without requiring Docker or changing deployment metadata", async () => {
@@ -383,7 +413,12 @@ describe("released-image upgrade", () => {
     await expect(
       fs.access(path.join(fx.deploy, ".upgrade-lock")),
     ).rejects.toThrow();
-    await fs.rm(fx.root, { recursive: true, force: true });
+    await fs.rm(fx.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   });
 
   it("still builds source deployments without invoking the release pull path", async () => {
@@ -410,7 +445,12 @@ describe("released-image upgrade", () => {
         fs.access(path.join(fx.deploy, "release.env")),
       ).rejects.toThrow();
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -426,7 +466,12 @@ describe("released-image upgrade", () => {
       ).resolves.toBeUndefined();
       await expect(fs.access(fx.calls)).rejects.toThrow();
     } finally {
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
@@ -451,7 +496,12 @@ describe("released-image upgrade", () => {
     expect(await fs.readFile(path.join(fx.deploy, "release.env"), "utf8")).toBe(
       oldManifest,
     );
-    await fs.rm(fx.root, { recursive: true, force: true });
+    await fs.rm(fx.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   });
 
   it.each([
@@ -473,7 +523,12 @@ describe("released-image upgrade", () => {
       const calls = await fs.readFile(fx.calls, "utf8");
       expect(calls).toContain("compose stop");
       expect(calls).toContain("compose up -d");
-      await fs.rm(fx.root, { recursive: true, force: true });
+      await fs.rm(fx.root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     },
   );
 });

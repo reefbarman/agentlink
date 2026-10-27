@@ -316,6 +316,7 @@ jobs:
           path: digests
       - name: Build release digest mapping and assets
         run: |
+          # shellcheck disable=SC2016 # single quotes hold JavaScript, not shell
           node --input-type=module -e '
             import { readFileSync, writeFileSync } from "node:fs";
             const targets = ["assistant", "command-worker", "publisher", "backup", "editor", "browser", "updater"];

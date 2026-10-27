@@ -17,7 +17,9 @@ afterEach(async () => {
 
 async function setup() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "persona-tools-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const store = await openPersonaStore({
     file: path.join(dir, "persona.json"),
     defaultTimeZone: "Australia/Brisbane",

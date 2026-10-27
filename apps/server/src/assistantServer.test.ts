@@ -56,7 +56,14 @@ async function startHarness(
     existing?.dataRoot ??
     (await fs.mkdtemp(path.join(os.tmpdir(), "assistant-server-")));
   if (!existing) {
-    cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dataRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
   }
   const port = existing?.port ?? (await freePort());
   const clock = existing?.clock ?? { value: Date.now() };
@@ -138,7 +145,14 @@ function authHeaders(harness: Harness, session: { cookie: string }) {
 describe("assistant server access layer", () => {
   it("refuses to start without TLS or with a non-https origin", async () => {
     const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-cfg-"));
-    cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dataRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const base = { dataRoot, listen: { host: "127.0.0.1", port: 0 } };
     await expect(
       createAssistantServer({

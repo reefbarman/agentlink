@@ -226,7 +226,14 @@ async function setup(
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "session-runner-")),
   );
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const folder = path.join(root, "projects", ".tasks", "t1");
   const clone = path.join(folder, "repo");
   await fs.mkdir(clone, { recursive: true });

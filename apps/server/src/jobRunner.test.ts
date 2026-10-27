@@ -200,7 +200,14 @@ async function setup(
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "job-runner-"));
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const store = await openJobStore({ directory: path.join(root, "jobs") });
   await options.prepare?.(store);
   const events = new SessionEventHub();

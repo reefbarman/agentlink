@@ -26,7 +26,14 @@ afterEach(async () => {
 
 async function tempDirectory(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "local-ca-"));
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   return path.join(root, "tls");
 }
 

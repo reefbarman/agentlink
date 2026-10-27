@@ -25,7 +25,12 @@ async function setup(
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "managed-providers-"));
   cleanup.push(async () => {
     await fs.chmod(path.join(root, "credentials"), 0o700).catch(() => {});
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   });
   const settingsFile = path.join(root, "settings", "model-providers.json");
   const credentialsDirectory = path.join(root, "credentials");

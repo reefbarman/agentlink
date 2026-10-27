@@ -119,8 +119,10 @@ export function validateClassification(value, batch) {
   const decisions = {};
   for (const entry of value.commits) {
     const commit = expected.get(entry?.sha);
-    if (!commit)
-      throw new Error(`Classifier returned unknown commit ${entry?.sha}`);
+    // Ignore commits the model was not asked about (for example one from an
+    // earlier batch). Every requested commit still needs a valid decision,
+    // which the omission check below enforces.
+    if (!commit) continue;
     if (decisions[entry.sha]) throw new Error(`Duplicate commit ${entry.sha}`);
     if (!["none", "patch", "minor"].includes(entry.bump)) {
       throw new Error(`Invalid bump for ${entry.sha}: ${entry.bump}`);

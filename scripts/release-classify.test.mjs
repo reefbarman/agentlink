@@ -49,7 +49,7 @@ test("omits commits beyond the run budget rather than silently classifying them"
   assert.equal(sent.length + omitted.length, commits.length);
 });
 
-test("rejects unknown, duplicate, missing, and out-of-scope decisions", () => {
+test("rejects duplicate, missing, and out-of-scope decisions", () => {
   const batch = [boundCommit(commit("a", ["sdk"])), boundCommit(commit("b"))];
   const valid = [
     { sha: "a", bump: "minor", breakingUnits: ["sdk"], summary: "Adds X." },
@@ -59,13 +59,24 @@ test("rejects unknown, duplicate, missing, and out-of-scope decisions", () => {
     validateClassification({ commits: valid }, batch).a.bump,
     "minor",
   );
-  assert.throws(
-    () =>
+  // Extra commits the model was not asked about are ignored.
+  assert.deepEqual(
+    Object.keys(
       validateClassification(
         { commits: [...valid, { ...valid[0], sha: "z" }] },
         batch,
       ),
-    /unknown commit z/u,
+    ).sort(),
+    ["a", "b"],
+  );
+  // An unknown commit cannot stand in for a requested one.
+  assert.throws(
+    () =>
+      validateClassification(
+        { commits: [valid[0], { ...valid[1], sha: "z" }] },
+        batch,
+      ),
+    /omitted b/u,
   );
   assert.throws(
     () => validateClassification({ commits: [valid[0], valid[0]] }, batch),

@@ -27,7 +27,9 @@ async function setup(
   } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "backup-agent-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const deployRoot = path.join(dir, "deploy");
   await fs.mkdir(path.join(deployRoot, "data"), { recursive: true });
   await fs.writeFile(path.join(deployRoot, "data/chats.json"), "[]");

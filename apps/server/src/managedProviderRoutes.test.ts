@@ -49,7 +49,14 @@ function auth(subjectId: string, valid: () => boolean): AssistantServerAuth {
 
 async function setup(wrap?: (providers: ManagedProviders) => ManagedProviders) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "provider-routes-"));
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   await fs.mkdir(path.join(root, "settings"));
   await fs.writeFile(
     path.join(root, "settings", "model-providers.json"),

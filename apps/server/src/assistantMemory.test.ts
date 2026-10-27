@@ -23,7 +23,14 @@ afterEach(async () => {
 
 async function setup() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-mem-"));
-  cleanup.push(() => fs.rm(directory, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const onChanged = vi.fn();
   let clock = Date.UTC(2026, 9, 16, 1);
   const memory = await openAssistantMemory({

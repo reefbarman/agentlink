@@ -80,7 +80,14 @@ function peerCertificate(
 describe("assistant service local certificates", () => {
   it("renews the server certificate in the running listener", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-svc-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     const port = await freePort();
     const config = parseAssistantServerConfig(
@@ -166,7 +173,14 @@ describe("assistant service local certificates", () => {
 describe("assistant service updater wiring", () => {
   it("forwards owner update confirmations to the fixed updater and blocks unsafe calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-updates-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     const certificate = createTestCertificate();
     await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
@@ -355,7 +369,14 @@ describe("assistant service updater wiring", () => {
 describe("assistant service first-run setup wiring", () => {
   it("opens setup from the installer marker and starts ChatGPT sign-in through the service's own runtime", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-setup-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     await fs.mkdir(path.join(root, "data", "settings"), { recursive: true });
     await fs.writeFile(
@@ -491,7 +512,14 @@ describe("assistant service first-run setup wiring", () => {
 describe("assistant service managed OpenAI key", () => {
   it("offers a key saved in the browser to the running service's chats, rotates and removes it live, and keeps it across a restart", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-openai-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     await fs.mkdir(path.join(root, "data", "settings"), { recursive: true });
     // What the guided installer writes: the opt-in, with no key.
@@ -747,7 +775,14 @@ describe("assistant service managed OpenAI key", () => {
 describe("assistant service chat-created jobs", () => {
   it("creates a job a chat proposed only once the owner approves its card", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-jobs-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     const certificate = createTestCertificate();
     await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
@@ -950,7 +985,14 @@ describe("assistant service chat-created jobs", () => {
 describe("assistant service notifications", () => {
   it("pushes a job run's inbox entry to subscribed devices until they are revoked", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-push-"));
-    cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
     const certificate = createTestCertificate();
     await fs.writeFile(path.join(root, "server.crt"), certificate.cert);

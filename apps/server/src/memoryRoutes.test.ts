@@ -34,7 +34,9 @@ const auth = (subjectId: string): AssistantServerAuth => {
 
 async function setup() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-routes-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const memory = await openAssistantMemory({ directory: dir });
   await memory.instructionsFor({
     sessionId: "chat-1",

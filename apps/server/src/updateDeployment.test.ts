@@ -26,7 +26,12 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.mocked(spawn).mockReset();
   for (const dir of cleanup.splice(0))
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
 });
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");

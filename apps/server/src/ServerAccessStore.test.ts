@@ -14,7 +14,12 @@ const DAY = 24 * 60 * 60 * 1000;
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
 

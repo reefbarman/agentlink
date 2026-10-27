@@ -37,9 +37,14 @@ const roots: string[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(
-    roots
-      .splice(0)
-      .map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots.splice(0).map((root) =>
+      fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    ),
   );
 });
 
@@ -797,7 +802,12 @@ describe("archives", { timeout: 30_000 }, () => {
       publisher.archive({ repository: "https://gitlab.com/octo/hello" }),
     ).rejects.toMatchObject({ code: "repository_invalid" });
     // A repository git cannot fetch (private, with no token, or gone).
-    await fs.rm(setup.remote, { recursive: true, force: true });
+    await fs.rm(setup.remote, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
     await expect(
       publisher.archive({ repository: REPOSITORY }),
     ).rejects.toMatchObject({ code: "fetch_failed" });
@@ -851,7 +861,12 @@ describe("publisher HTTP", { timeout: 30_000 }, () => {
       expect(
         execFileSync("tar", ["-tf", destination], { encoding: "utf8" }).trim(),
       ).toBe("README.md");
-      await fs.rm(setup.remote, { recursive: true, force: true });
+      await fs.rm(setup.remote, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
       await expect(
         client.archive(
           { repository: REPOSITORY },

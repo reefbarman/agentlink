@@ -17,7 +17,9 @@ const NOW = Date.UTC(2026, 9, 12, 0, 0);
 
 async function setup() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "job-tools-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const store = await openJobStore({ directory: path.join(dir, "jobs") });
   const runner = {
     jobChanged: vi.fn(async (_jobId: string) => undefined),

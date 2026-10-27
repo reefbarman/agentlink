@@ -42,7 +42,9 @@ async function setup(
   options: { readonly enabled?: boolean; readonly editors?: boolean } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-routes-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const audit = await openTaskAudit({ directory: path.join(dir, "audit") });
   const store = auditedTaskStore(
     await openTaskStore({ directory: dir }),

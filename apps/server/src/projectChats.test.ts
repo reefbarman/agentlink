@@ -50,7 +50,9 @@ async function setup(options: { clone?: boolean; valid?: boolean } = {}) {
   const dir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "project-chats-")),
   );
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const home = path.join(dir, "home");
   const work = path.join(dir, "work");
   await fs.mkdir(home);

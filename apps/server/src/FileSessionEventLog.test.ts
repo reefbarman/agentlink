@@ -18,7 +18,14 @@ afterEach(async () => {
 
 async function directory() {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "event-log-"));
-  cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(parent, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   return path.join(parent, "events");
 }
 

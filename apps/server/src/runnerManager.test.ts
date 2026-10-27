@@ -86,7 +86,14 @@ async function setup(
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "runner-manager-")),
   );
-  cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const projects = path.join(root, "projects");
   const data = path.join(root, "runners");
   const folder = path.join(projects, ".tasks", "t1");

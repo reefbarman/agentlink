@@ -27,7 +27,9 @@ afterEach(async () => {
 
 async function tempDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "push-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   return path.join(dir, "push");
 }
 

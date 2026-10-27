@@ -38,7 +38,14 @@ const auth = (subjectId: string): AssistantServerAuth => {
 
 async function setup() {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-routes-"));
-  cleanup.push(() => fs.rm(dataRoot, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dataRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   const registry = await openMcpRegistry({
     dataRoot,
     redirectUrl: "https://assistant.example/mcp/callback",

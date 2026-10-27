@@ -140,7 +140,14 @@ describe("task requests", () => {
 describe("task store", () => {
   it("persists records and appends an event per state change", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-store-"));
-    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     const store = await openTaskStore({ directory: dir });
     await store.create(task("aaaaaaaaaaaa"));
     await store.create(task("bbbbbbbbbbbb", { createdAt: 2 }));
@@ -191,7 +198,14 @@ describe("task store", () => {
 
   it("refuses to start with an unreadable task file", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "task-store-"));
-    cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+    cleanup.push(() =>
+      fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }),
+    );
     await fs.writeFile(path.join(dir, "tasks.json"), "{not json");
     await expect(openTaskStore({ directory: dir })).rejects.toThrow(
       /Tasks are unreadable/u,

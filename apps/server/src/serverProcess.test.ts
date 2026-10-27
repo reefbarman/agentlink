@@ -35,7 +35,12 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await fs.rm(workDir, { recursive: true, force: true });
+  await fs.rm(workDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  });
 });
 
 /** A model endpoint that accepts requests and never answers them. */

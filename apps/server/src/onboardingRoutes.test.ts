@@ -47,7 +47,9 @@ const READY: OnboardingFacts = {
 
 async function setup(initial?: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "onboarding-routes-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const file = path.join(dir, "settings", "onboarding.json");
   if (initial !== undefined) {
     await fs.mkdir(path.dirname(file), { recursive: true });

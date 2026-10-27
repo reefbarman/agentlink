@@ -13,7 +13,9 @@ afterEach(async () => {
 
 async function setup() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "project-files-"));
-  cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
   const root = path.join(dir, "project");
   await fs.mkdir(path.join(root, "docs"), { recursive: true });
   await fs.writeFile(path.join(root, "AGENTS.md"), "# Agents\n");

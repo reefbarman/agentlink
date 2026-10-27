@@ -92,6 +92,7 @@ jobs:
       - name: Verify SDK asset set
         run: |
           test -f dist/agentlink-sdk-artifacts.json
+          # shellcheck disable=SC2016 # single quotes hold JavaScript, not shell
           node -e '
             const fs = require("fs");
             const manifest = JSON.parse(fs.readFileSync("dist/agentlink-sdk-artifacts.json", "utf8"));
@@ -114,6 +115,7 @@ jobs:
           TARGET=$(git rev-parse HEAD)
           {
             node scripts/release-coordinator.mjs notes --unit sdk --version "$SDK_VERSION" && printf '\n' || true
+            # shellcheck disable=SC2016 # backticks are Markdown, not shell
             printf '%s\n' 'Pre-1.0 Node SDK preview: matched `@agentlink/protocol`, `@agentlink/core`, and `@agentlink/node-host` archives. Not published to npm. Vendor them into a Node server project with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install-sdk.mjs | node --input-type=module - --version '"$SDK_VERSION"'`. See the [embedding guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/embedding-agentlink.md).'
           } > notes.md
           node scripts/release-publish.mjs \

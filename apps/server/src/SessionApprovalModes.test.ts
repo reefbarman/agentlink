@@ -12,7 +12,14 @@ afterEach(async () => {
 
 async function tempFile() {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "approval-modes-"));
-  cleanup.push(() => fs.rm(parent, { recursive: true, force: true }));
+  cleanup.push(() =>
+    fs.rm(parent, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    }),
+  );
   return path.join(parent, "settings", "approval-modes.json");
 }
 

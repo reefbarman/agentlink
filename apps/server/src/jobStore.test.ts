@@ -15,7 +15,12 @@ import {
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
 
