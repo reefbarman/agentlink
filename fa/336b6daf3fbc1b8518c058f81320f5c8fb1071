@@ -1,0 +1,25 @@
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 5-10,1362-1434
+  s_2e5eb9a7f4d0d8::t_879f6962193d1a 4,1435-1440
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa336b6daf3fbc1b8518c058f81320f5c8fb1071",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_2e5eb9a7f4d0d8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c1df1ec-1697-464a-842d-2fa6e04e9e4d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
