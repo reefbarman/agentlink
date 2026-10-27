@@ -1,10 +1,17 @@
 import {
   defineTool,
   type AgentPrincipal,
+  type CoreModelMessage,
   type HostTool,
   type HostToolResolveRequest,
   type HostToolResolver,
 } from "@agentlink/core";
+import {
+  TODO_WRITE_INPUT_SCHEMA,
+  getLatestTodoState,
+  handleTodoWrite,
+  todoTool,
+} from "@agentlink/core/todo-tool";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 export type WorkspaceQuestionKind = "confirmation" | "multiple_choice" | "text";
@@ -35,11 +42,26 @@ export interface CreateWorkspaceSessionInteractionToolsOptions {
     sessionId: string,
     todos: readonly TodoItem[],
   ) => void;
+  /**
+   * The session's stored transcript. A session's todo list is rebuilt from
+   * it, as VS Code does, the first time this process sees the session.
+   */
+  readonly readTranscript?: (
+    sessionId: string,
+  ) => Promise<readonly CoreModelMessage[]>;
 }
 
 export interface WorkspaceSessionInteractionTools {
   readonly resolveTools: HostToolResolver;
   readonly snapshot: (sessionId: string) => WorkspaceSessionInteractionSnapshot;
+  /**
+   * Seed a session's todo list from its transcript unless this process
+   * already holds one. A list the model wrote in this process always wins.
+   */
+  readonly restore: (
+    sessionId: string,
+    messages: readonly CoreModelMessage[],
+  ) => void;
 }
 
 export function createWorkspaceSessionInteractionTools(
@@ -51,12 +73,25 @@ export function createWorkspaceSessionInteractionTools(
   ): WorkspaceSessionInteractionSnapshot => ({
     todos: structuredClone(todos.get(sessionId) ?? []),
   });
+  const restore = (
+    sessionId: string,
+    messages: readonly CoreModelMessage[],
+  ): void => {
+    if (todos.has(sessionId)) return;
+    todos.set(sessionId, getLatestTodoState([...messages]));
+  };
   const { askQuestion } = options;
-  const resolveTools: HostToolResolver = async (request) => [
-    ...(askQuestion ? [createAskUserTool(request, askQuestion)] : []),
-    createTodoWriteTool(request, todos, options),
-  ];
-  return { resolveTools, snapshot };
+  const resolveTools: HostToolResolver = async (request) => {
+    if (!todos.has(request.sessionId) && options.readTranscript) {
+      const messages = await options.readTranscript(request.sessionId);
+      restore(request.sessionId, messages);
+    }
+    return [
+      ...(askQuestion ? [createAskUserTool(request, askQuestion)] : []),
+      createTodoWriteTool(request, todos, options),
+    ];
+  };
+  return { resolveTools, snapshot, restore };
 }
 
 function createAskUserTool<TPrincipal extends AgentPrincipal>(
@@ -143,22 +178,11 @@ function createTodoWriteTool<TPrincipal extends AgentPrincipal>(
   todos: Map<string, readonly TodoItem[]>,
   options: CreateWorkspaceSessionInteractionToolsOptions,
 ): HostTool<TPrincipal> {
+  // VS Code's todo_write: same description, schema and guidance result.
   return defineTool({
-    name: "todo_write",
-    description:
-      "Replace the current session's visible task list. Keep exactly one task in progress while work remains.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        todos: {
-          type: "array",
-          maxItems: 50,
-          items: todoSchema(0),
-        },
-      },
-      required: ["todos"],
-      additionalProperties: false,
-    },
+    name: todoTool.name,
+    description: todoTool.description,
+    inputSchema: TODO_WRITE_INPUT_SCHEMA,
     effect: "read",
     parallelSafe: false,
     displayInput: (input) => ({
@@ -166,38 +190,18 @@ function createTodoWriteTool<TPrincipal extends AgentPrincipal>(
     }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const next = structuredClone(input.todos as TodoItem[]);
+      const result = handleTodoWrite({
+        todos: structuredClone(input.todos as TodoItem[]),
+      });
+      const next = result.todos;
       todos.set(context.sessionId, next);
       options.onTodosChanged?.(context.sessionId, next);
-      const payload = { todos: next };
       return {
-        modelContent: JSON.stringify({ updated: next.length }),
-        displayContent: payload,
+        modelContent: result.content,
+        displayContent: { todos: next },
       };
     },
   });
-}
-
-function todoSchema(depth: number): Record<string, unknown> {
-  const properties: Record<string, unknown> = {
-    id: { type: "string", minLength: 1, maxLength: 256 },
-    content: { type: "string", minLength: 1, maxLength: 4_096 },
-    activeForm: { type: "string", minLength: 1, maxLength: 4_096 },
-    status: { type: "string", enum: ["pending", "in_progress", "completed"] },
-  };
-  if (depth < 3) {
-    properties.children = {
-      type: "array",
-      maxItems: 50,
-      items: todoSchema(depth + 1),
-    };
-  }
-  return {
-    type: "object",
-    properties,
-    required: ["id", "content", "activeForm", "status"],
-    additionalProperties: false,
-  };
 }
 
 function sameTurn(

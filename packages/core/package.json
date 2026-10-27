@@ -340,6 +340,18 @@
         "default": "./dist/cjs/findAndReplace.cjs"
       }
     },
+    "./interaction-tools": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/interactionTools.d.ts",
+        "default": "./dist/interactionTools.js"
+      },
+      "require": {
+        "types": "./dist/cjs/interactionTools.d.cts",
+        "default": "./dist/cjs/interactionTools.cjs"
+      }
+    },
     "./read-file-content": {
       "browser": null,
       "edge": null,

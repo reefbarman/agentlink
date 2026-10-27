@@ -1359,6 +1359,68 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("runs VS Code's todo_write and restores the list after the host restarts", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-todos-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const todos = [
+      { id: "a", content: "Plan", activeForm: "Planning", status: "completed" },
+      {
+        id: "b",
+        content: "Build",
+        activeForm: "Building",
+        status: "in_progress",
+      },
+    ];
+    const bodies: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        bodies.push(String(init?.body));
+        return bodies.length === 1
+          ? toolCall("todo_write", { todos })
+          : completion("ok");
+      });
+    const open = () =>
+      createWorkspaceHost({
+        ...readProfileConfig(fetch),
+        projectRoot,
+        dataRoot: path.join(parent, "data"),
+        ownerId: "todo-owner",
+        sessionInteractions: {},
+      });
+    let sessionId: string;
+    const first = await open();
+    try {
+      sessionId = (await first.createSession()).sessionId;
+      await first.runTurn(sessionId, "Plan and build");
+      expect(bodies[1]).toContain(
+        "Updated: 1/2 complete, 1 in progress, 0 pending",
+      );
+      expect(first.readSessionInteractions(sessionId).todos).toEqual(todos);
+    } finally {
+      await first.close();
+    }
+    // A new turn restores the list (the Assistant's path).
+    const second = await open();
+    try {
+      expect(second.readSessionInteractions(sessionId).todos).toEqual([]);
+      await second.runTurn(sessionId, "Carry on");
+      expect(second.readSessionInteractions(sessionId).todos).toEqual(todos);
+    } finally {
+      await second.close();
+    }
+    // Opening the session restores it too (the CLI's path).
+    const third = await open();
+    try {
+      await third.readSession(sessionId);
+      expect(third.readSessionInteractions(sessionId).todos).toEqual(todos);
+    } finally {
+      await third.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("sends each session's own Codex conversation state and request controls to the model", async () => {
     // VS Code keeps one ResponsesConversationState per session
     // (AgentSession.codexConversationState) so a WebSocket-to-HTTP fallback

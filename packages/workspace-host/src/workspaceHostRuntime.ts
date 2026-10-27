@@ -281,7 +281,11 @@ export interface CreateWorkspaceHostOptions {
     /** Lifecycle, phase, or current-tool changes of a child (no output text). */
     readonly onAgentChanged?: (change: WorkspaceBackgroundChange) => void;
   };
-  readonly sessionInteractions?: CreateWorkspaceSessionInteractionToolsOptions;
+  /** Session todos are rebuilt from the stored transcript by the host. */
+  readonly sessionInteractions?: Omit<
+    CreateWorkspaceSessionInteractionToolsOptions,
+    "readTranscript"
+  >;
   readonly sharedMcp?: Omit<CreateWorkspaceSharedMcpToolsOptions, "secret"> & {
     readonly hasSessionGrant?: (
       proposal: WorkspaceSharedMcpToolApproval,
@@ -958,7 +962,12 @@ export async function createWorkspaceHost(
       })
     : undefined;
   const sessionInteractionTools = options.sessionInteractions
-    ? createWorkspaceSessionInteractionTools(options.sessionInteractions)
+    ? createWorkspaceSessionInteractionTools({
+        ...options.sessionInteractions,
+        readTranscript: async (sessionId) =>
+          (await engine.sessions.hydrate({ principal, sessionId })).record
+            .messages,
+      })
     : undefined;
   const interactionTokens =
     options.files ||
@@ -1500,9 +1509,11 @@ export async function createWorkspaceHost(
             left.sessionId.localeCompare(right.sessionId),
         );
     },
-    readSession(sessionId) {
+    async readSession(sessionId) {
       assertForegroundSession(sessionId);
-      return engine.sessions.hydrate({ principal, sessionId });
+      const hydration = await engine.sessions.hydrate({ principal, sessionId });
+      sessionInteractionTools?.restore(sessionId, hydration.record.messages);
+      return hydration;
     },
     async setSessionModel(sessionId, model) {
       assertForegroundSession(sessionId);

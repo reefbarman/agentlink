@@ -72,14 +72,19 @@ import {
   type OutsideReadOperation,
 } from "../approvals/actionApprovalReview.js";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
-import { isTeaserOnlyFinalSummary } from "../shared/finalSummaryHeuristics.js";
+import {
+  ASK_USER_TOOL,
+  SET_TASK_STATUS_TOOL,
+  buildAskUserResultPayload,
+  buildTaskStatusMarker,
+  buildTaskStatusResultPayload,
+  getAskUserModeSwitch,
+  isTaskStatus,
+  parseAskUserInput,
+} from "@agentlink/core/interaction-tools";
 import { McpClientHub } from "./McpClientHub.js";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import { IS_DEV_BUILD } from "../shared/buildFlags.js";
-import {
-  getConfirmationOptions,
-  isConfirmationOptions,
-} from "@agentlink/protocol/question-confirmation";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { getSearchInputError } from "../core/tools/searchInputValidation.js";
 import {
@@ -499,136 +504,6 @@ function skillAllowlistHasMcpTargets(
 }
 
 const MCP_META_TOOLS: ToolDefinition[] = MCP_META_TOOL_DEFINITIONS;
-
-/** Schema for the ask_user tool (always available in all modes). */
-const ASK_USER_TOOL: ToolDefinition = {
-  name: "ask_user",
-  description:
-    "Ask one or more structured questions and wait for responses before continuing. In a foreground session this asks the user. In a native background session the root foreground coordinator answers first and decides whether human escalation is necessary. Prefer `questions[].context`: visible text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. Use `recommended` whenever you recommend a choice: it must exactly match the option label (use `Yes` or `No` for `yes_no`, or the numeric value as a string for `scale`) and renders a recommendation badge. Do not write \"(recommended)\" into an option label. Use `confirmation` for a direct two-button decision: it submits immediately without a separate acknowledgement or Submit/Cancel control. It defaults to `Yes` and `No`; provide exactly two distinct `options` strings to name its buttons, and the selected label is returned as the answer. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
-  input_schema: {
-    type: "object",
-    properties: {
-      context: {
-        type: "string",
-        description:
-          "Optional brief shared intro shown above the questions. Use only for context that applies to every question; put question-specific rationale in questions[].context.",
-      },
-      questions: {
-        type: "array",
-        description:
-          "The questions to ask. All are shown at once; the user answers all before you continue.",
-        items: {
-          type: "object",
-          properties: {
-            id: {
-              type: "string",
-              description:
-                "Unique identifier for this question (used to map answers back)",
-            },
-            type: {
-              type: "string",
-              enum: [
-                "multiple_choice",
-                "multiple_select",
-                "yes_no",
-                "text",
-                "scale",
-                "confirmation",
-              ],
-              description: "Question type",
-            },
-            question: {
-              type: "string",
-              description: "The question text shown to the user",
-            },
-            context: {
-              type: "string",
-              description:
-                "Visible context shown with this specific question. Prefer this over top-level context, especially when asking multiple questions. Explain the local trade-off/options and include your recommendation when relevant.",
-            },
-            options: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "Answer options (required for multiple_choice and multiple_select). For confirmation, provide exactly two distinct labels to replace the default Yes/No buttons.",
-            },
-            recommended: {
-              type: "string",
-              description:
-                "Recommended option value. Match an option label exactly (use Yes or No for yes_no), or use the numeric value as a string for scale; renders a recommendation badge.",
-            },
-            allowBlank: {
-              type: "boolean",
-              description:
-                "Allows submitting a blank text answer. Only applies to text questions.",
-            },
-            scale_min: {
-              type: "number",
-              description: "Scale minimum (default: 1)",
-            },
-            scale_max: {
-              type: "number",
-              description: "Scale maximum (default: 5)",
-            },
-            scale_min_label: {
-              type: "string",
-              description: "Label for the low end of the scale",
-            },
-            scale_max_label: {
-              type: "string",
-              description: "Label for the high end of the scale",
-            },
-            modeSwitch: {
-              type: "object",
-              description:
-                "Maps answer values (option strings) to agent mode slugs. When the user picks a mapped answer, the agent switches mode as part of submission — no separate switch_mode approval is shown. Only valid on multiple_choice questions, and only one question per ask_user call may include modeSwitch. Available modes: code, architect, ask, debug, review (plus any custom modes).",
-              additionalProperties: { type: "string" },
-            },
-          },
-          required: ["id", "type", "question"],
-        },
-      },
-    },
-    required: ["questions"],
-  },
-};
-
-/** Base schema for final task status; background result fields are added per run. */
-const SET_TASK_STATUS_TOOL: ToolDefinition = {
-  name: "set_task_status",
-  description:
-    "Mark the current turn's final status and end the current response unless another user interjection is already pending. Unfinished todos do not resume automatically after this tool. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user, for intermediate progress updates, or to answer an interjected question when you intend to resume earlier work afterward; use ordinary visible text in those cases. The summary is the turn's final message: the complete response itself (answer, findings, artifact, or change report), not a meta-description. Do not also write it as text before this call. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Include a short continuation button label and prompt when the user can safely continue with one click, especially when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step.",
-  input_schema: {
-    type: "object",
-    properties: {
-      status: {
-        type: "string",
-        enum: ["completed", "waiting_for_user", "blocked", "cancelled"],
-      },
-      summary: {
-        type: "string",
-        description:
-          "The turn's final message, shown in the final-status card. Markdown is rendered. Must contain all the substance the user asked for (answer, explanation, findings, artifact, or result), not a meta-description or a recap of text already written. If the summary says 'here is', 'below', 'paste this', 'the prompt is', or otherwise promises an artifact, the complete artifact must be included in this same summary (for example, in a fenced code block). Never rely on text after set_task_status to provide missing content. Never write 'Explained X', 'Answered Y', 'Reviewed Z', or similar past-tense recaps. For non-trivial code-modifying work, structure as what changed (key files/behavior), why it matters, validation run, validation skipped with reasons, and concrete follow-up. Size it to the content: one sentence for a tiny answer, a full structured breakdown for detailed explanations or non-trivial work; do not reduce meaningful work to 'Done' or 'All set'. Keep it final and avoid open-ended questions or generic offers for further assistance.",
-      },
-      continueLabel: {
-        type: "string",
-        description:
-          "Button label for a clear next-step continuation. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
-      },
-      completeTodos: {
-        type: "boolean",
-        description:
-          "When true with status='completed', mark all currently visible todos completed as part of this final status call. Use instead of a separate todo_write call only when the existing todo list accurately represents finished work.",
-      },
-      continuePrompt: {
-        type: "string",
-        description:
-          "Visible user message sent when the continuation button is clicked. Make it specific enough to start the named next step, not just a generic 'continue', whenever there is remaining work from the original plan or a concrete follow-up in the summary. Wrap any command, slash command, file path, or code in backticks (for example `npm test`) so sending the prompt unchanged cannot invoke it as a command.",
-      },
-    },
-    required: ["status"],
-  },
-};
 
 type ExpectedBackgroundResult =
   | "text"
@@ -1449,62 +1324,32 @@ export async function buildAskUserToolResult(args: {
   modeSwitchProvider?: ModeSwitchProvider;
 }): Promise<ToolResult> {
   const { context, questions, response, modeSwitchProvider } = args;
-  const responses = questions.map((q) => {
-    const answer = response.answers[q.id];
-    const note = response.notes[q.id];
-    const attachments = response.attachments?.[q.id] ?? [];
-    const entry: Record<string, unknown> = {
-      question: q.question,
-      answer: answer ?? null,
-    };
-    if (q.context) entry.context = q.context;
-    if (note) entry.note = note;
-    if (attachments.length > 0) {
-      entry.attachments = attachments.map((attachment) => ({
-        kind: attachment.kind,
-        name: attachment.name,
-        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
-        ...(attachment.path ? { path: attachment.path } : {}),
-      }));
-    }
-    return entry;
-  });
-
-  const modeSwitchQuestion = questions.find(
-    (q) => q.modeSwitch && Object.keys(q.modeSwitch).length > 0,
-  );
+  const modeSwitch = getAskUserModeSwitch(questions, response);
   let modeSwitched: string | undefined;
   let modeSwitchFollowUp: string | undefined;
-  if (modeSwitchQuestion && modeSwitchProvider) {
-    const answer = response.answers[modeSwitchQuestion.id];
-    const mapping = modeSwitchQuestion.modeSwitch;
-    if (mapping && typeof answer === "string") {
-      const targetMode = mapping[answer];
-      if (targetMode) {
-        const note = response.notes[modeSwitchQuestion.id]?.trim();
-        const switchReason = note
-          ? `ask_user: "${answer}" — ${note}`
-          : `ask_user: "${answer}"`;
-        try {
-          const switchResult = await modeSwitchProvider.switchMode({
-            mode: targetMode,
-            reason: switchReason,
-            silent: true,
-          });
-          if (switchResult.approved) {
-            modeSwitched = switchResult.mode;
-            modeSwitchFollowUp = switchResult.followUp?.trim() || undefined;
-          }
-        } catch {
-          // ignore — fall back to no switch; agent can call switch_mode if needed
-        }
+  if (modeSwitch && modeSwitchProvider) {
+    try {
+      const switchResult = await modeSwitchProvider.switchMode({
+        mode: modeSwitch.mode,
+        reason: modeSwitch.reason,
+        silent: true,
+      });
+      if (switchResult.approved) {
+        modeSwitched = switchResult.mode;
+        modeSwitchFollowUp = switchResult.followUp?.trim() || undefined;
       }
+    } catch {
+      // ignore — fall back to no switch; agent can call switch_mode if needed
     }
   }
 
-  const payload: Record<string, unknown> = { context, responses };
-  if (modeSwitched) payload.modeSwitched = modeSwitched;
-  if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
+  const payload = buildAskUserResultPayload({
+    context,
+    questions,
+    response,
+    modeSwitched,
+    followUp: modeSwitchFollowUp,
+  });
   const media: ToolResult["content"] = [];
   for (const question of questions) {
     for (const attachment of response.attachments?.[question.id] ?? []) {
@@ -4198,12 +4043,7 @@ async function dispatchToolCallWithTrackedApprovals(
   switch (toolName) {
     case "set_task_status": {
       const status = params.status;
-      if (
-        status !== "completed" &&
-        status !== "waiting_for_user" &&
-        status !== "blocked" &&
-        status !== "cancelled"
-      ) {
+      if (!isTaskStatus(status)) {
         return {
           content: [
             {
@@ -4253,29 +4093,11 @@ async function dispatchToolCallWithTrackedApprovals(
           };
         }
       }
-      let summary =
-        typeof params.summary === "string" ? params.summary.trim() : "";
-      if (isTeaserOnlyFinalSummary(summary)) {
-        summary =
-          "Task status was set, but the final summary only promised an artifact and did not include it. Expand the `set_task_status` tool input below to inspect what the agent attempted to send.";
-      }
-      const continueLabel =
-        typeof params.continueLabel === "string"
-          ? params.continueLabel.trim()
-          : "";
-      const continuePrompt =
-        typeof params.continuePrompt === "string"
-          ? params.continuePrompt.trim()
-          : "";
-      const marker: FinalMessageMarker = {
+      const marker = buildTaskStatusMarker({
         status,
-        source: "tool",
-        ...(summary ? { summary } : {}),
-        ...(structuredResult ? { result: structuredResult } : {}),
-        ...(continueLabel && continuePrompt
-          ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
-          : {}),
-      };
+        params,
+        result: structuredResult,
+      });
       const sessionStatusProvider =
         ctx.sessionStatusProvider ?? createSessionStatusProvider(ctx);
       sessionStatusProvider.setFinalStatus(marker);
@@ -4284,24 +4106,17 @@ async function dispatchToolCallWithTrackedApprovals(
         status === "completed" && completeTodosRequested
           ? sessionStatusProvider.completeTodos?.()
           : undefined;
-      const completeTodosIgnored =
-        completeTodosRequested && status !== "completed";
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              ok: true,
-              ...(completedTodos
-                ? { completedTodos: completedTodos.length }
-                : {}),
-              ...(completeTodosIgnored
-                ? {
-                    completeTodosIgnored:
-                      "completeTodos only applies when status is 'completed'",
-                  }
-                : {}),
-            }),
+            text: JSON.stringify(
+              buildTaskStatusResultPayload({
+                status,
+                completeTodosRequested,
+                completedTodos,
+              }),
+            ),
           },
         ],
       };
@@ -5256,93 +5071,15 @@ async function dispatchToolCallWithTrackedApprovals(
           ],
         };
       }
-      const context = String(params.context ?? "").trim();
-      const rawQuestions: unknown[] = Array.isArray(params.questions)
-        ? params.questions
-        : [];
-      const invalidConfirmation = rawQuestions.find((question) => {
-        if (!question || typeof question !== "object") return false;
-        const q = question as Question;
-        return (
-          q.type === "confirmation" &&
-          q.options !== undefined &&
-          !isConfirmationOptions(q.options)
-        );
-      }) as Question | undefined;
-      const questions: Question[] = rawQuestions.flatMap((question) => {
-        if (!question || typeof question !== "object") return [];
-        const q = question as Question;
-        return [
-          {
-            ...q,
-            context:
-              typeof q.context === "string" ? q.context.trim() : q.context,
-            ...(q.type === "confirmation" && q.options !== undefined
-              ? { options: getConfirmationOptions(q.options) }
-              : {}),
-          },
-        ];
-      });
-      if (invalidConfirmation) {
+      const parsed = parseAskUserInput(params);
+      if (!parsed.ok) {
         return {
           content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: `Confirmation question "${invalidConfirmation.id}" must have exactly two distinct non-empty options when custom button labels are provided`,
-              }),
-            },
+            { type: "text", text: JSON.stringify({ error: parsed.error }) },
           ],
         };
       }
-      const hasQuestionContext = questions.some((q) => q.context?.trim());
-      if (!context && !hasQuestionContext) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "ask_user requires visible context in this tool call, either top-level context or questions[].context. Preceding assistant messages are intentionally not used because the question card must remain self-contained.",
-              }),
-            },
-          ],
-        };
-      }
-
-      // Reject calls that include modeSwitch on more than one question or on
-      // unsupported question types — keeps a single, unambiguous mode change
-      // per ask_user invocation.
-      const modeSwitchQuestions = questions.filter(
-        (q) => q.modeSwitch && Object.keys(q.modeSwitch).length > 0,
-      );
-      if (modeSwitchQuestions.length > 1) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "Only one question per ask_user call may include modeSwitch",
-              }),
-            },
-          ],
-        };
-      }
-      const modeSwitchQuestion = modeSwitchQuestions[0];
-      if (modeSwitchQuestion && modeSwitchQuestion.type !== "multiple_choice") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "modeSwitch is only supported on multiple_choice questions",
-              }),
-            },
-          ],
-        };
-      }
+      const { context, questions } = parsed;
 
       const response = await userQuestionProvider.ask({
         context,
