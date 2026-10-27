@@ -722,6 +722,193 @@ describe("workspace file tools", () => {
     });
   });
 
+  it("reviews VS Code's find_and_replace across globbed files and writes exactly the pinned baselines", async () => {
+    const test = await fixture();
+    await fs.mkdir(path.join(test.root, "src", "nested"), { recursive: true });
+    await fs.mkdir(path.join(test.root, "node_modules", "dep"), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(test.root, "top.ts"), "oldName();\n");
+    await fs.writeFile(
+      path.join(test.root, "src", "a.ts"),
+      "const x = oldName;\noldName();\n",
+    );
+    await fs.writeFile(
+      path.join(test.root, "src", "nested", "b.ts"),
+      "export { oldName };\n",
+    );
+    await fs.writeFile(path.join(test.root, "src", "c.md"), "oldName\n");
+    await fs.writeFile(
+      path.join(test.root, "node_modules", "dep", "d.ts"),
+      "oldName\n",
+    );
+    const tool = test.tool("find_and_replace");
+    expect(tool.definition.input_schema).toMatchObject({
+      required: ["find", "replace"],
+      properties: {
+        glob: expect.any(Object),
+        regex: expect.any(Object),
+        max_replacements: expect.any(Object),
+      },
+    });
+    const authorize = (toolCallId: string, input: Record<string, unknown>) =>
+      test.files.authorizeToolCall({
+        principal,
+        sessionId: "session",
+        turnId: "turn",
+        model,
+        toolCallId,
+        toolName: "find_and_replace",
+        input,
+        effect: "write",
+      });
+    const input = {
+      find: "old(\\w+)",
+      replace: "new$1",
+      regex: true,
+      glob: "src/**/*.ts",
+    };
+
+    const reviewed = await authorize("glob", input);
+    expect(reviewed).toMatchObject({
+      decision: "require_user",
+      displayContent: {
+        kind: "file_write",
+        toolName: "find_and_replace",
+        path: "2 files",
+        replacements: 3,
+        files: [
+          { path: "src/a.ts", changes: 2 },
+          { path: "src/nested/b.ts", changes: 1 },
+        ],
+      },
+    });
+    if (reviewed.decision !== "require_user" || !reviewed.preparedInput) {
+      throw new Error("Expected a pinned review");
+    }
+    expect(reviewed.preparedInput.expectedContentHashes).toEqual({
+      "src/a.ts": hash("const x = oldName;\noldName();\n"),
+      "src/nested/b.ts": hash("export { oldName };\n"),
+    });
+    const display = reviewed.displayContent as WorkspaceFileApprovalDisplay;
+    expect(display.diff).toContain("+const x = newName;");
+    await expect(
+      test.files.validatePendingWrite({
+        principal,
+        sessionId: "session",
+        turnId: "turn",
+        toolName: "find_and_replace",
+        input: reviewed.preparedInput,
+        displayContent: display,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    // Execution refuses an unpinned call and a baseline that drifted.
+    await expect(tool.execute(input, context())).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({
+        error: "expected_content_hashes_required",
+      }),
+    });
+    const written = await tool.execute(
+      { ...reviewed.preparedInput },
+      context(),
+    );
+    expect(written.isError).not.toBe(true);
+    expect(JSON.parse(String(written.modelContent))).toMatchObject({
+      status: "applied",
+      find: "old(\\w+)",
+      replace: "new$1",
+      files_changed: 2,
+      total_replacements: 3,
+      files: [
+        {
+          path: "src/a.ts",
+          changes: 2,
+          post_edit_content_hash: hash("const x = newName;\nnewName();\n"),
+        },
+        { path: "src/nested/b.ts", changes: 1 },
+      ],
+    });
+    await expect(
+      fs.readFile(path.join(test.root, "top.ts"), "utf8"),
+    ).resolves.toBe("oldName();\n");
+    await expect(
+      fs.readFile(path.join(test.root, "node_modules", "dep", "d.ts"), "utf8"),
+    ).resolves.toBe("oldName\n");
+
+    await fs.writeFile(path.join(test.root, "top.ts"), "oldName();\n");
+    const single = await authorize("single", {
+      find: "oldName",
+      replace: "x",
+      path: "top.ts",
+    });
+    if (single.decision !== "require_user" || !single.preparedInput) {
+      throw new Error("Expected a pinned review");
+    }
+    await fs.writeFile(path.join(test.root, "top.ts"), "oldName(); oldName\n");
+    await expect(
+      test
+        .tool("find_and_replace")
+        .execute({ ...single.preparedInput }, context()),
+    ).resolves.toMatchObject({
+      modelContent: expect.stringContaining('"status":"stale_proposal"'),
+    });
+    await expect(
+      fs.readFile(path.join(test.root, "top.ts"), "utf8"),
+    ).resolves.toBe("oldName(); oldName\n");
+
+    // Nothing to write skips review and returns VS Code's payloads.
+    const none = await authorize("none", {
+      find: "absent",
+      replace: "x",
+      glob: "**/*.ts",
+    });
+    expect(none).toMatchObject({ decision: "allow" });
+    if (none.decision !== "allow" || !none.preparedInput) {
+      throw new Error("Expected an allowed no-op");
+    }
+    await expect(
+      tool.execute({ ...none.preparedInput }, context()),
+    ).resolves.toMatchObject({
+      modelContent: JSON.stringify({
+        status: "no_matches",
+        find: "absent",
+        files_searched: 3,
+      }),
+    });
+    await expect(
+      tool.execute(
+        {
+          find: "oldName",
+          replace: "x",
+          glob: "**/*.ts",
+          max_replacements: 1,
+          expectedContentHashes: {},
+        },
+        context(),
+      ),
+    ).resolves.toMatchObject({
+      modelContent: expect.stringContaining('"status":"too_many_matches"'),
+    });
+    await expect(
+      tool.execute({ find: "x", replace: "y", glob: "*.nope" }, context()),
+    ).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({
+        error: "No files matched glob pattern: *.nope",
+      }),
+    });
+
+    await fs.writeFile(path.join(test.root, "AGENTS.md"), "oldName\n");
+    await expect(
+      authorize("protected", { find: "oldName", replace: "x", glob: "*.md" }),
+    ).resolves.toMatchObject({
+      decision: "require_user",
+      displayContent: { protected: true, protectionReason: "instruction_file" },
+    });
+  });
+
   it("limits session grants to one tool and a verified content-hash chain", async () => {
     const test = await fixture();
     const filePath = path.join(test.root, "granted.txt");

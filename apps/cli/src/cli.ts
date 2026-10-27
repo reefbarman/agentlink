@@ -1234,7 +1234,10 @@ async function runInkInteractiveChat(
             ? "Allow background once and acknowledge concurrent edits"
             : "Approve once",
       },
-      ...((fileProposal && !fileProposal.protected) ||
+      // A multi-file find_and_replace has no single path to grant.
+      ...((fileProposal &&
+        !fileProposal.protected &&
+        fileProposal.toolName !== "find_and_replace") ||
       commandProposal?.mode === "foreground" ||
       mcpProposal
         ? [
@@ -1256,7 +1259,9 @@ async function runInkInteractiveChat(
     const response = await requestControl({
       id: interaction.interactionId,
       title: fileProposal
-        ? `Review ${fileProposal.operation} · ${fileProposal.path}`
+        ? fileProposal.toolName === "find_and_replace"
+          ? `Review find and replace · ${fileProposal.path}`
+          : `Review ${fileProposal.operation} · ${fileProposal.path}`
         : commandProposal
           ? `Review ${commandProposal.mode} command`
           : `Review MCP tool · ${mcpProposal!.serverId}/${mcpProposal!.serverToolName}`,
@@ -2507,6 +2512,16 @@ function proposalBody(
     | WorkspaceMcpToolApprovalDisplay
     | WorkspaceSharedMcpToolApproval,
 ): readonly string[] {
+  if (isWorkspaceFileProposal(proposal) && proposal.files) {
+    return [
+      `${proposal.replacements ?? 0} replacement${proposal.replacements === 1 ? "" : "s"} in ${proposal.files.length} file${proposal.files.length === 1 ? "" : "s"}:`,
+      ...proposal.files.map(
+        (file) =>
+          `  ${file.path} (${file.changes} change${file.changes === 1 ? "" : "s"})${file.protected ? ` [protected: ${file.protectionReason ?? "yes"}]` : ""}`,
+      ),
+      ...proposal.diff.split("\n"),
+    ];
+  }
   if (isWorkspaceFileProposal(proposal)) {
     return [
       `Baseline: ${proposal.expectedContentHash ?? "absent"}`,
@@ -2569,7 +2584,8 @@ function isWorkspaceFileProposal(
   return (
     proposal.kind === "file_write" &&
     (proposal.toolName === "write_file" ||
-      proposal.toolName === "apply_diff") &&
+      proposal.toolName === "apply_diff" ||
+      proposal.toolName === "find_and_replace") &&
     typeof proposal.path === "string" &&
     typeof proposal.diff === "string" &&
     (proposal.operation === "created" || proposal.operation === "modified") &&

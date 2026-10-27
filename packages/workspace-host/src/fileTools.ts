@@ -9,6 +9,12 @@ import {
 } from "@agentlink/core";
 import { planApplyDiff } from "@agentlink/core/apply-diff";
 import {
+  buildFindAndReplacePattern,
+  FIND_AND_REPLACE_MAX_GLOB_FILES,
+  planFindAndReplace,
+  type FindAndReplaceFilePlan,
+} from "@agentlink/core/find-and-replace";
+import {
   buildRipgrepSearchArgs,
   emptyContentSearchResult,
   filePatternGlobArgs,
@@ -27,6 +33,7 @@ import {
 import {
   applyDiffBlockOptions,
   createNodeHostApplyDiffTools,
+  createNodeHostGlobMatcher,
   createNodeHostReadTools,
   createNodeHostWriteTools,
   isNodeHostStructuredConfigPath,
@@ -73,9 +80,24 @@ const BACKEND_SEARCH_ENVIRONMENT: Readonly<Record<string, string>> = {
   PATH: "/usr/bin:/bin",
 };
 
+/** One file in a multi-file (`find_and_replace`) proposal. */
+export interface WorkspaceFileApprovalDisplayFile {
+  readonly path: string;
+  readonly changes: number;
+  readonly expectedContentHash: string;
+  readonly proposedContentHash: string;
+  readonly bytes: number;
+  readonly protected: boolean;
+  readonly protectionReason?: string;
+}
+
 export interface WorkspaceFileApprovalDisplay {
   readonly kind: "file_write";
-  readonly toolName: "write_file" | "apply_diff";
+  readonly toolName: "write_file" | "apply_diff" | "find_and_replace";
+  /**
+   * Project-relative target. A multi-file `find_and_replace` proposal uses
+   * its single file's path, or `N files`; see `files` for each target.
+   */
   readonly path: string;
   readonly operation: "created" | "modified";
   readonly expectedContentHash?: string;
@@ -85,6 +107,10 @@ export interface WorkspaceFileApprovalDisplay {
   readonly diff: string;
   readonly protected: boolean;
   readonly protectionReason?: string;
+  /** `find_and_replace` only: every reviewed file with its pinned baseline. */
+  readonly files?: readonly WorkspaceFileApprovalDisplayFile[];
+  /** `find_and_replace` only: total replacements across `files`. */
+  readonly replacements?: number;
   readonly scopeDigest: string;
   readonly operationDigest: string;
   readonly policyRevision: string;
@@ -220,6 +246,9 @@ export function createWorkspaceFileTools(
       })(request),
     ]);
     const tools = [...reads, ...writes, ...diffs];
+    const nodeWriteFile = writes.find(
+      (tool) => tool.definition.name === "write_file",
+    );
     if (options.ripgrepExecutable) {
       const searchIndex = tools.findIndex(
         (tool) => tool.definition.name === "search_files",
@@ -232,7 +261,7 @@ export function createWorkspaceFileTools(
         );
       }
     }
-    return tools.map((tool) =>
+    const projectTools = tools.map((tool) =>
       tool.definition.name === "read_file"
         ? createWorkspaceReadFileTool(
             runtime,
@@ -255,13 +284,29 @@ export function createWorkspaceFileTools(
             options.mutations,
           ),
     );
+    return nodeWriteFile
+      ? [
+          ...projectTools,
+          createFindAndReplaceTool(
+            files,
+            request,
+            projectRoot,
+            resolveScopes,
+            nodeWriteFile,
+            options.canWritePath,
+            options.onFileCommitted,
+            options.mutations,
+          ),
+        ]
+      : projectTools;
   };
 
   const authorizeToolCall: AuthorizeToolCall = async (request) => {
     try {
       if (
         request.toolName !== "write_file" &&
-        request.toolName !== "apply_diff"
+        request.toolName !== "apply_diff" &&
+        request.toolName !== "find_and_replace"
       ) {
         return {
           decision: "deny",
@@ -274,6 +319,44 @@ export function createWorkspaceFileTools(
         resolveScopes,
         request,
       );
+      if (request.toolName === "find_and_replace") {
+        const prepared = await prepareFindAndReplaceApproval(
+          files,
+          projectRoot,
+          request.input,
+          scopes,
+        );
+        if (prepared.ok === "no_write") {
+          // Nothing to write: executing returns VS Code's no_matches,
+          // guardrail, or error payload.
+          return { decision: "allow", preparedInput: prepared.preparedInput };
+        }
+        if (!prepared.ok) return { decision: "deny", reason: prepared.reason };
+        for (const file of prepared.display.files ?? []) {
+          if (
+            options.canWritePath &&
+            !(await options.canWritePath(request, file.path))
+          ) {
+            return {
+              decision: "deny",
+              reason: "Path is reserved by another active workspace writer",
+            };
+          }
+        }
+        if (
+          !prepared.display.protected &&
+          options.approvalPolicy?.hasSessionGrant?.(prepared.display, request)
+        ) {
+          return { decision: "allow", preparedInput: prepared.preparedInput };
+        }
+        const fileCount = prepared.display.files?.length ?? 0;
+        return {
+          decision: "require_user",
+          summary: `Replace \`${String(request.input.find)}\` → \`${String(request.input.replace)}\` (${prepared.display.replacements} match${prepared.display.replacements === 1 ? "" : "es"} in ${fileCount} file${fileCount === 1 ? "" : "s"})`,
+          displayContent: prepared.display,
+          preparedInput: prepared.preparedInput,
+        };
+      }
       const prepared = await prepareWriteApproval(
         files,
         projectRoot,
@@ -329,7 +412,8 @@ export function createWorkspaceFileTools(
     async (request) => {
       if (
         request.toolName !== "write_file" &&
-        request.toolName !== "apply_diff"
+        request.toolName !== "apply_diff" &&
+        request.toolName !== "find_and_replace"
       ) {
         return { ok: false, reason: "Pending operation is not a file write" };
       }
@@ -346,13 +430,20 @@ export function createWorkspaceFileTools(
           turnId: request.turnId,
         },
       );
-      const prepared = await prepareWriteApproval(
-        files,
-        projectRoot,
-        request.toolName,
-        request.input,
-        scopes,
-      );
+      const prepared = await (request.toolName === "find_and_replace"
+        ? prepareFindAndReplaceApproval(
+            files,
+            projectRoot,
+            request.input,
+            scopes,
+          )
+        : prepareWriteApproval(
+            files,
+            projectRoot,
+            request.toolName,
+            request.input,
+            scopes,
+          ));
       if (prepared.ok === "no_write") {
         return { ok: false, reason: "Pending file proposal no longer applies" };
       }
@@ -1382,6 +1473,576 @@ async function prepareWriteApproval(
   };
 }
 
+const FIND_AND_REPLACE_WALK_ENTRY_LIMIT = 50_000;
+
+/** VS Code's `find_and_replace` input; writes never run a formatter here. */
+const FIND_AND_REPLACE_INPUT_SCHEMA: CoreModelJsonSchema = {
+  type: "object",
+  properties: {
+    find: {
+      type: "string",
+      description:
+        "Text to find. Treated as a literal string unless regex=true.",
+    },
+    replace: { type: "string", description: "Replacement text" },
+    path: {
+      type: "string",
+      minLength: 1,
+      description:
+        "Single project-relative file path to search in. Mutually exclusive with glob.",
+    },
+    glob: {
+      type: "string",
+      minLength: 1,
+      maxLength: 500,
+      description:
+        "Glob pattern relative to the project root (e.g. 'src/**/*.ts'). Mutually exclusive with path.",
+    },
+    regex: {
+      type: "boolean",
+      description:
+        "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar, \\n \\t \\\\ escapes. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other $ and \\ tokens stay literal.",
+    },
+    max_replacements: {
+      type: "integer",
+      description:
+        "Maximum allowed matches to replace. Must be a positive integer. If total matches exceed this value, no edits are applied and the tool returns a guardrail error payload.",
+    },
+    expectedContentHashes: {
+      type: "object",
+      maxProperties: FIND_AND_REPLACE_MAX_GLOB_FILES,
+      additionalProperties: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      description:
+        "Optional map of project-relative path to the SHA-256 you read. Normally omitted: the host pins the baselines shown for review.",
+    },
+  },
+  required: ["find", "replace"],
+  additionalProperties: false,
+};
+
+interface FindAndReplaceTarget {
+  readonly relativePath: string;
+  readonly absolutePath: string;
+  readonly content: string;
+}
+
+type WorkspaceFindAndReplacePlan =
+  | { readonly status: "error"; readonly error: string }
+  | { readonly status: "final"; readonly payload: Record<string, unknown> }
+  | {
+      readonly status: "ready";
+      readonly files: readonly FindAndReplaceFilePlan[];
+      readonly totalMatches: number;
+      readonly absolutePaths: ReadonlyMap<string, string>;
+    };
+
+/**
+ * VS Code's find_and_replace decision over project files: `path` names one
+ * file, `glob` walks the project (skipping `.git`, `node_modules`, and
+ * read-protected paths) for up to 500 matching readable text files.
+ */
+async function planWorkspaceFindAndReplace(
+  files: WorkspaceFileSystem,
+  projectRoot: string,
+  input: Readonly<Record<string, unknown>>,
+  scopes: readonly ResolvedWorkspaceFileScope[],
+): Promise<WorkspaceFindAndReplacePlan> {
+  if (typeof input.find !== "string" || typeof input.replace !== "string") {
+    return { status: "error", error: "'find' and 'replace' must be strings" };
+  }
+  if (!input.find) {
+    return { status: "error", error: "'find' parameter is required" };
+  }
+  const regex = input.regex === true;
+  const pattern = buildFindAndReplacePattern(input.find, regex);
+  if (!pattern.ok) return { status: "error", error: pattern.error };
+
+  let candidates: string[];
+  if (typeof input.path === "string" && input.path) {
+    const resolved = await resolveProjectPath(files, projectRoot, input.path, {
+      allowAbsent: false,
+    });
+    if (!resolved.ok) return { status: "error", error: resolved.error };
+    const relativePath = toRelativePath(projectRoot, resolved.path);
+    if (!scopeAllows(scopes, relativePath, "read")) {
+      return { status: "error", error: "path_not_scoped" };
+    }
+    const protection = protectedPath(relativePath);
+    if (protection.blockRead) {
+      return {
+        status: "error",
+        error: protection.reason ?? "protected_content",
+      };
+    }
+    if (isIgnoredPath(relativePath)) {
+      return { status: "error", error: "path_ignored" };
+    }
+    candidates = [resolved.path];
+  } else if (typeof input.glob === "string" && input.glob) {
+    candidates = await findProjectFilesByGlob(
+      files,
+      projectRoot,
+      input.glob,
+      scopes,
+    );
+    if (candidates.length === 0) {
+      return {
+        status: "error",
+        error: `No files matched glob pattern: ${input.glob}`,
+      };
+    }
+  } else {
+    return {
+      status: "error",
+      error: "Either 'path' or 'glob' must be specified",
+    };
+  }
+
+  // Like VS Code, files that cannot be opened as text are skipped.
+  const targets: FindAndReplaceTarget[] = [];
+  for (const absolutePath of candidates) {
+    const content = await readReviewableText(files, absolutePath);
+    if (content === undefined) continue;
+    targets.push({
+      relativePath: toRelativePath(projectRoot, absolutePath),
+      absolutePath,
+      content,
+    });
+  }
+  const plan = planFindAndReplace(
+    {
+      find: input.find,
+      replace: input.replace,
+      regex,
+      ...(input.max_replacements !== undefined
+        ? { max_replacements: input.max_replacements as number }
+        : {}),
+    },
+    targets.map((target) => ({
+      path: target.relativePath,
+      content: target.content,
+    })),
+  );
+  if (plan.status !== "ready") return plan;
+  return {
+    ...plan,
+    absolutePaths: new Map(
+      targets.map((target) => [target.relativePath, target.absolutePath]),
+    ),
+  };
+}
+
+async function findProjectFilesByGlob(
+  files: WorkspaceFileSystem,
+  projectRoot: string,
+  glob: string,
+  scopes: readonly ResolvedWorkspaceFileScope[],
+): Promise<string[]> {
+  const matches = createNodeHostGlobMatcher(glob);
+  const found: string[] = [];
+  const queue = [projectRoot];
+  let visited = 0;
+  while (queue.length > 0) {
+    const directory = queue.shift()!;
+    const entries = await files.readDirectory(directory).catch(() => []);
+    // Sorted so review and pending validation see the same file order.
+    for (const entry of [...entries].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    )) {
+      visited += 1;
+      if (visited > FIND_AND_REPLACE_WALK_ENTRY_LIMIT) return found;
+      const absolutePath = path.join(directory, entry.name);
+      const relativePath = toRelativePath(projectRoot, absolutePath);
+      if (
+        isIgnoredPath(relativePath) ||
+        protectedPath(relativePath).blockRead
+      ) {
+        continue;
+      }
+      if (entry.kind === "directory") {
+        queue.push(absolutePath);
+      } else if (
+        entry.kind === "file" &&
+        matches(relativePath) &&
+        scopeAllows(scopes, relativePath, "read")
+      ) {
+        found.push(absolutePath);
+        if (found.length >= FIND_AND_REPLACE_MAX_GLOB_FILES) return found;
+      }
+    }
+  }
+  return found;
+}
+
+async function readReviewableText(
+  files: WorkspaceFileSystem,
+  absolutePath: string,
+): Promise<string | undefined> {
+  const stat = await files.lstat(absolutePath).catch(() => undefined);
+  if (
+    stat?.kind !== "file" ||
+    stat.nlink > 1 ||
+    stat.size > MAX_CONTEXT_BYTES
+  ) {
+    return undefined;
+  }
+  const bytes = await files.readFile(absolutePath).catch(() => undefined);
+  if (!bytes || bytes.includes(0)) return undefined;
+  return bytes.toString("utf8");
+}
+
+function findAndReplaceBaselines(
+  planned: readonly FindAndReplaceFilePlan[],
+): Record<string, string> {
+  return Object.fromEntries(
+    planned.map((file) => [file.path, contentHash(file.content)]),
+  );
+}
+
+function sameBaselines(
+  supplied: unknown,
+  current: Readonly<Record<string, string>>,
+): boolean {
+  if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) {
+    return false;
+  }
+  const record = supplied as Record<string, unknown>;
+  const keys = Object.keys(current);
+  return (
+    Object.keys(record).length === keys.length &&
+    keys.every((key) => record[key] === current[key])
+  );
+}
+
+/**
+ * Review one find_and_replace proposal. The reviewed baseline of every file
+ * is pinned into `expectedContentHashes` (host-prepared input) so the write
+ * applies to exactly the content shown.
+ */
+async function prepareFindAndReplaceApproval(
+  files: WorkspaceFileSystem,
+  projectRoot: string,
+  input: Readonly<Record<string, unknown>>,
+  scopes: readonly ResolvedWorkspaceFileScope[],
+): Promise<
+  | {
+      ok: true;
+      display: WorkspaceFileApprovalDisplay;
+      preparedInput: Readonly<Record<string, unknown>>;
+    }
+  | { ok: "no_write"; preparedInput: Readonly<Record<string, unknown>> }
+  | { ok: false; reason: string }
+> {
+  const { expectedContentHashes: supplied, ...rest } = input;
+  const planned = await planWorkspaceFindAndReplace(
+    files,
+    projectRoot,
+    rest,
+    scopes,
+  );
+  if (planned.status !== "ready") {
+    return {
+      ok: "no_write",
+      preparedInput: { ...rest, expectedContentHashes: {} },
+    };
+  }
+  const baselines = findAndReplaceBaselines(planned.files);
+  if (supplied !== undefined && !sameBaselines(supplied, baselines)) {
+    return { ok: false, reason: "File baseline changed before review" };
+  }
+  const entries: WorkspaceFileApprovalDisplayFile[] = [];
+  const diffs: string[] = [];
+  let bytes = 0;
+  for (const file of planned.files) {
+    if (!scopeAllows(scopes, file.path, "write")) {
+      return {
+        ok: false,
+        reason: `Path is outside the active write scope: ${file.path}`,
+      };
+    }
+    const protection = protectedPath(file.path);
+    if (protection.blockWrite) {
+      return {
+        ok: false,
+        reason: `Writes to ${protection.reason ?? "this protected path"} are not supported`,
+      };
+    }
+    const fileBytes = Buffer.byteLength(file.proposedContent, "utf8");
+    if (fileBytes > MAX_CONTEXT_BYTES) {
+      return { ok: false, reason: "Proposed file is too large" };
+    }
+    bytes += fileBytes;
+    entries.push({
+      path: file.path,
+      changes: file.replacements.length,
+      expectedContentHash: baselines[file.path]!,
+      proposedContentHash: contentHash(file.proposedContent),
+      bytes: fileBytes,
+      protected: protection.protected,
+      ...(protection.reason ? { protectionReason: protection.reason } : {}),
+    });
+    diffs.push(
+      renderReviewDiff(
+        file.path,
+        file.content,
+        file.proposedContent,
+        "modified",
+      ),
+    );
+  }
+  const preparedInput = { ...rest, expectedContentHashes: baselines };
+  const protectedEntry = entries.find((entry) => entry.protected);
+  const scopeDigest = fileScopeDigest(scopes);
+  const operationDigest = contentHash(
+    JSON.stringify({
+      policyRevision: POLICY_REVISION,
+      toolName: "find_and_replace",
+      projectRoot,
+      files: entries,
+      scopeDigest,
+      inputDigest: contentHash(JSON.stringify(preparedInput)),
+    }),
+  );
+  return {
+    ok: true,
+    display: {
+      kind: "file_write",
+      toolName: "find_and_replace",
+      path: entries.length === 1 ? entries[0]!.path : `${entries.length} files`,
+      operation: "modified",
+      expectedContentHash: contentHash(JSON.stringify(baselines)),
+      proposedContentHash: contentHash(
+        JSON.stringify(
+          entries.map((entry) => [entry.path, entry.proposedContentHash]),
+        ),
+      ),
+      bytes,
+      diff: diffs.join("\n"),
+      protected: protectedEntry !== undefined,
+      ...(protectedEntry?.protectionReason
+        ? { protectionReason: protectedEntry.protectionReason }
+        : {}),
+      files: entries,
+      replacements: planned.totalMatches,
+      scopeDigest,
+      operationDigest,
+      policyRevision: POLICY_REVISION,
+    },
+    preparedInput,
+  };
+}
+
+/**
+ * VS Code's `find_and_replace` over project-relative files. Execution needs
+ * the per-file baselines pinned at review; each file is then written with
+ * the same locked, hash-pinned, exact replacement as `write_file`.
+ */
+function createFindAndReplaceTool(
+  files: WorkspaceFileSystem,
+  discovery: HostToolResolveRequest,
+  projectRoot: string,
+  resolveScopes: ResolveWorkspaceFileScopes,
+  writeFile: HostTool,
+  canWritePath: CreateWorkspaceFileToolsOptions["canWritePath"] | undefined,
+  onFileCommitted:
+    | CreateWorkspaceFileToolsOptions["onFileCommitted"]
+    | undefined,
+  mutations: WorkspaceFileMutationCoordinator | undefined,
+): HostTool {
+  return defineTool({
+    name: "find_and_replace",
+    description:
+      "Bulk find-and-replace across one or more project files (project-relative path or glob). The complete diff is reviewed before applying, and literal strings or regex with capture groups are supported. Writes preserve exact content; no formatter runs.",
+    inputSchema: FIND_AND_REPLACE_INPUT_SCHEMA,
+    effect: "write",
+    authorization: "required",
+    parallelSafe: false,
+    displayInput: (input) => ({
+      find: input.find,
+      replace: input.replace,
+      ...(input.path !== undefined ? { path: input.path } : {}),
+      ...(input.glob !== undefined ? { glob: input.glob } : {}),
+    }),
+    handler: async (input, context) => {
+      if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
+      const scopes = await resolveFileScopes(
+        files,
+        projectRoot,
+        resolveScopes,
+        discovery,
+      );
+      const { expectedContentHashes, ...rest } = input;
+      const planned = await planWorkspaceFindAndReplace(
+        files,
+        projectRoot,
+        rest,
+        scopes,
+      );
+      if (planned.status === "error") {
+        const payload = { error: planned.error };
+        return {
+          modelContent: JSON.stringify(payload),
+          displayContent: payload,
+          isError: true,
+        };
+      }
+      if (planned.status === "final") {
+        return {
+          modelContent: JSON.stringify(planned.payload),
+          displayContent: planned.payload,
+        };
+      }
+      if (
+        !expectedContentHashes ||
+        typeof expectedContentHashes !== "object" ||
+        Array.isArray(expectedContentHashes)
+      ) {
+        return toolError("expected_content_hashes_required");
+      }
+      const baselines = findAndReplaceBaselines(planned.files);
+      if (!sameBaselines(expectedContentHashes, baselines)) {
+        const pinned = expectedContentHashes as Record<string, unknown>;
+        const changed =
+          planned.files.find(
+            (file) => pinned[file.path] !== baselines[file.path],
+          )?.path ?? Object.keys(pinned).find((key) => !(key in baselines));
+        const payload = {
+          status: "stale_proposal",
+          no_changes_applied: true,
+          ...(changed ? { path: changed } : {}),
+          message:
+            "File content changed after the replacement preview; review a fresh proposal before retrying.",
+        };
+        return {
+          modelContent: JSON.stringify(payload),
+          displayContent: payload,
+        };
+      }
+      for (const file of planned.files) {
+        if (
+          !scopeAllows(scopes, file.path, "write") ||
+          protectedPath(file.path).blockWrite
+        ) {
+          return toolError("path_not_scoped");
+        }
+      }
+      const execute = async () => {
+        if (canWritePath) {
+          for (const file of planned.files) {
+            if (!(await canWritePath(discovery, file.path))) {
+              return toolError("path_reserved_by_active_writer");
+            }
+          }
+        }
+        const results: Array<Record<string, unknown>> = [];
+        const saved: string[] = [];
+        let failure: string | undefined;
+        for (const file of planned.files) {
+          const changes = file.replacements.length;
+          if (failure) {
+            results.push({ path: file.path, changes, status: "not_attempted" });
+            continue;
+          }
+          const written = await writeFile.execute(
+            {
+              path: planned.absolutePaths.get(file.path),
+              content: file.proposedContent,
+              expectedContentHash: baselines[file.path],
+            },
+            context,
+          );
+          const parsed = parseJsonRecord(written.modelContent);
+          const durability = parsed?.durability as
+            | { status?: unknown; final_content_hash?: unknown }
+            | undefined;
+          if (
+            written.isError ||
+            durability?.status !== "durable" ||
+            typeof durability.final_content_hash !== "string"
+          ) {
+            failure = file.path;
+            results.push({
+              path: file.path,
+              changes,
+              status: "error",
+              error:
+                typeof parsed?.error === "string"
+                  ? parsed.error
+                  : "write_failed",
+            });
+            continue;
+          }
+          saved.push(file.path);
+          results.push({
+            path: file.path,
+            changes,
+            durability,
+            post_edit_content_hash: durability.final_content_hash,
+          });
+          if (onFileCommitted) {
+            await Promise.resolve(onFileCommitted(discovery, file.path)).catch(
+              () => undefined,
+            );
+          }
+        }
+        const summary = {
+          find: rest.find,
+          replace: rest.replace,
+          total_replacements: planned.totalMatches,
+        };
+        if (!failure) {
+          const payload = {
+            status: "applied",
+            ...summary,
+            files_changed: saved.length,
+            files: results,
+          };
+          return {
+            modelContent: JSON.stringify(payload),
+            displayContent: payload,
+          };
+        }
+        const failed = planned.files
+          .map((file) => file.path)
+          .filter((filePath) => !saved.includes(filePath));
+        const payload = {
+          error: `Failed to write ${failed.length} of ${planned.files.length} replacement file${planned.files.length !== 1 ? "s" : ""}`,
+          ...summary,
+          status: saved.length > 0 ? "partial" : "error",
+          reason: "write_failed",
+          saved_files: saved,
+          failed_files: failed,
+          files: results,
+          next_steps: [
+            "Replacements in saved_files were written and verified; do not repeat them.",
+            "Re-read each failed file before retrying.",
+          ],
+        };
+        return {
+          modelContent: JSON.stringify(payload),
+          displayContent: payload,
+          isError: true,
+        };
+      };
+      return mutations
+        ? await mutations.withCommit(execute, context.signal)
+        : await execute();
+    },
+  });
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveProjectPath(
   files: WorkspaceFileSystem,
   projectRoot: string,
@@ -1686,7 +2347,9 @@ function isWorkspaceFileApprovalDisplay(
   const display = value as Partial<WorkspaceFileApprovalDisplay>;
   return (
     display.kind === "file_write" &&
-    (display.toolName === "write_file" || display.toolName === "apply_diff") &&
+    (display.toolName === "write_file" ||
+      display.toolName === "apply_diff" ||
+      display.toolName === "find_and_replace") &&
     typeof display.path === "string" &&
     (display.operation === "created" || display.operation === "modified") &&
     typeof display.proposedContentHash === "string" &&
@@ -1716,7 +2379,9 @@ function sameApprovalDisplay(
     current.bytes === stored.bytes &&
     current.diff === stored.diff &&
     current.protected === stored.protected &&
-    current.protectionReason === stored.protectionReason
+    current.protectionReason === stored.protectionReason &&
+    current.replacements === stored.replacements &&
+    JSON.stringify(current.files) === JSON.stringify(stored.files)
   );
 }
 

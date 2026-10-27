@@ -16,6 +16,7 @@ import {
   type SandboxManagedNetworkDestination,
   type SandboxRuntimeProvider,
 } from "@agentlink/sandbox";
+import { APPLY_DIFF_INPUT_GRAMMAR } from "@agentlink/core/apply-diff";
 import type { CoreModelToolDefinition } from "@agentlink/core/model-runtime";
 
 type WorkspaceHostModule = typeof import("@agentlink/workspace-host", {
@@ -272,15 +273,59 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
     {
       name: "apply_diff",
       description:
-        "Edit an existing text file inside a folder the user granted for commands, using SEARCH/REPLACE blocks (each SEARCH must match exactly once). Pass the absolute path and expectedContentHash from read_file. The change waits for the user's approval. Each block is the line <<<<<<< SEARCH, the exact old lines, the line ======= DIVIDER =======, the new lines, then the line >>>>>>> REPLACE.",
+        "Edit an existing text file inside a folder the user granted for commands, using SEARCH/REPLACE blocks or unified-diff hunks. Pass the absolute path. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate. The change waits for the user's approval of the exact result. Ambiguous failures include candidate locations plus copy-ready block_options.",
       input_schema: {
         type: "object",
         properties: {
           path: { type: "string", minLength: 1 },
-          diff: { type: "string", minLength: 1 },
-          expectedContentHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          diff: {
+            type: "string",
+            minLength: 1,
+            description: APPLY_DIFF_INPUT_GRAMMAR,
+          },
+          block_options: {
+            type: "array",
+            maxItems: 64,
+            description:
+              "Optional per-block controls. Use occurrence to select a 1-based exact/flexible/escape-normalized match, or replace_all to replace every exact match. Unlisted blocks retain unique-match safety.",
+            items: {
+              type: "object",
+              properties: {
+                index: {
+                  type: "integer",
+                  minimum: 0,
+                  description:
+                    "Zero-based positional SEARCH/REPLACE block index, counting malformed block slots before the target",
+                },
+                occurrence: {
+                  type: "integer",
+                  minimum: 1,
+                  description:
+                    "Select this 1-based matching occurrence for the block",
+                },
+                replace_all: {
+                  type: "boolean",
+                  const: true,
+                  description: "Replace every exact occurrence for this block",
+                },
+              },
+              required: ["index"],
+              additionalProperties: false,
+            },
+          },
+          atomic: {
+            type: "boolean",
+            description:
+              "When true, require every parsed block to succeed and no malformed blocks before review or applying any change.",
+          },
+          expectedContentHash: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            description:
+              "Optional contentHash from read_file. When omitted, the baseline shown for approval is pinned.",
+          },
         },
-        required: ["path", "diff", "expectedContentHash"],
+        required: ["path", "diff"],
         additionalProperties: false,
       },
     },
@@ -324,7 +369,7 @@ export function askAgentCommandFoldersPrompt(
     "",
     "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. present_files still only works in the scratch folder.",
     "",
-    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path and that contentHash, or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed. Edits wait until no command is running in that folder, including background commands, so stop a background command with stop_command before editing files it is in.",
+    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path (expectedContentHash is optional), or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed. Edits wait until no command is running in that folder, including background commands, so stop a background command with stop_command before editing files it is in.",
     "",
     "For a long-running command such as a dev server, test watcher or build in watch mode, pass background: true. The call returns once it starts; check on it with get_command_output, find it again with list_commands, and stop it with stop_command when you are done. Background commands cannot use require_managed_network.",
     "",

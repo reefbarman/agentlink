@@ -123,6 +123,29 @@ describe("AskAgentSandboxWorkspace", () => {
     ).toContain("background");
   });
 
+  it("advertises the same apply_diff contract the shared workspace file tools enforce", async () => {
+    const root = await temporaryDirectory("al-ask-diff-");
+    const { createWorkspaceFileTools } =
+      await import("@agentlink/workspace-host");
+    const shared = (
+      await createWorkspaceFileTools({ projectRoot: root }).resolveTools({
+        principal: { tenantId: "local", subjectId: "ask" },
+        sessionId: "session",
+        turnId: "turn",
+        input: { text: "", attachments: undefined },
+      })
+    ).find((tool) => tool.definition.name === "apply_diff")!.definition
+      .input_schema as { properties: object; required: string[] };
+    const advertised = ASK_AGENT_SANDBOX_TOOLS.find(
+      (tool) => tool.name === "apply_diff",
+    )!.input_schema as { properties: object; required: string[] };
+    expect(Object.keys(advertised.properties).sort()).toEqual(
+      Object.keys(shared.properties).sort(),
+    );
+    expect(advertised.required).toEqual(shared.required);
+    expect(advertised.required).not.toContain("expectedContentHash");
+  });
+
   it("is unavailable on other hosts and without a staged helper", async () => {
     const root = await temporaryDirectory("al-ask-sbx-");
     for (const platform of ["win32", "linux", "darwin"] as const) {

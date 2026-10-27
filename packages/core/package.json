@@ -328,6 +328,18 @@
         "default": "./dist/cjs/applyDiff.cjs"
       }
     },
+    "./find-and-replace": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/findAndReplace.d.ts",
+        "default": "./dist/findAndReplace.js"
+      },
+      "require": {
+        "types": "./dist/cjs/findAndReplace.d.cts",
+        "default": "./dist/cjs/findAndReplace.cjs"
+      }
+    },
     "./search-files": {
       "browser": null,
       "edge": null,

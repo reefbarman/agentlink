@@ -14,6 +14,7 @@ const modules = [
   "contextCondense",
   "contextCondenser",
   "embeddedAgentWeb",
+  "findAndReplace",
   "hostAdapterContracts",
   "hostApprovalTestKit",
   "hostTools",
@@ -51,6 +52,7 @@ const focusedSubpathModules = new Set([
   "codexDeviceAuth",
   "condenseThresholds",
   "contextCondense",
+  "findAndReplace",
   "searchFiles",
   "todoTool",
 ]);

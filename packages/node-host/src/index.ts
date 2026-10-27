@@ -42,6 +42,7 @@ export * from "./skillDiscovery.js";
 export * from "./skillTools.js";
 export * from "./webImageErrors.js";
 export * from "./webImageRuntime.js";
+export * from "./globMatcher.js";
 export * from "./webImageTools.js";
 export type {
   PublicFetchRequest,
