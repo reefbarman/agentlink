@@ -1,0 +1,26 @@
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 143-144,231
+.github/workflows/assistant-release.yml
+  h_e08a86bb3a33a2 319
+.github/workflows/sdk-release.yml
+  h_e08a86bb3a33a2 95,118
+apps/server/src/projectClone.test.ts
+  h_e08a86bb3a33a2 33-41
+scripts/release-classify.test.mjs
+  h_e08a86bb3a33a2 52,62-72,76,79
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 152
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 122-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "55e377380b111fe414e38bc23a340e9ab6985ae2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
