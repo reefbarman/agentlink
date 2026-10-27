@@ -1,0 +1,64 @@
+packages/core/src/readFileContent.test.ts
+  h_e08a86bb3a33a2 1-74
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 172
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 32,57
+src/tools/readFile.ts
+  h_e08a86bb3a33a2 32-43,52,59,64,522,540,549-552,554,556,571,576,583-584,586,593,716,749,791,793,799,807,809,830-831,835,839-840,896
+  s_e4dd6a03ccda1f::t_35f011c3e4e643 31
+packages/core/package.json
+  h_e08a86bb3a33a2 343-354
+packages/node-host/build-cjs.mjs
+  h_e08a86bb3a33a2 22-24
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 5,13-20,45-46,51,75-86,1162,1172-1181,1187-1205,1207,1211-1213,1216-1218,1221-1223,1274-1279,1285-1298,1369-1642
+  s_e4dd6a03ccda1f::t_fb62ac7b63e9a9 12,1182,1206,1208-1210,1214-1215,1219-1220,1267,1273,1299
+packages/node-host/README.md
+  h_e08a86bb3a33a2 59-60
+packages/workspace-host/src/fileTools.test.ts
+  h_e08a86bb3a33a2 31-55,320-445
+  s_e4dd6a03ccda1f::t_78fa2b78cf45cb 254,257-259,264-267,271,446-450
+packages/core/src/readFileContent.ts
+  h_e08a86bb3a33a2 1-200
+packages/node-host/src/index.ts
+  h_e08a86bb3a33a2 46-48
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 52,103
+packages/node-host/src/pdfText.ts
+  h_e08a86bb3a33a2 1-73
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 22,24,26,108
+  s_e4dd6a03ccda1f::t_f8c6e67daeffeb 25
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 849
+packages/node-host/package.json
+  h_e08a86bb3a33a2 42,46,49
+resources/builtin-skills/documentation/references/release-notes.md
+  s_e4dd6a03ccda1f::t_afad85700c4aca 5
+package-lock.json
+  h_e08a86bb3a33a2 14465,14469,14472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3fa28bdef49feaad99b45eebca6e6b47d797b013",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_e4dd6a03ccda1f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f01259b8-0eca-4cf4-8dde-4568cc46f242",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
