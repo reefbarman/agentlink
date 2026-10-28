@@ -1,0 +1,61 @@
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 1833
+src/tools/findAndReplace.ts
+  h_e08a86bb3a33a2 18,83-91
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 99
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/tools/findAndReplace.test.ts
+  h_e08a86bb3a33a2 228-292
+packages/core/src/findAndReplace.ts
+  h_e08a86bb3a33a2 71-106,363-367
+packages/core/src/findAndReplace.test.ts
+  h_e08a86bb3a33a2 5,7,19-91
+  s_14e04439ca7f2b::t_c8c509d80e3c81 92-93
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1172
+packages/workspace-host/src/fileTools.test.ts
+  s_3d2f06b4bf3136::t_113881b78f8b96 979-1012
+resources/builtin-skills/documentation/references/release-notes.md
+  s_a962b3fb40f3b0::t_803e6f056ef19c 5
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 844-846,889-891,935-938,940-947
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d686de1d552b09b27691a3712f4d89c084b0681d",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_14e04439ca7f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a1c8ac7-3247-40e8-a0b2-9e9ab2ed8411",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_3d2f06b4bf3136": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c345105-4deb-449b-aab5-a6b3246658d2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a962b3fb40f3b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca4c87d5-4457-4923-8b12-7cff7b27e3ba",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
