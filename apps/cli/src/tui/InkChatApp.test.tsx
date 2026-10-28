@@ -3,13 +3,19 @@ import {
   controllerStatus,
   shellLayout,
   suspendForShell,
+  takeInterjectableSubmissions,
   visibleControlOptions,
 } from "./InkChatApp.js";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AgentTurnEvent, AgentTurnInterjection } from "@agentlink/core";
 import React from "react";
 import type { ReleaseUpdateState } from "../../../../src/updates/releaseUpdateTypes.js";
-import type { StandaloneSessionController } from "../sessionController.js";
+import type { WorkspaceHost } from "@agentlink/workspace-host";
+import {
+  createStandaloneSessionController,
+  type StandaloneSessionController,
+} from "../sessionController.js";
 import { buildActivityShelfItems } from "./ActivityShelf.js";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
 import { render as renderInk } from "ink-testing-library";
@@ -94,6 +100,7 @@ function controllerFixture(): StandaloneSessionController {
     acknowledgeBackgroundCommand: vi.fn(),
     addCommandRule: vi.fn(),
     runPrompt: vi.fn(),
+    setInterjectionSource: vi.fn(),
     notifyBackgroundApproval: vi.fn(),
     cancelPrompts: vi.fn(),
     close: vi.fn(),
@@ -1376,6 +1383,192 @@ describe("Ink chat app", () => {
     await nextInputDispatch();
     expect(runningController.cancel).toHaveBeenCalledWith("Cancelled from TUI");
     expect(onExit).not.toHaveBeenCalled();
+    screen.unmount();
+  });
+
+  it("lets a turn take only the leading plain-text queued messages", () => {
+    const plain = (id: number, text: string) => ({
+      id,
+      text,
+      attachmentPaths: [] as string[],
+    });
+    expect(
+      takeInterjectableSubmissions([
+        plain(1, "use blue"),
+        plain(2, "and the footer"),
+        plain(3, "/model"),
+        plain(4, "later"),
+      ]).map((item) => item.id),
+    ).toEqual([1, 2]);
+    expect(
+      takeInterjectableSubmissions([
+        { id: 1, text: "see this", attachmentPaths: ["a.png"] },
+        plain(2, "after it"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("shows ^n continue while a final card's continue action is ready", () => {
+    const base = controllerFixture();
+    const card = {
+      id: "final-1",
+      role: "assistant" as const,
+      text: "Built it.",
+      streaming: false,
+      finalStatus: {
+        status: "completed" as const,
+        source: "tool" as const,
+        summary: "Built it.",
+        continueAction: { label: "Ship", prompt: "Ship the build" },
+      },
+    };
+    const projection = {
+      ...base.getState(),
+      phase: "idle" as const,
+      transcript: [...base.getState().transcript, card],
+    };
+    const controller = {
+      ...base,
+      getState: () => projection,
+    } as StandaloneSessionController;
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={projection}
+        loadFileSuggestions={async () => []}
+        onSubmit={async () => undefined}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+    expect(stripAnsi(screen.lastFrame())).toContain("^n continue");
+    screen.unmount();
+
+    const plain = { ...projection, transcript: base.getState().transcript };
+    const without = render(
+      <InkChatApp
+        controller={
+          { ...base, getState: () => plain } as StandaloneSessionController
+        }
+        initialProjection={plain}
+        loadFileSuggestions={async () => []}
+        onSubmit={async () => undefined}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+    expect(stripAnsi(without.lastFrame())).not.toContain("^n continue");
+    without.unmount();
+  });
+
+  it("passes a message sent mid-turn into the running turn, as VS Code does", async () => {
+    // Real controller and TUI; only the workspace host is faked.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const admitted: (readonly AgentTurnInterjection[])[] = [];
+    const event = (value: object, sequence: number) =>
+      ({
+        schemaVersion: 1,
+        sessionId: "session-1",
+        turnId: "turn-1",
+        sequence,
+        emittedAt: sequence,
+        ...value,
+      }) as AgentTurnEvent;
+    const host = {
+      project: { root: "/project", id: "project-1" },
+      listCommands: () => [],
+      listBackgroundAgents: () => [],
+      listBackgroundApprovals: () => [],
+      readSessionInteractions: () => ({ todos: [] }),
+      readMcpConfiguration: async () => undefined,
+      listSessions: async () => [],
+      createSession: async () => ({ sessionId: "session-1" }),
+      runTurn: vi.fn(
+        async (
+          _sessionId: string,
+          text: string,
+          options?: {
+            readonly onEvent?: (event: AgentTurnEvent) => void;
+            readonly takeInterjections?: () => readonly AgentTurnInterjection[];
+          },
+        ) => {
+          options?.onEvent?.(event({ type: "turn.started" }, 0));
+          if (text === "first") {
+            await gate;
+            const taken = options?.takeInterjections?.() ?? [];
+            admitted.push(taken);
+            for (const [index, message] of taken.entries()) {
+              options?.onEvent?.(
+                event(
+                  {
+                    type: "user.interjected",
+                    interjectionId: message.id,
+                    text: message.text,
+                  },
+                  index + 1,
+                ),
+              );
+            }
+          }
+          return {
+            status: "completed",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            sessionRevision: "2",
+            execution: {} as never,
+            provenance: {} as never,
+            text: "done",
+            stopReason: undefined,
+            usage: undefined,
+          };
+        },
+      ),
+    } as unknown as WorkspaceHost;
+    const controller = createStandaloneSessionController({ host });
+    await controller.initialize();
+    const onSubmit = vi.fn(async (text: string) => {
+      if (!text.startsWith("/")) await controller.submit(text);
+    });
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={controller.getState()}
+        loadFileSuggestions={async () => []}
+        onSubmit={onSubmit}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+    await screen.composerReady();
+    for (const text of ["first", "second", "/help"]) {
+      screen.stdin.write(text);
+      await nextInputDispatch();
+      screen.stdin.write("\r");
+      await nextInputDispatch();
+    }
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("2 queued"),
+    );
+    release();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    // "second" went into the running turn; the slash command waited.
+    expect(admitted).toEqual([
+      [{ id: expect.stringMatching(/^queued-/u), text: "second" }],
+    ]);
+    expect(onSubmit.mock.calls.map(([text]) => text)).toEqual([
+      "first",
+      "/help",
+    ]);
+    expect(host.runTurn).toHaveBeenCalledTimes(1);
+    expect(
+      controller
+        .getState()
+        .transcript.filter((message) => message.role === "user")
+        .map((message) => message.text),
+    ).toEqual(["first", "second"]);
     screen.unmount();
   });
 });

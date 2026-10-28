@@ -3,6 +3,7 @@ import type {
   AgentModelReference,
   AgentTurnAttachment,
   AgentTurnEvent,
+  AgentTurnInterjection,
   AgentTurnResult,
   CoreQualifiedModelCatalogEntry,
   CoreReasoningEffort,
@@ -39,6 +40,7 @@ export interface StandaloneSessionControllerOptions {
         readonly attachments?: readonly AgentTurnAttachment[];
         readonly signal?: AbortSignal;
         readonly onEvent?: (event: AgentTurnEvent) => void;
+        readonly takeInterjections?: () => readonly AgentTurnInterjection[];
       },
     ): Promise<AgentTurnResult>;
   };
@@ -119,6 +121,14 @@ export interface StandaloneSessionController {
   acknowledgeBackgroundCommand(commandId: string): void;
   addCommandRule(rule: StandaloneCommandRule): Promise<void>;
   runPrompt<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /**
+   * Where a running turn takes the messages the user sent while it runs,
+   * as VS Code's queued messages: the turn admits them at its next break.
+   * Undefined leaves every message for the next turn.
+   */
+  setInterjectionSource(
+    source: (() => readonly AgentTurnInterjection[]) | undefined,
+  ): void;
   notifyBackgroundApproval(): void;
   cancelPrompts(reason?: string): void;
   close(): Promise<void>;
@@ -141,6 +151,10 @@ export function createStandaloneSessionController(
   let closed = false;
   let promptTail: Promise<void> = Promise.resolve();
   const promptController = new AbortController();
+  let interjectionSource: (() => readonly AgentTurnInterjection[]) | undefined;
+  // Read at each break, so a source set mid-turn is used from then on.
+  const takeInterjections = (): readonly AgentTurnInterjection[] =>
+    closed ? [] : (interjectionSource?.() ?? []);
 
   const dispatch = (action: StandaloneSessionProjectionAction) => {
     if (closed && action.type !== "controller.closed") return;
@@ -329,6 +343,9 @@ export function createStandaloneSessionController(
 
   return {
     getState: () => state,
+    setInterjectionSource(source) {
+      interjectionSource = source;
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -378,6 +395,7 @@ export function createStandaloneSessionController(
           ),
           signal,
           onEvent,
+          takeInterjections,
         }),
       );
     },
@@ -399,6 +417,7 @@ export function createStandaloneSessionController(
         options.host.resumeInteraction(currentSession, decision, {
           signal,
           onEvent,
+          takeInterjections,
         }),
       );
     },

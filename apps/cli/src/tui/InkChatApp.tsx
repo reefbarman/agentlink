@@ -10,6 +10,7 @@ import {
   type SuspendTerminal,
 } from "ink";
 import React, {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useReducer,
@@ -129,9 +130,33 @@ export function InkChatApp({
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [workingSince, setWorkingSince] = useState<number>();
   const busyRef = useRef(false);
-  const [queuedSubmissions, setQueuedSubmissions] = useState<
+  const [queuedSubmissions, setQueuedSubmissionsState] = useState<
     QueuedSubmission[]
   >([]);
+  // The running turn takes queued messages synchronously, so the queue is
+  // mirrored in a ref that every update goes through.
+  const queuedRef = useRef<QueuedSubmission[]>([]);
+  const setQueuedSubmissions = useCallback(
+    (update: (queue: QueuedSubmission[]) => QueuedSubmission[]) => {
+      queuedRef.current = update(queuedRef.current);
+      setQueuedSubmissionsState(queuedRef.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    // VS Code's queued messages: the running turn admits them at its next
+    // break instead of running them as turns of their own afterwards.
+    controller.setInterjectionSource(() => {
+      const taken = takeInterjectableSubmissions(queuedRef.current);
+      if (taken.length === 0) return [];
+      setQueuedSubmissions((queue) => queue.slice(taken.length));
+      return taken.map((submission) => ({
+        id: `queued-${submission.id}`,
+        text: submission.text,
+      }));
+    });
+    return () => controller.setInterjectionSource(undefined);
+  }, [controller, setQueuedSubmissions]);
   const [attachedFiles, setAttachedFiles] = useState<readonly TuiPickerItem[]>(
     [],
   );
@@ -249,7 +274,7 @@ export function InkChatApp({
   }, [controller]);
   useEffect(() => {
     dispatch({ type: "session.changed" });
-    setQueuedSubmissions([]);
+    setQueuedSubmissions(() => []);
     setAttachedFiles([]);
   }, [projection.sessionId]);
   useEffect(() => {
@@ -622,6 +647,7 @@ export function InkChatApp({
     spinner:
       STATUS_SPINNER_FRAMES[spinnerFrame % STATUS_SPINNER_FRAMES.length]!,
     queued: queuedSubmissions.length,
+    continueAction: !busy && latestContinueAction(projection) !== undefined,
     focus: transcript.isFocused
       ? "transcript"
       : activity.isFocused
@@ -857,6 +883,7 @@ function footerState({
   elapsed,
   spinner,
   queued,
+  continueAction = false,
   focus,
   compact,
 }: {
@@ -865,6 +892,8 @@ function footerState({
   readonly elapsed: number;
   readonly spinner: string;
   readonly queued: number;
+  /** A final card's continue action is ready for Ctrl+N. */
+  readonly continueAction?: boolean;
   readonly focus: "composer" | "transcript" | "activity";
   readonly compact: boolean;
 }): {
@@ -913,6 +942,7 @@ function footerState({
             ]
           : [
               { key: "⏎", label: working ? "queue" : "send" },
+              ...(continueAction ? [{ key: "^n", label: "continue" }] : []),
               { key: "^j", label: "newline" },
               { key: "tab", label: "focus" },
               { key: "^o", label: "controls" },
@@ -921,6 +951,32 @@ function footerState({
               exitHint,
             ];
   return { tone, status: `${label}${queuedSuffix}`, hints };
+}
+
+/**
+ * The queued messages a running turn can take now: the leading plain-text
+ * ones. Interjections carry text only, so a message with attachments, and a
+ * slash command, wait for their own turn, along with everything after them
+ * so the order holds.
+ */
+export function takeInterjectableSubmissions<
+  T extends {
+    readonly text: string;
+    readonly attachmentPaths: readonly string[];
+  },
+>(queue: readonly T[]): readonly T[] {
+  const taken: T[] = [];
+  for (const submission of queue) {
+    if (
+      submission.attachmentPaths.length > 0 ||
+      submission.text.startsWith("/") ||
+      !submission.text.trim()
+    ) {
+      break;
+    }
+    taken.push(submission);
+  }
+  return taken;
 }
 
 function ComposerAttachments({

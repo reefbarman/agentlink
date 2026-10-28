@@ -126,6 +126,35 @@ describe("standalone session controller", () => {
     expect(controller.getState().transcript[0]?.attachments).toHaveLength(2);
   });
 
+  it("lets running turns and resumes take messages from the interjection source", async () => {
+    const taken: unknown[] = [];
+    const { host, controller } = fixture({
+      runTurn: vi.fn(async (_sessionId, _text, options) => {
+        taken.push(options?.takeInterjections?.());
+        return result();
+      }),
+      resumeInteraction: vi.fn(async (_sessionId, _decision, options) => {
+        taken.push(options?.takeInterjections?.());
+        return result();
+      }),
+    });
+    await controller.initialize();
+    await controller.submit("no source yet");
+    const source = vi.fn(() => [{ id: "q-1", text: "use blue" }]);
+    controller.setInterjectionSource(source);
+    await controller.submit("start");
+    await controller.resumeInteraction("deny");
+    controller.setInterjectionSource(undefined);
+    await controller.submit("after");
+    expect(taken).toEqual([
+      [],
+      [{ id: "q-1", text: "use blue" }],
+      [{ id: "q-1", text: "use blue" }],
+      [],
+    ]);
+    expect(host.runTurn).toHaveBeenCalledTimes(3);
+  });
+
   it("initializes a new session and projects turn events without terminal IO", async () => {
     const { host, controller } = fixture({
       runTurn: vi.fn(async (_sessionId, _text, options) => {
