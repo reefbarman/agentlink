@@ -1,0 +1,14 @@
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 14,59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "79c837fdac14dd4e2987342749b0114e65667792",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
