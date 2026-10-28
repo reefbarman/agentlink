@@ -19,43 +19,100 @@ const execution = {
 } as const;
 
 describe("workspace session interaction tools", () => {
-  it("asks a structured question through the host callback", async () => {
-    const askQuestion = vi.fn(async () => "Ship it");
-    const tools = createWorkspaceSessionInteractionTools({ askQuestion });
+  it("asks VS Code's questions[] through the host callback", async () => {
+    const askQuestions = vi.fn(async () => ({
+      answers: { decision: "Ship it", name: "v2" },
+      notes: { decision: "after review" },
+    }));
+    const tools = createWorkspaceSessionInteractionTools({ askQuestions });
     const ask = (await tools.resolveTools(discovery)).find(
       (tool) => tool.definition.name === "ask_user",
     )!;
+    const schema = JSON.stringify(ask.definition.input_schema);
+    expect(schema).toContain('"questions"');
+    expect(schema).not.toContain("modeSwitch");
+    expect(ask.definition.description).not.toContain("modeSwitch");
+    expect(ask.definition.description).not.toContain("coordinator");
 
-    await expect(
-      ask.execute(
+    const result = await ask.execute(
+      {
+        context: "Release",
+        questions: [
+          {
+            id: "decision",
+            type: "multiple_choice",
+            question: "What next?",
+            context: " Pick one ",
+            options: ["Ship it", "Wait"],
+            recommended: "Ship it",
+            modeSwitch: { Wait: "architect" },
+          },
+          { id: "name", type: "text", question: "Version name?" },
+        ],
+      },
+      execution,
+    );
+    const payload = {
+      context: "Release",
+      responses: [
         {
-          id: "decision",
-          kind: "multiple_choice",
           question: "What next?",
-          options: ["Ship it", "Wait"],
-          recommended: "Ship it",
+          answer: "Ship it",
+          context: "Pick one",
+          note: "after review",
         },
-        execution,
-      ),
-    ).resolves.toMatchObject({
-      modelContent: JSON.stringify({ id: "decision", answer: "Ship it" }),
-      displayContent: { id: "decision", answer: "Ship it" },
+        { question: "Version name?", answer: "v2" },
+      ],
+    };
+    expect(result).toEqual({
+      modelContent: JSON.stringify(payload),
+      displayContent: payload,
     });
-    expect(askQuestion).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "decision",
-        kind: "multiple_choice",
-        options: ["Ship it", "Wait"],
-      }),
+    // modeSwitch is dropped before the host sees the question.
+    expect(askQuestions).toHaveBeenCalledWith(
+      {
+        context: "Release",
+        questions: [
+          {
+            id: "decision",
+            type: "multiple_choice",
+            question: "What next?",
+            context: "Pick one",
+            options: ["Ship it", "Wait"],
+            recommended: "Ship it",
+          },
+          {
+            id: "name",
+            type: "text",
+            question: "Version name?",
+            context: undefined,
+          },
+        ],
+      },
       { sessionId: "session-1", signal: execution.signal },
     );
+  });
+
+  it("rejects ask_user calls VS Code rejects without asking", async () => {
+    const askQuestions = vi.fn();
+    const tools = createWorkspaceSessionInteractionTools({ askQuestions });
+    const ask = (await tools.resolveTools(discovery)).find(
+      (tool) => tool.definition.name === "ask_user",
+    )!;
+    await expect(
+      ask.execute(
+        { questions: [{ id: "q", type: "text", question: "Name?" }] },
+        execution,
+      ),
+    ).resolves.toMatchObject({ isError: true });
+    expect(askQuestions).not.toHaveBeenCalled();
   });
 
   it("propagates question cancellation so the turn stops", async () => {
     const cancelled = new Error("Question cancelled by user");
     cancelled.name = "AbortError";
     const tools = createWorkspaceSessionInteractionTools({
-      askQuestion: vi.fn(async () => {
+      askQuestions: vi.fn(async () => {
         throw cancelled;
       }),
     });
@@ -66,19 +123,25 @@ describe("workspace session interaction tools", () => {
     await expect(
       ask.execute(
         {
-          id: "decision",
-          kind: "text",
-          question: "What next?",
+          context: "Naming",
+          questions: [{ id: "decision", type: "text", question: "What next?" }],
         },
         execution,
       ),
     ).rejects.toBe(cancelled);
   });
 
+  it("offers no ask_user without a question callback", async () => {
+    const tools = createWorkspaceSessionInteractionTools({});
+    expect(
+      (await tools.resolveTools(discovery)).map((tool) => tool.definition.name),
+    ).toEqual(["todo_write"]);
+  });
+
   it("replaces and snapshots session-scoped todo state", async () => {
     const onTodosChanged = vi.fn();
     const tools = createWorkspaceSessionInteractionTools({
-      askQuestion: vi.fn(),
+      askQuestions: vi.fn(),
       onTodosChanged,
     });
     const todoWrite = (await tools.resolveTools(discovery)).find(

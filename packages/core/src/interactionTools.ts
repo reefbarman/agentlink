@@ -1,17 +1,18 @@
-import type { CoreModelToolDefinition as ToolDefinition } from "./modelRuntime.js";
 import type {
   FinalMessageMarker,
   FinalMessageStatus,
 } from "@agentlink/protocol/final-status";
-import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
-import {
-  getConfirmationOptions,
-  isConfirmationOptions,
-} from "@agentlink/protocol/question-confirmation";
 import type {
   UserQuestion,
   UserQuestionResponse,
 } from "@agentlink/protocol/structured-question";
+import {
+  getConfirmationOptions,
+  isConfirmationOptions,
+} from "@agentlink/protocol/question-confirmation";
+
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
+import type { CoreModelToolDefinition as ToolDefinition } from "./modelRuntime.js";
 
 /**
  * VS Code's `ask_user` and `set_task_status` contracts: tool definitions,
@@ -111,6 +112,54 @@ export const ASK_USER_TOOL: ToolDefinition = {
     required: ["questions"],
   },
 };
+
+const ASK_USER_COORDINATOR_SENTENCES =
+  "In a foreground session this asks the user. In a native background session the root foreground coordinator answers first and decides whether human escalation is necessary.";
+const ASK_USER_MODE_SWITCH_SENTENCES =
+  " To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.";
+
+/**
+ * VS Code's `ask_user` for a host without some of its features. Without
+ * `modeSwitch` the property and its guidance are removed; without a
+ * background coordinator the question always goes to the user. With both,
+ * this is `ASK_USER_TOOL` itself.
+ */
+export function askUserToolDefinition(options: {
+  readonly modeSwitch: boolean;
+  readonly backgroundCoordinator: boolean;
+}): ToolDefinition {
+  if (options.modeSwitch && options.backgroundCoordinator) return ASK_USER_TOOL;
+  const remove = (text: string, part: string, replacement: string) => {
+    if (!text.includes(part)) {
+      throw new Error("ask_user description no longer has the expected text");
+    }
+    return text.replace(part, replacement);
+  };
+  let description = ASK_USER_TOOL.description;
+  if (!options.backgroundCoordinator) {
+    description = remove(
+      description,
+      ASK_USER_COORDINATOR_SENTENCES,
+      "This asks the user.",
+    );
+  }
+  if (!options.modeSwitch) {
+    description = remove(description, ASK_USER_MODE_SWITCH_SENTENCES, "");
+  }
+  const schema = structuredClone(ASK_USER_TOOL.input_schema) as unknown as {
+    properties: {
+      questions: { items: { properties: Record<string, unknown> } };
+    };
+  };
+  if (!options.modeSwitch) {
+    delete schema.properties.questions.items.properties.modeSwitch;
+  }
+  return {
+    name: ASK_USER_TOOL.name,
+    description,
+    input_schema: schema as unknown as ToolDefinition["input_schema"],
+  };
+}
 
 /** Base schema for final task status; background result fields are added per run. */
 export const SET_TASK_STATUS_TOOL: ToolDefinition = {

@@ -634,6 +634,83 @@ describe("Ink chat app", () => {
     });
   });
 
+  it("ticks multi-select options with Space and opens on the preselected option", async () => {
+    const controller = controllerFixture();
+    let presentControl:
+      | ((
+          request: import("./controlTypes.js").TuiControlRequest,
+        ) => Promise<import("./controlTypes.js").TuiControlResponse>)
+      | undefined;
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={controller.getState()}
+        loadFileSuggestions={async () => []}
+        onSubmit={async () => undefined}
+        onExit={() => undefined}
+        onError={() => undefined}
+        registerControlPresenter={(present) => {
+          presentControl = present;
+        }}
+      />,
+    );
+    await vi.waitFor(() => expect(presentControl).toBeDefined());
+    const options = ["Tests", "Docs", "Lint"].map((label) => ({
+      id: label,
+      label,
+    }));
+    const multi = presentControl!({
+      id: "pick-many",
+      kind: "question",
+      title: "Pick",
+      body: ["What?"],
+      options,
+      multiSelect: true,
+    });
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("[ ] Docs"),
+    );
+    screen.stdin.write(" ");
+    await nextInputDispatch();
+    screen.stdin.write("\u001b[B");
+    await nextInputDispatch();
+    screen.stdin.write("\u001b[B");
+    await nextInputDispatch();
+    screen.stdin.write(" ");
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("[x] Lint"),
+    );
+    screen.stdin.write("\r");
+    await expect(multi).resolves.toEqual({
+      requestId: "pick-many",
+      cancelled: false,
+      optionIds: ["Tests", "Lint"],
+    });
+
+    const single = presentControl!({
+      id: "pick-one",
+      kind: "question",
+      title: "Pick one",
+      body: ["Which?"],
+      options,
+      initialOptionId: "Docs",
+      input: { placeholder: "Optional note" },
+    });
+    await vi.waitFor(() =>
+      expect(stripAnsi(screen.lastFrame())).toContain("❯ Docs"),
+    );
+    screen.stdin.write("ok");
+    await nextInputDispatch();
+    screen.stdin.write("\r");
+    await expect(single).resolves.toEqual({
+      requestId: "pick-one",
+      cancelled: false,
+      optionId: "Docs",
+      text: "ok",
+    });
+    screen.unmount();
+  });
+
   it("uses Ctrl+C to terminate an active approval instead of denying it", async () => {
     const controller = controllerFixture();
     let presentControl:

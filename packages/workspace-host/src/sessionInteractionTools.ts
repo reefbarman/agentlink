@@ -12,18 +12,30 @@ import {
   handleTodoWrite,
   todoTool,
 } from "@agentlink/core/todo-tool";
+import {
+  askUserToolDefinition,
+  buildAskUserResultPayload,
+  parseAskUserInput,
+} from "@agentlink/core/interaction-tools";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
+import type {
+  UserQuestion,
+  UserQuestionResponse,
+} from "@agentlink/protocol/structured-question";
 
-export type WorkspaceQuestionKind = "confirmation" | "multiple_choice" | "text";
-
-export interface WorkspaceQuestionRequest {
-  readonly id: string;
-  readonly kind: WorkspaceQuestionKind;
-  readonly question: string;
-  readonly context?: string;
-  readonly options: readonly string[];
-  readonly recommended?: string;
+/** One `ask_user` call, validated as VS Code does. */
+export interface WorkspaceQuestionsRequest {
+  /** Shared intro shown above the questions; may be empty. */
+  readonly context: string;
+  /** VS Code's question shapes, without `modeSwitch`. */
+  readonly questions: readonly UserQuestion[];
 }
+
+/** Answers and optional notes keyed by question ID. */
+export type WorkspaceQuestionsResponse = Pick<
+  UserQuestionResponse,
+  "answers" | "notes"
+>;
 
 export interface WorkspaceSessionInteractionSnapshot {
   readonly todos: readonly TodoItem[];
@@ -31,13 +43,14 @@ export interface WorkspaceSessionInteractionSnapshot {
 
 export interface CreateWorkspaceSessionInteractionToolsOptions {
   /**
-   * Answers `ask_user`. Without it only `todo_write` is offered, for hosts
-   * with no way to put a question to the user.
+   * Answers VS Code's `ask_user`. Without it only `todo_write` is offered,
+   * for hosts with no way to put a question to the user. Throw an
+   * `AbortError` when the user cancels so the turn stops.
    */
-  readonly askQuestion?: (
-    request: WorkspaceQuestionRequest,
+  readonly askQuestions?: (
+    request: WorkspaceQuestionsRequest,
     context: { readonly sessionId: string; readonly signal?: AbortSignal },
-  ) => Promise<string>;
+  ) => Promise<WorkspaceQuestionsResponse>;
   readonly onTodosChanged?: (
     sessionId: string,
     todos: readonly TodoItem[],
@@ -80,87 +93,67 @@ export function createWorkspaceSessionInteractionTools(
     if (todos.has(sessionId)) return;
     todos.set(sessionId, getLatestTodoState([...messages]));
   };
-  const { askQuestion } = options;
+  const { askQuestions } = options;
   const resolveTools: HostToolResolver = async (request) => {
     if (!todos.has(request.sessionId) && options.readTranscript) {
       const messages = await options.readTranscript(request.sessionId);
       restore(request.sessionId, messages);
     }
     return [
-      ...(askQuestion ? [createAskUserTool(request, askQuestion)] : []),
+      ...(askQuestions ? [createAskUserTool(request, askQuestions)] : []),
       createTodoWriteTool(request, todos, options),
     ];
   };
   return { resolveTools, snapshot, restore };
 }
 
+/**
+ * VS Code's `ask_user` without `modeSwitch` (no modes yet) or attachments,
+ * and with every question going to the user: background children here have
+ * no coordinator to answer first.
+ */
+const STANDALONE_ASK_USER_TOOL = askUserToolDefinition({
+  modeSwitch: false,
+  backgroundCoordinator: false,
+});
+
 function createAskUserTool<TPrincipal extends AgentPrincipal>(
   discovery: HostToolResolveRequest<TPrincipal>,
-  askQuestion: NonNullable<
-    CreateWorkspaceSessionInteractionToolsOptions["askQuestion"]
+  askQuestions: NonNullable<
+    CreateWorkspaceSessionInteractionToolsOptions["askQuestions"]
   >,
 ): HostTool<TPrincipal> {
   return defineTool({
-    name: "ask_user",
-    description:
-      "Ask the user one structured confirmation, multiple-choice, or text question and wait for their answer before continuing.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", minLength: 1, maxLength: 128 },
-        kind: {
-          type: "string",
-          enum: ["confirmation", "multiple_choice", "text"],
-        },
-        question: { type: "string", minLength: 1, maxLength: 4_096 },
-        context: { type: "string", maxLength: 8_192 },
-        options: {
-          type: "array",
-          minItems: 2,
-          maxItems: 12,
-          items: { type: "string", minLength: 1, maxLength: 512 },
-        },
-        recommended: { type: "string", minLength: 1, maxLength: 512 },
-      },
-      required: ["id", "kind", "question"],
-      additionalProperties: false,
-    },
+    name: STANDALONE_ASK_USER_TOOL.name,
+    description: STANDALONE_ASK_USER_TOOL.description,
+    inputSchema: STANDALONE_ASK_USER_TOOL.input_schema,
     effect: "read",
     parallelSafe: false,
     displayInput: (input) => ({
-      id: input.id,
-      kind: input.kind,
-      question: input.question,
+      questions: Array.isArray(input.questions)
+        ? input.questions.map((question: { question?: unknown }) =>
+            String(question?.question ?? ""),
+          )
+        : [],
     }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const kind = input.kind as WorkspaceQuestionKind;
-      if (
-        kind !== "text" &&
-        (!Array.isArray(input.options) || input.options.length < 2)
-      ) {
-        return toolError("Question choices require at least two options");
-      }
-      const request: WorkspaceQuestionRequest = {
-        id: String(input.id),
-        kind,
-        question: String(input.question),
-        ...(typeof input.context === "string"
-          ? { context: input.context }
-          : {}),
-        options: Array.isArray(input.options)
-          ? input.options.map((value) => String(value))
-          : [],
-        ...(typeof input.recommended === "string"
-          ? { recommended: input.recommended }
-          : {}),
-      };
+      const parsed = parseAskUserInput(input);
+      if (!parsed.ok) return toolError(parsed.error);
+      // A modeSwitch map the model sent anyway is ignored, not applied.
+      const questions = parsed.questions.map(
+        ({ modeSwitch: _modeSwitch, ...question }) => question,
+      );
       try {
-        const answer = await askQuestion(request, {
-          sessionId: context.sessionId,
-          signal: context.signal,
+        const response = await askQuestions(
+          { context: parsed.context, questions },
+          { sessionId: context.sessionId, signal: context.signal },
+        );
+        const payload = buildAskUserResultPayload({
+          context: parsed.context,
+          questions,
+          response: { answers: response.answers, notes: response.notes },
         });
-        const payload = { id: request.id, answer };
         return {
           modelContent: JSON.stringify(payload),
           displayContent: payload,

@@ -138,6 +138,9 @@ export function InkChatApp({
   const [controlSelection, setControlSelection] = useState(0);
   const [controlBodyOffset, setControlBodyOffset] = useState(0);
   const [controlText, setControlText] = useState("");
+  const [controlChecked, setControlChecked] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const controlResolve = useRef<
     ((response: TuiControlResponse) => void) | undefined
   >(undefined);
@@ -182,9 +185,17 @@ export function InkChatApp({
           controlResolve.current = complete;
           controlRequestId.current = request.id;
           setControlRequest(request);
-          setControlSelection(0);
+          setControlSelection(
+            Math.max(
+              0,
+              request.options?.findIndex(
+                (option) => option.id === request.initialOptionId,
+              ) ?? 0,
+            ),
+          );
           setControlBodyOffset(0);
           setControlText(request.input?.initialValue ?? "");
+          setControlChecked(new Set());
         }),
     );
     return () => {
@@ -360,12 +371,31 @@ export function InkChatApp({
         setControlSelection((index) => (index + 1) % options.length);
       } else if (key.return) {
         const selectedOption = options[controlSelection];
-        if (selectedOption || controlRequest.input) {
+        if (controlRequest.multiSelect && selectedOption) {
+          // Nothing ticked: Enter takes the highlighted option.
+          const ticked = options
+            .filter((option) => controlChecked.has(option.id))
+            .map((option) => option.id);
+          completeControl({
+            requestId: controlRequest.id,
+            cancelled: false,
+            optionIds: ticked.length > 0 ? ticked : [selectedOption.id],
+          });
+        } else if (selectedOption || controlRequest.input) {
           completeControl({
             requestId: controlRequest.id,
             cancelled: false,
             ...(selectedOption ? { optionId: selectedOption.id } : {}),
             ...(controlRequest.input ? { text: controlText } : {}),
+          });
+        }
+      } else if (controlRequest.multiSelect && input === " ") {
+        const selectedOption = options[controlSelection];
+        if (selectedOption) {
+          setControlChecked((checked) => {
+            const next = new Set(checked);
+            if (!next.delete(selectedOption.id)) next.add(selectedOption.id);
+            return next;
           });
         }
       } else if (controlRequest.input && !key.ctrl && !key.meta) {
@@ -739,6 +769,7 @@ export function InkChatApp({
           selectedIndex={controlSelection}
           bodyOffset={controlBodyOffset}
           text={controlText}
+          checked={controlChecked}
         />
       ) : (
         <Picker state={shell} />
@@ -1183,12 +1214,14 @@ function ControlPanel({
   selectedIndex,
   bodyOffset,
   text,
+  checked,
 }: {
   readonly width: number;
   readonly request: TuiControlRequest;
   readonly selectedIndex: number;
   readonly bodyOffset: number;
   readonly text: string;
+  readonly checked: ReadonlySet<string>;
 }): React.JSX.Element {
   const options = request.options ?? [];
   const visibleOptions = visibleControlOptions(options, selectedIndex, 10);
@@ -1200,6 +1233,7 @@ function ControlPanel({
         : tuiTheme.accent;
   const hints: KeyHint[] = [
     ...(options.length > 1 ? [{ key: "↑↓", label: "select" }] : []),
+    ...(request.multiSelect ? [{ key: "space", label: "tick" }] : []),
     ...(request.body.length > 6
       ? [{ key: "pgup/pgdn", label: "details" }]
       : []),
@@ -1241,6 +1275,11 @@ function ControlPanel({
               <Text bold color={active ? tone : tuiTheme.faint}>
                 {active ? "❯ " : "  "}
               </Text>
+              {request.multiSelect ? (
+                <Text color={checked.has(option.id) ? tone : tuiTheme.faint}>
+                  {checked.has(option.id) ? "[x] " : "[ ] "}
+                </Text>
+              ) : null}
               <Text
                 bold={active}
                 color={

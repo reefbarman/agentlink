@@ -2,6 +2,7 @@ import {
   ASK_USER_TOOL,
   SET_TASK_STATUS_TOOL,
   TEASER_FINAL_SUMMARY_REPLACEMENT,
+  askUserToolDefinition,
   buildAskUserResultPayload,
   buildTaskStatusMarker,
   buildTaskStatusResultPayload,
@@ -29,6 +30,26 @@ describe("ask_user contract", () => {
       "scale",
       "confirmation",
     ]);
+  });
+
+  it("derives a variant without modeSwitch or a background coordinator", () => {
+    expect(
+      askUserToolDefinition({ modeSwitch: true, backgroundCoordinator: true }),
+    ).toBe(ASK_USER_TOOL);
+    const standalone = askUserToolDefinition({
+      modeSwitch: false,
+      backgroundCoordinator: false,
+    });
+    expect(standalone.description).toMatch(
+      /^Ask one or more structured questions and wait for responses before continuing\. This asks the user\. Prefer `questions\[\]\.context`/,
+    );
+    expect(standalone.description).not.toContain("modeSwitch");
+    expect(standalone.description).toMatch(
+      /the selected label is returned as the answer\.$/,
+    );
+    expect(JSON.stringify(standalone.input_schema)).not.toContain("modeSwitch");
+    // The shared definition is not mutated.
+    expect(JSON.stringify(ASK_USER_TOOL.input_schema)).toContain("modeSwitch");
   });
 
   it("trims context and normalises custom confirmation labels", () => {

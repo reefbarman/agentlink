@@ -524,14 +524,19 @@ describe("runCli", () => {
     });
 
     await expect(
-      broker.askQuestion({
-        id: "question-1",
-        kind: "multiple_choice",
-        question: "Ship this?",
-        options: ["Yes", "No"],
-        recommended: "Yes",
+      broker.askQuestions({
+        context: "Release check",
+        questions: [
+          {
+            id: "question-1",
+            type: "multiple_choice",
+            question: "Ship this?",
+            options: ["Yes", "No"],
+            recommended: "Yes",
+          },
+        ],
       }),
-    ).resolves.toBe("Yes");
+    ).resolves.toEqual({ answers: { "question-1": "Yes" }, notes: {} });
     await expect(
       broker.confirmMcpLaunch({
         kind: "mcp_stdio_launch",

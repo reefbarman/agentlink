@@ -44,8 +44,10 @@ import {
   type WorkspaceSharedMcpToolApproval,
   type WorkspaceOwnershipHandle,
   type WorkspaceProviderConfig,
-  type WorkspaceQuestionRequest,
+  type WorkspaceQuestionsRequest,
+  type WorkspaceQuestionsResponse,
 } from "@agentlink/workspace-host";
+import { askQuestionsInControlPanel } from "./questionControls.js";
 import { randomUUID } from "node:crypto";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { readdir } from "node:fs/promises";
@@ -158,7 +160,10 @@ interface CliInteractionBroker {
     readonly parentSessionId: string;
     readonly childSessionId: string;
   }): void;
-  askQuestion(request: WorkspaceQuestionRequest): Promise<string>;
+  askQuestions(
+    request: WorkspaceQuestionsRequest,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceQuestionsResponse>;
 }
 
 interface CliInteractionBridge {
@@ -893,9 +898,10 @@ async function createHost(options: {
         }
       : {}),
     sessionInteractions: {
-      askQuestion: (request) =>
-        requireInteractionBroker(options.interactionBridge).askQuestion(
+      askQuestions: (request, { signal }) =>
+        requireInteractionBroker(options.interactionBridge).askQuestions(
           request,
+          signal,
         ),
     },
     ...(options.enableCommands
@@ -2171,26 +2177,12 @@ export function createInkInteractionBroker(options: {
         `Background child ${request.childSessionId} is awaiting approval. Open Controls > Approvals.`,
       );
     },
-    async askQuestion(request) {
-      const response = await options.presentControl({
-        id: request.id,
-        kind: "question",
-        title: "Agent question",
-        body: [...(request.context ? [request.context] : []), request.question],
-        ...(request.kind === "text"
-          ? { input: { placeholder: "Type your answer" } }
-          : {
-              options: request.options.map((label) => ({
-                id: label,
-                label,
-                ...(label === request.recommended
-                  ? { detail: "recommended" }
-                  : {}),
-              })),
-            }),
-      });
-      if (response.cancelled) throw abortError("Question cancelled by user");
-      return response.text?.trim() || response.optionId || "";
+    askQuestions(request, signal) {
+      return askQuestionsInControlPanel(
+        request,
+        options.presentControl,
+        signal,
+      );
     },
     async confirmMcpLaunch(proposal) {
       if (options.mcpLaunchGrants.has(proposal.operationDigest)) return true;
