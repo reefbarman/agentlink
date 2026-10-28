@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, type Stats } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
@@ -18,6 +18,7 @@ import {
 } from "./sandboxEnvironmentPolicy.js";
 import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
 import { SandboxPreparationError } from "./SandboxPreparationError.js";
+import { SandboxStructuralProtectionError } from "./SandboxRuntimeProvider.js";
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
   type SandboxLaunchAuthorization,
@@ -60,6 +61,15 @@ const AGENTLINK_RUNTIME_ENTRIES = new Set([
   "tool-usage-report",
 ]);
 const PROTECTED_POLICY_SUBTREE_RE = /^(?:commands|rules|skills)(?:-|$)/;
+// Agent policy namespaces. Each is write-denied as a whole, so a symbolic link
+// inside one whose canonical target is also inside one (in the same workspace
+// root) cannot be redirected or have its target edited by a sandboxed command.
+const POLICY_NAMESPACE_NAMES = [
+  ".agentlink",
+  ".agents",
+  ".claude",
+  ".codex",
+] as const;
 
 const MACOS_RUNTIME_COMPATIBILITY_WRITE_ROOTS = [
   "/tmp/claude",
@@ -221,9 +231,42 @@ async function resolveRegularPolicyFiles(root: string): Promise<string[]> {
   return files;
 }
 
+/**
+ * Follows a policy entry symlink whose canonical target stays inside one of
+ * the workspace root's protected policy namespaces, such as the common
+ * `.agents/skills -> ../.claude/skills` convention. Any other target (outside
+ * the namespaces, another root, or dangling) fails closed with the offending
+ * path so the caller sees a structural-protection error, not a generic one.
+ */
+async function resolveProtectedPolicySymlink(
+  candidate: string,
+  protectedNamespaces: readonly string[],
+): Promise<{ target: string; metadata: Stats }> {
+  let target: string;
+  try {
+    target = await realpath(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    throw new SandboxStructuralProtectionError(
+      `Workspace policy entry must not be a dangling symbolic link: ${candidate}`,
+      { kind: "symbolic_link", path: candidate },
+    );
+  }
+  if (!protectedNamespaces.some((root) => isWithinSandboxRoot(target, root))) {
+    throw new SandboxStructuralProtectionError(
+      `Workspace policy entry must not be a symbolic link outside the workspace's ${POLICY_NAMESPACE_NAMES.join(", ")} folders: ${candidate} -> ${target}`,
+      { kind: "symbolic_link", path: candidate },
+    );
+  }
+  return { target, metadata: await lstat(target) };
+}
+
 async function resolvePolicyNamespaceIntegrityRoots(
   namespaceRoot: string,
-  options: { runtimeEntries?: ReadonlySet<string> } = {},
+  options: {
+    runtimeEntries?: ReadonlySet<string>;
+    protectedNamespaces: readonly string[];
+  },
 ): Promise<string[]> {
   let rootMetadata;
   try {
@@ -232,48 +275,55 @@ async function resolvePolicyNamespaceIntegrityRoots(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
+  // The namespace node itself lives in the writable workspace root, so a
+  // symlinked namespace could be repointed by a sandboxed command.
   if (rootMetadata.isSymbolicLink()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace policy namespace must not be a symbolic link: ${namespaceRoot}`,
+      { kind: "symbolic_link", path: namespaceRoot },
     );
   }
   if (!rootMetadata.isDirectory()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace policy namespace must be a directory: ${namespaceRoot}`,
+      { kind: "unsupported_node", path: namespaceRoot },
     );
   }
 
   const protectedRoots: string[] = [];
   for (const name of (await readdir(namespaceRoot)).sort()) {
     const candidate = path.join(namespaceRoot, name);
-    const metadata = await lstat(candidate);
+    let metadata = await lstat(candidate);
     if (options.runtimeEntries?.has(name)) {
       if (metadata.isSymbolicLink()) {
-        throw new Error(
+        throw new SandboxStructuralProtectionError(
           `Workspace policy entry must not be a symbolic link: ${candidate}`,
+          { kind: "symbolic_link", path: candidate },
         );
       }
       continue;
     }
     const selectedSubtree = PROTECTED_POLICY_SUBTREE_RE.test(name);
+    let resolved = candidate;
     if (metadata.isSymbolicLink()) {
       if (
-        namespaceRoot.endsWith(`${path.sep}.agentlink`) ||
-        selectedSubtree ||
-        path.extname(name)
+        !namespaceRoot.endsWith(`${path.sep}.agentlink`) &&
+        !selectedSubtree &&
+        !path.extname(name)
       ) {
-        throw new Error(
-          `Workspace policy entry must not be a symbolic link: ${candidate}`,
-        );
+        continue;
       }
-      continue;
+      ({ target: resolved, metadata } = await resolveProtectedPolicySymlink(
+        candidate,
+        options.protectedNamespaces,
+      ));
     }
     if (metadata.isFile()) {
-      protectedRoots.push(await realpath(candidate));
+      protectedRoots.push(await realpath(resolved));
       continue;
     }
     if (metadata.isDirectory() && selectedSubtree) {
-      protectedRoots.push(...(await resolveRegularPolicyFiles(candidate)));
+      protectedRoots.push(...(await resolveRegularPolicyFiles(resolved)));
     }
   }
   return uniqueSandboxRoots(protectedRoots);
@@ -282,17 +332,19 @@ async function resolvePolicyNamespaceIntegrityRoots(
 async function resolveWorkspacePolicyIntegrityRoots(
   workspaceRoot: string,
 ): Promise<WorkspacePolicyIntegrityRoots> {
-  const namespaceRoots = await Promise.all([
-    resolvePolicyNamespaceIntegrityRoots(
-      path.join(workspaceRoot, ".agentlink"),
-      {
-        runtimeEntries: AGENTLINK_RUNTIME_ENTRIES,
-      },
+  const protectedNamespaces = POLICY_NAMESPACE_NAMES.map((name) =>
+    path.join(workspaceRoot, name),
+  );
+  const namespaceRoots = await Promise.all(
+    POLICY_NAMESPACE_NAMES.map((name) =>
+      resolvePolicyNamespaceIntegrityRoots(path.join(workspaceRoot, name), {
+        ...(name === ".agentlink"
+          ? { runtimeEntries: AGENTLINK_RUNTIME_ENTRIES }
+          : {}),
+        protectedNamespaces,
+      }),
     ),
-    ...[".agents", ".claude", ".codex"].map((name) =>
-      resolvePolicyNamespaceIntegrityRoots(path.join(workspaceRoot, name)),
-    ),
-  ]);
+  );
   const instructionResolutions = await Promise.all(
     [...PROTECTED_INSTRUCTION_FILENAMES].map(async (entry) => {
       const candidate = path.join(workspaceRoot, entry);
