@@ -1,0 +1,71 @@
+packages/core/src/findAndReplace.test.ts
+  s_14e04439ca7f2b::t_c8c509d80e3c81 92-93
+  h_e08a86bb3a33a2 5,7,19-91
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 844-846,889-891
+resources/builtin-skills/documentation/references/release-notes.md
+  s_a962b3fb40f3b0::t_803e6f056ef19c 5
+packages/workspace-host/src/fileTools.ts
+  h_e08a86bb3a33a2 1833
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1172
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 99
+src/tools/findAndReplace.test.ts
+  h_e08a86bb3a33a2 228-292
+packages/workspace-host/src/fileTools.test.ts
+  s_1f0586bb273c3e::t_69ada0b0e11d1e 1010-1012
+  s_1f0586bb273c3e::t_4c3aa4a847a3fa 1007-1009
+  s_61411c83408ea3::t_732740e7219bf3 979-1006
+packages/core/src/findAndReplace.ts
+  h_e08a86bb3a33a2 71-106,363-367
+src/tools/findAndReplace.ts
+  h_e08a86bb3a33a2 18,83-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "398956888ea9dabf2d772b9870ec4d065ccc98f8",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_14e04439ca7f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a1c8ac7-3247-40e8-a0b2-9e9ab2ed8411",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1f0586bb273c3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33679f24-f0cd-4baf-a5b6-dda5f798b10a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_61411c83408ea3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f95640eb-65b5-4304-899e-d47c7ee726bf",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a962b3fb40f3b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca4c87d5-4457-4923-8b12-7cff7b27e3ba",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
