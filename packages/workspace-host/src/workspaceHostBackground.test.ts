@@ -173,6 +173,144 @@ describe("workspace host background composition", () => {
     }
   });
 
+  it("answers the background tools with VS Code's payloads, including several-agent waits and the legacy child id", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-shapes-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "notes.md"), "notes\n");
+    const parentToolResults: unknown[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const messages = body.messages ?? [];
+      const lastUserIndex = messages.findLastIndex(
+        (message) => message.role === "user",
+      );
+      const lastUser = messages[lastUserIndex]?.content ?? "";
+      const results = messages
+        .slice(lastUserIndex + 1)
+        .filter((message) => message.role === "tool")
+        .map((message): unknown => {
+          try {
+            return JSON.parse(String(message.content));
+          } catch {
+            return message.content;
+          }
+        });
+      if (lastUser === "inspect notes") return completion("child found it");
+      if (lastUser === "delegate") {
+        return results.length === 0
+          ? toolCall("spawn_background_agent", {
+              task: "Inspect notes",
+              message: "inspect notes",
+              read_paths: [{ path: "notes.md", kind: "file" }],
+              write_paths: [],
+            })
+          : completion("spawned");
+      }
+      const childId = lastUser.replace(/^check /u, "");
+      const steps = [
+        () =>
+          toolCall("get_background_result", {
+            sessionIds: [childId],
+            return_when: "all",
+            wait_seconds: 5,
+          }),
+        () =>
+          toolCall("get_background_result", {
+            sessionId: childId,
+            wait_seconds: 1,
+          }),
+        () => toolCall("get_background_status", { child_session_id: childId }),
+        () => toolCall("get_background_status", { sessionId: "missing-id" }),
+      ];
+      const next = steps[results.length];
+      if (next) return next();
+      parentToolResults.push(...results);
+      return completion("checked");
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-shapes",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: { enabled: true },
+      background: { enabled: true },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await expect(host.runTurn(sessionId, "delegate")).resolves.toMatchObject({
+        status: "completed",
+      });
+      const childId = host.listBackgroundAgents(sessionId)[0]!.childSessionId;
+      await expect(
+        host.runTurn(sessionId, `check ${childId}`),
+      ).resolves.toMatchObject({ status: "completed", text: "checked" });
+      const [several, single, legacyStatus, missing] = parentToolResults;
+      expect(several).toMatchObject({
+        status: "completed",
+        returnWhen: "all",
+        done: true,
+        completed: [
+          {
+            sessionId: childId,
+            result: "child found it",
+            resultState: "completed",
+            retrySafe: true,
+            agentRetryable: false,
+          },
+        ],
+        pending: [],
+      });
+      // A finished single wait returns the child's final text, as in VS Code.
+      expect(single).toBe("child found it");
+      expect(legacyStatus).toMatchObject({
+        status: "idle",
+        done: true,
+        phase: "completed",
+        resultState: "completed",
+        canSteer: false,
+        canKill: false,
+        sessionId: childId,
+        task: "Inspect notes",
+        scopes: [{ path: "notes.md", kind: "file", access: "read" }],
+      });
+      expect(missing).toMatchObject({
+        status: "error",
+        done: true,
+        resultState: "failed",
+        terminalReason: "background_session_not_found",
+        retrySafe: true,
+      });
+      expect((missing as { partialOutput: string }).partialOutput).toContain(
+        childId,
+      );
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs a read-only reviewer on the configured review model", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-background-review-"),

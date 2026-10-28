@@ -9,6 +9,18 @@ import {
   MAX_MODE_SWITCH_RESUMES,
   buildModeSwitchResumePrompt,
 } from "@agentlink/core/interaction-tools";
+import {
+  backgroundResultsPendingEntry,
+  buildBackgroundDenialPayload,
+  buildBackgroundFailurePayload,
+  buildBackgroundResultsPayload,
+  buildBackgroundStatusDenial,
+  buildBackgroundStillRunningPayload,
+  buildBackgroundWaitInterruptedPayload,
+  type BackgroundResultsCompletedEntry,
+  type BackgroundResultsPendingEntry,
+  type BackgroundResultsWaitStatus,
+} from "@agentlink/core/background-agent-tools";
 import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -12737,22 +12749,11 @@ export class AgentSessionManager {
       targetSessionId,
     );
     if (denial) {
-      // A lookup miss is not an authorization loss: presenting it as one
-      // sends coordinators toward abandoning finished work instead of
-      // re-checking the id they passed.
-      const notFound = denial.terminalReason === "background_session_not_found";
-      return {
-        status: "error",
-        done: true,
-        partialOutput: denial.error,
-        displayStatus: notFound ? "Not found" : "Unauthorized",
-        resultState: notFound ? "failed" : "authorization_lost",
+      return buildBackgroundStatusDenial({
+        notFound: denial.terminalReason === "background_session_not_found",
         terminalReason: denial.terminalReason,
-        retrySafe: notFound,
-        phase: "failed",
-        canSteer: false,
-        canKill: false,
-      };
+        error: denial.error,
+      });
     }
     return this.getBackgroundStatus(targetSessionId);
   }
@@ -12768,15 +12769,14 @@ export class AgentSessionManager {
       targetSessionId,
     );
     if (denial) {
-      const notFound = denial.terminalReason === "background_session_not_found";
       return Promise.resolve(
-        JSON.stringify({
-          status: notFound ? "not_found" : "authorization_lost",
-          terminalReason: denial.terminalReason,
-          retrySafe: notFound,
-          agentRetryable: false,
-          error: denial.error,
-        }),
+        JSON.stringify(
+          buildBackgroundDenialPayload({
+            notFound: denial.terminalReason === "background_session_not_found",
+            terminalReason: denial.terminalReason,
+            error: denial.error,
+          }),
+        ),
       );
     }
     return this.waitForBackgroundReleasingSlot(
@@ -12889,16 +12889,14 @@ export class AgentSessionManager {
         targetSessionId,
       );
       if (denial) {
-        const notFound =
-          denial.terminalReason === "background_session_not_found";
-        return JSON.stringify({
-          status: notFound ? "not_found" : "authorization_lost",
-          sessionId: targetSessionId,
-          terminalReason: denial.terminalReason,
-          retrySafe: notFound,
-          agentRetryable: false,
-          error: denial.error,
-        });
+        return JSON.stringify(
+          buildBackgroundDenialPayload({
+            notFound: denial.terminalReason === "background_session_not_found",
+            sessionId: targetSessionId,
+            terminalReason: denial.terminalReason,
+            error: denial.error,
+          }),
+        );
       }
     }
 
@@ -12915,15 +12913,9 @@ export class AgentSessionManager {
         ? completedCount > 0
         : completedCount === targetSessionIds.length;
     };
-    const buildResult = (
-      status:
-        | "completed"
-        | "still_running"
-        | "wait_interrupted"
-        | "wait_cancelled",
-    ) => {
-      const completed: Array<Record<string, unknown>> = [];
-      const pending: Array<Record<string, unknown>> = [];
+    const buildResult = (status: BackgroundResultsWaitStatus) => {
+      const completed: BackgroundResultsCompletedEntry[] = [];
+      const pending: BackgroundResultsPendingEntry[] = [];
       for (const sessionId of targetSessionIds) {
         const session = this.sessions.get(sessionId)!;
         const projected = this.getProjectedBgStatus(session);
@@ -12942,50 +12934,22 @@ export class AgentSessionManager {
             agentRetryable: resolution.agentRetryable,
           });
         } else {
-          const progress = this.getBackgroundStatus(sessionId);
-          pending.push({
-            sessionId,
-            status: progress.status,
-            phase: progress.phase,
-            displayStatus: progress.displayStatus,
-            currentTool: progress.currentTool,
-            elapsedMs: progress.elapsedMs,
-            idleMs: progress.idleMs,
-            partialOutput: progress.partialOutput,
-          });
+          pending.push(
+            backgroundResultsPendingEntry(
+              sessionId,
+              this.getBackgroundStatus(sessionId),
+            ),
+          );
         }
       }
-      return JSON.stringify({
-        status,
-        returnWhen: request.returnWhen,
-        done: pending.length === 0,
-        completed,
-        pending,
-        ...(status === "still_running"
-          ? {
-              retryAfterMs: 5_000,
-              retrySafe: true,
-              message:
-                "The bounded wait expired and some background agents are still running. Continue independent work before checking again.",
-            }
-          : {}),
-        ...(status === "wait_interrupted"
-          ? {
-              reason: "user_message_pending",
-              retrySafe: true,
-              message:
-                "The wait was interrupted because a user message is pending. The background agents are still running; handle the message before waiting again.",
-            }
-          : {}),
-        ...(status === "wait_cancelled"
-          ? {
-              reason: "tool_call_cancelled",
-              retrySafe: true,
-              message:
-                "The wait was cancelled. The background agents are still running and can be checked again later.",
-            }
-          : {}),
-      });
+      return JSON.stringify(
+        buildBackgroundResultsPayload({
+          status,
+          returnWhen: request.returnWhen,
+          completed,
+          pending,
+        }),
+      );
     };
 
     const attachCompletedImages = (text: string) => {
@@ -13395,34 +13359,16 @@ export class AgentSessionManager {
    * agent itself is untouched and keeps running.
    */
   private buildBackgroundWaitInterruptedResult(sessionId: string): string {
-    return JSON.stringify({
-      status: "wait_interrupted",
-      reason: "user_message_pending",
-      done: false,
-      sessionId,
-      retrySafe: true,
-      message:
-        "Waiting stopped because a user message is pending for your session. The background agent was not interrupted and keeps running. Handle the user's message first, then call get_background_result again when ready to wait, or get_background_status for a non-blocking check.",
-    });
+    return JSON.stringify(buildBackgroundWaitInterruptedPayload(sessionId));
   }
 
   private buildBackgroundStillRunningResult(sessionId: string): string {
-    const status = this.getBackgroundStatus(sessionId);
-    return JSON.stringify({
-      status: "still_running",
-      done: false,
-      sessionId,
-      phase: status.phase,
-      displayStatus: status.displayStatus,
-      currentTool: status.currentTool,
-      elapsedMs: status.elapsedMs,
-      idleMs: status.idleMs,
-      partialOutput: status.partialOutput,
-      retryAfterMs: 5_000,
-      retrySafe: true,
-      message:
-        "The bounded wait expired and the background agent is still running. Continue any independent foreground implementation, tests, documentation, validation, or self-review before checking again. Use get_background_status for non-blocking progress; call get_background_result again only when integration is genuinely blocked on the final result.",
-    });
+    return JSON.stringify(
+      buildBackgroundStillRunningPayload(
+        sessionId,
+        this.getBackgroundStatus(sessionId),
+      ),
+    );
   }
 
   /**
@@ -14062,32 +14008,34 @@ export class AgentSessionManager {
       session.fleetMetadata?.agentRetryable ??
       false;
     const incompleteEnvelope = resultState === "incomplete_expected_result";
-    const failureResult = JSON.stringify({
-      status: resultState,
-      terminalReason,
-      retrySafe,
-      agentRetryable,
-      // Keep the raw response recoverable and say which validation failed so
-      // the coordinator can salvage findings instead of guessing.
-      ...(incompleteEnvelope
-        ? {
-            expectedResultIssue: missingTextResult
-              ? "The agent stopped without a completed final text result. Any partial output is evidence only, not a completed review."
-              : providerStopReason
-                ? `The provider stopped before finalizing the result (${providerStopReason}). Partial output is not a completed result.`
-                : `Expected a "${expected}" envelope; the final message parsed as ${
-                    structuredResult.type === "text"
-                      ? "plain text without a valid envelope"
-                      : `a "${structuredResult.type}" envelope`
-                  }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
-          }
-        : {}),
-      ...(partialResult
-        ? { partialOutput: partialResult }
-        : incompleteEnvelope
-          ? { partialOutput: rawText }
+    const failureResult = JSON.stringify(
+      buildBackgroundFailurePayload({
+        status: resultState,
+        terminalReason,
+        retrySafe,
+        agentRetryable,
+        // Keep the raw response recoverable and say which validation failed so
+        // the coordinator can salvage findings instead of guessing.
+        ...(incompleteEnvelope
+          ? {
+              expectedResultIssue: missingTextResult
+                ? "The agent stopped without a completed final text result. Any partial output is evidence only, not a completed review."
+                : providerStopReason
+                  ? `The provider stopped before finalizing the result (${providerStopReason}). Partial output is not a completed result.`
+                  : `Expected a "${expected}" envelope; the final message parsed as ${
+                      structuredResult.type === "text"
+                        ? "plain text without a valid envelope"
+                        : `a "${structuredResult.type}" envelope`
+                    }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
+            }
           : {}),
-    });
+        ...(partialResult
+          ? { partialOutput: partialResult }
+          : incompleteEnvelope
+            ? { partialOutput: rawText }
+            : {}),
+      }),
+    );
     return {
       resultText: failureResult,
       structuredResult: { type: "text", text: failureResult },

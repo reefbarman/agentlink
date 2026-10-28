@@ -346,6 +346,18 @@
         "default": "./dist/cjs/applyDiff.cjs"
       }
     },
+    "./background-agent-tools": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/backgroundAgentTools.d.ts",
+        "default": "./dist/backgroundAgentTools.js"
+      },
+      "require": {
+        "types": "./dist/cjs/backgroundAgentTools.d.cts",
+        "default": "./dist/cjs/backgroundAgentTools.cjs"
+      }
+    },
     "./command-classifier": {
       "browser": null,
       "edge": null,

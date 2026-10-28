@@ -84,6 +84,12 @@ import {
   isTaskStatus,
   parseAskUserInput,
 } from "@agentlink/core/interaction-tools";
+import {
+  GET_BACKGROUND_RESULT_TOOL,
+  GET_BACKGROUND_STATUS_TOOL,
+  KILL_BACKGROUND_AGENT_TOOL,
+  STEER_BACKGROUND_AGENT_TOOL,
+} from "@agentlink/core/background-agent-tools";
 import { McpClientHub } from "./McpClientHub.js";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import { IS_DEV_BUILD } from "../shared/buildFlags.js";
@@ -759,121 +765,10 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       required: ["task", "message"],
     },
   },
-  {
-    name: "get_background_status",
-    description:
-      "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, budget usage, canSteer/canKill controls, and preserved output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
-    input_schema: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description:
-            "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
-        },
-      },
-      required: ["sessionId"],
-    },
-  },
-  {
-    name: "get_background_result",
-    description:
-      'Wait for one or several background agents for a bounded interval and return available final responses. For one agent, provide sessionId and wait_seconds. For several agents, provide sessionIds, return_when ("any" or "all"), and wait_seconds. The two forms are mutually exclusive. If the wait expires, the background agents keep running and the tool returns status=still_running with current progress, partial output when available, retryAfterMs, and guidance to continue independent foreground work before checking again. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Skip this when completion results were already pushed into context. Waiting releases your own background concurrency slot. If a user or steering message arrives for your session, the call returns early with status=wait_interrupted; handle that message before waiting again.',
-    input_schema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        sessionIds: {
-          type: "array",
-          minItems: 1,
-          items: { type: "string" },
-        },
-        return_when: { type: "string", enum: ["any", "all"] },
-        wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
-      },
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            sessionId: {
-              type: "string",
-              description:
-                "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
-            },
-            wait_seconds: {
-              type: "integer",
-              minimum: 1,
-              maximum: 60,
-              description:
-                "Maximum seconds to wait before returning current progress. Use a short bounded synchronization point and continue independent foreground work after a timeout.",
-            },
-          },
-          required: ["sessionId", "wait_seconds"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: {
-            sessionIds: {
-              type: "array",
-              minItems: 1,
-              items: { type: "string" },
-              description:
-                "The exact sessionIds returned by spawn_background_agent.",
-            },
-            return_when: {
-              type: "string",
-              enum: ["any", "all"],
-              description:
-                "Return when any requested agent completes or only when all requested agents complete.",
-            },
-            wait_seconds: {
-              type: "integer",
-              minimum: 1,
-              maximum: 60,
-              description:
-                "Maximum seconds to wait before returning current aggregate progress.",
-            },
-          },
-          required: ["sessionIds", "return_when", "wait_seconds"],
-          additionalProperties: false,
-        },
-      ],
-    },
-  },
-  {
-    name: "kill_background_agent",
-    description:
-      "Immediately stop a background agent when get_background_status reports canKill and waiting is no longer worthwhile. Returns any partial output collected so far.",
-    input_schema: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description: "The sessionId of the background agent to stop",
-        },
-        reason: {
-          type: "string",
-          description:
-            "Brief reason for killing the agent (logged for debugging)",
-        },
-      },
-      required: ["sessionId"],
-    },
-  },
-  {
-    name: "steer_background_agent",
-    description:
-      'Send a course-correction to a running authorized descendant. To ask for an early result, say "Stop using tools and return your best findings now." The instruction is queued for the next safe tool boundary, so it cannot interrupt an in-flight provider request or tool; check idleMs later and kill if the instruction cannot be delivered promptly.',
-    input_schema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        message: { type: "string" },
-      },
-      required: ["sessionId", "message"],
-    },
-  },
+  GET_BACKGROUND_STATUS_TOOL,
+  GET_BACKGROUND_RESULT_TOOL,
+  KILL_BACKGROUND_AGENT_TOOL,
+  STEER_BACKGROUND_AGENT_TOOL,
   ...Object.entries(DEFERRED_AGENT_TOOL_SCHEMAS).map(([name, schema]) => ({
     name,
     description: TOOL_REGISTRY[name]!.description,

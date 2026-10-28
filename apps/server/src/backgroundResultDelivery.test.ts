@@ -134,4 +134,37 @@ describe("background result delivery", () => {
     ).toEqual([]);
     expect(terminalChildIdsIn({ error: "nope" })).toEqual([]);
   });
+
+  it("finds outcomes in the VS Code-shaped background payloads", () => {
+    // get_background_status and a single get_background_result.
+    expect(
+      terminalChildIdsIn({ sessionId: "child-1", done: true, status: "idle" }),
+    ).toEqual(["child-1"]);
+    expect(
+      terminalChildIdsIn(
+        JSON.stringify({
+          status: "completed",
+          sessionId: "child-1",
+          done: true,
+        }),
+      ),
+    ).toEqual(["child-1"]);
+    // Still running, or a status denial without a child ID.
+    expect(
+      terminalChildIdsIn({
+        status: "still_running",
+        sessionId: "c",
+        done: false,
+      }),
+    ).toEqual([]);
+    expect(terminalChildIdsIn({ status: "error", done: true })).toEqual([]);
+    // A several-agent wait: only the finished ones.
+    expect(
+      terminalChildIdsIn({
+        status: "completed",
+        completed: [{ sessionId: "child-1" }],
+        pending: [{ sessionId: "child-2" }],
+      }),
+    ).toEqual(["child-1"]);
+  });
 });

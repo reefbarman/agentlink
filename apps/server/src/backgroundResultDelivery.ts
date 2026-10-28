@@ -159,6 +159,19 @@ export function terminalChildIdsIn(content: unknown): string[] {
     }
   }
   if (!isRecord(value)) return [];
+  // VS Code-shaped payloads: a status or single result names the child as
+  // `sessionId` with `done`; a several-agent wait lists finished ones.
+  if (Array.isArray(value.completed)) {
+    return value.completed.flatMap((entry) =>
+      isRecord(entry) && typeof entry.sessionId === "string"
+        ? [entry.sessionId]
+        : [],
+    );
+  }
+  if (typeof value.sessionId === "string" && value.done === true) {
+    return [value.sessionId];
+  }
+  // Payloads written before the shared contract.
   if (isRecord(value.record)) return terminalChildIdsIn(value.record);
   return typeof value.childSessionId === "string" &&
     typeof value.lifecycle === "string" &&

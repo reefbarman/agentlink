@@ -7,6 +7,7 @@ const modules = [
   "agentModes",
   "agentToolLoop",
   "applyDiff",
+  "backgroundAgentTools",
   "browserRuntime",
   "codexDeviceAuth",
   "client",
@@ -58,6 +59,7 @@ const modules = [
 const focusedSubpathModules = new Set([
   "agentModes",
   "applyDiff",
+  "backgroundAgentTools",
   "browserRuntime",
   "codexDeviceAuth",
   "commandClassifier",

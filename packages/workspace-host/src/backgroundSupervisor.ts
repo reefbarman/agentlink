@@ -116,6 +116,20 @@ export type WorkspaceBackgroundWaitResult =
       readonly record: WorkspaceBackgroundRecord;
     };
 
+export interface WorkspaceBackgroundWaitManyRequest {
+  readonly callerSessionId: string;
+  readonly childSessionIds: readonly string[];
+  readonly returnWhen: "any" | "all";
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface WorkspaceBackgroundWaitManyResult {
+  readonly status: "completed" | "still_running" | "wait_cancelled";
+  /** One record per distinct requested child, in request order. */
+  readonly records: readonly WorkspaceBackgroundRecord[];
+}
+
 export type WorkspaceBackgroundResult =
   | { readonly status: "completed"; readonly record: WorkspaceBackgroundRecord }
   | {
@@ -427,6 +441,80 @@ export class WorkspaceBackgroundSupervisor {
       status: outcome === "interrupted" ? "wait_interrupted" : "still_running",
       record,
     };
+  }
+
+  /**
+   * Wait for several directly owned children until any or all of them have
+   * finished, the bounded wait expires, or the call is cancelled. Every child
+   * is authorized before waiting, so a denied request waits for nothing.
+   */
+  async waitMany(
+    request: WorkspaceBackgroundWaitManyRequest,
+  ): Promise<WorkspaceBackgroundWaitManyResult> {
+    if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs <= 0) {
+      throw new Error("background_wait_timeout_invalid");
+    }
+    const childSessionIds = [...new Set(request.childSessionIds)];
+    if (childSessionIds.length === 0) {
+      throw new Error("background_session_ids_required");
+    }
+    const target = (childSessionId: string) => ({
+      callerSessionId: request.callerSessionId,
+      childSessionId,
+    });
+    for (const childSessionId of childSessionIds) {
+      this.requireOwned(target(childSessionId));
+    }
+    const satisfied = () => {
+      const finished = childSessionIds.filter((childSessionId) =>
+        isTerminal(this.records.get(childSessionId)),
+      ).length;
+      return request.returnWhen === "any"
+        ? finished > 0
+        : finished === childSessionIds.length;
+    };
+    const snapshot = (status: WorkspaceBackgroundWaitManyResult["status"]) => ({
+      status,
+      records: childSessionIds.map((childSessionId) =>
+        cloneRecord(this.requireOwned(target(childSessionId))),
+      ),
+    });
+    if (satisfied()) return snapshot("completed");
+    if (request.signal?.aborted) return snapshot("wait_cancelled");
+    const outcome = await new Promise<"changed" | "timeout" | "cancelled">(
+      (resolve) => {
+        let settled = false;
+        const finish = (value: "changed" | "timeout" | "cancelled") => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          request.signal?.removeEventListener("abort", onAbort);
+          for (const childSessionId of childSessionIds) {
+            const waiters = this.waiters.get(childSessionId);
+            waiters?.delete(onChanged);
+            if (waiters?.size === 0) this.waiters.delete(childSessionId);
+          }
+          resolve(value);
+        };
+        const onChanged = () => {
+          if (satisfied()) finish("changed");
+        };
+        const onAbort = () => finish("cancelled");
+        const timer = setTimeout(() => finish("timeout"), request.timeoutMs);
+        timer.unref?.();
+        for (const childSessionId of childSessionIds) {
+          const waiters = this.waiters.get(childSessionId) ?? new Set();
+          waiters.add(onChanged);
+          this.waiters.set(childSessionId, waiters);
+        }
+        request.signal?.addEventListener("abort", onAbort, { once: true });
+        onChanged();
+      },
+    );
+    if (satisfied()) return snapshot("completed");
+    return snapshot(
+      outcome === "cancelled" ? "wait_cancelled" : "still_running",
+    );
   }
 
   result(request: WorkspaceBackgroundTargetRequest): WorkspaceBackgroundResult {
