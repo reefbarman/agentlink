@@ -1,0 +1,32 @@
+packages/core/src/codex/streamParser.ts
+  h_e08a86bb3a33a2 74-79,203-207,248-249,304-309,311
+  s_d5c49c59ea8b0c::t_b75c510f91a4c0 208,310
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 8153,8206-8208,8222-8294
+  h_e08a86bb3a33a2 8217-8221
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 152-158,1290,2376-2386,2526
+packages/core/src/codex/streamParser.test.ts
+  h_e08a86bb3a33a2 85-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "849207f4851c531ed6dd012393837e5838f758b3",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d5c49c59ea8b0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "283044d4-e8f9-4048-9c2c-40897f62da90",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
