@@ -1,0 +1,107 @@
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 612-613
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 44,66,291-300,709-720
+scripts/run-core-sdk-consumer-gate.mjs
+  h_e08a86bb3a33a2 27-28
+packages/workspace-host/src/workspaceModes.ts
+  h_e08a86bb3a33a2 57-59,79-87
+  s_03979ea9c65c51::t_5de1a4d267ddae 88-89
+apps/server/src/SessionApprovalModes.ts
+  h_e08a86bb3a33a2 31-38,57,126,132-139
+  s_03979ea9c65c51::t_e1053a97bffa93 140
+apps/server/src/sessionRunners.ts
+  h_e08a86bb3a33a2 161-162,322-323
+packages/workspace-host/src/workspaceModes.test.ts
+  h_e08a86bb3a33a2 8,35-39
+apps/server/src/taskReview.ts
+  h_e08a86bb3a33a2 94
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 285
+apps/server/src/remoteWorkspaceHost.ts
+  h_e08a86bb3a33a2 46-50,327
+src/approvals/commandTierClassifier.ts
+  h_e08a86bb3a33a2 1-14
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 14,16,40-41,63,65,72-73
+apps/server/src/SessionApprovalModes.test.ts
+  h_e08a86bb3a33a2 47-69
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/core/src/commandSplitter.ts
+  h_e08a86bb3a33a2 1-211
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 102,117,119-128,254,428-429
+  s_1eaba8c592705b::t_282de146228770 118
+packages/core/src/commandClassifier.ts
+  h_e08a86bb3a33a2 1-1514
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 198-207,724-731
+  s_03979ea9c65c51::t_6112353ce32c59 732
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 10-12,59-65,102-108,303-341,940-959
+  s_03979ea9c65c51::t_0ab5847eed5cae 9,66,960-961
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/commandWorker.test.ts
+  h_e08a86bb3a33a2 217-234
+packages/core/src/shellCommand.ts
+  h_e08a86bb3a33a2 1-7
+src/util/shellLex.ts
+  h_e08a86bb3a33a2 1-23
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2800-2900
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 13
+packages/core/package.json
+  h_e08a86bb3a33a2 55-72,349-360
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 190-196,566-569
+  s_1eaba8c592705b::t_40da6286ebb56a 570
+apps/server/README.md
+  h_e08a86bb3a33a2 701
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 530-534,561-566,1400-1401,2289-2290
+  s_1eaba8c592705b::t_27e122d62056d0 1393-1399,1402
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 155
+src/approvals/commandSplitter.ts
+  h_e08a86bb3a33a2 1,4-6
+  s_03979ea9c65c51::t_8ac5c34201b4ba 2-3
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 222,402-442,446
+  h_e08a86bb3a33a2 443-445
+packages/core/src/shellLex.ts
+  s_03979ea9c65c51::t_1e49d06fec824d 1-647
+resources/builtin-skills/documentation/references/release-notes.md
+  s_1eaba8c592705b::t_508087eb64606e 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "73cd67552780aeb81b26b4debced936cfa2b5c08",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_03979ea9c65c51": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a07cbeb5-f295-41a5-9aa9-545e44bfebf9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1eaba8c592705b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3be99071-5452-4375-a9ea-8d3bb58d9e41",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
