@@ -71,6 +71,8 @@ export function composeSharedWorkspaceGuidance(options: {
   readonly projectRoot: string;
   readonly toolNames: Iterable<string>;
   readonly identity?: WorkspacePromptIdentity;
+  /** False for a general assistant; see `BasePromptOptions.codingAssistant`. */
+  readonly codingAssistant?: boolean;
 }): string {
   const profile = resolveWorkspacePromptProfile(options.model);
   const capabilities = {
@@ -90,6 +92,7 @@ export function composeSharedWorkspaceGuidance(options: {
       identity,
       cwd: options.projectRoot,
       capabilities,
+      ...(options.codingAssistant === false ? { codingAssistant: false } : {}),
     }),
     buildSessionHistoryRecallGuidance(capabilities),
   ]

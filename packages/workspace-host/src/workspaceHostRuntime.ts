@@ -193,9 +193,13 @@ export interface CreateWorkspaceHostOptions {
    * Lead the prompt with VS Code's shared guidance (`@agentlink/core/system-prompt`)
    * for the tools each session actually registers: file edits, `ask_user`,
    * `todo_write`, `set_task_status` and history recall. Off by default, so
-   * hosts keep the short standalone prompt until they opt in.
+   * hosts keep the short standalone prompt until they opt in. A general
+   * assistant passes `{ codingAssistant: false }` to leave out the
+   * "primarily a coding assistant" rule.
    */
-  readonly sharedPromptGuidance?: boolean;
+  readonly sharedPromptGuidance?:
+    | boolean
+    | { readonly codingAssistant?: boolean };
   /**
    * VS Code's agent modes for foreground sessions: Code, Architect, Ask,
    * Debug and Review plus custom modes from the project's `modes.json`
@@ -1407,6 +1411,10 @@ export async function createWorkspaceHost(
               }),
               ...(options.promptIdentity
                 ? { identity: options.promptIdentity }
+                : {}),
+              ...(typeof options.sharedPromptGuidance === "object" &&
+              options.sharedPromptGuidance.codingAssistant === false
+                ? { codingAssistant: false }
                 : {}),
             }),
           ]

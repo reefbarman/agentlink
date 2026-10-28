@@ -19,9 +19,13 @@ import { isProgressToolName } from "@agentlink/protocol/auto-continue-progress";
 /** The message that continues a session; the same one VS Code sends. */
 export const AUTO_CONTINUE_PROMPT = TODO_AUTO_CONTINUE_PROMPT;
 
-/** Tells the model how its todo list keeps it working. */
+/**
+ * Tells the model how its todo list keeps it working. The shared guidance
+ * already covers `todo_write` and `set_task_status`; this adds what only the
+ * Assistant does: carrying on by itself while todos remain.
+ */
 export const AUTO_CONTINUE_INSTRUCTIONS =
-  "For work with several steps, keep a todo list with todo_write and keep it current: exactly one item in progress, and mark each item completed as soon as it is done. While items remain unfinished, the session carries on by itself after each of your turns, so there is no need to stop and ask whether to continue. When your response is final, end it with set_task_status: blocked or waiting_for_user when you need the owner (a decision, a sign-in, an approval you cannot get), and completed (with completeTodos when the list is done) when the work is done. Setting a final status stops the session carrying on by itself.";
+  "While todo items remain unfinished, the session carries on by itself after each of your turns, so there is no need to stop and ask whether to continue. Use waiting_for_user or blocked when you need the owner (a decision, a sign-in, an approval you cannot get). Setting a final status with set_task_status stops the session carrying on by itself.";
 
 /**
  * The list a successful `todo_write` call set, or the one `set_task_status`

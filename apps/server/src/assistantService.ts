@@ -1427,6 +1427,11 @@ export async function startAssistantService(
         // default chosen in Setup applies to chats without their own model.
         defaultModel: liveModelReference(currentDefaultModel),
         promptIdentity: { role: "a personal assistant" },
+        // VS Code's guidance for the tools each chat has (no ask_user and no
+        // modes here). Owner chats are a general assistant; a coding task's
+        // chat keeps the coding-assistant rule.
+        sharedPromptGuidance:
+          kind === "project" ? { codingAssistant: false } : true,
         turnLimits: SESSION_TURN_LIMITS,
         // The todo list, for Auto Continue, and VS Code's set_task_status
         // (a final card that ends Auto Continue); no ask_user (approval

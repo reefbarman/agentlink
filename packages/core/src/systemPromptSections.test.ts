@@ -257,6 +257,19 @@ describe("system prompt sections", () => {
     );
   });
 
+  it("leaves out the coding-assistant rule for a general assistant", () => {
+    const options = { identity: "You are AgentLink.", cwd: "/repo" };
+    expect(buildBasePrompt("compatibility", options)).toContain(
+      "You are primarily a coding assistant",
+    );
+    const general = buildBasePrompt("compatibility", {
+      ...options,
+      codingAssistant: false,
+    });
+    expect(general).not.toContain("primarily a coding assistant");
+    expect(general).toContain("## General Rules");
+  });
+
   it("describes modes with or without model-driven switching", () => {
     expect(buildModesOverviewSection()).toContain("use `switch_mode`");
     const userOnly = buildModesOverviewSection({

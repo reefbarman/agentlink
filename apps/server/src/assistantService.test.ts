@@ -982,6 +982,176 @@ describe("assistant service chat-created jobs", () => {
   }, 40_000);
 });
 
+describe("assistant service system prompt", () => {
+  // Backticked snake_case names the shared guidance uses for values, not tools.
+  const VALUE_NAMES = new Set(["in_progress", "waiting_for_user"]);
+
+  it.each(["compatibility", "reasoning"] as const)(
+    "layers an owner chat's persona on VS Code's guidance, naming only advertised tools (%s)",
+    async (profile) => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "assistant-prompt-"),
+      );
+      cleanup.push(() =>
+        fs.rm(root, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        }),
+      );
+      await fs.mkdir(path.join(root, "projects", "home"), { recursive: true });
+      const certificate = createTestCertificate();
+      await fs.writeFile(path.join(root, "server.crt"), certificate.cert);
+      await fs.writeFile(path.join(root, "server.key"), certificate.key, {
+        mode: 0o600,
+      });
+      const requests: Array<{
+        messages: Array<{ role: string; content?: unknown }>;
+        tools?: Array<{ function: { name: string } }>;
+      }> = [];
+      const model = http.createServer((request, response) => {
+        let raw = "";
+        request.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+        request.on("end", () => {
+          requests.push(JSON.parse(raw));
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            `data: ${JSON.stringify({
+              id: "r",
+              choices: [
+                { index: 0, delta: { content: "Hi." }, finish_reason: "stop" },
+              ],
+            })}\n\ndata: [DONE]\n\n`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) =>
+        model.listen(0, "127.0.0.1", () => resolve()),
+      );
+      cleanup.push(
+        () => new Promise<void>((resolve) => model.close(() => resolve())),
+      );
+      const modelPort = (model.address() as { port: number }).port;
+      const port = await freePort();
+      const origin = `https://localhost:${port}`;
+      const config = parseAssistantServerConfig(
+        {
+          schemaVersion: 1,
+          dataRoot: "data",
+          listen: { host: "127.0.0.1", port },
+          publicOrigins: [origin],
+          tls: { certFile: "server.crt", keyFile: "server.key" },
+          defaultModel: { providerId: "local", modelId: "fixture" },
+          providers: [
+            {
+              type: "openai-compatible",
+              id: "local",
+              baseURL: `http://127.0.0.1:${modelPort}/v1`,
+              noAuth: true,
+              allowInsecureHttp: true,
+              models: [
+                {
+                  id: "fixture",
+                  contextWindow: 32_768,
+                  maxOutputTokens: 4_096,
+                  supportsToolUse: true,
+                  promptProfile: profile,
+                },
+              ],
+            },
+          ],
+          projects: [{ id: "home", label: "Home", root: "projects/home" }],
+        },
+        root,
+      );
+      const service = await startAssistantService({
+        config,
+        log: () => undefined,
+      });
+      cleanup.push(() => service.close());
+      const request = (input: {
+        method?: string;
+        path: string;
+        body?: unknown;
+        cookie?: string;
+      }) =>
+        httpsRequest({
+          port,
+          ca: certificate.cert,
+          method: input.method,
+          path: input.path,
+          body: input.body,
+          headers: {
+            ...(input.method && input.method !== "GET" ? { origin } : {}),
+            ...(input.cookie ? { cookie: input.cookie } : {}),
+          },
+        });
+      const { code } = service.server.store.createPairing();
+      const cookie = sessionCookieFrom(
+        await request({
+          method: "POST",
+          path: "/api/auth/pairings/redeem",
+          body: { code, deviceLabel: "Laptop" },
+        }),
+      );
+      void request({
+        method: "POST",
+        path: "/api/ask-agent/send",
+        body: { text: "Hello" },
+        cookie,
+      }).catch(() => undefined);
+      const first = await vi.waitFor(
+        () => {
+          expect(requests.length).toBeGreaterThan(0);
+          return requests[0]!;
+        },
+        { timeout: 20_000, interval: 50 },
+      );
+      const prompt = String(
+        first.messages.find((message) => message.role === "system")?.content,
+      );
+      const tools = new Set(
+        (first.tools ?? []).map((tool) => tool.function.name),
+      );
+
+      // The Meridian identity line, then VS Code's guidance, then the persona.
+      expect(prompt).toMatch(/^You are AgentLink, a personal assistant\.\n/u);
+      expect(prompt).toContain(
+        profile === "reasoning" ? "## Core Contract" : "## TODO Discipline",
+      );
+      if (profile === "compatibility") {
+        expect(prompt).toContain("## Final Response Status");
+        expect(prompt).toContain("## Technical Judgment");
+      }
+      expect(prompt.indexOf("## Who you are")).toBeGreaterThan(
+        prompt.indexOf(
+          profile === "reasoning" ? "## Core Contract" : "## General Rules",
+        ),
+      );
+      expect(prompt).toContain("carries on by itself");
+      // No questions, no modes, and not a coding assistant.
+      expect(tools.has("ask_user")).toBe(false);
+      expect(prompt).not.toContain("ask_user");
+      expect(prompt).not.toContain("## Questions & Clarification");
+      expect(prompt).not.toContain("## Modes");
+      expect(prompt).not.toContain("switch_mode");
+      expect(prompt).not.toContain("primarily a coding assistant");
+      expect(prompt).not.toContain("Auto Continue");
+      const named = [...prompt.matchAll(/`([a-z]+(?:_[a-z]+)+)`/gu)]
+        .map((match) => match[1]!)
+        .filter((name) => !VALUE_NAMES.has(name));
+      expect(named).toContain("set_task_status");
+      for (const name of new Set(named)) {
+        expect(tools.has(name), `${name} is named but not advertised`).toBe(
+          true,
+        );
+      }
+    },
+    40_000,
+  );
+});
+
 describe("assistant service notifications", () => {
   it("pushes a job run's inbox entry to subscribed devices until they are revoked", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-push-"));

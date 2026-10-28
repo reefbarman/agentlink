@@ -123,6 +123,12 @@ export interface BasePromptOptions {
   /** Surface-owned `## Indexed tool scope` section, when the surface has one. */
   readonly indexedToolScope?: string;
   readonly capabilities?: SystemPromptCapabilities;
+  /**
+   * Whether the surface is primarily a coding assistant. A general assistant
+   * (for example the AgentLink Assistant) passes false to leave out the
+   * "primarily a coding assistant" rule. Defaults to true.
+   */
+  readonly codingAssistant?: boolean;
 }
 
 /**
@@ -168,7 +174,10 @@ const COMMUNICATION_STYLE_SECTION = `## Communication Style
 - If you need clarification, ask specific questions rather than broad ones.
 - When explaining code changes, focus on *what* changed and *why*, not line-by-line narration.`;
 
-function generalRulesBullets(cwd: string): GuidancePart[] {
+function generalRulesBullets(
+  cwd: string,
+  codingAssistant: boolean,
+): GuidancePart[] {
   return [
     { text: `- The project root directory is: ${cwd}` },
     { text: `- All file paths should be relative to this directory.` },
@@ -191,9 +200,13 @@ function generalRulesBullets(cwd: string): GuidancePart[] {
       text: `- When \`execute_command\` returns \`retry_guidance\`, use a listed exact recovery option before trying command variants or workarounds. A reviewed native option means issue that exact \`require_escalated\` request so normal approval can decide; do not retry after \`rejected_by_user\`, cancellation, or a terminal second attempt.`,
       requires: "commandRetryGuidance",
     },
-    {
-      text: `- You are primarily a coding assistant, but you should be helpful with any question the user asks. If someone asks a non-technical question, answer it naturally — don't refuse or redirect. Being helpful builds trust.`,
-    },
+    ...(codingAssistant
+      ? [
+          {
+            text: `- You are primarily a coding assistant, but you should be helpful with any question the user asks. If someone asks a non-technical question, answer it naturally — don't refuse or redirect. Being helpful builds trust.`,
+          },
+        ]
+      : []),
   ];
 }
 
@@ -379,7 +392,7 @@ export function buildCompatibilityBasePrompt(
 ): string {
   const capabilities = options.capabilities ?? FULL_SYSTEM_PROMPT_CAPABILITIES;
   const generalRules = `## General Rules\n\n${selectParts(
-    generalRulesBullets(options.cwd),
+    generalRulesBullets(options.cwd, options.codingAssistant !== false),
     capabilities,
   ).join("\n")}`;
   const sections: GuidancePart[] = [

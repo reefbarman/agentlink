@@ -382,6 +382,9 @@ export async function startSessionRunner(options: {
     providers: backends.map((backend) => ({ type: "backend", backend })),
     defaultModel: spec.defaultModel,
     promptIdentity: { role: "a personal assistant" },
+    // VS Code's guidance for the tools the task's chat has, as the
+    // Assistant's coding-task chats.
+    sharedPromptGuidance: true,
     // No limits: a task runs until it is done or stopped, like a VS Code
     // chat with Auto Continue (the control plane watches for runaways).
     turnLimits: {
