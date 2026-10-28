@@ -1,0 +1,94 @@
+packages/workspace-host/src/promptProfile.ts
+  h_e08a86bb3a33a2 51
+apps/cli/src/tui/tuiShellState.test.ts
+  h_e08a86bb3a33a2 218-223
+packages/core/src/agentModes.ts
+  h_e08a86bb3a33a2 96-176
+  h_e08a86bb3a33a2 95
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 4,23-25,32,34-45,121,199-209,416-417,421-427,485-486,488-494,709-710,742-745,780-781,1057-1141,1197,1201,1220,1245-1251,1254,1257-1260,1420-1425,1684-1687,1693,1697-1715,1730-1732,1840-1841
+  s_420b0f7d013d09::t_1ea2db1a1ea80d 22,428-429,779,782,1198-1200,1252-1253,1255-1256,1716,1839,1842
+apps/cli/src/sessionController.ts
+  h_e08a86bb3a33a2 98-101,266-273,278-279,291-292,526-529,532,587-598
+  s_420b0f7d013d09::t_69a4b6c26e3a04 530-531,533-534,599-600
+packages/core/src/systemPromptSections.test.ts
+  h_e08a86bb3a33a2 7,32,223-268
+  s_420b0f7d013d09::t_68e148d4dc2109 269-270
+apps/cli/src/sessionProjection.test.ts
+  h_e08a86bb3a33a2 280-304
+packages/workspace-host/src/workspaceModes.test.ts
+  h_e08a86bb3a33a2 1-57
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/cli/src/tui/ShellChrome.tsx
+  h_e08a86bb3a33a2 243-245
+  s_420b0f7d013d09::t_a9dcf3203a7c80 242
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 821-822,1390-1392,1731-1740,1743-1745,1749,1751-1753,1755-1757,1759-1761,1763-1765,1768,1773-1775,1782-1783
+  s_420b0f7d013d09::t_5687db506df1cc 1741,1754,1758,1778-1781,1784
+apps/cli/src/sessionProjection.ts
+  h_e08a86bb3a33a2 16,138-141,175-176,210-214,268-269,281-283,378-383,765-768,772
+  s_420b0f7d013d09::t_709fe0e6cea952 384
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 92-93
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 13-14
+packages/core/src/agentEngine.ts
+  h_e08a86bb3a33a2 22,142-143,162-171,282-285,452-453,517-533,1018,1717-1721
+  h_e08a86bb3a33a2 454,534-535,1722-1726
+apps/cli/src/tui/tuiCommand.ts
+  h_e08a86bb3a33a2 28-29,54-55,118
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 161,270,273-282
+  s_420b0f7d013d09::t_765039ecf1d3bc 283
+src/agent/toolPermissions.ts
+  h_e08a86bb3a33a2 1-2
+packages/node-host/src/fileStateRepository.ts
+  h_e08a86bb3a33a2 26,374-376,1110-1111
+  h_e08a86bb3a33a2 1112
+packages/core/src/systemPromptSections.ts
+  h_e08a86bb3a33a2 44-45,63,100,514-545,981-1063,1066-1067,1075,1079-1081,1117,1136-1137,1155
+  h_e08a86bb3a33a2 513
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2507-2660
+apps/cli/src/sessionController.test.ts
+  h_e08a86bb3a33a2 72-76,274-291
+  s_420b0f7d013d09::t_cde0b6039416e4 292-293
+packages/core/src/sessionRepository.ts
+  h_e08a86bb3a33a2 121-122,138,144-154,297-299,632-633
+  h_e08a86bb3a33a2 634
+packages/core/src/agentEngine.test.ts
+  h_e08a86bb3a33a2 463-504
+packages/workspace-host/src/index.ts
+  h_e08a86bb3a33a2 24
+packages/node-host/src/agentInstructions.ts
+  h_e08a86bb3a33a2 153-158,259
+  s_420b0f7d013d09::t_5db2dd4530ffc2 260-261
+packages/workspace-host/src/workspaceModes.ts
+  h_e08a86bb3a33a2 1-233
+resources/builtin-skills/documentation/references/release-notes.md
+  s_420b0f7d013d09::t_139db3a4ac5dc8 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d3947361cdb2adeb3c010298b871d994cec12f07",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_420b0f7d013d09": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78628dd2-3bdd-4521-8408-12d225cb6642",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
