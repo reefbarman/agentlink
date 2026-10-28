@@ -1,0 +1,23 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 1,21,64-72,234-261,267-268,278-279,281,283,287,289,296,299,301,307,310-312,314,316-319,322,326,335-345
+  h_e08a86bb3a33a2 262-263,266,269,347
+packages/sandbox/src/workspaceSandboxPolicy.test.ts
+  h_e08a86bb3a33a2 1-233
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 183
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a3b4a544046be6d157c82912f6c608cb4618267c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
