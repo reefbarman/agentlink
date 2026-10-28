@@ -328,6 +328,18 @@
         "default": "./dist/cjs/applyDiff.cjs"
       }
     },
+    "./command-output": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/commandOutput.d.ts",
+        "default": "./dist/commandOutput.js"
+      },
+      "require": {
+        "types": "./dist/cjs/commandOutput.d.cts",
+        "default": "./dist/cjs/commandOutput.cjs"
+      }
+    },
     "./find-and-replace": {
       "browser": null,
       "edge": null,

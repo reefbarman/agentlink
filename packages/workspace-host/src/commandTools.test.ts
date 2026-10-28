@@ -172,12 +172,15 @@ describe("workspace command tools", () => {
       await expect(authorize("repo/src")).resolves.toMatchObject({
         displayContent: { cwd: path.join(test.projectRoot, "repo", "src") },
       });
-      await expect(authorize(".")).rejects.toThrow(
-        "command_cwd_outside_project",
-      );
-      await expect(authorize("refs")).rejects.toThrow(
-        "command_cwd_outside_project",
-      );
+      // Refused with the reason for the model, not a failed turn.
+      await expect(authorize(".")).resolves.toEqual({
+        decision: "deny",
+        reason: expect.stringContaining("command_cwd_outside_project"),
+      });
+      await expect(authorize("refs")).resolves.toEqual({
+        decision: "deny",
+        reason: expect.stringContaining("command_cwd_outside_project"),
+      });
       const [tool] = await test.tools.resolveTools(test.request as never);
       expect(JSON.stringify(tool)).toContain(
         "Project-relative working directory, inside repo",

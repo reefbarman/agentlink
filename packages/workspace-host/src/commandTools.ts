@@ -6,6 +6,10 @@ import {
   type HostToolResolveRequest,
   type HostToolResolver,
 } from "@agentlink/core";
+import {
+  filterCommandOutput,
+  type CommandOutputFilterOptions,
+} from "@agentlink/core/command-output";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -76,6 +80,17 @@ export interface CreateWorkspaceCommandToolsOptions {
   readonly resolveEnvironment?: () =>
     | NodeJS.ProcessEnv
     | Promise<NodeJS.ProcessEnv>;
+  /**
+   * What the call's `env` may do: `allow` (default) sets any variable,
+   * `add_only` refuses one the host environment already has.
+   */
+  readonly environmentOverrides?: "allow" | "add_only";
+  /**
+   * `execute_command`'s model result: `vscode` (default) is VS Code's
+   * result with filtered output; `observation` is the raw supervisor
+   * observation, for a host that advertises its own older schema.
+   */
+  readonly executeResult?: "vscode" | "observation";
   readonly hasSessionGrant?: (
     proposal: WorkspaceCommandApprovalDisplay,
     request: Pick<HostToolResolveRequest, "principal" | "sessionId" | "turnId">,
@@ -158,16 +173,15 @@ export async function createWorkspaceCommandTools(
     const mode: WorkspaceCommandMode =
       input.background === true ? "background" : "foreground";
     const cwd = await canonicalCommandCwd(projectRoot, commandRoot, input.cwd);
-    const timeoutMs = boundedInteger(
-      input.timeoutMs,
-      DEFAULT_TIMEOUT_MS,
-      1,
-      MAX_TIMEOUT_MS,
+    const timeoutMs = requestedTimeoutMs(input);
+    const base = await (options.resolveEnvironment?.() ??
+      Promise.resolve(process.env));
+    const requestedEnvironment = parseRequestedEnvironment(
+      input.env,
+      completeEnvironment(base, cwd),
+      options.environmentOverrides ?? "allow",
     );
-    const environment = completeEnvironment(
-      await (options.resolveEnvironment?.() ?? Promise.resolve(process.env)),
-      cwd,
-    );
+    const environment = launchEnvironment(base, requestedEnvironment, cwd);
     const environmentKeys = Object.keys(environment).sort();
     const environmentDigest = digestEnvironment(
       environment,
@@ -196,6 +210,7 @@ export async function createWorkspaceCommandTools(
       cwd,
       environmentKeys,
       environmentDigest,
+      ...(requestedEnvironment ? { requestedEnvironment } : {}),
       mode,
       timeoutMs,
       policyFingerprint,
@@ -237,6 +252,7 @@ export async function createWorkspaceCommandTools(
         return true;
       },
       commandRootRelative,
+      options.executeResult ?? "vscode",
     ),
     observeCommandTool(request, options.supervisor, options.ownerId),
     listCommandsTool(request, options.supervisor, options.ownerId),
@@ -247,20 +263,32 @@ export async function createWorkspaceCommandTools(
     if (request.toolName !== "execute_command") {
       return { decision: "deny", reason: "Unsupported command authorization" };
     }
-    const prepared = await prepare(request.input, request);
+    let prepared: Awaited<ReturnType<typeof prepare>>;
+    try {
+      prepared = await prepare(request.input, request);
+    } catch (error) {
+      // Invalid input (cwd, env) is the model's to fix, not a turn failure.
+      return { decision: "deny", reason: errorMessage(error) };
+    }
     if (prepared.display.ruleDecision === "forbidden") {
       return {
         decision: "deny",
         reason: "Command forbidden by an explicit rule",
       };
     }
+    // The output filters only shape the result; the launch is what's bound.
+    const outputFilter = parseOutputFilter(request.input);
+    const preparedInput = {
+      launch: prepared.launch,
+      ...(outputFilter ? { outputFilter } : {}),
+    };
     if (
       prepared.display.mode === "foreground" &&
       !options.requiresApproval?.(prepared.display, request) &&
       (prepared.display.ruleDecision === "allow" ||
         options.hasSessionGrant?.(prepared.display, request))
     ) {
-      return { decision: "allow", preparedInput: { launch: prepared.launch } };
+      return { decision: "allow", preparedInput };
     }
     const boundary = unsandboxed ? "unsandboxed" : "sandboxed";
     return {
@@ -270,7 +298,7 @@ export async function createWorkspaceCommandTools(
           ? `Launch ${boundary} background command with concurrent editing`
           : `Run ${boundary} foreground command`,
       displayContent: prepared.display,
-      preparedInput: { launch: prepared.launch },
+      preparedInput,
     };
   };
 
@@ -320,8 +348,9 @@ export async function createWorkspaceCommandTools(
       if (cwd !== launch.cwd) {
         return { ok: false, reason: "Command working directory changed" };
       }
-      const currentEnvironment = completeEnvironment(
+      const currentEnvironment = launchEnvironment(
         await (options.resolveEnvironment?.() ?? Promise.resolve(process.env)),
+        launch.requestedEnvironment,
         cwd,
       );
       if (
@@ -368,23 +397,79 @@ function executeCommandTool(
   consumeBackgroundAcknowledgement: (commandId: string) => boolean,
   /** The command root relative to the project root; "" for the root. */
   commandRootRelative = "",
+  resultFormat: "vscode" | "observation" = "vscode",
 ): HostTool {
   return defineTool({
     name: "execute_command",
     description:
-      "Run an exact non-interactive command through /bin/zsh -c. There is no PTY, stdin, persistent shell state, or sandbox. Background launch requires explicit concurrent-editing acknowledgement.",
+      "Run an exact non-interactive command through /bin/zsh -c. There is no PTY, stdin, persistent shell state, or sandbox. Background launch requires explicit concurrent-editing acknowledgement. Use output_grep, output_head and output_tail instead of piping through grep, head or tail.",
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", minLength: 1, maxLength: 32_000 },
+        command: {
+          type: "string",
+          minLength: 1,
+          maxLength: 32_000,
+          description: "Shell command to execute",
+        },
         cwd: {
           type: "string",
           description: commandRootRelative
             ? `Project-relative working directory, inside ${commandRootRelative}. Defaults to ${commandRootRelative}; commands cannot run anywhere else.`
             : "Project-relative working directory. Defaults to the project root.",
         },
-        background: { type: "boolean" },
-        timeoutMs: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_MS },
+        background: {
+          type: "boolean",
+          description:
+            "Run without waiting for completion. Use for long-running processes like dev servers. Returns immediately with command_id.",
+        },
+        timeout: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: MAX_TIMEOUT_MS / 1_000,
+          description: `Timeout in seconds. Defaults to ${DEFAULT_TIMEOUT_MS / 1_000}. Always set one for quick commands.`,
+        },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TIMEOUT_MS,
+          description: "Deprecated: use timeout (seconds).",
+        },
+        env: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description:
+            'Environment variables to set for this command (e.g. {"CI":"1"}), merged with the base environment. Values are literal, not shell-expanded. PWD is set by the host.',
+        },
+        output_head: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Return only the first N lines of output. Overrides the default 200-line tail cap.",
+        },
+        output_tail: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Return only the last N lines of output. Overrides the default 200-line tail cap.",
+        },
+        output_offset: {
+          type: "integer",
+          minimum: 0,
+          description:
+            'Skip first N lines/entries before applying head/tail, equivalent to "| tail -n +N | head -N". Defaults to 0.',
+        },
+        output_grep: {
+          type: "string",
+          description:
+            "Filter output to lines matching this regex pattern (case-insensitive). Applied before head/tail. Use this instead of piping through grep.",
+        },
+        output_grep_context: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Number of context lines around each grep match (like grep -C). Only used with output_grep.",
+        },
       },
       required: ["command"],
       additionalProperties: false,
@@ -395,7 +480,10 @@ function executeCommandTool(
       command: input.command,
       cwd: input.cwd ?? ".",
       background: input.background === true,
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: requestedTimeoutMs(input),
+      ...(input.env && typeof input.env === "object"
+        ? { environmentKeys: Object.keys(input.env).sort() }
+        : {}),
     }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
@@ -407,8 +495,9 @@ function executeCommandTool(
       ) {
         return toolError("command_launch_identity_mismatch");
       }
-      const environment = completeEnvironment(
+      const environment = launchEnvironment(
         await (resolveEnvironment?.() ?? Promise.resolve(process.env)),
+        prepared.requestedEnvironment,
         prepared.cwd,
       );
       if (
@@ -440,7 +529,13 @@ function executeCommandTool(
         { ownerId: launch.ownerId, sessionId: launch.sessionId },
         { offset: 0, limitBytes: 128_000 },
       );
-      return commandResult(observation);
+      if (resultFormat === "observation") {
+        return commandResult(observation);
+      }
+      return executeCommandResult(
+        observation,
+        parseOutputFilter(input.outputFilter),
+      );
     },
   });
 }
@@ -705,6 +800,89 @@ function completeEnvironment(
   return environment;
 }
 
+/** The host environment plus the call's `env`, with PWD and PATH set. */
+function launchEnvironment(
+  base: NodeJS.ProcessEnv,
+  requested: Readonly<Record<string, string>> | undefined,
+  cwd: string,
+): Readonly<Record<string, string>> {
+  return completeEnvironment({ ...base, ...requested }, cwd);
+}
+
+const ENVIRONMENT_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const MAX_REQUESTED_VARIABLES = 64;
+
+function parseRequestedEnvironment(
+  value: unknown,
+  base: Readonly<Record<string, string>>,
+  overrides: "allow" | "add_only",
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("env_must_be_an_object");
+  }
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (entries.length === 0) return undefined;
+  if (entries.length > MAX_REQUESTED_VARIABLES) {
+    throw new Error("env_too_many_variables");
+  }
+  const requested: Record<string, string> = {};
+  for (const [key, entry] of entries) {
+    if (!ENVIRONMENT_KEY.test(key)) throw new Error(`env_key_invalid: ${key}`);
+    if (typeof entry !== "string") {
+      throw new Error(`env_value_must_be_a_string: ${key}`);
+    }
+    if (key === "PWD") throw new Error("env_pwd_is_host_managed");
+    if (overrides === "add_only" && base[key] !== undefined) {
+      throw new Error(`env_override_not_allowed: ${key}`);
+    }
+    requested[key] = entry;
+  }
+  return requested;
+}
+
+/** VS Code's `timeout` in seconds, or a replayed `timeoutMs`. */
+function requestedTimeoutMs(input: Readonly<Record<string, unknown>>): number {
+  const seconds = input.timeout;
+  if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.round(seconds * 1_000)));
+  }
+  return boundedInteger(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS);
+}
+
+function parseOutputFilter(
+  value: unknown,
+): CommandOutputFilterOptions | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const count = (field: unknown) =>
+    typeof field === "number" && Number.isFinite(field) && field >= 0
+      ? Math.floor(field)
+      : undefined;
+  const filter: CommandOutputFilterOptions = {
+    ...(count(input.output_head) !== undefined
+      ? { output_head: count(input.output_head) }
+      : {}),
+    ...(count(input.output_tail) !== undefined
+      ? { output_tail: count(input.output_tail) }
+      : {}),
+    ...(count(input.output_offset) !== undefined
+      ? { output_offset: count(input.output_offset) }
+      : {}),
+    ...(typeof input.output_grep === "string"
+      ? { output_grep: input.output_grep }
+      : {}),
+    ...(count(input.output_grep_context) !== undefined
+      ? { output_grep_context: count(input.output_grep_context) }
+      : {}),
+  };
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
 function digestEnvironment(
   environment: Readonly<Record<string, string>>,
   secret: string,
@@ -736,6 +914,12 @@ function preparedLaunch(
     Array.isArray(launch.environmentKeys) &&
     launch.environmentKeys.every((item) => typeof item === "string") &&
     typeof launch.environmentDigest === "string" &&
+    (launch.requestedEnvironment === undefined ||
+      (typeof launch.requestedEnvironment === "object" &&
+        launch.requestedEnvironment !== null &&
+        Object.values(launch.requestedEnvironment).every(
+          (value) => typeof value === "string",
+        ))) &&
     (launch.mode === "foreground" || launch.mode === "background") &&
     typeof launch.timeoutMs === "number" &&
     typeof launch.policyFingerprint === "string" &&
@@ -796,6 +980,66 @@ function commandResult(observation: WorkspaceCommandObservation) {
       observation.record.state === "failed" ||
       observation.record.state === "timed_out" ||
       observation.record.state === "interrupted",
+  };
+}
+
+/**
+ * VS Code's `execute_command` result for the model: the filtered output and
+ * its line counts, with the exit code and state. The UI keeps the full
+ * observation as display content.
+ */
+function executeCommandResult(
+  observation: WorkspaceCommandObservation,
+  filter: CommandOutputFilterOptions | undefined,
+) {
+  const record = observation.record;
+  const raw = observation.output.map((chunk) => chunk.text).join("");
+  const { filtered, totalLines, linesShown, truncated } = filterCommandOutput(
+    raw,
+    filter ?? {},
+  );
+  const running = record.state === "running";
+  const complete =
+    !observation.truncatedBeforeOffset &&
+    record.outputDroppedBytes === 0 &&
+    observation.nextOffset >= record.outputEndOffset;
+  const result = {
+    command: record.command,
+    cwd: record.cwd,
+    command_id: record.commandId,
+    state: record.state,
+    exit_code: record.exitCode ?? null,
+    ...(record.signal ? { signal: record.signal } : {}),
+    timed_out: record.state === "timed_out",
+    is_running: running,
+    ...(record.mode === "background" ? { backgrounded: true } : {}),
+    output: filtered,
+    output_complete: complete,
+    output_finalized: !running,
+    output_dropped_bytes: record.outputDroppedBytes,
+    total_lines: totalLines,
+    lines_shown: linesShown,
+    output_truncated: truncated,
+    total_lines_scope: complete && !running ? "complete" : "retained",
+    ...(running
+      ? {
+          output_warning:
+            "The command is still running. Read more output with get_command_output.",
+        }
+      : !complete
+        ? {
+            output_warning:
+              "Older output was not retained. Filtering applies only to retained output.",
+          }
+        : {}),
+  };
+  return {
+    modelContent: JSON.stringify(result),
+    displayContent: observation,
+    isError:
+      record.state === "failed" ||
+      record.state === "timed_out" ||
+      record.state === "interrupted",
   };
 }
 

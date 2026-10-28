@@ -31,6 +31,8 @@ export interface PreparedWorkspaceCommandLaunch {
   readonly cwd: string;
   readonly environmentKeys: readonly string[];
   readonly environmentDigest: string;
+  /** Variables the call's `env` set on top of the host environment. */
+  readonly requestedEnvironment?: Readonly<Record<string, string>>;
   readonly mode: WorkspaceCommandMode;
   readonly timeoutMs: number;
   readonly policyFingerprint: string;

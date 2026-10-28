@@ -550,6 +550,9 @@ export function commandHostOptions(
             : proxy,
         );
       },
+      // A call's env adds variables; it never replaces the proxy settings
+      // and other values set here.
+      environmentOverrides: "add_only",
       ...(autonomous
         ? { hasSessionGrant: (_proposal, request) => autonomous(request) }
         : {}),

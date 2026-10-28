@@ -2658,4 +2658,103 @@ describe("createWorkspaceHost", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   }, 30_000); // Seven real turns with a command supervisor, under full-suite load.
+
+  it("runs execute_command with VS Code's timeout, env and output filters", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-exec-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const toolResults: string[] = [];
+    const replies: Response[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content?: unknown }>;
+        };
+        const last = body.messages.at(-1);
+        if (last?.role === "tool") toolResults.push(String(last.content));
+        return replies.shift() ?? completion("done");
+      });
+    const open = (
+      ownerId: string,
+      environmentOverrides?: "allow" | "add_only",
+    ) =>
+      createWorkspaceHost({
+        ...readProfileConfig(fetch),
+        projectRoot,
+        dataRoot: path.join(parent, ownerId),
+        ownerId,
+        commands: {
+          enabled: true,
+          shellExecutable: "/bin/sh",
+          resolveEnvironment: () => ({
+            PATH: process.env.PATH,
+            HOST_VAR: "host",
+          }),
+          hasSessionGrant: () => true,
+          ...(environmentOverrides ? { environmentOverrides } : {}),
+        },
+      });
+    const host = await open("exec-owner");
+    try {
+      const { sessionId } = await host.createSession();
+      replies.push(
+        toolCall("execute_command", {
+          command:
+            "printf 'a\\nERR one\\nb\\nERR two\\n'; printf \"$SMOKE_VAR $HOST_VAR\"",
+          timeout: 30,
+          env: { SMOKE_VAR: "from-env" },
+          output_grep: "err|from",
+        }),
+      );
+      await host.runTurn(sessionId, "run it");
+      const filtered = JSON.parse(toolResults.at(-1)!) as Record<
+        string,
+        unknown
+      >;
+      expect(filtered).toMatchObject({
+        exit_code: 0,
+        state: "completed",
+        is_running: false,
+        timed_out: false,
+        output: "ERR one\nERR two\nfrom-env host",
+        total_lines: 5,
+        lines_shown: 3,
+        output_truncated: false,
+        output_complete: true,
+        total_lines_scope: "complete",
+      });
+      expect(filtered.command_id).toEqual(expect.any(String));
+
+      // An old transcript's timeoutMs still runs.
+      replies.push(
+        toolCall("execute_command", { command: "printf ok", timeoutMs: 5_000 }),
+      );
+      await host.runTurn(sessionId, "again");
+      expect(JSON.parse(toolResults.at(-1)!)).toMatchObject({
+        exit_code: 0,
+        output: "ok",
+      });
+    } finally {
+      await host.close();
+    }
+
+    // The Assistant's add_only: env adds variables, never replaces one.
+    const assistant = await open("exec-assistant", "add_only");
+    try {
+      const { sessionId } = await assistant.createSession();
+      replies.push(
+        toolCall("execute_command", {
+          command: 'printf "$HOST_VAR"',
+          env: { HOST_VAR: "replaced" },
+        }),
+      );
+      await assistant.runTurn(sessionId, "override");
+      expect(toolResults.at(-1)).toContain("env_override_not_allowed");
+      expect(toolResults.at(-1)).not.toContain("replaced");
+    } finally {
+      await assistant.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

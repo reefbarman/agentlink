@@ -1653,6 +1653,8 @@ export class AskAgentSandboxWorkspace {
       stateDirectory,
       shellExecutable: this.shellExecutable(),
       sandboxed: true,
+      // Ask Agent still advertises its own schema (timeoutMs, commandId).
+      executeResult: "observation",
       environmentDigestSecret: this.environmentDigestSecret(sessionId),
       resolveEnvironment: () => ({
         PATH: SANDBOX_PATH,
@@ -1823,6 +1825,7 @@ export class AskAgentSandboxWorkspace {
       stateDirectory,
       shellExecutable: this.shellExecutable(),
       sandboxed: true,
+      executeResult: "observation",
       environmentDigestSecret: this.environmentDigestSecret(chat.sessionId),
       resolveEnvironment: () => this.grantedEnvironment(),
       // A granted folder is real work: every command asks, whatever rules say.

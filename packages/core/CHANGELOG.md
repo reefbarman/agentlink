@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New `@agentlink/core/command-output` subpath: VS Code's command output filter (`filterCommandOutput` with `output_grep`, `output_grep_context`, `output_offset`, `output_head` and `output_tail`, the 200-line default and 64 KiB bound) and `redactCommandOutput`.
 - `buildBasePrompt` takes `codingAssistant: false` to leave out the "primarily a coding assistant" rule for a general assistant. It defaults to true, so VS Code's text is unchanged.
 - Agent modes for hosts: `TOOL_GROUPS` and `getToolsForMode` moved to `@agentlink/core/agent-modes`; `buildModesOverviewSection({ builtInModes, modeSwitching })` describes modes for hosts without `switch_mode`; `buildModePrompt` and `formatModeInstructionBlock` take `capabilities` and drop mode-switching, background-agent, rich-output and (new `reviewTempWrites` capability) Review temporary-file text a host can't honour. Session records gain an optional `mode` slug (`isAgentSessionMode`), set with `createSession({ mode })` or the new `sessions.setMode`, and returned in summaries. VS Code's text and tool groups are unchanged.
 - `@agentlink/core/system-prompt`: `deriveSystemPromptCapabilities(toolNames)` maps a host's registered tools to guidance capabilities, `buildSessionHistoryRecallGuidance` names only the recall tools present, and new `autoContinue`, `sessionHistoryRecall` and `workspaceSessionRecall` capabilities drop Auto Continue, `ask_user` and `set_task_status` sentences a host can't honour. VS Code's text is unchanged.

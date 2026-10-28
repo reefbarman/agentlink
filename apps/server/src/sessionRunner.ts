@@ -409,6 +409,8 @@ export async function startSessionRunner(options: {
       root: spec.commandRoot,
       // Exactly this environment: never the runner's own (its token).
       resolveEnvironment: () => ({ ...spec.commandEnvironment }),
+      // A call's env adds variables; it never replaces the task's own.
+      environmentOverrides: "add_only",
       hasSessionGrant: (_proposal, request) => state.autonomous(request),
     },
     hostTools: remoteHostTools(control),

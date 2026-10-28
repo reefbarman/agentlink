@@ -280,6 +280,12 @@ export interface CreateWorkspaceHostOptions {
     readonly resolveEnvironment?: () =>
       | NodeJS.ProcessEnv
       | Promise<NodeJS.ProcessEnv>;
+    /**
+     * What `execute_command`'s `env` may do: `allow` (default) sets any
+     * variable, `add_only` refuses a variable the host environment already
+     * has, so host-set values (proxy settings, tokens) cannot be replaced.
+     */
+    readonly environmentOverrides?: "allow" | "add_only";
     readonly hasSessionGrant?: (
       proposal: WorkspaceCommandApprovalDisplay,
       request: { readonly sessionId: string; readonly turnId: string },
@@ -685,6 +691,9 @@ export async function createWorkspaceHost(
           shellExecutable: options.commands.shellExecutable,
           environmentDigestSecret: approvalSecret!,
           resolveEnvironment: options.commands.resolveEnvironment,
+          ...(options.commands.environmentOverrides
+            ? { environmentOverrides: options.commands.environmentOverrides }
+            : {}),
           hasSessionGrant:
             inheritSessionGrants && options.commands.hasSessionGrant
               ? (proposal, request) =>
