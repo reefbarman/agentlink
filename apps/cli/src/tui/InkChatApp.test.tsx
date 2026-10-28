@@ -104,6 +104,7 @@ function controllerFixture(): StandaloneSessionController {
     runPrompt: vi.fn(),
     setInterjectionSource: vi.fn(),
     notifyBackgroundApproval: vi.fn(),
+    notifyModeChanged: vi.fn(),
     cancelPrompts: vi.fn(),
     close: vi.fn(),
   } as StandaloneSessionController;

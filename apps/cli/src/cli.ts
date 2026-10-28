@@ -44,10 +44,13 @@ import {
   type WorkspaceSharedMcpToolApproval,
   type WorkspaceOwnershipHandle,
   type WorkspaceProviderConfig,
+  type WorkspaceModeSwitchConfirmation,
+  type WorkspaceModeSwitchDecision,
   type WorkspaceQuestionsRequest,
   type WorkspaceQuestionsResponse,
 } from "@agentlink/workspace-host";
 import { askQuestionsInControlPanel } from "./questionControls.js";
+import { confirmModeSwitchInControlPanel } from "./modeSwitchControl.js";
 import { randomUUID } from "node:crypto";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { readdir } from "node:fs/promises";
@@ -164,6 +167,10 @@ interface CliInteractionBroker {
     request: WorkspaceQuestionsRequest,
     signal?: AbortSignal,
   ): Promise<WorkspaceQuestionsResponse>;
+  confirmModeSwitch(
+    request: WorkspaceModeSwitchConfirmation,
+  ): Promise<WorkspaceModeSwitchDecision>;
+  notifyModeChanged(sessionId: string, mode: string): void;
 }
 
 interface CliInteractionBridge {
@@ -818,8 +825,17 @@ async function createHost(options: {
     defaultReasoningEffort: options.sharedCodeReasoningEffort,
     // VS Code's prompt guidance for the tools each session registers.
     sharedPromptGuidance: true,
-    // VS Code's agent modes, chosen with /mode.
-    modes: { enabled: true },
+    // VS Code's agent modes, chosen with /mode or proposed by the model
+    // with switch_mode and ask_user modeSwitch.
+    modes: {
+      enabled: true,
+      confirmSwitch: (request) =>
+        requireInteractionBroker(options.interactionBridge).confirmModeSwitch(
+          request,
+        ),
+      onSessionModeChanged: (sessionId, mode) =>
+        options.interactionBridge.current?.notifyModeChanged(sessionId, mode),
+    },
     files: {
       enabled: true,
       ripgrepExecutable: path.join(
@@ -2226,6 +2242,12 @@ export function createInkInteractionBroker(options: {
         options.presentControl,
         signal,
       );
+    },
+    confirmModeSwitch(request) {
+      return confirmModeSwitchInControlPanel(request, options.presentControl);
+    },
+    notifyModeChanged(sessionId, mode) {
+      options.controller.notifyModeChanged(sessionId, mode);
     },
     async confirmMcpLaunch(proposal) {
       if (options.mcpLaunchGrants.has(proposal.operationDigest)) return true;

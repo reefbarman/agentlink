@@ -2898,4 +2898,223 @@ describe("createWorkspaceHost", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("lets the model switch modes with switch_mode and ask_user modeSwitch, then continues in the new mode", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-switch-"),
+    );
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const requests: Array<{
+      messages: Array<{ role: string; content: unknown }>;
+      tools?: Array<{ function: { name: string } }>;
+    }> = [];
+    const replies: Response[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return replies.shift() ?? completion("ok");
+      });
+    // Two calls in one response: the second is skipped by the switch.
+    const switchThenTodo = (input: Record<string, unknown>) =>
+      new Response(
+        `data: ${JSON.stringify({
+          id: "tool-response",
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "switch",
+                    type: "function",
+                    function: {
+                      name: "switch_mode",
+                      arguments: JSON.stringify(input),
+                    },
+                  },
+                  {
+                    index: 1,
+                    id: "todo",
+                    type: "function",
+                    function: {
+                      name: "todo_write",
+                      arguments: JSON.stringify({ todos: [] }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    const confirmations: unknown[] = [];
+    const decisions: Array<{
+      approved: boolean;
+      rejectionReason?: string;
+      followUp?: string;
+    }> = [];
+    const asked: unknown[] = [];
+    const changes: Array<[string, string]> = [];
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "switch-owner",
+      sharedPromptGuidance: true,
+      modes: {
+        enabled: true,
+        confirmSwitch: async ({ signal: _signal, ...request }) => {
+          confirmations.push(request);
+          return decisions.shift() ?? { approved: false };
+        },
+        onSessionModeChanged: (sessionId, mode) =>
+          changes.push([sessionId, mode]),
+      },
+      files: { enabled: true },
+      sessionInteractions: {
+        finalStatus: true,
+        askQuestions: async (request) => {
+          asked.push(request);
+          return { answers: { next: "Implement it" }, notes: {} };
+        },
+      },
+    });
+    const lastUserText = () => {
+      const last = requests
+        .at(-1)!
+        .messages.findLast((message) => message.role === "user")!;
+      return typeof last.content === "string"
+        ? last.content
+        : JSON.stringify(last.content);
+    };
+    const toolResults = (index: number) =>
+      requests[index]!.messages.filter(
+        (message) => message.role === "tool",
+      ) as Array<{ content: string }>;
+    const modeOf = async (sessionId: string) =>
+      (await host.listSessions()).find(
+        (session) => session.sessionId === sessionId,
+      )?.mode;
+    try {
+      const { sessionId } = await host.createSession({ mode: "code" });
+
+      // Approved: VS Code's result, the rest of the batch skipped, the turn
+      // continued in Architect with VS Code's resume message.
+      decisions.push({ approved: true, followUp: "draft it first" });
+      replies.push(
+        switchThenTodo({ mode: "architect", reason: "needs a plan" }),
+        completion("planning now"),
+      );
+      const first = requests.length;
+      await expect(host.runTurn(sessionId, "Build it")).resolves.toMatchObject({
+        status: "completed",
+        text: "planning now",
+      });
+      expect(
+        requests[first]!.tools?.map((tool) => tool.function.name),
+      ).toContain("switch_mode");
+      expect(confirmations).toEqual([
+        {
+          sessionId,
+          mode: "architect",
+          modeName: "Architect",
+          reason: "needs a plan",
+        },
+      ]);
+      expect(requests.length - first).toBe(2);
+      const results = toolResults(first + 1);
+      expect(JSON.parse(results.at(-2)!.content)).toEqual({
+        ok: true,
+        mode: "architect",
+        follow_up: "draft it first",
+      });
+      expect(JSON.parse(results.at(-1)!.content)).toMatchObject({
+        status: "skipped",
+        skipped_by: "mode_switch",
+        mode: "architect",
+      });
+      const resume = lastUserText();
+      expect(resume).toMatch(/^<current_mode mode="architect">/u);
+      expect(resume).toContain(
+        "You just switched this session to architect mode.",
+      );
+      expect(resume).toContain("Switch reason: needs a plan");
+      expect(resume).toContain("User follow-up: draft it first");
+
+      expect(await modeOf(sessionId)).toBe("architect");
+      expect(changes).toEqual([[sessionId, "architect"]]);
+
+      // Rejected: VS Code's rejected_by_user, the mode stays, no resume.
+      decisions.push({ approved: false, rejectionReason: "keep planning" });
+      replies.push(
+        toolCall("switch_mode", { mode: "code" }),
+        completion("staying"),
+      );
+      const second = requests.length;
+      await host.runTurn(sessionId, "Implement");
+      expect(requests.length - second).toBe(2);
+      expect(JSON.parse(toolResults(second + 1).at(-1)!.content)).toEqual({
+        status: "rejected_by_user",
+        reason: "keep planning",
+      });
+      expect(await modeOf(sessionId)).toBe("architect");
+
+      // An unknown mode fails without asking.
+      replies.push(
+        toolCall("switch_mode", { mode: "nonsense" }),
+        completion("noted"),
+      );
+      const third = requests.length;
+      await host.runTurn(sessionId, "Switch to nonsense");
+      expect(confirmations).toHaveLength(2);
+      expect(JSON.parse(toolResults(third + 1).at(-1)!.content)).toEqual({
+        status: "rejected_by_user",
+        reason: 'Mode switch to "nonsense" failed: unknown_mode',
+      });
+
+      // ask_user modeSwitch: the answer is the consent, no separate card.
+      replies.push(
+        toolCall("ask_user", {
+          context: "The plan is ready.",
+          questions: [
+            {
+              id: "next",
+              type: "multiple_choice",
+              question: "What next?",
+              options: ["Implement it", "Revise"],
+              modeSwitch: { "Implement it": "code" },
+            },
+          ],
+        }),
+        completion("implementing"),
+      );
+      const fourth = requests.length;
+      await expect(host.runTurn(sessionId, "Ready?")).resolves.toMatchObject({
+        status: "completed",
+        text: "implementing",
+      });
+      expect(asked.at(-1)).toMatchObject({
+        questions: [{ modeSwitch: { "Implement it": "code" } }],
+      });
+      expect(confirmations).toHaveLength(2);
+      expect(JSON.parse(toolResults(fourth + 1).at(-1)!.content)).toMatchObject(
+        {
+          modeSwitched: "code",
+        },
+      );
+      expect(lastUserText()).toMatch(/^<current_mode mode="code">/u);
+      expect(lastUserText()).toContain(
+        'Switch reason: ask_user: "Implement it"',
+      );
+      expect(await modeOf(sessionId)).toBe("code");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

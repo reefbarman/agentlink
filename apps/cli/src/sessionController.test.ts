@@ -291,6 +291,19 @@ describe("standalone session controller", () => {
     expect(controller.getState().mode).toBe("ask");
   });
 
+  it("follows a mode change the host made for the current session only", async () => {
+    const { controller } = fixture();
+    await controller.initialize();
+    controller.notifyModeChanged("other-session", "ask");
+    controller.notifyModeChanged("session-1", "ask");
+    await vi.waitFor(() =>
+      expect(controller.getState()).toMatchObject({
+        mode: "ask",
+        writePolicy: "none",
+      }),
+    );
+  });
+
   it("projects session todo state during activity refresh", async () => {
     const todo = {
       id: "task-1",

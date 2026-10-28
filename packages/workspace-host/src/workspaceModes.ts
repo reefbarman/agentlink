@@ -143,9 +143,9 @@ export const WORKSPACE_BUILT_IN_MODE_SLUGS: readonly string[] =
   );
 
 /**
- * Prompt capabilities for mode instructions here: no `switch_mode`, no
- * VS Code background agent contract, no rich rendering, no temporary-file
- * writes in Review mode.
+ * Prompt capabilities for mode instructions here: `switch_mode` only when
+ * the session has it, no VS Code background agent contract, no rich
+ * rendering, no temporary-file writes in Review mode.
  */
 export function workspaceModePromptCapabilities(
   toolNames: Iterable<string>,
@@ -203,16 +203,23 @@ export function latestModeInstructionBlock(
 }
 
 /**
- * VS Code's out-of-mode rejection, without its `switch_mode` hint: the
- * model cannot change modes here, the user can.
+ * VS Code's out-of-mode rejection. Without `switch_mode` (`modeSwitching`
+ * false) it tells the model to ask the user to switch instead.
  */
 export function outOfModeTool<
   TPrincipal extends import("@agentlink/core").AgentPrincipal,
->(tool: HostTool<TPrincipal>, modeSlug: string): HostTool<TPrincipal> {
+>(
+  tool: HostTool<TPrincipal>,
+  modeSlug: string,
+  modeSwitching = false,
+): HostTool<TPrincipal> {
   const name = tool.definition.name;
+  const hint = modeSwitching
+    ? "use switch_mode to change to a mode that allows it."
+    : "ask the user to switch to a mode that allows it.";
   const result: HostToolResult = {
     modelContent: JSON.stringify({
-      error: `Tool '${name}' is not available in ${modeSlug} mode. If this capability is genuinely needed, ask the user to switch to a mode that allows it.`,
+      error: `Tool '${name}' is not available in ${modeSlug} mode. If this capability is genuinely needed, ${hint}`,
       status: "tool_not_in_mode",
       tool: name,
     }),

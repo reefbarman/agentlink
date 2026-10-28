@@ -6,6 +6,7 @@ import {
   isNonReplayableResponsesError,
   CodexTurnState,
 } from "@agentlink/core/codex";
+import { buildModeSwitchSkippedPayload } from "@agentlink/core/interaction-tools";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
@@ -825,15 +826,7 @@ function buildModeSwitchSkippedResult(
   call: ToolUseBlock,
   switchedMode?: string,
 ): ToolCallResult {
-  const payload: Record<string, unknown> = {
-    status: "skipped",
-    skipped_by: "mode_switch",
-    reason:
-      "Skipped because mode switched during this tool batch. Continue in the resumed turn.",
-  };
-  if (switchedMode) {
-    payload.mode = switchedMode;
-  }
+  const payload = buildModeSwitchSkippedPayload(switchedMode);
   return {
     tool_use_id: call.id,
     toolName: call.name,

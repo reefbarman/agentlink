@@ -104,7 +104,12 @@ import { WorkspaceMutationCoordinator } from "./mutationCoordinator.js";
 import {
   createWorkspaceSessionInteractionTools,
   type CreateWorkspaceSessionInteractionToolsOptions,
+  type WorkspaceModeSwitcher,
 } from "./sessionInteractionTools.js";
+import {
+  MAX_MODE_SWITCH_RESUMES,
+  buildModeSwitchResumePrompt,
+} from "@agentlink/core/interaction-tools";
 import {
   createWorkspaceCondenseCompletion,
   createWorkspaceModelRuntime,
@@ -150,6 +155,25 @@ export interface WorkspaceHostInstructionsRequest {
   readonly messages: readonly CoreModelMessage[];
   /** The input that starts this turn, when the engine reports it. */
   readonly input: AgentTurnInput | undefined;
+}
+
+/** A model's request to change a session's mode, for the user to decide. */
+export interface WorkspaceModeSwitchConfirmation {
+  readonly sessionId: string;
+  /** The target mode's slug and display name. */
+  readonly mode: string;
+  readonly modeName: string;
+  /** Why the model wants to switch, if it said. */
+  readonly reason?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface WorkspaceModeSwitchDecision {
+  readonly approved: boolean;
+  /** Why the user declined, returned to the model. */
+  readonly rejectionReason?: string;
+  /** A message the user typed with their decision. */
+  readonly followUp?: string;
 }
 
 export interface CreateWorkspaceHostOptions {
@@ -212,7 +236,22 @@ export interface CreateWorkspaceHostOptions {
    * so the system prompt stays the same across modes. Background children
    * keep their parent's mode.
    */
-  readonly modes?: { readonly enabled: true };
+  readonly modes?: {
+    readonly enabled: true;
+    /**
+     * Lets the model change a foreground session's mode with VS Code's
+     * `switch_mode` (the user approves each switch here) and `ask_user`
+     * `modeSwitch` (the chosen answer is the approval). Needs
+     * `sessionInteractions.askQuestions` for `modeSwitch`. An approved
+     * switch ends the turn, and the host continues it in the new mode with
+     * VS Code's resume message.
+     */
+    readonly confirmSwitch?: (
+      request: WorkspaceModeSwitchConfirmation,
+    ) => Promise<WorkspaceModeSwitchDecision>;
+    /** A session's mode changed other than through `setSessionMode`. */
+    readonly onSessionModeChanged?: (sessionId: string, mode: string) => void;
+  };
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
@@ -1066,9 +1105,64 @@ export async function createWorkspaceHost(
         mutations,
       })
     : undefined;
+  // Approved model-requested switches waiting for the turn to end: the mode
+  // can only be stored while the session is idle. Until then the session
+  // already works under the new mode's tools.
+  const pendingModeSwitches = new Map<
+    string,
+    {
+      readonly mode: string;
+      readonly reason?: string;
+      readonly followUp?: string;
+    }
+  >();
+  const confirmModeSwitch = options.modes?.confirmSwitch;
+  const modeSwitcher: WorkspaceModeSwitcher | undefined = confirmModeSwitch
+    ? {
+        available: (sessionId) => !isBackgroundSession(sessionId),
+        switchMode: async ({ sessionId, mode, reason, silent, signal }) => {
+          const slug = await requireOfferedMode(mode);
+          const target = (await listWorkspaceModes()).find(
+            (candidate) => candidate.slug === slug,
+          )!;
+          let followUp: string | undefined;
+          if (!silent) {
+            const decision = await confirmModeSwitch({
+              sessionId,
+              mode: slug,
+              modeName: target.name,
+              ...(reason ? { reason } : {}),
+              ...(signal ? { signal } : {}),
+            });
+            followUp = decision.followUp?.trim() || undefined;
+            if (!decision.approved) {
+              return {
+                approved: false,
+                mode: slug,
+                ...(decision.rejectionReason
+                  ? { rejectionReason: decision.rejectionReason }
+                  : {}),
+                ...(followUp ? { followUp } : {}),
+              };
+            }
+          }
+          pendingModeSwitches.set(sessionId, {
+            mode: slug,
+            ...(reason ? { reason } : {}),
+            ...(followUp ? { followUp } : {}),
+          });
+          return {
+            approved: true,
+            mode: slug,
+            ...(followUp ? { followUp } : {}),
+          };
+        },
+      }
+    : undefined;
   const sessionInteractionTools = options.sessionInteractions
     ? createWorkspaceSessionInteractionTools({
         ...options.sessionInteractions,
+        ...(modeSwitcher ? { modeSwitch: modeSwitcher } : {}),
         readTranscript: async (sessionId) =>
           (await engine.sessions.hydrate({ principal, sessionId })).record
             .messages,
@@ -1101,11 +1195,78 @@ export async function createWorkspaceHost(
     if (!current.ok) throw new Error("session_not_found");
     return {
       mode: resolveWorkspaceMode(
-        current.record.mode,
+        pendingModeSwitches.get(sessionId)?.mode ?? current.record.mode,
         await listWorkspaceModes(),
       ),
       record: current.record,
     };
+  };
+  // Store a switch the turn approved, once the session is idle again. The
+  // pending entry stays (and keeps governing the session) until it is
+  // stored, so a failed store is retried at the next turn's end.
+  const applyPendingModeSwitch = async (sessionId: string) => {
+    const pending = pendingModeSwitches.get(sessionId);
+    if (!pending) return undefined;
+    const current = await engine.sessions.hydrate({ principal, sessionId });
+    if (current.record.mode !== pending.mode) {
+      await engine.sessions.setMode({
+        principal,
+        sessionId,
+        mode: pending.mode,
+        expectedRevision: current.summary.revision,
+      });
+    }
+    if (pendingModeSwitches.get(sessionId) === pending) {
+      pendingModeSwitches.delete(sessionId);
+    }
+    options.modes?.onSessionModeChanged?.(sessionId, pending.mode);
+    return pending;
+  };
+  // After a turn ends on an approved switch, continue it in the new mode
+  // with VS Code's resume message, up to VS Code's per-turn limit.
+  const continueAfterModeSwitch = async (
+    sessionId: string,
+    first: AgentTurnResult,
+    runOptions: WorkspaceResumeInteractionOptions,
+  ): Promise<AgentTurnResult> => {
+    let result = first;
+    for (let resumes = 0; ; resumes += 1) {
+      // A suspended turn keeps the session busy; it is applied on resume.
+      if (result.status === "suspended") return result;
+      const pending = await applyPendingModeSwitch(sessionId);
+      if (
+        !pending ||
+        result.status !== "completed" ||
+        resumes >= MAX_MODE_SWITCH_RESUMES ||
+        runOptions.signal?.aborted
+      ) {
+        return result;
+      }
+      const stream = engine.sessions.runTurn(
+        {
+          principal,
+          sessionId,
+          input: {
+            text: await withModeBlock(
+              sessionId,
+              buildModeSwitchResumePrompt(pending),
+            ),
+            attachments: undefined,
+          },
+          model: undefined,
+        },
+        {
+          signal: runOptions.signal,
+          modelRequest: {
+            conversationState: getResponsesConversationState(sessionId),
+          },
+          ...(runOptions.takeInterjections
+            ? { takeInterjections: runOptions.takeInterjections }
+            : {}),
+        },
+      );
+      result = await collectTurn(stream, runOptions.onEvent);
+    }
   };
   // Every tool stays advertised, as in VS Code; one outside the session's
   // mode is refused when called, before any approval card.
@@ -1123,7 +1284,13 @@ export async function createWorkspaceHost(
       const permitted = mcpToolNames.has(name)
         ? mcpAllowed
         : isToolAllowedInWorkspaceMode(name, allowed);
-      return permitted ? tool : outOfModeTool(tool, mode.slug);
+      return permitted
+        ? tool
+        : outOfModeTool(
+            tool,
+            mode.slug,
+            modeSwitcher?.available(sessionId) === true,
+          );
     });
   };
   // VS Code sends the mode's instructions in front of the first message
@@ -1461,7 +1628,7 @@ export async function createWorkspaceHost(
         options.modes
           ? buildModesOverviewSection({
               builtInModes: WORKSPACE_BUILT_IN_MODE_SLUGS,
-              modeSwitching: false,
+              modeSwitching: modeSwitcher !== undefined,
             }).trim()
           : undefined,
         options.files
@@ -1733,6 +1900,8 @@ export async function createWorkspaceHost(
         reasoningEffort: sessionOptions.reasoningEffort,
         ...(mode !== undefined ? { mode } : {}),
       });
+      // A reused ID never inherits an earlier session's approved switch.
+      pendingModeSwitches.delete(created.record.sessionId);
       return { sessionId: created.record.sessionId };
     },
     async listModes() {
@@ -1835,6 +2004,7 @@ export async function createWorkspaceHost(
         throw new Error("command_running");
       }
       await engine.sessions.delete({ principal, sessionId });
+      pendingModeSwitches.delete(sessionId);
       disposeResponsesConversationState(sessionId);
       await sharedMcpTools?.closeSession(sessionId);
       // Its background children: their records, then their sessions.
@@ -1861,14 +2031,18 @@ export async function createWorkspaceHost(
     revalidatePendingInteraction,
     async resumeInteraction(sessionId, decision, runOptions = {}) {
       assertForegroundSession(sessionId);
-      return await resumeWorkspaceInteraction(
-        engine,
-        principal,
+      return await continueAfterModeSwitch(
         sessionId,
-        decision,
-        revalidatePendingInteraction,
+        await resumeWorkspaceInteraction(
+          engine,
+          principal,
+          sessionId,
+          decision,
+          revalidatePendingInteraction,
+          runOptions,
+          getResponsesConversationState(sessionId),
+        ),
         runOptions,
-        getResponsesConversationState(sessionId),
       );
     },
     async runTurn(sessionId, text, runOptions = {}) {
@@ -1893,11 +2067,18 @@ export async function createWorkspaceHost(
             : {}),
         },
       );
-      return await collectTurn(stream, runOptions.onEvent);
+      return await continueAfterModeSwitch(
+        sessionId,
+        await collectTurn(stream, runOptions.onEvent),
+        runOptions,
+      );
     },
     async cancel(sessionId, reason) {
       assertForegroundSession(sessionId);
       await engine.sessions.cancel({ principal, sessionId, reason });
+      // A switch approved before a suspended turn was cancelled still
+      // stands, as in VS Code, where it applies at once.
+      await applyPendingModeSwitch(sessionId).catch(() => undefined);
     },
     async condenseSession(sessionId, condenseOptions = {}) {
       assertForegroundSession(sessionId);

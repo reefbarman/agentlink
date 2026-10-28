@@ -5,6 +5,10 @@ import {
   buildBudgetEvidenceDigest,
 } from "./background/budgetEvidenceDigest.js";
 import { getCondensePreparation } from "./condensePreparation.js";
+import {
+  MAX_MODE_SWITCH_RESUMES,
+  buildModeSwitchResumePrompt,
+} from "@agentlink/core/interaction-tools";
 import { workHistoryRegistry } from "./WorkHistoryRegistry.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -403,13 +407,13 @@ interface PendingBackgroundQuestion {
 }
 
 /**
- * Per-turn budget for auto-continuing after a mode switch. Kept separate from
+ * Per-turn budget for auto-continuing after a mode switch
+ * (MAX_MODE_SWITCH_RESUMES, shared with standalone hosts). Kept separate from
  * MAX_AUTO_CONTINUE: each queued resume traces back to an explicit approval
  * (mode-switch approval or an ask_user answer mapped to a mode), so the todo
  * auto-continue budget must not silently swallow the continuation — the turn
  * would end right after the user's answer with no indication of why.
  */
-const MAX_MODE_SWITCH_RESUMES = 10;
 
 /** Incremental progress emitted while a /btw side question runs. */
 export type BtwProgressEvent =
@@ -8828,19 +8832,7 @@ export class AgentSessionManager {
     this.log?.(
       `[agent] auto-continuing (mode resume ${resumesUsed + 1}/${MAX_MODE_SWITCH_RESUMES}): resumed after switch to ${pending.mode}`,
     );
-    const reason = pending.reason?.trim();
-    const followUp = pending.followUp?.trim();
-    const details = [
-      `You just switched this session to ${pending.mode} mode.`,
-      "Continue immediately in the new mode and start the next concrete implementation step now.",
-    ];
-    if (reason) {
-      details.push(`Switch reason: ${reason}`);
-    }
-    if (followUp) {
-      details.push(`User follow-up: ${followUp}`);
-    }
-    return details.join("\n");
+    return buildModeSwitchResumePrompt(pending);
   }
 
   /**

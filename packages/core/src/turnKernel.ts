@@ -112,7 +112,11 @@ export interface HeadlessTurnToolResult {
   readonly displayContent?: unknown;
   readonly isError?: boolean;
   /** See `HostToolResult.endTurn`. */
-  readonly endTurn?: { readonly finalText?: string };
+  readonly endTurn?: {
+    readonly finalText?: string;
+    readonly skippedResult?: Readonly<Record<string, unknown>>;
+    readonly ignoreInterjections?: boolean;
+  };
 }
 
 export interface HeadlessTurnToolContext<
@@ -1551,6 +1555,12 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
     return {
       stop: false,
       ...(endTurn ? { endTurn: true } : {}),
+      ...(endTurn && result.endTurn?.skippedResult
+        ? { skippedResult: result.endTurn.skippedResult }
+        : {}),
+      ...(endTurn && result.endTurn?.ignoreInterjections
+        ? { ignoreInterjections: true }
+        : {}),
       content: endTurn
         ? (result.endTurn?.finalText ?? "")
         : typeof result.modelContent === "string"

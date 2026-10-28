@@ -75,7 +75,9 @@ import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import {
   ASK_USER_TOOL,
   SET_TASK_STATUS_TOOL,
+  SWITCH_MODE_TOOL,
   buildAskUserResultPayload,
+  buildSwitchModeResultPayload,
   buildTaskStatusMarker,
   buildTaskStatusResultPayload,
   getAskUserModeSwitch,
@@ -534,27 +536,6 @@ function getSetTaskStatusTool(
     },
   };
 }
-
-/** Schema for the switch_mode meta-tool (always available, regardless of mode). */
-const SWITCH_MODE_TOOL: ToolDefinition = {
-  name: "switch_mode",
-  description:
-    "Request to switch the current agent mode (e.g. from 'code' to 'architect'). Approve for Me allows the switch automatically; otherwise the user must approve it. Available modes: code, architect, ask, debug.",
-  input_schema: {
-    type: "object",
-    properties: {
-      mode: {
-        type: "string",
-        description: "Target mode slug (code | architect | ask | debug)",
-      },
-      reason: {
-        type: "string",
-        description: "Brief explanation of why switching mode is helpful",
-      },
-    },
-    required: ["mode"],
-  },
-};
 
 const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
   name: "respond_to_background_question",
@@ -5126,35 +5107,17 @@ async function dispatchToolCallWithTrackedApprovals(
         mode,
         reason,
       });
-      if (!switchResult.approved) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected_by_user",
-                reason:
-                  switchResult.rejectionReason?.trim() ||
-                  `User denied mode switch to "${mode}"`,
-                ...(switchResult.followUp?.trim()
-                  ? { follow_up: switchResult.followUp.trim() }
-                  : {}),
-              }),
-            },
-          ],
-        };
-      }
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              ok: true,
-              mode: switchResult.mode,
-              ...(switchResult.followUp?.trim()
-                ? { follow_up: switchResult.followUp.trim() }
-                : {}),
-            }),
+            text: JSON.stringify(
+              buildSwitchModeResultPayload(
+                switchResult.approved
+                  ? switchResult
+                  : { ...switchResult, mode },
+              ),
+            ),
           },
         ],
       };

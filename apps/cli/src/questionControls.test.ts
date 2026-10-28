@@ -149,6 +149,37 @@ describe("askQuestionsInControlPanel", () => {
     expect(requests[3]!.body).toContain("Enter a number from 0 to 50.");
   });
 
+  it("marks answers that also switch modes", async () => {
+    const { present, requests } = presenter([{ optionId: "Build it" }]);
+    await expect(
+      askQuestionsInControlPanel(
+        {
+          context: "",
+          questions: [
+            {
+              id: "next",
+              type: "multiple_choice",
+              question: "What next?",
+              options: ["Build it", "Revise"],
+              recommended: "Build it",
+              modeSwitch: { "Build it": "code" },
+            },
+          ],
+        },
+        present,
+      ),
+    ).resolves.toEqual({ answers: { next: "Build it" }, notes: {} });
+    expect(requests[0]!.options).toEqual([
+      {
+        id: "Build it",
+        label: "Build it",
+        detail: "recommended, switches to code mode",
+      },
+      { id: "Revise", label: "Revise" },
+    ]);
+    expect(requests[0]!.initialOptionId).toBe("Build it");
+  });
+
   it("cancels the whole call when one question is cancelled", async () => {
     const present = vi.fn(async (request: TuiControlRequest) => ({
       requestId: request.id,

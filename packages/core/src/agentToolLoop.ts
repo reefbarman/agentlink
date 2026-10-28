@@ -64,6 +64,13 @@ export interface AgentToolLoopToolResult<TOutcome extends string = string> {
    * user message is admitted first, in which case the model answers it.
    */
   endTurn?: boolean;
+  /** With `endTurn`, the payload skipped calls receive instead of the default. */
+  skippedResult?: Readonly<Record<string, unknown>>;
+  /**
+   * With `endTurn`, end even when a user message is queued, as VS Code does
+   * after a mode switch; the message waits for the next turn.
+   */
+  ignoreInterjections?: boolean;
 }
 
 export interface AgentToolLoopHandlers<
@@ -339,12 +346,19 @@ export async function runAgentToolLoop<
       if (ended) {
         // VS Code's barrier: every later call in this response is skipped.
         for (const call of result.toolCalls.slice(nextCallIndex)) {
-          const skipped = skippedToolResultMessage(call, ended.call.name);
+          const skipped = skippedToolResultMessage(
+            call,
+            ended.call.name,
+            ended.executed.skippedResult,
+          );
           toolMessages.push(skipped);
           iterationMessages.push(skipped);
         }
-        // A queued message takes priority over ending the turn.
-        if (admitInterjections()) continue;
+        // A queued message takes priority over ending the turn, except at a
+        // hard boundary such as a mode switch.
+        if (!ended.executed.ignoreInterjections && admitInterjections()) {
+          continue;
+        }
         handlers.onIterationMessagesComplete?.(iterationMessages);
         return handlers.finishSuccess(
           assistantText || ended.executed.content,
@@ -367,6 +381,7 @@ export async function runAgentToolLoop<
 function skippedToolResultMessage(
   call: AgentToolLoopCall,
   skippedBy: string,
+  payload?: Readonly<Record<string, unknown>>,
 ): CoreModelMessage {
   return {
     role: "user",
@@ -374,11 +389,13 @@ function skippedToolResultMessage(
       {
         type: "tool_result",
         tool_use_id: call.id,
-        content: JSON.stringify({
-          status: "skipped",
-          skipped_by: skippedBy,
-          reason: "Skipped because final task status was set for this turn.",
-        }),
+        content: JSON.stringify(
+          payload ?? {
+            status: "skipped",
+            skipped_by: skippedBy,
+            reason: "Skipped because final task status was set for this turn.",
+          },
+        ),
       },
     ],
   };

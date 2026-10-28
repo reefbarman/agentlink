@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `@agentlink/core/interaction-tools` adds VS Code's `switch_mode`: `SWITCH_MODE_TOOL`, `switchModeToolDefinition({ approveForMe })`, `buildSwitchModeResultPayload`, `buildModeSwitchSkippedPayload`, `buildModeSwitchResumePrompt` and `MAX_MODE_SWITCH_RESUMES`. A host tool's `endTurn` can carry `skippedResult`, the payload later calls in the response receive (default unchanged), and `ignoreInterjections`, which ends the turn even with a queued user message, as VS Code does after a mode switch. VS Code delegates unchanged.
 - New `@agentlink/core/command-classifier` subpath: VS Code's command classifier, including `isCommandEligibleForReadOnlyExecution` and `isCommandPathInsideWorkspace`. New browser-safe `@agentlink/core/shell-command` subpath: VS Code's shell lexer and compound-command splitter. VS Code delegates to both unchanged.
 - `@agentlink/core/command-output` also exports `COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES` (the JSON Schema for VS Code's `output_*` filter parameters) and `parseCommandOutputFilter`.
 - New `@agentlink/core/command-output` subpath: VS Code's command output filter (`filterCommandOutput` with `output_grep`, `output_grep_context`, `output_offset`, `output_head` and `output_tail`, the 200-line default and 64 KiB bound) and `redactCommandOutput`.

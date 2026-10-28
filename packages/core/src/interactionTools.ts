@@ -343,6 +343,118 @@ export function buildAskUserResultPayload(args: {
   return payload;
 }
 
+// ── switch_mode ──
+
+const SWITCH_MODE_APPROVE_FOR_ME_SENTENCE =
+  "Approve for Me allows the switch automatically; otherwise the user must approve it.";
+
+/** Schema for the switch_mode meta-tool (always available, regardless of mode). */
+export const SWITCH_MODE_TOOL: ToolDefinition = {
+  name: "switch_mode",
+  description: `Request to switch the current agent mode (e.g. from 'code' to 'architect'). ${SWITCH_MODE_APPROVE_FOR_ME_SENTENCE} Available modes: code, architect, ask, debug.`,
+  input_schema: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        description: "Target mode slug (code | architect | ask | debug)",
+      },
+      reason: {
+        type: "string",
+        description: "Brief explanation of why switching mode is helpful",
+      },
+    },
+    required: ["mode"],
+  },
+};
+
+/**
+ * VS Code's `switch_mode` for a host without Approve for Me, where the user
+ * always approves the switch. With it, this is `SWITCH_MODE_TOOL` itself.
+ */
+export function switchModeToolDefinition(options: {
+  readonly approveForMe: boolean;
+}): ToolDefinition {
+  if (options.approveForMe) return SWITCH_MODE_TOOL;
+  return {
+    ...SWITCH_MODE_TOOL,
+    description: SWITCH_MODE_TOOL.description.replace(
+      SWITCH_MODE_APPROVE_FOR_ME_SENTENCE,
+      "The user must approve it.",
+    ),
+  };
+}
+
+/** The outcome of a requested mode switch. */
+export interface ModeSwitchOutcome {
+  readonly approved: boolean;
+  readonly mode: string;
+  readonly followUp?: string;
+  readonly rejectionReason?: string;
+}
+
+/** VS Code's `switch_mode` result payload. */
+export function buildSwitchModeResultPayload(
+  outcome: ModeSwitchOutcome,
+): Record<string, unknown> {
+  const followUp = outcome.followUp?.trim();
+  if (!outcome.approved) {
+    return {
+      status: "rejected_by_user",
+      reason:
+        outcome.rejectionReason?.trim() ||
+        `User denied mode switch to "${outcome.mode}"`,
+      ...(followUp ? { follow_up: followUp } : {}),
+    };
+  }
+  return {
+    ok: true,
+    mode: outcome.mode,
+    ...(followUp ? { follow_up: followUp } : {}),
+  };
+}
+
+/**
+ * The result VS Code gives later calls in a response once a mode switch
+ * ended the tool batch.
+ */
+export function buildModeSwitchSkippedPayload(
+  switchedMode?: string,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    status: "skipped",
+    skipped_by: "mode_switch",
+    reason:
+      "Skipped because mode switched during this tool batch. Continue in the resumed turn.",
+  };
+  if (switchedMode) payload.mode = switchedMode;
+  return payload;
+}
+
+/** How many mode-switch continuations one user turn may start. */
+export const MAX_MODE_SWITCH_RESUMES = 10;
+
+/** The message VS Code sends to continue a turn after a mode switch. */
+export function buildModeSwitchResumePrompt(pending: {
+  readonly mode: string;
+  readonly reason?: string;
+  readonly followUp?: string;
+}): string {
+  const reason = pending.reason?.trim();
+  const followUp = pending.followUp?.trim();
+  const details = [
+    `You just switched this session to ${pending.mode} mode.`,
+    "Continue immediately in the new mode and start the next concrete implementation step now.",
+  ];
+  if (reason) {
+    details.push(`Switch reason: ${reason}`);
+  }
+  if (followUp) {
+    details.push(`User follow-up: ${followUp}`);
+  }
+  return details.join("\n");
+}
+
 // ── set_task_status ──
 
 export function isTaskStatus(value: unknown): value is FinalMessageStatus {

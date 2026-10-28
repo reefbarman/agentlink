@@ -434,6 +434,54 @@ describe("runAgentToolLoop interjections", () => {
     });
   });
 
+  it("gives skipped calls the ending tool's own skip payload, and can end despite a queued message", async () => {
+    let completed: readonly CoreModelMessage[] = [];
+    let calls = 0;
+    const queue: CoreModelMessage[] = [];
+    await runAgentToolLoop(
+      makeHandlers({
+        takeInterjections: () => queue.splice(0),
+        callModel: async () => ({
+          text: (calls += 1) > 1 ? "should not run" : "",
+          toolCalls: [
+            { id: "m", name: "switch_mode", input: {} },
+            { id: "b", name: "write", input: {} },
+          ],
+        }),
+        runTool: async () => {
+          queue.push(user("queued meanwhile"));
+          return {
+            stop: false,
+            endTurn: true,
+            ignoreInterjections: true,
+            skippedResult: { status: "skipped", skipped_by: "mode_switch" },
+            content: "",
+            toolMessage: toolMessage("ok"),
+          };
+        },
+        onIterationMessagesComplete: (messages) => {
+          completed = structuredClone(messages);
+        },
+      }),
+    );
+    // The mode-switch boundary holds: the queued message waits.
+    expect(calls).toBe(1);
+    expect(queue).toHaveLength(1);
+    expect(completed.at(-1)).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "b",
+          content: JSON.stringify({
+            status: "skipped",
+            skipped_by: "mode_switch",
+          }),
+        },
+      ],
+    });
+  });
+
   it("answers a queued message instead of ending on a final-status call", async () => {
     const queue: CoreModelMessage[] = [];
     const seen: CoreModelMessage[][] = [];

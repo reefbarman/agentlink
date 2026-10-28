@@ -512,9 +512,11 @@ describe("runCli", () => {
       { runPrompt },
       renderControl,
     );
+    const notifyModeChanged = vi.fn();
     const broker = createInkInteractionBroker({
       controller: {
         notifyBackgroundApproval: vi.fn(),
+        notifyModeChanged,
       } as never,
       io: harness(true).io,
       mcpLaunchGrants: new Set(),
@@ -589,14 +591,26 @@ describe("runCli", () => {
         operationDigest: "shared-network-digest",
       }),
     ).resolves.toBe(true);
+    // The model's switch_mode: Allow is the first option.
+    await expect(
+      broker.confirmModeSwitch({
+        sessionId: "s1",
+        mode: "architect",
+        modeName: "Architect",
+        reason: "needs a plan",
+      }),
+    ).resolves.toEqual({ approved: true });
+    broker.notifyModeChanged("s1", "architect");
+    expect(notifyModeChanged).toHaveBeenCalledWith("s1", "architect");
 
-    expect(runPrompt).toHaveBeenCalledTimes(5);
+    expect(runPrompt).toHaveBeenCalledTimes(6);
     expect(renderControl.mock.calls.map(([request]) => request.title)).toEqual([
       "Agent question",
       "Review unsandboxed MCP server launch",
       "Trust project MCP server definition",
       "Review unsandboxed MCP server launch",
       "Review MCP network destination",
+      'Switch to "architect" mode',
     ]);
   });
 });

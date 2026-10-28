@@ -76,12 +76,22 @@ function questionControl(
     cancellable: true,
   };
   const choice = (labels: readonly string[], ids = labels) => {
-    const options: TuiControlOption[] = labels.map((label, position) => ({
-      id: ids[position]!,
-      label,
-      ...(label === question.recommended ? { detail: "recommended" } : {}),
-    }));
-    const recommended = options.find((option) => option.detail);
+    const options: TuiControlOption[] = labels.map((label, position) => {
+      // As VS Code's card shows, an answer mapped to a mode also switches.
+      const mode = question.modeSwitch?.[label];
+      const details = [
+        ...(label === question.recommended ? ["recommended"] : []),
+        ...(mode ? [`switches to ${mode} mode`] : []),
+      ];
+      return {
+        id: ids[position]!,
+        label,
+        ...(details.length ? { detail: details.join(", ") } : {}),
+      };
+    });
+    const recommended = options.find(
+      (option) => option.label === question.recommended,
+    );
     return {
       options,
       ...(recommended ? { initialOptionId: recommended.id } : {}),

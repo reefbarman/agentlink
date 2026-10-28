@@ -134,6 +134,12 @@ export interface StandaloneSessionController {
     source: (() => readonly AgentTurnInterjection[]) | undefined,
   ): void;
   notifyBackgroundApproval(): void;
+  /**
+   * The host changed a session's mode (the model's approved `switch_mode`
+   * or an `ask_user` answer mapped to a mode). Updates the footer when it
+   * is the current session.
+   */
+  notifyModeChanged(sessionId: string, mode: string): void;
   cancelPrompts(reason?: string): void;
   close(): Promise<void>;
 }
@@ -662,6 +668,16 @@ export function createStandaloneSessionController(
     runPrompt,
     notifyBackgroundApproval() {
       refreshActivity();
+    },
+    notifyModeChanged(changedSessionId, mode) {
+      if (changedSessionId !== sessionId) return;
+      void writePolicyForMode(mode).then(
+        (writePolicy) => {
+          if (changedSessionId !== sessionId) return;
+          dispatch({ type: "session.mode", mode, writePolicy });
+        },
+        () => undefined,
+      );
     },
     cancelPrompts(reason = "Session prompts cancelled") {
       if (!promptController.signal.aborted) promptController.abort(reason);

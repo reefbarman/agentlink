@@ -1,16 +1,78 @@
 import {
   ASK_USER_TOOL,
+  MAX_MODE_SWITCH_RESUMES,
   SET_TASK_STATUS_TOOL,
+  SWITCH_MODE_TOOL,
   TEASER_FINAL_SUMMARY_REPLACEMENT,
   askUserToolDefinition,
   buildAskUserResultPayload,
+  buildModeSwitchResumePrompt,
+  buildModeSwitchSkippedPayload,
+  buildSwitchModeResultPayload,
   buildTaskStatusMarker,
   buildTaskStatusResultPayload,
   getAskUserModeSwitch,
   isTaskStatus,
   parseAskUserInput,
+  switchModeToolDefinition,
 } from "./interactionTools.js";
 import { describe, expect, it } from "vitest";
+
+describe("switch_mode contract", () => {
+  it("keeps VS Code's definition and drops Approve for Me for hosts without it", () => {
+    expect(SWITCH_MODE_TOOL.name).toBe("switch_mode");
+    expect(SWITCH_MODE_TOOL.input_schema.required).toEqual(["mode"]);
+    expect(SWITCH_MODE_TOOL.description).toContain("Approve for Me");
+    expect(switchModeToolDefinition({ approveForMe: true })).toBe(
+      SWITCH_MODE_TOOL,
+    );
+    const standalone = switchModeToolDefinition({ approveForMe: false });
+    expect(standalone.description).toBe(
+      "Request to switch the current agent mode (e.g. from 'code' to 'architect'). The user must approve it. Available modes: code, architect, ask, debug.",
+    );
+    expect(standalone.input_schema).toEqual(SWITCH_MODE_TOOL.input_schema);
+  });
+
+  it("shapes VS Code's results, skip payload and resume message", () => {
+    expect(
+      buildSwitchModeResultPayload({
+        approved: true,
+        mode: "code",
+        followUp: " go ",
+      }),
+    ).toEqual({ ok: true, mode: "code", follow_up: "go" });
+    expect(
+      buildSwitchModeResultPayload({ approved: false, mode: "ask" }),
+    ).toEqual({
+      status: "rejected_by_user",
+      reason: 'User denied mode switch to "ask"',
+    });
+    expect(
+      buildSwitchModeResultPayload({
+        approved: false,
+        mode: "ask",
+        rejectionReason: "stay",
+      }),
+    ).toEqual({ status: "rejected_by_user", reason: "stay" });
+    expect(buildModeSwitchSkippedPayload("code")).toEqual({
+      status: "skipped",
+      skipped_by: "mode_switch",
+      reason:
+        "Skipped because mode switched during this tool batch. Continue in the resumed turn.",
+      mode: "code",
+    });
+    expect(
+      buildModeSwitchResumePrompt({
+        mode: "code",
+        reason: "plan approved",
+        followUp: "start with tests",
+      }),
+    ).toBe(
+      "You just switched this session to code mode.\nContinue immediately in the new mode and start the next concrete implementation step now.\nSwitch reason: plan approved\nUser follow-up: start with tests",
+    );
+    expect(MAX_MODE_SWITCH_RESUMES).toBe(10);
+  });
+});
 
 describe("ask_user contract", () => {
   it("advertises VS Code's questions[] schema", () => {

@@ -33,8 +33,16 @@ export interface HostToolResult {
    * End the turn after this call, as VS Code's `set_task_status` does:
    * later calls in the same response are skipped, and the turn completes
    * with `finalText` unless a queued user message is waiting.
+   * `skippedResult` is the JSON payload those skipped calls receive
+   * (default: VS Code's `set_task_status` skip). `ignoreInterjections` ends
+   * the turn even when a user message is queued, as VS Code does after a
+   * mode switch; the message waits for the next turn.
    */
-  readonly endTurn?: { readonly finalText?: string };
+  readonly endTurn?: {
+    readonly finalText?: string;
+    readonly skippedResult?: Readonly<Record<string, unknown>>;
+    readonly ignoreInterjections?: boolean;
+  };
 }
 
 export interface HostToolExecutionContext<
