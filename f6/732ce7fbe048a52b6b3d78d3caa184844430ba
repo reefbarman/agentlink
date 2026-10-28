@@ -1,0 +1,48 @@
+packages/core/src/systemPromptSections.test.ts
+  h_e08a86bb3a33a2 7,9,13,28-30,113-174
+  s_21c92358d3064a::t_59a21b8120a59f 175-176
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 10-11
+  s_21c92358d3064a::t_67ddc474e2a80f 9
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 819-820
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 266-272
+packages/core/src/systemPromptSections.ts
+  h_e08a86bb3a33a2 2,35-43,58-60,63-98,124-147,149-150,152-153,243-277,281-282,284-314,316,332,393,395-396,407-409,442,469
+  s_21c92358d3064a::t_8c97b4dbad57bf 99,148,283,394,397
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 16,100,173-179,981-997,1247-1263,1267,1269
+  s_21c92358d3064a::t_8a367c9ef84543 1264-1266
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/workspace-host/src/promptProfile.ts
+  h_e08a86bb3a33a2 1-6,51-52,56-103
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2368-2372,2403-2506
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/release-notes.md
+  s_21c92358d3064a::t_cc48411dc0266a 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f6732ce7fbe048a52b6b3d78d3caa184844430ba",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_21c92358d3064a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "001f87e3-6ee8-415d-b11c-595e76cbf647",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
