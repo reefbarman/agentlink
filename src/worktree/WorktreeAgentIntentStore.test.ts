@@ -112,6 +112,35 @@ describe("WorktreeAgentIntentStore", () => {
     });
   });
 
+  it("matches multi-root intents by their workspace file, not the worktree folder", async () => {
+    const root = await makeTmpDir();
+    const store = new WorktreeAgentIntentStore(root, { now: () => 1000 });
+
+    await store.writeIntent({
+      id: "multi",
+      sourceWorkspacePath: "/repo",
+      worktreePath: "/tmp/repo-worktrees/task",
+      workspaceFilePath: "/tmp/repo-worktrees/task.code-workspace",
+      branch: "agentlink/task",
+      baseRef: "abc",
+      task: "Task",
+      prompt: "Do task",
+      autoSubmit: true,
+    });
+
+    await expect(
+      store.consumeIntentForWorkspace("/tmp/repo-worktrees/task"),
+    ).resolves.toBeNull();
+    await expect(
+      store.consumeIntentForWorkspace(
+        "/tmp/repo-worktrees/task.code-workspace",
+      ),
+    ).resolves.toMatchObject({
+      id: "multi",
+      workspaceFilePath: "/tmp/repo-worktrees/task.code-workspace",
+    });
+  });
+
   it("removes expired intents without consuming them", async () => {
     const root = await makeTmpDir();
     let now = 1000;

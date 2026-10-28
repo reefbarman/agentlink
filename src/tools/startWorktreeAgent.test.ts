@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { mkdtemp, realpath, rm } from "fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,15 +45,31 @@ afterEach(async () => {
 function workspaceFolder(
   folderPath: string,
   scheme = "file",
+  name = "repo",
 ): vscode.WorkspaceFolder {
   return {
     uri:
       scheme === "file"
         ? vscode.Uri.file(folderPath)
         : ({ scheme, fsPath: folderPath, path: folderPath } as vscode.Uri),
-    name: "repo",
+    name,
     index: 0,
   };
+}
+
+/** Git mock keyed by `<cwd>|<args>`; a thrown Error value makes the call fail. */
+function makeCwdGit(outputs: Record<string, string | Error>): MockGitRunner {
+  const calls: GitCall[] = [];
+  const runner = vi.fn(async (args: string[], cwd: string) => {
+    calls.push({ args, cwd });
+    const key = `${cwd}|${args.join(" ")}`;
+    if (!(key in outputs)) throw new Error(`unexpected git: ${key}`);
+    const value = outputs[key]!;
+    if (value instanceof Error) throw value;
+    return value;
+  }) as unknown as MockGitRunner;
+  runner.calls = calls;
+  return runner;
 }
 
 function makeGit(outputs: Record<string, string>): MockGitRunner {
@@ -476,5 +492,165 @@ describe("handleStartWorktreeAgent", () => {
     expect(git.calls.map((call) => call.args.join(" "))).toContain(
       `worktree add -b ${branch} ${worktreePath} abc123`,
     );
+  });
+
+  describe("multi-root workspaces", () => {
+    const branch = "agentlink/task";
+
+    async function setup() {
+      const parent = await makeTmpDir();
+      const repoA = path.join(parent, "repo-a");
+      const repoB = path.join(parent, "repo-b");
+      const appFolder = path.join(repoB, "packages", "app");
+      const notes = path.join(parent, "notes");
+      await mkdir(repoA, { recursive: true });
+      await mkdir(appFolder, { recursive: true });
+      await mkdir(notes, { recursive: true });
+      const worktreeA = path.join(parent, "repo-a-worktrees", "task");
+      const worktreeB = path.join(parent, "repo-b-worktrees", "task");
+      const missing = new Error("missing ref");
+      const list = (root: string) =>
+        `worktree ${root}\nHEAD abc\nbranch refs/heads/main\n\n`;
+      const outputs: Record<string, string | Error> = {
+        [`${repoA}|rev-parse --show-toplevel`]: `${repoA}\n`,
+        [`${repoA}|rev-parse --git-common-dir`]: ".git\n",
+        [`${repoA}|rev-parse HEAD`]: "aaa111\n",
+        [`${repoA}|status --porcelain`]: "",
+        [`${repoA}|worktree list --porcelain`]: list(repoA),
+        [`${repoA}|show-ref --verify --quiet refs/heads/${branch}`]: missing,
+        [`${repoA}|worktree add -b ${branch} ${worktreeA} aaa111`]: "",
+        [`${appFolder}|rev-parse --show-toplevel`]: `${repoB}\n`,
+        [`${repoB}|rev-parse --git-common-dir`]: ".git\n",
+        [`${repoB}|rev-parse HEAD`]: "bbb222\n",
+        [`${repoB}|status --porcelain`]: " M src/index.ts\n",
+        [`${repoB}|worktree list --porcelain`]: list(repoB),
+        [`${repoB}|show-ref --verify --quiet refs/heads/${branch}`]: missing,
+        [`${repoB}|worktree add -b ${branch} ${worktreeB} bbb222`]: "",
+        [`${notes}|rev-parse --show-toplevel`]: new Error("not a git repo"),
+      };
+      const workspaceFolders = [
+        workspaceFolder(notes, "file", "notes"),
+        workspaceFolder(repoA, "file", "repo-a"),
+        workspaceFolder(appFolder, "file", "app"),
+      ];
+      return {
+        repoA,
+        repoB,
+        appFolder,
+        notes,
+        worktreeA,
+        worktreeB,
+        outputs,
+        workspaceFolders,
+      };
+    }
+
+    it("creates worktrees for every repository and opens a multi-root workspace", async () => {
+      const ctx = await setup();
+      const git = makeCwdGit(ctx.outputs);
+      const writeIntent = vi.fn(async () => ({ id: "intent-1" }));
+      const openFolder = vi.fn(async () => undefined);
+      const onApprovalRequest = vi.fn().mockResolvedValue("approve-autosubmit");
+
+      const result = await handleStartWorktreeAgent(
+        { task: "Task", prompt: "Do task", branch, sourcePath: ctx.repoA },
+        {
+          globalStorageUri: vscode.Uri.file("/global"),
+          workspaceFolders: ctx.workspaceFolders,
+          workspaceFile: null,
+          configuration: { get: () => undefined } as never,
+          runGit: git,
+          onApprovalRequest,
+          intentStore: { writeIntent } as never,
+          openFolder,
+        },
+      );
+
+      const workspaceFilePath = path.join(
+        path.dirname(ctx.worktreeA),
+        "task.code-workspace",
+      );
+      expect(textPayload(result)).toMatchObject({
+        status: "opened",
+        worktreePath: ctx.worktreeA,
+        workspaceFilePath,
+        additionalWorktrees: [
+          { repoRoot: ctx.repoB, worktreePath: ctx.worktreeB, reused: false },
+        ],
+        sharedFolders: [ctx.notes],
+      });
+      const calls = git.calls.map(
+        (call) => `${call.cwd}|${call.args.join(" ")}`,
+      );
+      expect(calls).toContain(
+        `${ctx.repoA}|worktree add -b ${branch} ${ctx.worktreeA} aaa111`,
+      );
+      expect(calls).toContain(
+        `${ctx.repoB}|worktree add -b ${branch} ${ctx.worktreeB} bbb222`,
+      );
+
+      const detail = onApprovalRequest.mock.calls[0]![0].detail as string;
+      expect(detail).toContain(`${ctx.repoB} -> ${ctx.worktreeB}`);
+      expect(detail).toContain("uncommitted changes");
+      expect(detail).toContain(ctx.notes);
+
+      const workspace = JSON.parse(await readFile(workspaceFilePath, "utf8"));
+      expect(workspace.folders).toEqual([
+        { name: "repo-a", path: ctx.worktreeA },
+        { name: "notes", path: ctx.notes },
+        { name: "app", path: path.join(ctx.worktreeB, "packages", "app") },
+      ]);
+      expect(writeIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          worktreePath: ctx.worktreeA,
+          workspaceFilePath,
+        }),
+      );
+      expect(openFolder).toHaveBeenCalledWith(
+        vscode.Uri.file(workspaceFilePath),
+        { forceNewWindow: true },
+      );
+    });
+
+    it("rolls back worktrees created by the launch when a later repository fails", async () => {
+      const ctx = await setup();
+      const git = makeCwdGit({
+        ...ctx.outputs,
+        [`${ctx.repoB}|worktree add -b ${branch} ${ctx.worktreeB} bbb222`]:
+          new Error("fatal: could not create worktree"),
+        [`${ctx.repoA}|worktree remove --force ${ctx.worktreeA}`]: "",
+        [`${ctx.repoA}|branch -D ${branch}`]: "",
+      });
+      const openFolder = vi.fn();
+      const writeIntent = vi.fn();
+
+      const result = await handleStartWorktreeAgent(
+        { task: "Task", prompt: "Do task", branch, sourcePath: ctx.repoA },
+        {
+          globalStorageUri: vscode.Uri.file("/global"),
+          workspaceFolders: ctx.workspaceFolders,
+          workspaceFile: null,
+          configuration: { get: () => undefined } as never,
+          runGit: git,
+          onApprovalRequest: vi.fn().mockResolvedValue("approve-autosubmit"),
+          intentStore: { writeIntent } as never,
+          openFolder,
+        },
+      );
+
+      expect(textPayload(result)).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("rolled back 1 worktree"),
+      });
+      const calls = git.calls.map(
+        (call) => `${call.cwd}|${call.args.join(" ")}`,
+      );
+      expect(calls).toContain(
+        `${ctx.repoA}|worktree remove --force ${ctx.worktreeA}`,
+      );
+      expect(calls).toContain(`${ctx.repoA}|branch -D ${branch}`);
+      expect(writeIntent).not.toHaveBeenCalled();
+      expect(openFolder).not.toHaveBeenCalled();
+    });
   });
 });

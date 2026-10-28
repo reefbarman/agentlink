@@ -1603,6 +1603,8 @@ Safety/consent behavior:
 - v1 supports only local `file` workspace folders; remote extension hosts are rejected rather than opening a wrong local path.
 - Uncommitted source changes are not copied into the new worktree; new branches are based on committed Git state.
 
+Multi-root workspaces: when the source window has more than one workspace folder, every Git repository behind those folders gets a worktree on the same branch, and the new window opens a generated `<worktree-name>.code-workspace` file (written next to the primary worktree) containing all of them. The `sourcePath` repository is listed first so the child agent starts there; folders inside a repository map to the same subfolder of its worktree; settings, tasks, launch configurations and extension recommendations from the source `.code-workspace` file are carried over. `baseRef`, `worktreePath` and `/review`'s pull request fetch apply to the primary repository; other repositories branch from their own `HEAD`, or reuse the branch when it already exists. Folders outside Git keep pointing at the original folder and are listed as shared in the approval detail. If creating any worktree fails, worktrees and branches created by that launch are removed.
+
 `/review <github-pr-url>` accepts `https://github.com/<owner>/<repository>/pull/<number>` URLs, including copied `/files` or `/commits` views and query/hash suffixes. It requires the current repository to have an HTTPS or SSH fetch remote matching `owner/repository`, fetches `refs/pull/<number>/head` only after approval, creates a uniquely named local branch at that exact commit, opens the child window in `review` mode, and autosubmits a review-focused prompt that asks the agent not to modify the branch unless requested. GitHub's pull ref also supports PRs whose head branch is in a fork. Browser remote users are directed to run the command in VS Code.
 
 | Parameter      | Type     | Description                                                                                                        |
@@ -1621,6 +1623,7 @@ Returns JSON with:
 - `status`: `"opened"`, `"rejected"`, or `"error"`
 - `worktreePath`, `branch`, `baseRef`
 - `intentId` when an intent was written for the child window
+- Multi-root only: `workspaceFilePath`, `additionalWorktrees` (`repoRoot`, `worktreePath`, `baseRef`, `reused`), and `sharedFolders` for folders outside Git
 - `message` for caveats/errors
 
 Example:

@@ -16,6 +16,11 @@ export interface WorktreeAgentStartupIntent {
   expiresAt: number;
   sourceWorkspacePath: string;
   worktreePath: string;
+  /**
+   * Multi-root launches open a generated `.code-workspace` file instead of the
+   * worktree folder; the child window matches the intent by this path.
+   */
+  workspaceFilePath?: string;
   branch: string;
   baseRef: string;
   task: string;
@@ -69,6 +74,9 @@ export class WorktreeAgentIntentStore {
         intent.expiresAt ?? createdAt + (intent.ttlMs ?? 10 * 60 * 1000),
       sourceWorkspacePath: intent.sourceWorkspacePath,
       worktreePath: intent.worktreePath,
+      ...(intent.workspaceFilePath
+        ? { workspaceFilePath: intent.workspaceFilePath }
+        : {}),
       branch: intent.branch,
       baseRef: intent.baseRef,
       task: intent.task,
@@ -131,8 +139,10 @@ export class WorktreeAgentIntentStore {
         continue;
       }
 
-      const intentWorktree = await this.normalizePath(intent.worktreePath);
-      if (!pathsEqual(target, intentWorktree)) continue;
+      const intentTarget = await this.normalizePath(
+        intent.workspaceFilePath ?? intent.worktreePath,
+      );
+      if (!pathsEqual(target, intentTarget)) continue;
 
       const consumed: WorktreeAgentStartupIntent = {
         ...intent,
@@ -232,6 +242,8 @@ function isValidIntent(
     typeof value.expiresAt === "number" &&
     typeof value.sourceWorkspacePath === "string" &&
     typeof value.worktreePath === "string" &&
+    (value.workspaceFilePath === undefined ||
+      typeof value.workspaceFilePath === "string") &&
     typeof value.branch === "string" &&
     typeof value.baseRef === "string" &&
     typeof value.task === "string" &&

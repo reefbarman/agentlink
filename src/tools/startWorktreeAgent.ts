@@ -11,6 +11,7 @@ import {
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
 import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
 import { WorktreeAgentIntentStore } from "../worktree/WorktreeAgentIntentStore.js";
 
@@ -36,6 +37,13 @@ export interface StartWorktreeAgentDeps {
     opts: { forceNewWindow: boolean },
   ) => Thenable<unknown>;
   configuration?: vscode.WorkspaceConfiguration;
+  /**
+   * The source window's `.code-workspace` file, when one is open. Its
+   * settings, tasks, launch and extension recommendations are carried into
+   * the generated multi-root worktree workspace. Defaults to
+   * `vscode.workspace.workspaceFile`.
+   */
+  workspaceFile?: vscode.Uri | null;
 }
 
 interface ParsedWorktree {
@@ -48,6 +56,29 @@ interface ParsedWorktree {
 interface ResolvedFetchRef {
   remote: string;
   ref: string;
+}
+
+/** One Git repository that receives a worktree for this launch. */
+interface RepoWorktreePlan {
+  primary: boolean;
+  repoRoot: string;
+  worktreePath: string;
+  baseRef: string;
+  dirty: boolean;
+  existingTarget?: ParsedWorktree;
+  reuseExisting: boolean;
+  branchExists: boolean;
+}
+
+/** One folder of the generated multi-root workspace. */
+interface WorkspaceFolderTarget {
+  name: string;
+  /** Local folder path (a worktree path, or the original path when shared). */
+  path?: string;
+  /** Original URI for non-file folders, which are kept as-is. */
+  uri?: string;
+  /** True when the folder is not inside a Git worktree and points at the source. */
+  shared: boolean;
 }
 
 export async function handleStartWorktreeAgent(
@@ -112,63 +143,133 @@ export async function handleStartWorktreeAgent(
     validateBranchName(branch);
     launchContext.branch = branch;
 
+    const configurationFor = (uri: vscode.Uri) =>
+      deps.configuration ?? vscode.workspace.getConfiguration("agentlink", uri);
     const worktreePath = await resolveWorktreePath({
       requestedPath: params.worktreePath,
       branch,
       repoRoot,
-      configuration:
-        deps.configuration ??
-        vscode.workspace.getConfiguration(
-          "agentlink",
-          sourceWorkspace.folder.uri,
-        ),
+      configuration: configurationFor(sourceWorkspace.folder.uri),
     });
 
     launchContext.worktreePath = worktreePath;
-    const dirtyStatus = (
-      await runGit(["status", "--porcelain"], repoRoot)
-    ).trim();
-    launchContext.sourceTreeDirty = dirtyStatus.length > 0;
-    const worktrees = parseWorktreeList(
-      await runGit(["worktree", "list", "--porcelain"], repoRoot),
-    );
-    const existingTarget = findWorktreeByPath(worktrees, worktreePath);
-    const checkedOutBranch = worktrees.find(
-      (wt) => wt.branch === `refs/heads/${branch}`,
-    );
-    const branchExists = await gitRefExists(
+    const primaryInspection = await inspectRepoWorktree({
       runGit,
       repoRoot,
-      `refs/heads/${branch}`,
-    );
-
-    if (fetchRef && branchExists) {
-      return worktreeError(
-        `Review branch "${branch}" already exists. Run /review again to create a fresh branch for the current pull request head.`,
-        { worktreePath, branch, baseRef: initialBaseRef },
-      );
-    }
-
-    if (checkedOutBranch && !pathsEqual(checkedOutBranch.path, worktreePath)) {
-      return worktreeError(
-        `Branch "${branch}" is already checked out at ${checkedOutBranch.path}. Choose a different branch or worktreePath.`,
-        { worktreePath, branch, baseRef: initialBaseRef },
-      );
-    }
-
-    const reuseExisting = Boolean(
-      existingTarget && existingTarget.branch === `refs/heads/${branch}`,
-    );
-    await validateDestinationPath(worktreePath, repoRoot, gitCommonDir, {
-      allowExistingWorktree: Boolean(existingTarget),
+      gitCommonDir,
+      branch,
+      worktreePath,
+      reviewFetch: Boolean(fetchRef),
     });
-
-    if (existingTarget && !reuseExisting) {
-      return worktreeError(
-        `Destination path is already a Git worktree for ${existingTarget.branch ?? existingTarget.head ?? "an unknown ref"}, not branch "${branch}".`,
-        { worktreePath, branch, baseRef: initialBaseRef },
-      );
+    if (primaryInspection.status === "error") {
+      return worktreeError(primaryInspection.message, {
+        worktreePath,
+        branch,
+        baseRef: initialBaseRef,
+      });
     }
+    const primaryPlan: RepoWorktreePlan = {
+      ...primaryInspection.plan,
+      primary: true,
+      baseRef: initialBaseRef,
+    };
+    launchContext.sourceTreeDirty = primaryPlan.dirty;
+    const { existingTarget } = primaryPlan;
+
+    // Multi-root workspaces: every other local folder's repository gets a
+    // worktree on the same branch so the new window mirrors the source window.
+    const plans: RepoWorktreePlan[] = [primaryPlan];
+    const workspaceTargets: WorkspaceFolderTarget[] | undefined =
+      (workspaceFolders?.length ?? 0) > 1 ? [] : undefined;
+    if (workspaceTargets) {
+      const ordered = [
+        sourceWorkspace.folder,
+        ...(workspaceFolders ?? []).filter(
+          (folder) => folder !== sourceWorkspace.folder,
+        ),
+      ];
+      for (const folder of ordered) {
+        if (folder.uri.scheme !== "file") {
+          workspaceTargets.push({
+            name: folder.name,
+            uri: folder.uri.toString(),
+            shared: true,
+          });
+          continue;
+        }
+        const folderPath = await realpathOrResolved(folder.uri.fsPath);
+        let folderRepoRoot: string | undefined;
+        try {
+          folderRepoRoot = await realpathOrResolved(
+            (await runGit(["rev-parse", "--show-toplevel"], folderPath)).trim(),
+          );
+        } catch {
+          folderRepoRoot = undefined;
+        }
+        if (!folderRepoRoot) {
+          workspaceTargets.push({
+            name: folder.name,
+            path: folderPath,
+            shared: true,
+          });
+          continue;
+        }
+
+        let plan = plans.find((candidate) =>
+          pathsEqual(candidate.repoRoot, folderRepoRoot!),
+        );
+        if (!plan) {
+          const secondaryCommonDir = await realpathOrResolved(
+            path.resolve(
+              folderRepoRoot,
+              (
+                await runGit(["rev-parse", "--git-common-dir"], folderRepoRoot)
+              ).trim(),
+            ),
+          );
+          const secondaryWorktreePath = await resolveWorktreePath({
+            branch,
+            repoRoot: folderRepoRoot,
+            configuration: configurationFor(folder.uri),
+          });
+          const inspection = await inspectRepoWorktree({
+            runGit,
+            repoRoot: folderRepoRoot,
+            gitCommonDir: secondaryCommonDir,
+            branch,
+            worktreePath: secondaryWorktreePath,
+            reviewFetch: false,
+          });
+          if (inspection.status === "error") {
+            return worktreeError(
+              `${inspection.message} (workspace folder "${folder.name}")`,
+              { worktreePath, branch, baseRef: initialBaseRef },
+            );
+          }
+          const secondaryBaseRef = inspection.plan.branchExists
+            ? branch
+            : (await runGit(["rev-parse", "HEAD"], folderRepoRoot)).trim();
+          plan = {
+            ...inspection.plan,
+            primary: false,
+            baseRef: secondaryBaseRef,
+          };
+          plans.push(plan);
+        }
+        const relative = path.relative(plan.repoRoot, folderPath);
+        workspaceTargets.push({
+          name: folder.name,
+          path: relative
+            ? path.join(plan.worktreePath, relative)
+            : plan.worktreePath,
+          shared: false,
+        });
+      }
+    }
+    const secondaryPlans = plans.filter((plan) => !plan.primary);
+    const sharedFolders = (workspaceTargets ?? []).filter(
+      (target) => target.shared,
+    );
 
     const approval = await requestWorktreeApproval({
       task,
@@ -178,8 +279,10 @@ export async function handleStartWorktreeAgent(
       worktreePath,
       branch,
       baseRef: initialBaseRef,
-      dirty: dirtyStatus.length > 0,
+      dirty: primaryPlan.dirty,
       existingWorktree: existingTarget,
+      additionalRepos: secondaryPlans,
+      sharedFolders,
       onApprovalRequest: deps.onApprovalRequest,
       sessionId: deps.sessionId,
     });
@@ -192,7 +295,7 @@ export async function handleStartWorktreeAgent(
         baseRef: initialBaseRef,
         sourceRoot,
         repoRoot,
-        sourceTreeDirty: dirtyStatus.length > 0,
+        sourceTreeDirty: primaryPlan.dirty,
         decision: approval.decision,
         ...(existingTarget
           ? { existingWorktreeBranch: existingTarget.branch }
@@ -214,18 +317,22 @@ export async function handleStartWorktreeAgent(
         );
       }
       launchContext.baseRef = baseRef;
+      primaryPlan.baseRef = baseRef;
     }
 
-    if (!reuseExisting) {
-      await fs.mkdir(path.dirname(worktreePath), { recursive: true });
-      if (branchExists) {
-        await runGit(["worktree", "add", worktreePath, branch], repoRoot);
-      } else {
-        await runGit(
-          ["worktree", "add", "-b", branch, worktreePath, baseRef],
-          repoRoot,
-        );
-      }
+    await createPlannedWorktrees(runGit, plans, branch);
+
+    let workspaceFilePath: string | undefined;
+    if (workspaceTargets) {
+      workspaceFilePath = await writeWorktreeWorkspaceFile({
+        primaryWorktreePath: worktreePath,
+        targets: workspaceTargets,
+        sourceWorkspaceFile:
+          deps.workspaceFile === undefined
+            ? vscode.workspace.workspaceFile
+            : deps.workspaceFile,
+      });
+      launchContext.workspaceFilePath = workspaceFilePath;
     }
 
     const store =
@@ -234,6 +341,7 @@ export async function handleStartWorktreeAgent(
     const intent = await store.writeIntent({
       sourceWorkspacePath: repoRoot,
       worktreePath,
+      ...(workspaceFilePath ? { workspaceFilePath } : {}),
       branch,
       baseRef,
       task,
@@ -262,23 +370,208 @@ export async function handleStartWorktreeAgent(
       deps.openFolder ??
       ((uri, opts) =>
         vscode.commands.executeCommand("vscode.openFolder", uri, opts));
-    await openFolder(vscode.Uri.file(worktreePath), { forceNewWindow: true });
+    await openFolder(vscode.Uri.file(workspaceFilePath ?? worktreePath), {
+      forceNewWindow: true,
+    });
 
+    const reusedAll = plans.every((plan) => plan.reuseExisting);
+    const worktreeNoun = plans.length > 1 ? "worktrees" : "worktree";
     return successResult({
       status: "opened",
       worktreePath,
       branch,
       baseRef,
       intentId: intent.id,
-      message: reuseExisting
-        ? "Reused existing worktree and opened a new VS Code window. Startup intent was written before opening; child-agent startup is best-effort."
-        : "Created worktree and opened a new VS Code window. Startup intent was written before opening; child-agent startup is best-effort.",
+      ...(workspaceFilePath
+        ? {
+            workspaceFilePath,
+            additionalWorktrees: secondaryPlans.map((plan) => ({
+              repoRoot: plan.repoRoot,
+              worktreePath: plan.worktreePath,
+              baseRef: plan.baseRef,
+              reused: plan.reuseExisting,
+            })),
+            ...(sharedFolders.length > 0
+              ? {
+                  sharedFolders: sharedFolders.map(
+                    (target) => target.path ?? target.uri,
+                  ),
+                }
+              : {}),
+          }
+        : {}),
+      message: `${reusedAll ? `Reused existing ${worktreeNoun}` : `Created ${worktreeNoun}`} and opened a new VS Code window${workspaceFilePath ? ` with a multi-root workspace (${workspaceFilePath})` : ""}. Startup intent was written before opening; child-agent startup is best-effort.`,
       ...(approval.followUp ? { follow_up: approval.followUp } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return worktreeError(message, launchContext);
   }
+}
+
+async function inspectRepoWorktree(args: {
+  runGit: GitRunner;
+  repoRoot: string;
+  gitCommonDir: string;
+  branch: string;
+  worktreePath: string;
+  /** /review launches require a fresh branch at the fetched PR head. */
+  reviewFetch: boolean;
+}): Promise<
+  | { status: "ok"; plan: Omit<RepoWorktreePlan, "primary" | "baseRef"> }
+  | { status: "error"; message: string }
+> {
+  const { runGit, repoRoot, branch, worktreePath } = args;
+  const dirtyStatus = (
+    await runGit(["status", "--porcelain"], repoRoot)
+  ).trim();
+  const worktrees = parseWorktreeList(
+    await runGit(["worktree", "list", "--porcelain"], repoRoot),
+  );
+  const existingTarget = findWorktreeByPath(worktrees, worktreePath);
+  const checkedOutBranch = worktrees.find(
+    (wt) => wt.branch === `refs/heads/${branch}`,
+  );
+  const branchExists = await gitRefExists(
+    runGit,
+    repoRoot,
+    `refs/heads/${branch}`,
+  );
+
+  if (args.reviewFetch && branchExists) {
+    return {
+      status: "error",
+      message: `Review branch "${branch}" already exists. Run /review again to create a fresh branch for the current pull request head.`,
+    };
+  }
+
+  if (checkedOutBranch && !pathsEqual(checkedOutBranch.path, worktreePath)) {
+    return {
+      status: "error",
+      message: `Branch "${branch}" is already checked out at ${checkedOutBranch.path}. Choose a different branch or worktreePath.`,
+    };
+  }
+
+  const reuseExisting = Boolean(
+    existingTarget && existingTarget.branch === `refs/heads/${branch}`,
+  );
+  await validateDestinationPath(worktreePath, repoRoot, args.gitCommonDir, {
+    allowExistingWorktree: Boolean(existingTarget),
+  });
+
+  if (existingTarget && !reuseExisting) {
+    return {
+      status: "error",
+      message: `Destination path is already a Git worktree for ${existingTarget.branch ?? existingTarget.head ?? "an unknown ref"}, not branch "${branch}".`,
+    };
+  }
+
+  return {
+    status: "ok",
+    plan: {
+      repoRoot,
+      worktreePath,
+      dirty: dirtyStatus.length > 0,
+      existingTarget,
+      reuseExisting,
+      branchExists,
+    },
+  };
+}
+
+/**
+ * Create every planned worktree. If one fails, worktrees and branches created
+ * by this call are removed again so a partial multi-repo launch does not leave
+ * stray checkouts behind; reused worktrees are never touched.
+ */
+async function createPlannedWorktrees(
+  runGit: GitRunner,
+  plans: RepoWorktreePlan[],
+  branch: string,
+): Promise<void> {
+  const created: RepoWorktreePlan[] = [];
+  try {
+    for (const plan of plans) {
+      if (plan.reuseExisting) continue;
+      await fs.mkdir(path.dirname(plan.worktreePath), { recursive: true });
+      if (plan.branchExists) {
+        await runGit(
+          ["worktree", "add", plan.worktreePath, branch],
+          plan.repoRoot,
+        );
+      } else {
+        await runGit(
+          ["worktree", "add", "-b", branch, plan.worktreePath, plan.baseRef],
+          plan.repoRoot,
+        );
+      }
+      created.push(plan);
+    }
+  } catch (err) {
+    for (const plan of created.reverse()) {
+      try {
+        await runGit(
+          ["worktree", "remove", "--force", plan.worktreePath],
+          plan.repoRoot,
+        );
+        if (!plan.branchExists) {
+          await runGit(["branch", "-D", branch], plan.repoRoot);
+        }
+      } catch {
+        // Best-effort rollback; the original error is more useful.
+      }
+    }
+    if (created.length > 0 && err instanceof Error) {
+      err.message = `${err.message} (rolled back ${created.length} worktree${created.length === 1 ? "" : "s"} created by this launch)`;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Write a `.code-workspace` file next to the primary worktree that lists every
+ * worktree folder (primary first, so the child agent starts in the requested
+ * repository), carrying over settings from the source workspace file.
+ */
+async function writeWorktreeWorkspaceFile(args: {
+  primaryWorktreePath: string;
+  targets: WorkspaceFolderTarget[];
+  sourceWorkspaceFile: vscode.Uri | null | undefined;
+}): Promise<string> {
+  const carried: Record<string, unknown> = {};
+  if (args.sourceWorkspaceFile?.scheme === "file") {
+    try {
+      const raw = await fs.readFile(args.sourceWorkspaceFile.fsPath, "utf8");
+      const parsed = parseJsonWithComments<Record<string, unknown>>(raw);
+      for (const key of ["settings", "extensions", "launch", "tasks"]) {
+        if (parsed && typeof parsed === "object" && key in parsed) {
+          carried[key] = parsed[key];
+        }
+      }
+    } catch {
+      // The source workspace file is optional context; ignore unreadable files.
+    }
+  }
+
+  const workspaceFilePath = path.join(
+    path.dirname(args.primaryWorktreePath),
+    `${path.basename(args.primaryWorktreePath)}.code-workspace`,
+  );
+  const content = {
+    folders: args.targets.map((target) =>
+      target.uri
+        ? { name: target.name, uri: target.uri }
+        : { name: target.name, path: target.path },
+    ),
+    ...carried,
+  };
+  await fs.mkdir(path.dirname(workspaceFilePath), { recursive: true });
+  await fs.writeFile(
+    workspaceFilePath,
+    `${JSON.stringify(content, null, 2)}\n`,
+    "utf8",
+  );
+  return workspaceFilePath;
 }
 
 function normalizeRequired(value: unknown, name: string): string {
@@ -552,6 +845,8 @@ async function requestWorktreeApproval(args: {
   baseRef: string;
   dirty: boolean;
   existingWorktree?: ParsedWorktree;
+  additionalRepos?: RepoWorktreePlan[];
+  sharedFolders?: WorkspaceFolderTarget[];
   onApprovalRequest?: OnApprovalRequest;
   sessionId?: string;
 }): Promise<
@@ -660,6 +955,8 @@ function buildApprovalDetail(args: {
   baseRef: string;
   dirty: boolean;
   existingWorktree?: ParsedWorktree;
+  additionalRepos?: RepoWorktreePlan[];
+  sharedFolders?: WorkspaceFolderTarget[];
 }): string {
   const lines = [
     `Source: ${args.sourceRoot}`,
@@ -684,6 +981,34 @@ function buildApprovalDetail(args: {
       `Existing worktree will be reused: ${args.existingWorktree.path}`,
       `Existing HEAD: ${args.existingWorktree.head ?? "unknown"}`,
       "Warning: the existing worktree HEAD may differ from the requested baseRef.",
+    );
+  }
+  if (args.additionalRepos?.length) {
+    lines.push(
+      "",
+      "Other workspace repositories (same branch, opened together as a multi-root workspace):",
+    );
+    for (const repo of args.additionalRepos) {
+      const notes = [
+        repo.reuseExisting
+          ? "reusing existing worktree"
+          : repo.branchExists
+            ? "existing branch"
+            : `base ${repo.baseRef}`,
+        ...(repo.dirty ? ["has uncommitted changes, not copied"] : []),
+      ];
+      lines.push(
+        `- ${repo.repoRoot} -> ${repo.worktreePath} (${notes.join("; ")})`,
+      );
+    }
+  }
+  if (args.sharedFolders?.length) {
+    lines.push(
+      "",
+      "Workspace folders outside Git are shared with the source window, not isolated:",
+      ...args.sharedFolders.map(
+        (folder) => `- ${folder.path ?? folder.uri ?? folder.name}`,
+      ),
     );
   }
   return lines.join("\n");

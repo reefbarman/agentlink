@@ -423,12 +423,21 @@ async function consumeWorktreeStartupIntent(
   provider: ChatViewProvider,
   logFn: (msg: string) => void,
 ): Promise<void> {
+  // Multi-root worktree launches open a generated .code-workspace file; single
+  // repository launches open the worktree folder directly.
+  const workspaceFile = vscode.workspace.workspaceFile;
   const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder || folder.uri.scheme !== "file") return;
+  const workspacePath =
+    workspaceFile?.scheme === "file"
+      ? workspaceFile.fsPath
+      : folder?.uri.scheme === "file"
+        ? folder.uri.fsPath
+        : undefined;
+  if (!workspacePath) return;
 
   try {
     const store = new WorktreeAgentIntentStore(context.globalStorageUri.fsPath);
-    const intent = await store.consumeIntentForWorkspace(folder.uri.fsPath);
+    const intent = await store.consumeIntentForWorkspace(workspacePath);
     if (!intent) {
       await store.pruneExpired();
       return;
