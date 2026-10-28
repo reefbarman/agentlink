@@ -1,0 +1,51 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/worktree/WorktreeAgentIntentStore.test.ts
+  h_e08a86bb3a33a2 115-143
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1606-1607,1626
+src/tools/startWorktreeAgent.ts
+  h_e08a86bb3a33a2 14,40-46,61-83,146-147,152,156,159-165,168-169,171-177,179-216,218-245,249-267,269-271,282,284-285,298,320,323-335,344,373-374,377-378,385-403,412-424,436-553,555-574,848-849,958-959,986-1011
+  s_0e74f1b948f7ff::t_91337f18b0dba8 166-167,246-248,272,375,425-435,554,575-576,1012-1013
+src/extension.ts
+  h_e08a86bb3a33a2 426-428,430-436,440
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 95
+src/worktree/WorktreeAgentIntentStore.ts
+  h_e08a86bb3a33a2 19-23,77-79,142-143,145,245-246
+  s_0e74f1b948f7ff::t_2da0cec4044301 144
+src/tools/startWorktreeAgent.test.ts
+  h_e08a86bb3a33a2 2,48,55,60-74,496-654
+  s_0e74f1b948f7ff::t_8814bab11b1706 655
+resources/builtin-skills/documentation/references/release-notes.md
+  s_6e10e3be32763c::t_461c87763374e8 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "edbbcb5d0a6bc26adfe66411d09a4a769e5dd93b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0e74f1b948f7ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f883074e-0994-424a-880d-897cb6b12234",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_6e10e3be32763c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c657f89-4b8c-4de2-8a74-3ca4a6d5afd2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
