@@ -68,6 +68,42 @@ export function expandReplacement(
   );
 }
 
+/**
+ * `${1}` looks like a capture reference in JavaScript and .NET but is literal
+ * text here, so a template using it silently drops the captured content. Find
+ * the first unescaped `${digits}`, scanning tokens the way `expandReplacement`
+ * does so `$${1}` (literal `${1}`) is still allowed.
+ */
+export function findUnescapedNumericBraceReference(
+  replacement: string,
+): string | undefined {
+  const token = /\\[nt\\]|\$\$|\$\{\d+\}/g;
+  let found: RegExpExecArray | null;
+  while ((found = token.exec(replacement)) !== null) {
+    if (found[0].startsWith("${")) return found[0];
+  }
+  return undefined;
+}
+
+/**
+ * Rejects regex replacement templates that would silently corrupt matches.
+ * Returns an error message, or undefined when the template is safe to expand.
+ */
+export function validateFindAndReplaceTemplate(
+  replacement: string,
+  regex: boolean | undefined,
+): string | undefined {
+  if (!regex) return undefined;
+  const reference = findUnescapedNumericBraceReference(replacement);
+  if (!reference) return undefined;
+  const digits = reference.slice(2, -1);
+  return (
+    `Regex replacement contains '${reference}', which is not a capture reference here and would be inserted literally in place of the captured text. ` +
+    `Use '$${digits}' to insert the capture, or '$$${reference.slice(1)}' to insert the literal text '${reference}'. ` +
+    "To put a digit straight after a capture when the pattern has fewer than 10 groups, a two-digit reference falls back to one digit (for example '$10' is capture 1 followed by '0'); otherwise include the digit in the pattern or a capture. No edits were proposed."
+  );
+}
+
 function expandDollarReference(
   token: string,
   reference: string,
@@ -324,6 +360,11 @@ export function planFindAndReplace(
   }
   const built = buildFindAndReplacePattern(params.find, params.regex);
   if (!built.ok) return { status: "error", error: built.error };
+  const templateError = validateFindAndReplaceTemplate(
+    params.replace,
+    params.regex,
+  );
+  if (templateError) return { status: "error", error: templateError };
   const planned: FindAndReplaceFilePlan[] = [];
   let totalMatches = 0;
   files.forEach((file, fileIndex) => {

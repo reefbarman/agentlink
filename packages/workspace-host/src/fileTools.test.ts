@@ -976,6 +976,40 @@ describe("workspace file tools", () => {
     });
   });
 
+  it("rejects an unescaped ${digits} find_and_replace template without review or writes", async () => {
+    const test = await fixture();
+    const original = "scale: 0.5, idle\n";
+    await fs.writeFile(path.join(test.root, "book.yaml"), original);
+    const input = {
+      find: "(scale: )0\\.5(, idle)",
+      replace: "${1}0.64$2",
+      regex: true,
+      path: "book.yaml",
+    };
+    const authorized = await test.files.authorizeToolCall({
+      principal,
+      sessionId: "session",
+      turnId: "turn",
+      model,
+      toolCallId: "brace",
+      toolName: "find_and_replace",
+      input,
+      effect: "write",
+    });
+    expect(authorized).toMatchObject({ decision: "allow" });
+    if (authorized.decision !== "allow" || !authorized.preparedInput) {
+      throw new Error("Expected a no-write decision");
+    }
+    const result = await test
+      .tool("find_and_replace")
+      .execute({ ...authorized.preparedInput }, context());
+    expect(result.isError).toBe(true);
+    expect(String(result.modelContent)).toContain("'${1}'");
+    await expect(
+      fs.readFile(path.join(test.root, "book.yaml"), "utf8"),
+    ).resolves.toBe(original);
+  });
+
   it("reviews VS Code's find_and_replace across globbed files and writes exactly the pinned baselines", async () => {
     const test = await fixture();
     await fs.mkdir(path.join(test.root, "src", "nested"), { recursive: true });

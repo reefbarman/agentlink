@@ -2,7 +2,9 @@ import {
   buildFindAndReplacePattern,
   collectFindAndReplaceMatches,
   expandReplacement,
+  findUnescapedNumericBraceReference,
   planFindAndReplace,
+  validateFindAndReplaceTemplate,
 } from "./findAndReplace.js";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +14,81 @@ describe("find-and-replace", () => {
     expect(expandReplacement("$1-$2-$$-$0-$10-\\n-\\q", match)).toBe(
       "a--$-$0-a0-\n-\\q",
     );
+  });
+
+  it.each([
+    ["${1}0.64$2", "${1}"],
+    ["${0}", "${0}"],
+    ["${100}", "${100}"],
+    ["$$${1}", "${1}"],
+    ["\\${1}", "${1}"],
+    ["$${1}", undefined],
+    ["$$$${1}", undefined],
+    ["\\\\$${1}", undefined],
+    ["${name}", undefined],
+    ["$10.64$2", undefined],
+  ])("detects unescaped numeric brace references in %s", (template, found) => {
+    expect(findUnescapedNumericBraceReference(template)).toBe(found);
+  });
+
+  it("rejects ${digits} only in regex mode, with an actionable hint", () => {
+    expect(validateFindAndReplaceTemplate("${1}", false)).toBeUndefined();
+    expect(validateFindAndReplaceTemplate("$${1}", true)).toBeUndefined();
+    const error = validateFindAndReplaceTemplate("${1}0.64$2", true);
+    expect(error).toContain("'${1}'");
+    expect(error).toContain("'$1'");
+    expect(error).toContain("'$${1}'");
+  });
+
+  it("refuses to plan the reported ${1} replacement and keeps $${1} literal", () => {
+    const find =
+      "(asset: (?:kip-stand|kip-proud), x: \\d+, y: \\d+, scale: )0\\.5{1,2}(, idle)";
+    const content =
+      "- { asset: kip-stand, x: 120, y: 340, scale: 0.5, idle: true }\n" +
+      "- { asset: kip-proud, x: 360, y: 380, scale: 0.55, idle: true }\n";
+    const files = [
+      { path: "book.yaml", content },
+      { path: "other.yaml", content },
+    ];
+    expect(
+      planFindAndReplace({ find, replace: "${1}0.64$2", regex: true }, files),
+    ).toEqual({
+      status: "error",
+      error: expect.stringContaining("'${1}'"),
+    });
+    expect(
+      planFindAndReplace({ find, replace: "$10.64$2", regex: true }, files),
+    ).toMatchObject({
+      status: "ready",
+      totalMatches: 4,
+      files: [
+        {
+          proposedContent:
+            "- { asset: kip-stand, x: 120, y: 340, scale: 0.64, idle: true }\n" +
+            "- { asset: kip-proud, x: 360, y: 380, scale: 0.64, idle: true }\n",
+        },
+        expect.anything(),
+      ],
+    });
+    expect(
+      planFindAndReplace({ find: "(old)", replace: "$${1}=$1", regex: true }, [
+        { path: "a.ts", content: "old" },
+      ]),
+    ).toMatchObject({
+      status: "ready",
+      files: [{ proposedContent: "${1}=old" }],
+    });
+    expect(
+      planFindAndReplace({ find: "old", replace: "${1}" }, [
+        { path: "a.ts", content: "old" },
+      ]),
+    ).toMatchObject({ status: "ready", files: [{ proposedContent: "${1}" }] });
+    // Captured text is never re-validated, only the template.
+    expect(
+      planFindAndReplace({ find: "(.+)", replace: "$1", regex: true }, [
+        { path: "a.ts", content: "${1}" },
+      ]),
+    ).toMatchObject({ status: "ready", files: [{ proposedContent: "${1}" }] });
   });
 
   it("escapes literal patterns and reports invalid regex", () => {

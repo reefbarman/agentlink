@@ -15,6 +15,7 @@ import {
   checkFindAndReplaceGuardrail,
   collectFindAndReplaceMatches,
   findAndReplaceNoMatchesResult,
+  validateFindAndReplaceTemplate,
 } from "@agentlink/core/find-and-replace";
 import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
 import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
@@ -79,6 +80,15 @@ export async function handleFindAndReplace(
     const built = buildFindAndReplacePattern(findStr, params.regex);
     if (!built.ok) return errorResult(built.error);
     const { pattern } = built;
+    const templateError = validateFindAndReplaceTemplate(
+      replaceStr,
+      params.regex,
+    );
+    if (templateError) {
+      return errorResult(templateError, {
+        reason: "unsupported_replacement_reference",
+      });
+    }
 
     // Resolve target files
     let fileUris: vscode.Uri[];

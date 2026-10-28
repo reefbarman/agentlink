@@ -225,6 +225,71 @@ describe("handleFindAndReplace", () => {
     },
   );
 
+  it("rejects unescaped ${digits} before opening files or requesting review", async () => {
+    mockWorkspace.findFiles.mockResolvedValue([
+      { fsPath: path.join(workspaceDir, "a.yaml") },
+      { fsPath: path.join(workspaceDir, "b.yaml") },
+    ]);
+    const reviewAndApply = vi.fn<MultiFileEditReviewProvider["reviewAndApply"]>(
+      async () => ({ content: [] }),
+    );
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    const result = await handleFindAndReplace(
+      {
+        glob: "**/*.yaml",
+        find: "(scale: )0\\.5(, idle)",
+        replace: "${1}0.64$2",
+        regex: true,
+      },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      { multiFileEditReviewProvider: { reviewAndApply } },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(toolJson(result)).toMatchObject({
+      error: expect.stringContaining("'${1}'"),
+      reason: "unsupported_replacement_reference",
+    });
+    expect(mockWorkspace.findFiles).not.toHaveBeenCalled();
+    expect(mockWorkspace.openTextDocument).not.toHaveBeenCalled();
+    expect(reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { find: "(old)", replace: "$${1}/$1", expected: "${1}/old" },
+    { find: "old", replace: "${1}", expected: "${1}", regex: false },
+    { find: "(.+)", replace: "$1", expected: "${1}", text: "${1}" },
+  ])(
+    "still proposes literal brace text for $replace",
+    async ({ find, replace, expected, regex = true, text = "old" }) => {
+      const filePath = path.join(workspaceDir, "example.ts");
+      mockWorkspace.openTextDocument.mockResolvedValue(
+        createDocument(filePath, text),
+      );
+      const reviewAndApply = vi.fn<
+        MultiFileEditReviewProvider["reviewAndApply"]
+      >(async () => ({ content: [] }));
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+      await handleFindAndReplace(
+        { path: "example.ts", find, replace, regex },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+      expect(reviewAndApply).toHaveBeenCalledOnce();
+      const file = reviewAndApply.mock.calls[0][0].files[0];
+      expect(file.replacements[0].newText).toBe(expected);
+    },
+  );
+
   it("matches regex line anchors on every line", async () => {
     const filePath = path.join(workspaceDir, "src", "example.meta");
     mockWorkspace.openTextDocument.mockResolvedValue(
