@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as fsp from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import type * as vscode from "vscode";
 
@@ -80,7 +81,33 @@ export function createVscodeAdvertisedArtifactProvider(): AdvertisedArtifactProv
     readTextFile(filePath) {
       return fsp.readFile(filePath, "utf-8");
     },
+    canLoadUndiscoveredSkill: isUndiscoveredSkillLoadable,
   };
+}
+
+const GLOBAL_SKILL_NAMESPACES = [".agents", ".claude", ".agentlink"];
+const SKILL_SOURCE_SEGMENT = /^skills(?:-[^/\\]+)?$/;
+
+/**
+ * A SKILL.md the agent can already read without approval: inside an open
+ * workspace folder (any root, not just the session's), or inside a global
+ * skill folder such as `~/.agents/skills`.
+ */
+function isUndiscoveredSkillLoadable(realSkillPath: string): boolean {
+  if (
+    getWorkspaceRoots().some((root) =>
+      isPathWithinRoot(realSkillPath, canonicalizePath(root)),
+    )
+  ) {
+    return true;
+  }
+  const home = os.homedir();
+  return GLOBAL_SKILL_NAMESPACES.some((namespace) => {
+    const base = canonicalizePath(path.join(home, namespace));
+    if (!isPathWithinRoot(realSkillPath, base)) return false;
+    const [first] = path.relative(base, realSkillPath).split(path.sep);
+    return first !== undefined && SKILL_SOURCE_SEGMENT.test(first);
+  });
 }
 
 export function createVscodeReadFileEnrichmentProvider(): ReadFileEnrichmentProvider {

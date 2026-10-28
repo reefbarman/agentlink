@@ -71,6 +71,12 @@ export interface SkillLoadActivation {
   name: string;
   revision: string;
   skillPath: string;
+  /**
+   * Host-parsed skill entry for a SKILL.md loaded directly from disk because
+   * it was absent from, or newer than, the session catalog. Opaque here; the
+   * session validates it before committing the activation.
+   */
+  entry?: unknown;
 }
 
 /** Exact, immutable skill authority inherited across agent boundaries. */
@@ -186,7 +192,8 @@ export interface AgentToolExecutionContext {
   getAdvertisedSkills?: () => AdvertisedSkillReference[];
   getSkillDiagnostics?: () => readonly SkillCatalogDiagnostic[];
   getAdvertisedRules?: () => AdvertisedRuleReference[];
-  onSkillLoad?: (activation: SkillLoadActivation) => void;
+  /** Returns false when the session declines to commit the activation. */
+  onSkillLoad?: (activation: SkillLoadActivation) => boolean | void;
   skillAllowedTools?: readonly string[];
   /** Exact request-boundary authority forwarded only to internal descendants. */
   skillAuthority?: Readonly<SkillAuthoritySnapshot>;

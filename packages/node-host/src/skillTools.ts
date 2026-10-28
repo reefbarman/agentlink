@@ -15,6 +15,10 @@ import {
   jsonResult,
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
+import {
+  parseUndiscoveredSkillEntry,
+  type SkillEntry,
+} from "./skillDiscovery.js";
 
 /** How a surface resolves and reads advertised skill and rule files. */
 export interface AdvertisedArtifactProvider {
@@ -23,6 +27,13 @@ export interface AdvertisedArtifactProvider {
   resolveLexicalPath?(inputPath: string): string;
   normalizeExistingPath(filePath: string): string;
   readTextFile(filePath: string): Promise<string>;
+  /**
+   * Whether `load_skill` may read and activate this canonical SKILL.md path
+   * when it is absent from (or newer than) the session catalog. Return true
+   * only for paths the agent could already read without approval. Omit to
+   * keep activation limited to the catalog.
+   */
+  canLoadUndiscoveredSkill?(realSkillPath: string): boolean;
 }
 
 /** Session-scoped discovery evidence. This does not grant file or activation access. */
@@ -48,6 +59,12 @@ export interface SkillActivation {
   name: string;
   revision: string;
   skillPath: string;
+  /**
+   * Parsed entry for a skill read directly from disk because it was not in
+   * the session catalog, or its bytes changed since discovery. The session
+   * still decides whether to commit it.
+   */
+  entry?: SkillEntry;
 }
 
 export interface LoadSkillOutcome {
@@ -95,6 +112,16 @@ export function createNodeAdvertisedArtifactProvider(
     readTextFile(filePath) {
       return fsp.readFile(filePath, "utf-8");
     },
+    // Skills not yet in the catalog may load only from inside the project.
+    ...(root
+      ? {
+          canLoadUndiscoveredSkill: (realSkillPath: string) =>
+            isPathWithinDirectory(
+              realSkillPath,
+              normalizeExistingPathSync(root),
+            ),
+        }
+      : {}),
   };
 }
 
@@ -369,6 +396,21 @@ export async function loadSkill(
     result.data && typeof result.data === "object" && "error" in result.data
       ? String(result.data.error)
       : "";
+  const status =
+    result.data && typeof result.data === "object" && "status" in result.data
+      ? result.data.status
+      : undefined;
+  if (
+    error.includes("not in the current session") ||
+    status === "stale_advertised_artifact"
+  ) {
+    const direct = await loadUndiscoveredSkill(
+      params,
+      advertisedSkills,
+      artifactProvider,
+    );
+    if (direct) return direct;
+  }
   if (!error.includes("not in the current session")) return { result };
 
   // Match discovery paths lexically, never through realpath resolution. Older
@@ -461,6 +503,126 @@ export async function loadSkill(
             ? `This path is a supporting file inside the ${resourceOwner.name} skill directory, not a skill. load_skill only activates SKILL.md files; read this file with read_file using its absolute path. No skill has been activated by this lookup.`
             : "No matching skill exists in the current session catalog. Refresh the session catalog or check the skill's enabled state and mode; reading an arbitrary file does not activate it.",
     }),
+  };
+}
+
+/**
+ * Read a SKILL.md the agent may already read, when the session catalog does
+ * not list it or lists older bytes. The catalog is for discovery; it is not a
+ * second read permission. Returns undefined to fall back to the catalog error
+ * when the host does not allow this path or the file cannot be read.
+ */
+async function loadUndiscoveredSkill(
+  params: { path: string },
+  advertisedSkills: readonly AllowedSkill[],
+  artifactProvider: AdvertisedArtifactProvider | undefined,
+): Promise<LoadSkillOutcome | undefined> {
+  if (!artifactProvider?.canLoadUndiscoveredSkill) return undefined;
+  let requestedPath: string;
+  let realSkillPath: string;
+  let raw: string;
+  try {
+    requestedPath = artifactProvider.resolvePath(params.path);
+    if (path.basename(requestedPath) !== "SKILL.md") return undefined;
+    realSkillPath = artifactProvider.normalizeExistingPath(requestedPath);
+    if (!artifactProvider.canLoadUndiscoveredSkill(realSkillPath)) {
+      return undefined;
+    }
+    raw = await artifactProvider.readTextFile(realSkillPath);
+  } catch {
+    return undefined;
+  }
+
+  const known = advertisedSkills.find((skill) => {
+    try {
+      return (
+        artifactProvider.normalizeExistingPath(skill.realSkillPath) ===
+        realSkillPath
+      );
+    } catch {
+      return false;
+    }
+  });
+  const skillPath = known?.skillPath ?? requestedPath;
+  const parsed = parseUndiscoveredSkillEntry({
+    raw,
+    skillPath,
+    realSkillPath,
+    id: known?.id,
+    scope: known?.sourceScope,
+  });
+  if ("diagnostic" in parsed) {
+    return {
+      result: errorResult(
+        `SKILL.md metadata is invalid: ${parsed.diagnostic.message}`,
+        {
+          path: params.path,
+          status: "invalid_skill",
+          diagnostics: [
+            {
+              code: parsed.diagnostic.code,
+              severity: "error",
+              message: parsed.diagnostic.message.slice(0, 1000),
+            },
+          ],
+          guidance:
+            "Fix the reported frontmatter problem, then load the skill again. No skill has been activated.",
+        },
+      ),
+    };
+  }
+  const entry = parsed.entry;
+  if (!entry.enabled) {
+    return {
+      result: errorResult("Skill is disabled by its frontmatter", {
+        path: params.path,
+        status: "skill_disabled",
+      }),
+    };
+  }
+  if (entry.dependencies.length > 0) {
+    return {
+      result: errorResult(
+        "Skill declares dependencies, which are resolved only for skills in the session catalog",
+        {
+          path: params.path,
+          status: "skill_not_in_catalog",
+          guidance:
+            "The catalog refreshes automatically when skill files change. Retry load_skill shortly. No skill has been activated.",
+        },
+      ),
+    };
+  }
+
+  return {
+    result: jsonResult(
+      {
+        skill_name: entry.name,
+        skillPath,
+        kind: "skill_activation",
+        skillDirectory: path.dirname(skillPath),
+        skill_id: entry.id,
+        revision: entry.revision,
+        resourceGuidance: skillResourceGuidance({
+          ...entry,
+          skillPath,
+          realSkillPath,
+          sourceScope: entry.provenance.scope,
+        }),
+        catalogNote: known
+          ? "Loaded the current file, which changed after the session catalog was built."
+          : "Loaded directly from disk; this skill was not in the session catalog yet.",
+        content: raw,
+      },
+      true,
+    ),
+    activation: {
+      id: entry.id,
+      name: entry.name,
+      revision: entry.revision,
+      skillPath,
+      entry,
+    },
   };
 }
 

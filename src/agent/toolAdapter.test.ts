@@ -4787,6 +4787,44 @@ describe("dispatchToolCall", () => {
     expect(onSkillLoad).not.toHaveBeenCalled();
   });
 
+  it("forwards directly loaded skill entries and reports a declined activation as an error", async () => {
+    const skillPath = "/tmp/other-root/.agents/skills/fresh/SKILL.md";
+    const entry = {
+      id: `file:${skillPath}`,
+      distinctive: "parsed-entry",
+    } as unknown as import("./skillLoader.js").SkillEntry;
+    const activation = {
+      id: entry.id,
+      name: "fresh",
+      revision: "f".repeat(64),
+      skillPath,
+      entry,
+    };
+    const onSkillLoad = vi.fn(() => false);
+    const runtime = createAgentToolRuntime(mockCtx);
+    vi.mocked(loadSkill).mockResolvedValueOnce({
+      result: {
+        content: [{ type: "text", text: "skill instructions" }],
+      },
+      activation,
+    });
+    const result = await runtime.executeTool({
+      name: "load_skill",
+      input: { path: skillPath },
+      context: {
+        sessionId: "test-session",
+        getAdvertisedSkills: () => [],
+        onSkillLoad,
+      },
+    });
+    expect(onSkillLoad).toHaveBeenCalledWith(activation);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain(
+      "skill_activation_declined",
+    );
+    expect(JSON.stringify(result.content)).not.toContain("skill instructions");
+  });
+
   it("activates only canonical skill results, not catalog lookup candidates", async () => {
     const skillPath = "/tmp/project/.agents/skills/helper/SKILL.md";
     const skill = {

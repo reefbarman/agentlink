@@ -537,6 +537,103 @@ describe("AgentSession", () => {
       expect(session.getLoadedSkills()).toEqual([]);
     });
 
+    it("commits a directly loaded skill entry absent from the catalog with its restrictions", async () => {
+      const session = await makeSession();
+      const entry = {
+        ...makeSkillEntry("fresh-skill", "c".repeat(64), ["read_file"]),
+        id: "file:/other-root/.agents/skills/fresh-skill/SKILL.md",
+      };
+      const activation = {
+        id: entry.id,
+        name: entry.name,
+        revision: entry.revision,
+        skillPath: entry.skillPath,
+      };
+
+      // Without a parsed entry the catalog remains the only authority.
+      expect(session.trackLoadedSkill(activation)).toBe(false);
+      expect(
+        session.trackLoadedSkill({
+          ...activation,
+          entry: { ...entry, revision: "d".repeat(64) },
+        }),
+      ).toBe(false);
+
+      expect(session.trackLoadedSkill({ ...activation, entry })).toBe(true);
+      expect(session.isSkillActive(entry.id)).toBe(true);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+    });
+
+    it("keeps an active catalog snapshot pinned when changed bytes are loaded directly", async () => {
+      const original = makeSkillEntry("safe-review", "a".repeat(64), [
+        "read_file",
+      ]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [original],
+      });
+      const session = await makeSession();
+      expect(session.trackLoadedSkill(original)).toBe(true);
+
+      const changed = makeSkillEntry("safe-review", "b".repeat(64), [
+        "read_file",
+        "execute_command",
+      ]);
+      expect(
+        session.trackLoadedSkill({
+          id: changed.id,
+          name: changed.name,
+          revision: changed.revision,
+          skillPath: changed.skillPath,
+          entry: changed,
+        }),
+      ).toBe(true);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+    });
+
+    it("rejects direct loads of skills disabled by configuration or catalog state", async () => {
+      const disabled = makeSkillEntry("disabled-skill", "a".repeat(64));
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        disabledSkillPaths: [disabled.provenance.realSkillPath],
+      });
+      const session = await makeSession();
+      const viaAlias = {
+        ...disabled,
+        id: "file:/alias/disabled-skill/SKILL.md",
+        skillPath: "/alias/disabled-skill/SKILL.md",
+      };
+      expect(
+        session.trackLoadedSkill({
+          id: viaAlias.id,
+          name: viaAlias.name,
+          revision: viaAlias.revision,
+          skillPath: viaAlias.skillPath,
+          entry: viaAlias,
+        }),
+      ).toBe(false);
+
+      session.disabledSkillIds = ["file:/configured/off/SKILL.md"];
+      const configured = {
+        ...makeSkillEntry("off", "b".repeat(64)),
+        id: "file:/configured/off/SKILL.md",
+        provenance: {
+          ...makeSkillEntry("off", "b".repeat(64)).provenance,
+          realSkillPath: "/configured/off/SKILL.md",
+        },
+      };
+      expect(
+        session.trackLoadedSkill({
+          id: configured.id,
+          name: configured.name,
+          revision: configured.revision,
+          skillPath: configured.skillPath,
+          entry: configured,
+        }),
+      ).toBe(false);
+      expect(session.getLoadedSkills()).toEqual([]);
+    });
+
     it("intersects active skill restrictions independent of load order", async () => {
       const broad = makeSkillEntry("broad", "a".repeat(64), [
         "read_file",

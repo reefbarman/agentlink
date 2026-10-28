@@ -109,6 +109,12 @@ export interface AdvertisedArtifactProvider {
   resolveLexicalPath?(inputPath: string): string;
   normalizeExistingPath(filePath: string): string;
   readTextFile(filePath: string): Promise<string>;
+  /**
+   * Whether `load_skill` may activate this canonical SKILL.md path when it is
+   * absent from, or newer than, the session catalog. True only for paths the
+   * agent can already read without approval.
+   */
+  canLoadUndiscoveredSkill?(realSkillPath: string): boolean;
 }
 
 export type StructuralScopeStatus =

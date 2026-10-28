@@ -1,3 +1,4 @@
+import * as path from "path";
 import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import type {
@@ -257,6 +258,8 @@ export class AgentSession {
   private readonly activeSkillIds = new Set<string>();
   private activeSkillCatalogDrift: string | undefined;
   private readonly activeSkillEntries = new Map<string, SkillEntry>();
+  /** Real paths of discovered but disabled skills, so direct loads cannot bypass them. */
+  private disabledSkillPaths = new Set<string>();
   private rejectedRestoredActiveSkillState:
     | PersistedActiveSkillState
     | undefined;
@@ -536,7 +539,11 @@ export class AgentSession {
       initialArchitectReviewPending,
     });
     session.lightweightPrompt = opts.lightweight === true;
-    session.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
+    session.setAdvertisedSkills(
+      artifacts.skills,
+      artifacts.skillDiagnostics,
+      artifacts.disabledSkillPaths,
+    );
     session.setSkillCatalogProjection(artifacts.skillCatalog);
     session.setAdvertisedRules(artifacts.advertisedRules);
     session.modeInstructionPlacement = modeInstructionPlacement;
@@ -730,7 +737,11 @@ export class AgentSession {
           prompt: artifacts.promptBreakdown,
         };
         this.activeFileContext = artifacts.activeFileContext;
-        this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
+        this.setAdvertisedSkills(
+          artifacts.skills,
+          artifacts.skillDiagnostics,
+          artifacts.disabledSkillPaths,
+        );
         this.setSkillCatalogProjection(artifacts.skillCatalog);
         this.setAdvertisedRules(artifacts.advertisedRules);
         await this.refreshModeInstructionAnchor();
@@ -823,7 +834,11 @@ export class AgentSession {
       prompt: artifacts.promptBreakdown,
     };
     this.activeFileContext = artifacts.activeFileContext;
-    this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
+    this.setAdvertisedSkills(
+      artifacts.skills,
+      artifacts.skillDiagnostics,
+      artifacts.disabledSkillPaths,
+    );
     this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
     if (modeInstructionBlock !== undefined) {
@@ -883,7 +898,11 @@ export class AgentSession {
     this.promptProfile = artifacts.promptProfile;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.activeFileContext = artifacts.activeFileContext;
-    this.setAdvertisedSkills(artifacts.skills, artifacts.skillDiagnostics);
+    this.setAdvertisedSkills(
+      artifacts.skills,
+      artifacts.skillDiagnostics,
+      artifacts.disabledSkillPaths,
+    );
     this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
     await this.refreshModeInstructionAnchor();
@@ -1486,10 +1505,14 @@ export class AgentSession {
   setAdvertisedSkills(
     skills: SkillEntry[],
     diagnostics: SkillDiagnostic[] = [],
+    disabledSkillPaths: readonly string[] = [],
   ): void {
     this.skillDiagnostics = diagnostics.map((diagnostic) => ({
       ...diagnostic,
     }));
+    this.disabledSkillPaths = new Set(
+      disabledSkillPaths.map((skillPath) => path.resolve(skillPath)),
+    );
     this.advertisedSkills = new Map(
       skills.map((skill) => [skill.skillPath, skill]),
     );
@@ -1620,16 +1643,15 @@ export class AgentSession {
   }
 
   trackLoadedSkill(activation: SkillLoadActivation): boolean {
-    const advertised = this.advertisedSkills.get(activation.skillPath);
-    if (
-      !advertised ||
-      !advertised.enabled ||
-      advertised.id !== activation.id ||
-      advertised.name !== activation.name ||
-      advertised.revision !== activation.revision
-    ) {
-      return false;
-    }
+    const catalogued = this.advertisedSkills.get(activation.skillPath);
+    const advertised =
+      catalogued?.enabled &&
+      catalogued.id === activation.id &&
+      catalogued.name === activation.name &&
+      catalogued.revision === activation.revision
+        ? catalogued
+        : this.acceptDirectSkillEntry(activation);
+    if (!advertised) return false;
     this.loadedSkills.add(advertised.name);
     this.activeSkillIds.add(advertised.id);
     // Reloading a skill whose catalogue entry changed mid-turn must not
@@ -1638,6 +1660,39 @@ export class AgentSession {
       this.activeSkillEntries.set(advertised.id, advertised);
     }
     return true;
+  }
+
+  /**
+   * A skill read straight from disk because the catalog did not list it, or
+   * listed older bytes. Accept it only when it matches the activation and is
+   * not disabled by configuration or by a disabled catalog entry for the same
+   * file. Restrictions still apply through the committed entry.
+   */
+  private acceptDirectSkillEntry(
+    activation: SkillLoadActivation,
+  ): SkillEntry | undefined {
+    const entry = activation.entry as SkillEntry | undefined;
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !entry.enabled ||
+      entry.id !== activation.id ||
+      entry.name !== activation.name ||
+      entry.revision !== activation.revision ||
+      entry.skillPath !== activation.skillPath ||
+      !entry.restrictions ||
+      !entry.provenance?.realSkillPath ||
+      entry.resolvedDependencies?.length !== 0
+    ) {
+      return undefined;
+    }
+    if (
+      this.disabledSkillIds.includes(entry.id) ||
+      this.disabledSkillPaths.has(path.resolve(entry.provenance.realSkillPath))
+    ) {
+      return undefined;
+    }
+    return entry;
   }
 
   addUsage(

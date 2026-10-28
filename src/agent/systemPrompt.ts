@@ -67,6 +67,8 @@ export interface PromptArtifacts {
   skills: SkillEntry[];
   /** Discovery evidence only, never activation authority or prompt instructions. */
   skillDiagnostics?: SkillDiagnostic[];
+  /** Real SKILL.md paths of discovered but disabled skills; direct loads must not bypass them. */
+  disabledSkillPaths?: string[];
   advertisedRules: AdvertisedRuleEntry[];
   skillCatalog?: SkillCatalogProjection;
   activeFileContext?: ProjectActiveFileResolution;
@@ -623,6 +625,9 @@ ${devFeedback}${composeRouting}${sessionHistoryRecall}${customSection}${instruct
     promptProfile,
     skills,
     skillDiagnostics: discoveredSkills.diagnostics,
+    disabledSkillPaths: discoveredSkills.entries
+      .filter((entry) => !entry.enabled)
+      .map((entry) => entry.provenance.realSkillPath),
     skillCatalog,
     advertisedRules: instructionSections.advertisedRules,
     ...(activeFileContext ? { activeFileContext } : {}),

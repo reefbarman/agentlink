@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleLoadSkill, loadSkill } from "./loadSkill.js";
 
 import { createHash } from "crypto";
+import { createNodeAdvertisedArtifactProvider } from "@agentlink/node-host";
 
 function textOf(result: Awaited<ReturnType<typeof handleLoadSkill>>): string {
   return result.content.find((item) => item.type === "text")?.text ?? "";
@@ -544,5 +549,172 @@ describe("handleLoadSkill", () => {
         "Skill path is not in the current session's advertised skill allowlist",
       path: "/provider/skills/other/SKILL.md",
     });
+  });
+});
+
+describe("loadSkill for skills absent from the session catalog", () => {
+  let projectRoot: string;
+  let outsideRoot: string;
+
+  beforeEach(() => {
+    projectRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-skill-direct-")),
+    );
+    outsideRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-skill-outside-")),
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  });
+
+  function writeSkill(root: string, name: string, frontmatter: string) {
+    const directory = path.join(root, ".agents", "skills", name);
+    fs.mkdirSync(directory, { recursive: true });
+    const skillPath = path.join(directory, "SKILL.md");
+    const content = `---\n${frontmatter}\n---\n\n# ${name}\n\nDistinctive ${name} body.\n`;
+    fs.writeFileSync(skillPath, content);
+    return { skillPath, content };
+  }
+
+  it("activates a readable skill added after the catalog was built", async () => {
+    const { skillPath, content } = writeSkill(
+      projectRoot,
+      "fresh-review",
+      "name: fresh-review\ndescription: Fresh review skill\nallowed-tools: read_file Bash",
+    );
+    const outcome = await loadSkill(
+      { path: skillPath },
+      [],
+      createNodeAdvertisedArtifactProvider(projectRoot),
+    );
+
+    expect(outcome.result.isError).toBeFalsy();
+    expect(outcome.result.data).toMatchObject({
+      kind: "skill_activation",
+      skill_name: "fresh-review",
+      skillPath,
+      content,
+      revision: createHash("sha256").update(content).digest("hex"),
+    });
+    expect(outcome.activation).toMatchObject({
+      id: `file:${skillPath}`,
+      name: "fresh-review",
+      skillPath,
+      entry: {
+        enabled: true,
+        restrictions: { allowedTools: ["read_file", "Bash"] },
+        provenance: { realSkillPath: skillPath, namespace: "agents" },
+      },
+    });
+  });
+
+  it("loads current bytes for a catalogued skill that changed, keeping its identity", async () => {
+    const { skillPath, content } = writeSkill(
+      projectRoot,
+      "helper",
+      "name: helper\ndescription: Updated helper",
+    );
+    const catalogued = {
+      id: "project:agents:.agents/skills/helper",
+      name: "helper",
+      revision: "0".repeat(64),
+      skillPath,
+      realSkillPath: skillPath,
+      sourceScope: "project" as const,
+    };
+    const outcome = await loadSkill(
+      { path: skillPath },
+      [catalogued],
+      createNodeAdvertisedArtifactProvider(projectRoot),
+    );
+
+    expect(outcome.result.isError).toBeFalsy();
+    expect(outcome.activation).toMatchObject({
+      id: catalogued.id,
+      revision: createHash("sha256").update(content).digest("hex"),
+    });
+  });
+
+  it("reports invalid metadata directly instead of a missing catalog entry", async () => {
+    const { skillPath } = writeSkill(
+      projectRoot,
+      "broken",
+      "description: Missing its name",
+    );
+    const outcome = await loadSkill(
+      { path: skillPath },
+      [],
+      createNodeAdvertisedArtifactProvider(projectRoot),
+    );
+
+    expect(outcome.activation).toBeUndefined();
+    expect(outcome.result.data).toMatchObject({
+      status: "invalid_skill",
+      diagnostics: [
+        expect.objectContaining({
+          code: "invalid-metadata",
+          message: expect.stringContaining("'name' is required"),
+        }),
+      ],
+    });
+  });
+
+  it("does not activate frontmatter-disabled skills", async () => {
+    const { skillPath } = writeSkill(
+      projectRoot,
+      "switched-off",
+      "name: switched-off\ndescription: Off\nenabled: false",
+    );
+    const outcome = await loadSkill(
+      { path: skillPath },
+      [],
+      createNodeAdvertisedArtifactProvider(projectRoot),
+    );
+    expect(outcome.activation).toBeUndefined();
+    expect(outcome.result.data).toMatchObject({ status: "skill_disabled" });
+  });
+
+  it("keeps the catalog boundary for paths the host does not allow", async () => {
+    const { skillPath } = writeSkill(
+      outsideRoot,
+      "elsewhere",
+      "name: elsewhere\ndescription: Outside the project",
+    );
+    const provider = createNodeAdvertisedArtifactProvider(projectRoot);
+    const read = vi.spyOn(provider, "readTextFile");
+
+    const outcome = await loadSkill({ path: skillPath }, [], provider);
+    expect(outcome.activation).toBeUndefined();
+    expect(outcome.result.data).toMatchObject({
+      status: "skill_not_in_catalog",
+    });
+    expect(read).not.toHaveBeenCalled();
+
+    // A provider without the capability never loads uncatalogued skills.
+    const { skillPath: inside } = writeSkill(
+      projectRoot,
+      "inside",
+      "name: inside\ndescription: Inside",
+    );
+    const { canLoadUndiscoveredSkill: _omitted, ...legacy } =
+      createNodeAdvertisedArtifactProvider(projectRoot);
+    const legacyOutcome = await loadSkill({ path: inside }, [], legacy);
+    expect(legacyOutcome.activation).toBeUndefined();
+  });
+
+  it("does not activate non-SKILL.md files", async () => {
+    writeSkill(projectRoot, "helper", "name: helper\ndescription: Helper");
+    const guide = path.join(projectRoot, ".agents/skills/helper/guide.md");
+    fs.writeFileSync(guide, "# guide");
+    const outcome = await loadSkill(
+      { path: guide },
+      [],
+      createNodeAdvertisedArtifactProvider(projectRoot),
+    );
+    expect(outcome.activation).toBeUndefined();
+    expect(outcome.result.isError).toBe(true);
   });
 });

@@ -412,64 +412,22 @@ async function scanSkillsDir(
       continue;
     }
 
-    let frontmatter: FrontmatterRecord;
-    try {
-      frontmatter = parseFrontmatter(raw);
-    } catch (error) {
+    const parsed = parseSkillDocument(raw, entry.name);
+    if (!parsed.ok) {
       diagnostics.push({
-        code: "invalid-frontmatter",
+        ...parsed.diagnostic,
         severity: "error",
-        message: error instanceof Error ? error.message : String(error),
         sourcePath: skillPath,
       });
       continue;
     }
 
-    const metadataErrors = validateSkillMetadata(frontmatter, entry.name);
-    if (metadataErrors.length > 0) {
-      diagnostics.push({
-        code: "invalid-metadata",
-        severity: "error",
-        message: metadataErrors.join("; "),
-        sourcePath: skillPath,
-      });
-      continue;
-    }
-
-    const restrictions = readMapping(frontmatter.restrictions);
-    const permissions = readMapping(frontmatter.permissions);
-    const declaredAllowedToolsValue =
-      restrictions &&
-      (Object.hasOwn(restrictions, "allowed-tools") ||
-        Object.hasOwn(restrictions, "allowedTools"))
-        ? readStringArray(
-            restrictions["allowed-tools"] ?? restrictions.allowedTools,
-          )
-        : Object.hasOwn(frontmatter, "allowed-tools") ||
-            Object.hasOwn(frontmatter, "allowedTools")
-          ? readStringArray(
-              frontmatter["allowed-tools"] ?? frontmatter.allowedTools,
-            )
-          : undefined;
-    const declaredAllowedTools = declaredAllowedToolsValue?.length
-      ? declaredAllowedToolsValue
-      : undefined;
-    const requestedTools =
-      readStringArray(
-        permissions?.tools ??
-          permissions?.["requested-tools"] ??
-          permissions?.requestedTools,
-      ) ?? [];
-    const name = readString(frontmatter.name)!;
-    const description = readString(frontmatter.description)!;
-    const id = buildSkillId(source, candidateDirectory);
-    const revision = createHash("sha256").update(raw).digest("hex");
-
+    const { body, ...metadata } = parsed.metadata;
     entries.push({
-      id,
-      name,
-      description,
-      revision,
+      ...metadata,
+      ...(options.includeBody ? { body } : {}),
+      id: buildSkillId(source, candidateDirectory),
+      revision: createHash("sha256").update(raw).digest("hex"),
       sourceChars: raw.length,
       provenance: {
         scope: source.scope,
@@ -481,7 +439,89 @@ async function scanSkillsDir(
         priority: source.priority,
       },
       skillPath,
-      ...(options.includeBody ? { body: stripFrontmatterBody(raw) } : {}),
+    });
+  }
+
+  return { entries, diagnostics };
+}
+
+type ParsedSkillMetadata = Omit<
+  RawSkill,
+  "id" | "revision" | "sourceChars" | "provenance" | "skillPath"
+>;
+
+/**
+ * Parse and validate one SKILL.md document. Shared by catalogue discovery
+ * and direct loads of skills that were not discovered, so both apply the
+ * same frontmatter rules.
+ */
+function parseSkillDocument(
+  raw: string,
+  directoryName: string,
+):
+  | { ok: true; metadata: ParsedSkillMetadata }
+  | {
+      ok: false;
+      diagnostic: {
+        code: "invalid-frontmatter" | "invalid-metadata";
+        message: string;
+      };
+    } {
+  let frontmatter: FrontmatterRecord;
+  try {
+    frontmatter = parseFrontmatter(raw);
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "invalid-frontmatter",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+
+  const metadataErrors = validateSkillMetadata(frontmatter, directoryName);
+  if (metadataErrors.length > 0) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "invalid-metadata",
+        message: metadataErrors.join("; "),
+      },
+    };
+  }
+
+  const restrictions = readMapping(frontmatter.restrictions);
+  const permissions = readMapping(frontmatter.permissions);
+  const declaredAllowedToolsValue =
+    restrictions &&
+    (Object.hasOwn(restrictions, "allowed-tools") ||
+      Object.hasOwn(restrictions, "allowedTools"))
+      ? readStringArray(
+          restrictions["allowed-tools"] ?? restrictions.allowedTools,
+        )
+      : Object.hasOwn(frontmatter, "allowed-tools") ||
+          Object.hasOwn(frontmatter, "allowedTools")
+        ? readStringArray(
+            frontmatter["allowed-tools"] ?? frontmatter.allowedTools,
+          )
+        : undefined;
+  const declaredAllowedTools = declaredAllowedToolsValue?.length
+    ? declaredAllowedToolsValue
+    : undefined;
+  const requestedTools =
+    readStringArray(
+      permissions?.tools ??
+        permissions?.["requested-tools"] ??
+        permissions?.requestedTools,
+    ) ?? [];
+
+  return {
+    ok: true,
+    metadata: {
+      name: readString(frontmatter.name)!,
+      description: readString(frontmatter.description)!,
+      body: stripFrontmatterBody(raw),
       allowedTools: declaredAllowedTools,
       restrictions: { allowedTools: declaredAllowedTools },
       permissions: { requestedTools },
@@ -501,10 +541,62 @@ async function scanSkillsDir(
       modeSlugs:
         readStringArray(frontmatter.modeSlugs ?? frontmatter["mode-slugs"]) ??
         undefined,
-    });
-  }
+    },
+  };
+}
 
-  return { entries, diagnostics };
+const UNDISCOVERED_SKILL_NAMESPACES: Record<string, SkillSourceNamespace> = {
+  ".agents": "agents",
+  ".claude": "claude",
+  ".agentlink": "agentlink",
+};
+
+/**
+ * Build a skill entry for a SKILL.md read directly by path rather than found
+ * by catalogue discovery (for example a skill added after the session's last
+ * refresh, or one in another open workspace folder). The caller is
+ * responsible for read authorisation; this only parses and validates.
+ */
+export function parseUndiscoveredSkillEntry(params: {
+  raw: string;
+  skillPath: string;
+  realSkillPath: string;
+  /** Identity to keep when the path belongs to a known catalogue entry. */
+  id?: string;
+  scope?: SkillSourceScope;
+}):
+  | { entry: SkillEntry }
+  | {
+      diagnostic: {
+        code: "invalid-frontmatter" | "invalid-metadata";
+        message: string;
+      };
+    } {
+  const skillDirectory = path.dirname(params.skillPath);
+  const parsed = parseSkillDocument(params.raw, path.basename(skillDirectory));
+  if (!parsed.ok) return { diagnostic: parsed.diagnostic };
+  const { modeSlugs: _modeSlugs, body: _body, ...metadata } = parsed.metadata;
+  const sourceRoot = path.dirname(skillDirectory);
+  return {
+    entry: {
+      ...metadata,
+      id: params.id ?? `file:${toPosix(params.realSkillPath)}`,
+      revision: createHash("sha256").update(params.raw).digest("hex"),
+      sourceChars: params.raw.length,
+      provenance: {
+        scope: params.scope ?? "project",
+        namespace:
+          UNDISCOVERED_SKILL_NAMESPACES[
+            path.basename(path.dirname(sourceRoot))
+          ] ?? "agents",
+        sourceRoot,
+        skillDirectory,
+        realSkillPath: params.realSkillPath,
+        priority: -1,
+      },
+      skillPath: params.skillPath,
+    },
+  };
 }
 
 export function getSkillDiscoveryRoots(cwd: string): string[] {

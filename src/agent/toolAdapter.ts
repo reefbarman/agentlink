@@ -4096,7 +4096,16 @@ async function dispatchToolCallWithTrackedApprovals(
         createVscodeAdvertisedArtifactProvider(),
         ctx.getSkillDiagnostics?.() ?? [],
       );
-      if (activation) ctx.onSkillLoad?.(activation);
+      if (activation && ctx.onSkillLoad?.(activation) === false) {
+        return errorResult(
+          "The session could not activate this skill. It may be disabled in AgentLink's skill settings.",
+          {
+            path: params.path,
+            status: "skill_activation_declined",
+            skill_id: activation.id,
+          },
+        );
+      }
       return result;
     }
     case "read_skill_resource":

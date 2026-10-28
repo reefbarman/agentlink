@@ -105,6 +105,25 @@ describe("createVscodeAdvertisedArtifactProvider", () => {
     expect(provider.normalizeExistingPath).toBeTypeOf("function");
     expect(provider.readTextFile).toBeTypeOf("function");
   });
+
+  it("allows uncatalogued skills only in open workspace folders and global skill folders", () => {
+    getWorkspaceRoots.mockReturnValue(["/workspace", "/companion"]);
+    const allow =
+      createVscodeAdvertisedArtifactProvider().canLoadUndiscoveredSkill!;
+    const home = os.homedir();
+    try {
+      expect(allow("/companion/.agents/skills/ha-review/SKILL.md")).toBe(true);
+      expect(allow("/workspace/.claude/skills/x/SKILL.md")).toBe(true);
+      expect(allow(path.join(home, ".agents/skills/x/SKILL.md"))).toBe(true);
+      expect(allow(path.join(home, ".agentlink/skills-code/x/SKILL.md"))).toBe(
+        true,
+      );
+      expect(allow(path.join(home, ".agents/other/x/SKILL.md"))).toBe(false);
+      expect(allow("/elsewhere/.agents/skills/x/SKILL.md")).toBe(false);
+    } finally {
+      getWorkspaceRoots.mockReturnValue(["/workspace"]);
+    }
+  });
 });
 
 describe("createVscodeReadFileEnrichmentProvider", () => {
