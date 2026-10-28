@@ -352,6 +352,30 @@
         "default": "./dist/cjs/interactionTools.cjs"
       }
     },
+    "./agent-modes": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/agentModes.d.ts",
+        "default": "./dist/agentModes.js"
+      },
+      "require": {
+        "types": "./dist/cjs/agentModes.d.cts",
+        "default": "./dist/cjs/agentModes.cjs"
+      }
+    },
+    "./system-prompt": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/systemPromptSections.d.ts",
+        "default": "./dist/systemPromptSections.js"
+      },
+      "require": {
+        "types": "./dist/cjs/systemPromptSections.d.cts",
+        "default": "./dist/cjs/systemPromptSections.cjs"
+      }
+    },
     "./read-file-content": {
       "browser": null,
       "edge": null,

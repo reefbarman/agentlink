@@ -4,6 +4,7 @@ import { build } from "esbuild";
 
 const modules = [
   "agentEngine",
+  "agentModes",
   "agentToolLoop",
   "applyDiff",
   "browserRuntime",
@@ -35,6 +36,7 @@ const modules = [
   "sessionRepository",
   "sessionTranscriptRecall",
   "surfaceModelMessages",
+  "systemPromptSections",
   "todoTool",
   "toolCallBudget",
   "turnContracts",
@@ -49,6 +51,7 @@ const modules = [
 
 // Focused portable subpaths must not accidentally widen the historical root CJS surface.
 const focusedSubpathModules = new Set([
+  "agentModes",
   "applyDiff",
   "browserRuntime",
   "codexDeviceAuth",
@@ -58,6 +61,7 @@ const focusedSubpathModules = new Set([
   "interactionTools",
   "readFileContent",
   "searchFiles",
+  "systemPromptSections",
   "todoTool",
 ]);
 const rootModules = modules.filter((name) => !focusedSubpathModules.has(name));

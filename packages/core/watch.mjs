@@ -29,6 +29,7 @@ const declarationsPlugin = {
 
 const sharedCoreModuleNames = new Set([
   "agentEngine",
+  "agentModes",
   "agentToolLoop",
   "applyDiff",
   "client",
@@ -55,6 +56,7 @@ const sharedCoreModuleNames = new Set([
   "sessionRepository",
   "sessionTranscriptRecall",
   "surfaceModelMessages",
+  "systemPromptSections",
   "todoTool",
   "toolCallBudget",
   "turnContracts",
@@ -81,6 +83,7 @@ const sharedCoreModulesPlugin = {
 const cjs = await context({
   entryPoints: [
     "src/agentEngine.ts",
+    "src/agentModes.ts",
     "src/agentToolLoop.ts",
     "src/applyDiff.ts",
     "src/client.ts",
@@ -107,6 +110,7 @@ const cjs = await context({
     "src/sessionRepository.ts",
     "src/sessionTranscriptRecall.ts",
     "src/surfaceModelMessages.ts",
+    "src/systemPromptSections.ts",
     "src/todoTool.ts",
     "src/toolCallBudget.ts",
     "src/turnContracts.ts",
