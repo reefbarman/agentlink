@@ -1,0 +1,54 @@
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 157-159
+apps/cli/src/sessionController.test.ts
+  h_e08a86bb3a33a2 129-157
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 13,133,136-159,277,650,886,895-896,945,956-979
+  s_0c86bfe6681f24::t_d121fd74878741 980-981
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 6,11,14-17,103,1388-1571
+  s_0e7a3237fe4ee3::t_412e703fde6e70 18,1572-1573
+apps/cli/src/sessionController.ts
+  h_e08a86bb3a33a2 6,43,124-131,154-157,346-348,398,420
+resources/builtin-skills/documentation/references/release-notes.md
+  s_c44bb60f975f9f::t_786307fdee1cc6 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d3e2af57ad2d931d0b742920f7348a84dcd2fae",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0c86bfe6681f24": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "830243bb-5f06-46a8-a333-443ff3ca7800",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_0e7a3237fe4ee3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5e55cf8-dc6f-44d8-9030-56b75b1a1c48",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c44bb60f975f9f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3dbda6cf-dfeb-4d3b-b14c-e6235eceaf1e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
