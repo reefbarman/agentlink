@@ -149,6 +149,13 @@ const MAX_REQUEST_RETRIES = 4;
 // outright, so waiting out ~60s of provider outage is the cheaper outcome.
 const MAX_TRANSIENT_REQUEST_RETRIES = 8;
 const MAX_STREAM_RETRIES = 5;
+/**
+ * A no-progress timeout with a live transport usually reproduces on replay
+ * (the retry regenerates the same output from scratch), so each extra attempt
+ * costs another full watchdog window. Allow one retry for a genuinely wedged
+ * stream, then surface the error instead of spending up to an hour retrying.
+ */
+const MAX_NO_PROGRESS_RETRIES = 1;
 const MAX_RETRY_DELAY_MS = 8_000;
 const MAX_TRANSIENT_RETRY_DELAY_MS = 16_000;
 const TRANSIENT_RETRY_CATEGORIES: ReadonlySet<AgentRetryCategory> = new Set([
@@ -1280,6 +1287,7 @@ export class AgentEngine {
     try {
       let requestRetryCount = 0;
       let streamRetryCount = 0;
+      let noProgressTimeoutCount = 0;
       let responsesRetriesInPhase = 0;
       let responsesRetriesUsed = 0;
       let responsesDispatches = 0;
@@ -2365,6 +2373,17 @@ export class AgentEngine {
           // Keep request establishment retries separate from reconnecting an
           // already-live stream. This mirrors the official harnesses and
           // prevents one failure class from consuming the other's budget.
+          if (
+            streamErr instanceof ProviderStreamTimeoutError &&
+            streamErr.kind === "no_progress" &&
+            transportMonitor?.hasTransportActivity
+          ) {
+            noProgressTimeoutCount += 1;
+            if (noProgressTimeoutCount > MAX_NO_PROGRESS_RETRIES) {
+              throw Object.assign(streamErr, { recoveryHandled: true });
+            }
+          }
+
           const retry = getAgentRetryDecision(streamErr);
           if (isCodex && dispatchEvidence) {
             const phase = dispatchEvidence.transport;
@@ -2504,6 +2523,7 @@ export class AgentEngine {
         // Successful API response resets both independently budgeted layers.
         requestRetryCount = 0;
         streamRetryCount = 0;
+        noProgressTimeoutCount = 0;
         responsesRetriesInPhase = 0;
         responsesRetriesUsed = 0;
         responsesDispatches = 0;

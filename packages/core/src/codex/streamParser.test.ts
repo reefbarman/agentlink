@@ -82,6 +82,107 @@ describe("parseCodexResponseStreamEvents", () => {
     },
   );
 
+  it("streams real Responses argument deltas keyed by item_id", async () => {
+    // Real Responses API deltas carry `item_id` (the fc_ item id), never
+    // `call_id`. Dropping them made long tool calls look like a stalled
+    // stream to the provider no-progress watchdog.
+    const events = await collect([
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_abc",
+          call_id: "call_abc",
+          name: "write_file",
+          arguments: "",
+        },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_abc",
+        output_index: 0,
+        delta: '{"path":',
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_abc",
+        output_index: 0,
+        delta: '"a.md"}',
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_abc",
+          call_id: "call_abc",
+          name: "write_file",
+          arguments: '{"path":"a.md"}',
+        },
+      },
+      { type: "response.completed", response: { id: "resp_abc" } },
+    ]);
+
+    expect(events.filter((event) => event.type === "tool_input_delta")).toEqual(
+      [
+        {
+          type: "tool_input_delta",
+          toolCallId: "call_abc",
+          partialJson: '{"path":',
+        },
+        {
+          type: "tool_input_delta",
+          toolCallId: "call_abc",
+          partialJson: '"a.md"}',
+        },
+      ],
+    );
+    expect(events).toContainEqual({
+      type: "tool_done",
+      toolCallId: "call_abc",
+      toolName: "write_file",
+      input: { path: "a.md" },
+    });
+  });
+
+  it("falls back to completed item arguments when accumulated deltas are malformed", async () => {
+    const events = await collect([
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: "fc_x",
+          call_id: "call_x",
+          name: "t",
+        },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_x",
+        delta: '{"partial":',
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "function_call",
+          id: "fc_x",
+          call_id: "call_x",
+          name: "t",
+          arguments: '{"partial":true}',
+        },
+      },
+      { type: "response.completed", response: { id: "resp_x" } },
+    ]);
+
+    expect(events).toContainEqual({
+      type: "tool_done",
+      toolCallId: "call_x",
+      toolName: "t",
+      input: { partial: true },
+    });
+  });
+
   it("parses text, reasoning, tool calls, usage, and final content blocks", async () => {
     const state = { outputStarted: false };
     const events = await collect(

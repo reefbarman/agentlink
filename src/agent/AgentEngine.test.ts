@@ -8150,7 +8150,7 @@ describe("AgentEngine", () => {
       }
     });
 
-    it("aborts and retries a stream that stays transport-active but never yields events", async () => {
+    it("aborts a transport-active stream that never yields events and stops after one retry", async () => {
       let attempts = 0;
       const requestSignals: AbortSignal[] = [];
       const provider = makeMockProvider();
@@ -8203,9 +8203,9 @@ describe("AgentEngine", () => {
         );
         const error = events.find((event) => event.type === "error");
 
-        // Transport activity classifies these as stream failures:
-        // 1 initial attempt + MAX_STREAM_RETRIES (5).
-        expect(attempts).toBe(6);
+        // Repeated no-progress timeouts with a live transport reproduce on
+        // replay, so the engine allows one retry, not MAX_STREAM_RETRIES.
+        expect(attempts).toBe(2);
         expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
         expect(error).toEqual(
           expect.objectContaining({
@@ -8213,6 +8213,84 @@ describe("AgentEngine", () => {
             retryable: true,
           }),
         );
+        expect((error as { error?: string }).error).toContain("no progress");
+      } finally {
+        backoffSpy.mockRestore();
+      }
+    });
+
+    it("stops Codex Responses recovery after repeated no-progress timeouts instead of exhausting all 11 retries", async () => {
+      let attempts = 0;
+      const provider: ModelProvider = {
+        ...makeMockProvider(),
+        id: "codex",
+        listModels(): ModelInfo[] {
+          return [
+            {
+              id: TEST_MODEL,
+              displayName: "Codex",
+              provider: "codex",
+              capabilities: TEST_CAPABILITIES,
+            },
+          ];
+        },
+        async *stream(request: StreamRequest) {
+          attempts += 1;
+          request.onProviderRequestAttempt?.({
+            model: request.model,
+            dispatchEvidence: {
+              transport: "websocket",
+              phase: "sent_unacknowledged",
+            },
+          });
+          const heartbeat = setInterval(() => {
+            request.onTransportActivity?.({
+              kind: "websocket",
+              at: Date.now(),
+            });
+          }, 2);
+          try {
+            await new Promise((_, reject) => {
+              request.signal?.addEventListener(
+                "abort",
+                () => reject(new Error("request aborted")),
+                { once: true },
+              );
+            });
+          } finally {
+            clearInterval(heartbeat);
+          }
+          yield { type: "done" };
+        },
+      };
+      // The Codex backoff callback clears its own timer handle, so run it on
+      // a microtask rather than synchronously inside setTimeout.
+      const backoffSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") queueMicrotask(() => fn());
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession({ ...testConfig, model: TEST_MODEL });
+        session.providerId = "codex";
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(
+          engine.run(session, { providerNoProgressTimeoutMs: 10 }),
+        );
+
+        expect(attempts).toBe(2);
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "warning" &&
+              /Retrying over WebSocket/.test(event.message),
+          ),
+        ).toHaveLength(1);
+        const error = events.find((event) => event.type === "error");
         expect((error as { error?: string }).error).toContain("no progress");
       } finally {
         backoffSpy.mockRestore();

@@ -71,6 +71,12 @@ export async function* parseCodexResponseStreamEvents(
     string,
     { name: string; arguments: string }
   >();
+  // Responses API argument deltas identify their output item by `item_id`
+  // (the `fc_…` item id), not by the function `call_id`. Without this alias
+  // every real argument delta is dropped, so a long tool call streams for
+  // minutes without yielding a single parsed event and trips the provider
+  // no-progress watchdog.
+  const toolCallIdsByItemId = new Map<string, string>();
 
   let inputTokens = 0;
   let outputTokens = 0;
@@ -194,9 +200,12 @@ export async function* parseCodexResponseStreamEvents(
       eventType === "response.function_call_arguments.delta" ||
       eventType === "response.tool_call_arguments.delta"
     ) {
-      const callId = (event.call_id ?? event.tool_call_id ?? event.id) as
-        | string
-        | undefined;
+      const itemId =
+        typeof event.item_id === "string" ? event.item_id : undefined;
+      const callId = (event.call_id ??
+        event.tool_call_id ??
+        (itemId ? (toolCallIdsByItemId.get(itemId) ?? itemId) : undefined) ??
+        event.id) as string | undefined;
       const delta = (event.delta ?? event.arguments) as string | undefined;
       if (callId && delta) {
         const pending = pendingToolCalls.get(callId);
@@ -236,6 +245,8 @@ export async function* parseCodexResponseStreamEvents(
           | undefined;
         if (callId && name) {
           pendingToolCalls.set(callId, { name, arguments: "" });
+          if (typeof item.id === "string" && item.id !== callId)
+            toolCallIdsByItemId.set(item.id, callId);
           if (state) state.outputStarted = true;
           yield { type: "tool_start", toolCallId: callId, toolName: name };
         }
@@ -290,7 +301,14 @@ export async function* parseCodexResponseStreamEvents(
           try {
             parsed = finalArgs ? JSON.parse(finalArgs) : {};
           } catch {
-            parsed = {};
+            // Accumulated deltas can be incomplete; the completed item carries
+            // the authoritative argument string.
+            try {
+              parsed =
+                argsStr && argsStr !== finalArgs ? JSON.parse(argsStr) : {};
+            } catch {
+              parsed = {};
+            }
           }
 
           contentBlocks.push({
