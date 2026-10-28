@@ -23,6 +23,7 @@ import {
   type ToolAuthorizationDecision,
   type TurnFencingToken,
   type ValidateAgentTurnLeaseResult,
+  isAgentSessionMode,
 } from "@agentlink/core";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -369,6 +370,9 @@ export class FileAgentStateRepository<
           : {}),
         ...(stored.record.reasoningEffort !== undefined
           ? { reasoningEffort: stored.record.reasoningEffort }
+          : {}),
+        ...(stored.record.mode !== undefined
+          ? { mode: stored.record.mode }
           : {}),
         runState: clone(stored.record.runState),
         ...(stored.record.pendingInteractionId
@@ -1102,6 +1106,9 @@ function validateSessionRecord(record: AgentSessionRecord): void {
     !isCoreReasoningEffort(record.reasoningEffort)
   ) {
     throw new Error("Session reasoningEffort must be supported");
+  }
+  if (record.mode !== undefined && !isAgentSessionMode(record.mode)) {
+    throw new Error("Session mode must be a single-line slug");
   }
 }
 

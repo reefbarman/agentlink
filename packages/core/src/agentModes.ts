@@ -93,6 +93,88 @@ export const BUILT_IN_MODES: AgentMode[] = [
 ];
 
 /**
+ * Static tool groups. The 'mcp' group is populated dynamically at runtime
+ * from connected MCP servers. Tools in no group (questions, todos, final
+ * status, background agents) are available in every mode.
+ */
+export const TOOL_GROUPS: Record<string, string[]> = {
+  read: [
+    "web_fetch",
+    "read_file",
+    "get_context",
+    "get_repo_map",
+    "get_module_neighbors",
+    "list_files",
+    "open_file",
+    "get_editor_state",
+    "search_session_history",
+    "read_session_excerpt",
+    "search_workspace_sessions",
+    "read_workspace_session_excerpt",
+    "diagnose_activity",
+    "present_images",
+    "inspect_page_images",
+    "recall_memory",
+    "compose",
+  ],
+  edit: [
+    "write_file",
+    "save_editor",
+    "apply_diff",
+    "find_and_replace",
+    "rename_symbol",
+    "generate_image",
+    "save_session_image",
+    "propose_memory",
+  ],
+  media: ["generate_image", "save_session_image"],
+  command: ["execute_command", "get_terminal_output", "close_terminals"],
+  language: [
+    "get_diagnostics",
+    "get_hover",
+    "get_symbols",
+    "get_references",
+    "go_to_definition",
+    "go_to_implementation",
+    "go_to_type_definition",
+    "get_call_hierarchy",
+    "get_type_hierarchy",
+  ],
+  "language-benchmark": [
+    "get_completions",
+    "get_inlay_hints",
+    "get_code_actions",
+    "apply_code_action",
+  ],
+  search: ["web_search", "search_files"],
+  memory: ["manage_memory"],
+  "read-only-command": ["execute_command"],
+  plan: ["write_file", "apply_diff", "execute_command", "get_terminal_output"],
+  mcp: [], // populated dynamically from McpClientHub
+};
+
+/**
+ * Get the flat set of allowed tool names for a given mode.
+ * The optional mcpTools parameter injects dynamically discovered MCP server tools.
+ */
+export function getToolsForMode(
+  mode: AgentMode,
+  mcpTools: string[] = [],
+): Set<string> {
+  const groups: Record<string, string[]> = { ...TOOL_GROUPS, mcp: mcpTools };
+  const allowed = new Set<string>();
+  for (const group of mode.toolGroups) {
+    for (const tool of groups[group] ?? []) {
+      allowed.add(tool);
+    }
+  }
+  if (mode.slug === "review") {
+    allowed.add("write_file");
+  }
+  return allowed;
+}
+
+/**
  * Project-level custom mode files, in priority order: later sources override
  * earlier ones for the same slug. Paths are relative to the project root.
  */

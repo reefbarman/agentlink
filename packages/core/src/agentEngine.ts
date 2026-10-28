@@ -19,6 +19,7 @@ import type {
   AgentTranscriptStore,
   ReadAgentSessionResult,
 } from "./sessionRepository.js";
+import { isAgentSessionMode } from "./sessionRepository.js";
 import type {
   AgentInteractionRequest,
   AgentTurnDurableState,
@@ -138,6 +139,8 @@ export interface CreateAgentSessionRequest<
   readonly model?: AgentModelReference;
   /** Session default; `"none"` explicitly disables the runtime default. */
   readonly reasoningEffort?: CoreReasoningEffort;
+  /** Agent mode slug, for hosts that offer modes. */
+  readonly mode?: string;
 }
 
 export interface CreateAgentSessionResponse<
@@ -153,6 +156,16 @@ export interface SetAgentSessionModelRequest<
   readonly principal: TPrincipal;
   readonly sessionId: string;
   readonly model: AgentModelReference | undefined;
+  readonly expectedRevision: AgentSessionRevision;
+}
+
+export interface SetAgentSessionModeRequest<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  /** A mode slug, or `undefined` to clear the session's mode. */
+  readonly mode: string | undefined;
   readonly expectedRevision: AgentSessionRevision;
 }
 
@@ -265,6 +278,10 @@ export interface AgentSessionOperations<
   }>;
   setReasoningEffort(
     request: SetAgentSessionReasoningEffortRequest<TPrincipal>,
+  ): Promise<{ readonly revision: AgentSessionRevision }>;
+  /** Set the session's mode slug while it is idle. */
+  setMode(
+    request: SetAgentSessionModeRequest<TPrincipal>,
   ): Promise<{ readonly revision: AgentSessionRevision }>;
   runTurn(
     request: AgentTurnRequest<TPrincipal>,
@@ -432,6 +449,9 @@ export function createAgentEngine<
                 ),
               }
             : {}),
+          ...(request.mode !== undefined
+            ? { mode: requiredSessionMode(request.mode) }
+            : {}),
           runState: { phase: "idle" },
         };
         const created = await options.sessions.createSession({ record });
@@ -492,6 +512,25 @@ export function createAgentEngine<
           ttlMs: leaseTtlMs,
           now,
           mutate: (record) => ({ ...record, reasoningEffort }),
+        });
+      },
+      async setMode(request: SetAgentSessionModeRequest<TPrincipal>) {
+        const mode =
+          request.mode === undefined
+            ? undefined
+            : requiredSessionMode(request.mode);
+        return await mutateIdleSession(options.sessions, options.turnLeases, {
+          principal: request.principal,
+          sessionId: request.sessionId,
+          expectedRevision: request.expectedRevision,
+          turnId: requiredText(createTurnId(), "turnId"),
+          ownerId,
+          ttlMs: leaseTtlMs,
+          now,
+          mutate: (record) => {
+            const { mode: _previous, ...rest } = record;
+            return mode === undefined ? rest : { ...rest, mode };
+          },
         });
       },
       runTurn(
@@ -976,6 +1015,7 @@ function toSessionSummary<TPrincipal extends AgentPrincipal>(
     ...(current.record.reasoningEffort !== undefined
       ? { reasoningEffort: current.record.reasoningEffort }
       : {}),
+    ...(current.record.mode !== undefined ? { mode: current.record.mode } : {}),
     runState: structuredClone(current.record.runState),
     ...(current.record.pendingInteractionId
       ? { pendingInteractionId: current.record.pendingInteractionId }
@@ -1669,6 +1709,16 @@ function optionalReasoningEffort(
     throw new AgentEngineError(
       "invalid_engine_configuration",
       `${field} must be a supported reasoning effort`,
+    );
+  }
+  return value;
+}
+
+function requiredSessionMode(value: string): string {
+  if (!isAgentSessionMode(value)) {
+    throw new AgentEngineError(
+      "invalid_engine_configuration",
+      "mode must be a single-line slug of 1 to 64 characters",
     );
   }
   return value;

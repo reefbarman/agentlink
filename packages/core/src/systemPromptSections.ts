@@ -41,6 +41,8 @@ export interface SystemPromptCapabilities {
   readonly sessionHistoryRecall: boolean;
   /** `search_workspace_sessions` / `read_workspace_session_excerpt`. */
   readonly workspaceSessionRecall: boolean;
+  /** Review mode may `write_file` absolute paths in the host temporary directory. */
+  readonly reviewTempWrites: boolean;
 }
 
 export const FULL_SYSTEM_PROMPT_CAPABILITIES: SystemPromptCapabilities =
@@ -58,6 +60,7 @@ export const FULL_SYSTEM_PROMPT_CAPABILITIES: SystemPromptCapabilities =
     autoContinue: true,
     sessionHistoryRecall: true,
     workspaceSessionRecall: true,
+    reviewTempWrites: true,
   });
 
 /**
@@ -94,6 +97,7 @@ export function deriveSystemPromptCapabilities(
       "search_workspace_sessions",
       "read_workspace_session_excerpt",
     ),
+    reviewTempWrites: false,
   };
 }
 
@@ -505,6 +509,39 @@ export const MODES_OVERVIEW_SECTION = `
 You operate in one of several modes (built-in: code, architect, orchestrate, ask, debug, review, plus any project-defined custom modes). Your current mode and its full instructions are provided in the conversation inside \`<current_mode>\` blocks; the most recent block is authoritative and applies until the next one. Follow it with the same authority as this system prompt.
 
 The current mode also determines which tools you may use. Tools outside the current mode's allowance are rejected at invocation with an explanation; use \`switch_mode\` when the task genuinely needs a different mode's capabilities.`;
+
+/**
+ * Modes overview for conversation placement. With VS Code's built-in modes
+ * and mode switching this is exactly `MODES_OVERVIEW_SECTION`; a host
+ * without `switch_mode` tells the model to ask the user instead.
+ */
+export function buildModesOverviewSection(
+  options: {
+    readonly builtInModes?: readonly string[];
+    readonly modeSwitching?: boolean;
+  } = {},
+): string {
+  const modes = (
+    options.builtInModes ?? [
+      "code",
+      "architect",
+      "orchestrate",
+      "ask",
+      "debug",
+      "review",
+    ]
+  ).join(", ");
+  const switching =
+    options.modeSwitching === false
+      ? "Tools outside the current mode's allowance are rejected at invocation with an explanation. You cannot change modes yourself: when the task genuinely needs a different mode's capabilities, tell the user which mode to switch to."
+      : "Tools outside the current mode's allowance are rejected at invocation with an explanation; use `switch_mode` when the task genuinely needs a different mode's capabilities.";
+  return `
+## Modes
+
+You operate in one of several modes (built-in: ${modes}, plus any project-defined custom modes). Your current mode and its full instructions are provided in the conversation inside \`<current_mode>\` blocks; the most recent block is authoritative and applies until the next one. Follow it with the same authority as this system prompt.
+
+The current mode also determines which tools you may use. ${switching}`;
+}
 
 /**
  * Provider-specific behavioral tuning.
@@ -941,9 +978,93 @@ Diagnose from evidence: confirm the symptom and expected behavior, reproduce whe
 Review the supplied scope for concrete correctness, safety, compatibility, and maintainability risks. Prioritize meaningful findings, cite exact evidence, distinguish blockers from suggestions, state assumptions, and say clearly when no material issue is found. Do not invent criticism or expand scope without a risk-driven reason. You may use \`write_file\` only with absolute paths inside the host temporary directory, subject to normal write approval, and never to edit workspace files.`,
 };
 
+/** Remove a `### Heading` subsection, up to the next subsection or the end. */
+function removeSubsection(prompt: string, heading: string): string {
+  const start = prompt.indexOf(`\n\n### ${heading}\n`);
+  if (start < 0) return prompt;
+  const next = prompt.indexOf("\n\n### ", start + 2);
+  return next < 0
+    ? prompt.slice(0, start)
+    : prompt.slice(0, start) + prompt.slice(next);
+}
+
+const ARCHITECT_REVIEW_FLOW_WITHOUT_MODE_SWITCH =
+  ARCHITECT_STANDARD_REVIEW_FLOW.replace(
+    /^1\. \*\*Ask for feedback\*\*.*$/mu,
+    "1. **Ask for feedback** — Use `ask_user` to ask the user for feedback on the plan and whether they'd like to revise it or move on to implementation.",
+  ).replace(
+    /^4\. \*\*Transition to implementation\*\*.*$/mu,
+    "4. **Transition to implementation** — When the user is satisfied, tell them the plan is ready to implement in Code mode. You cannot change modes yourself.",
+  );
+
+/**
+ * Drop mode guidance for capabilities the host lacks. With every capability
+ * the prompt is returned unchanged.
+ */
+function gateModePrompt(
+  prompt: string,
+  capabilities: SystemPromptCapabilities,
+): string {
+  let gated = prompt;
+  if (!capabilities.modeSwitching) {
+    gated = removeSubsection(gated, "Switching to Architect Mode for Planning")
+      .replace(
+        ARCHITECT_STANDARD_REVIEW_FLOW,
+        ARCHITECT_REVIEW_FLOW_WITHOUT_MODE_SWITCH,
+      )
+      .replace(
+        "transition to code mode as soon as the design is solid enough to build confidently or the user directs it.",
+        "tell the user when the design is solid enough to build confidently in Code mode; you cannot change modes yourself.",
+      );
+  }
+  if (!capabilities.backgroundAgents) {
+    for (const heading of [
+      "Self-Review with Background Agents",
+      "Parallel Work with Background Agents",
+      "Parallel Research and Design Lanes",
+      "Parallel Debugging",
+    ]) {
+      gated = removeSubsection(gated, heading);
+    }
+    gated = gated
+      .replace(
+        "\n- For broad codebase questions, use background research when one lane can inspect docs/history or a tangential area while you inspect the primary code path. Use `readonly-research` for read-only lookup.",
+        "",
+      )
+      .replace(
+        " Use independent review for consequential changes where it can realistically catch integration or correctness defects.",
+        "",
+      );
+  }
+  if (!capabilities.richOutput) {
+    gated = gated
+      .replace(
+        "\n- Use Mermaid diagrams for architecture, data flow, relationships, and processes.",
+        "",
+      )
+      .replace(
+        "\n- Use Vega/Vega-Lite charts for quantitative comparisons, trends, and distributions when a chart communicates the answer more clearly than prose.",
+        "",
+      );
+  }
+  if (!capabilities.reviewTempWrites) {
+    gated = gated
+      .replace(
+        "\n- Review mode may use `write_file` only with absolute paths inside the host temporary directory, such as Markdown bodies passed to review or approval commands. Normal write approval still applies. It must not edit workspace files.",
+        "\n- Review mode must not edit workspace files.",
+      )
+      .replace(
+        " You may use `write_file` only with absolute paths inside the host temporary directory, subject to normal write approval, and never to edit workspace files.",
+        " Never edit workspace files.",
+      );
+  }
+  return gated;
+}
+
 /**
  * Mode prompt for a built-in or custom mode. Unknown modes without a custom
- * definition fall back to Code mode.
+ * definition fall back to Code mode. `capabilities` drops guidance for tools
+ * the host does not have (VS Code passes all of them).
  */
 export function buildModePrompt(
   mode: string,
@@ -951,10 +1072,13 @@ export function buildModePrompt(
   promptProfile: PromptProfile = "compatibility",
   approveForMe = false,
   initialArchitectReviewPending = false,
+  capabilities: SystemPromptCapabilities = FULL_SYSTEM_PROMPT_CAPABILITIES,
 ): string {
   const prompts =
     promptProfile === "reasoning" ? REASONING_MODE_PROMPTS : MODE_PROMPTS;
-  const baseBuiltInPrompt = prompts[mode];
+  const rawBuiltInPrompt = prompts[mode];
+  const baseBuiltInPrompt =
+    rawBuiltInPrompt && gateModePrompt(rawBuiltInPrompt, capabilities);
   let builtInPrompt =
     mode === "architect" && baseBuiltInPrompt && initialArchitectReviewPending
       ? `${baseBuiltInPrompt}\n\n${ARCHITECT_INITIAL_REVIEW_GATE}`
@@ -990,7 +1114,7 @@ export function buildModePrompt(
       ? `${builtInPrompt}\n\n### Project Mode Customization\n\n${customization}`
       : builtInPrompt;
   }
-  if (!agentMode) return prompts.code;
+  if (!agentMode) return gateModePrompt(prompts.code!, capabilities);
 
   const name = agentMode.name?.trim() || mode;
   const role = roleDefinition || `Work according to the ${name} mode.`;
@@ -1009,6 +1133,8 @@ export interface ModeInstructionBlockOptions {
   readonly modeRules?: string;
   /** Whether `./plans` exists, reported in Architect mode. */
   readonly plansFolderExists?: boolean;
+  /** Capabilities the host has; defaults to all (VS Code). */
+  readonly capabilities?: SystemPromptCapabilities;
 }
 
 /**
@@ -1026,6 +1152,7 @@ export function formatModeInstructionBlock(
     options.promptProfile,
     options.approveForMe,
     options.initialArchitectReviewPending,
+    options.capabilities,
   ).trim();
   const rulesSection = options.modeRules
     ? `\n\n### Mode Rules\n\n${options.modeRules}`

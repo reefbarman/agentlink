@@ -4,6 +4,7 @@ import {
   buildBackgroundAgentSection,
   buildBasePrompt,
   buildModePrompt,
+  buildModesOverviewSection,
   buildSessionHistoryRecallGuidance,
   buildWorkspaceFoldersSection,
   deriveSystemPromptCapabilities,
@@ -28,6 +29,7 @@ const NO_CAPABILITIES: SystemPromptCapabilities = {
   autoContinue: false,
   sessionHistoryRecall: false,
   workspaceSessionRecall: false,
+  reviewTempWrites: false,
 };
 
 const GATED_TOOL_MENTIONS = [
@@ -216,6 +218,54 @@ describe("system prompt sections", () => {
     expect(block).toContain("Plans folder (`./plans`): exists");
     expect(block.endsWith("\n</current_mode>")).toBe(true);
     expect(formatModeInstructionBlock("code")).not.toContain("Plans folder");
+  });
+
+  it("gates mode instructions to the host's capabilities", () => {
+    for (const profile of ["compatibility", "reasoning"] as const) {
+      for (const mode of ["code", "architect", "ask", "debug", "review"]) {
+        const gated = buildModePrompt(
+          mode,
+          undefined,
+          profile,
+          false,
+          false,
+          NO_CAPABILITIES,
+        );
+        expect(gated, `${profile} ${mode}`).not.toContain("switch_mode");
+        expect(gated, `${profile} ${mode}`).not.toContain(
+          "spawn_background_agent",
+        );
+        expect(gated, `${profile} ${mode}`).not.toMatch(/Mermaid|Vega/u);
+      }
+    }
+    expect(
+      buildModePrompt("review", undefined, "compatibility", false, false, {
+        ...NO_CAPABILITIES,
+        reviewTempWrites: true,
+      }),
+    ).toContain("write_file");
+    // VS Code's defaults are unchanged.
+    expect(buildModePrompt("architect")).toBe(
+      buildModePrompt(
+        "architect",
+        undefined,
+        "compatibility",
+        false,
+        false,
+        FULL_SYSTEM_PROMPT_CAPABILITIES,
+      ),
+    );
+  });
+
+  it("describes modes with or without model-driven switching", () => {
+    expect(buildModesOverviewSection()).toContain("use `switch_mode`");
+    const userOnly = buildModesOverviewSection({
+      builtInModes: ["code", "ask"],
+      modeSwitching: false,
+    });
+    expect(userOnly).toContain("(built-in: code, ask,");
+    expect(userOnly).toContain("You cannot change modes yourself");
+    expect(userOnly).not.toContain("switch_mode");
   });
 
   it("lists workspace folders only for multi-root workspaces", () => {

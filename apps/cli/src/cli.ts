@@ -818,6 +818,8 @@ async function createHost(options: {
     defaultReasoningEffort: options.sharedCodeReasoningEffort,
     // VS Code's prompt guidance for the tools each session registers.
     sharedPromptGuidance: true,
+    // VS Code's agent modes, chosen with /mode.
+    modes: { enabled: true },
     files: {
       enabled: true,
       ripgrepExecutable: path.join(
@@ -1385,6 +1387,9 @@ async function runInkInteractiveChat(
           await chooseReasoning();
           return {};
         case "mode":
+          if (command.slug) {
+            return { status: await switchMode(command.slug) };
+          }
           await showMode();
           return {};
         case "mcp":
@@ -1723,26 +1728,60 @@ async function runInkInteractiveChat(
       response.optionId as import("@agentlink/core").CoreReasoningEffort,
     );
   };
+  const switchMode = async (slug: string): Promise<string> => {
+    const modes = await controller.listModes();
+    const mode = modes.find((candidate) => candidate.slug === slug);
+    if (!mode) {
+      return `Unknown mode "${slug}". Modes: ${modes.map((candidate) => candidate.slug).join(", ")}`;
+    }
+    if (controller.getState().mode === slug)
+      return `Already in ${mode.name} mode`;
+    await controller.setMode(slug);
+    return `Mode: ${mode.name}`;
+  };
   const showMode = async () => {
-    await requestControl({
+    const current = controller.getState().mode;
+    const modes = await controller.listModes();
+    const response = await requestControl({
       id: `mode:${Date.now()}`,
       title: "Agent mode",
       body: [
-        "Code mode is active.",
-        "The standalone host currently exposes one coding-agent instruction profile.",
+        "The mode decides which tools the agent may use and the instructions it follows. It is saved with the session and applies from your next message.",
       ],
-      options: [{ id: "code", label: "Code", detail: "active" }],
+      options: modes.map((mode) => ({
+        id: mode.slug,
+        label: `${mode.slug === current ? "✓ " : ""}${mode.name}`,
+        detail:
+          [
+            mode.custom ? "custom" : undefined,
+            mode.writes ? undefined : "read-only",
+          ]
+            .filter(Boolean)
+            .join(", ") || undefined,
+      })),
     });
+    if (response.cancelled || !response.optionId) return;
+    if (response.optionId !== current)
+      await controller.setMode(response.optionId);
   };
   const showWritePolicy = async () => {
+    const readOnly = controller.getState().writePolicy === "none";
     await requestControl({
       id: `write-policy:${Date.now()}`,
       title: "Write policy",
       body: [
-        "Prompt is active.",
+        readOnly
+          ? "The current mode cannot change project files. Use /mode to pick one that can."
+          : "Prompt is active.",
         "The standalone host always reviews ungranted writes and does not expose broader write-policy scopes.",
       ],
-      options: [{ id: "prompt", label: "Prompt", detail: "active" }],
+      options: [
+        {
+          id: "prompt",
+          label: "Prompt",
+          detail: readOnly ? "unavailable in this mode" : "active",
+        },
+      ],
     });
   };
   const showMcp = async () => {

@@ -13,6 +13,7 @@ import {
 
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
+import { stripModeInstructionBlock } from "@agentlink/workspace-host";
 
 export type StandaloneSessionPhase =
   | "initializing"
@@ -134,8 +135,10 @@ export interface StandaloneSessionProjection {
   readonly projectRoot: string;
   readonly sessionId?: string;
   readonly phase: StandaloneSessionPhase;
-  readonly mode: "code";
-  readonly writePolicy: "prompt";
+  /** The session's agent mode slug. */
+  readonly mode: string;
+  /** `none` when the mode's tools cannot change project files. */
+  readonly writePolicy: "prompt" | "none";
   readonly transcript: readonly StandaloneTranscriptMessage[];
   readonly responseTextStart?: number;
   readonly thinking: readonly StandaloneThinkingActivity[];
@@ -169,6 +172,8 @@ export type StandaloneSessionProjectionAction =
       readonly activeTurnId?: string;
       readonly model?: AgentModelReference;
       readonly reasoningEffort?: CoreReasoningEffort;
+      readonly mode?: string;
+      readonly writePolicy?: StandaloneSessionProjection["writePolicy"];
       readonly todos?: readonly TodoItem[];
       readonly usage?: StandaloneSessionProjection["usage"];
     }
@@ -201,6 +206,11 @@ export type StandaloneSessionProjectionAction =
       readonly type: "session.settings";
       readonly model?: AgentModelReference;
       readonly reasoningEffort?: CoreReasoningEffort;
+    }
+  | {
+      readonly type: "session.mode";
+      readonly mode: string;
+      readonly writePolicy: StandaloneSessionProjection["writePolicy"];
     }
   | { readonly type: "todos.refreshed"; readonly todos: readonly TodoItem[] }
   /** A /condense outside a turn (turns report theirs as turn events). */
@@ -255,6 +265,8 @@ export function reduceStandaloneSessionProjection(
           : [],
         model: action.model,
         reasoningEffort: action.reasoningEffort,
+        mode: action.mode ?? "code",
+        writePolicy: action.writePolicy ?? "prompt",
         todos: action.todos ? [...action.todos] : [],
         usage: action.usage,
         pendingInteraction: undefined,
@@ -266,6 +278,9 @@ export function reduceStandaloneSessionProjection(
         revision: nextRevision,
         sessionId: action.sessionId,
         phase: "idle",
+        // A new session starts in the mode the last one was using.
+        mode: state.mode,
+        writePolicy: state.writePolicy,
       };
     case "session.recovered":
       return {
@@ -359,6 +374,13 @@ export function reduceStandaloneSessionProjection(
         revision: nextRevision,
         model: action.model,
         reasoningEffort: action.reasoningEffort,
+      };
+    case "session.mode":
+      return {
+        ...state,
+        revision: nextRevision,
+        mode: action.mode,
+        writePolicy: action.writePolicy,
       };
     case "todos.refreshed":
       return { ...state, revision: nextRevision, todos: [...action.todos] };
@@ -740,11 +762,14 @@ function projectHydratedTranscript(
             )
             .map((block) => block.text)
             .join("\n");
-    if (text) {
+    // The host's <current_mode> block is model context, not the user's words.
+    const shown =
+      message.role === "user" ? stripModeInstructionBlock(text) : text;
+    if (shown) {
       projected.push({
         id: `${sessionId}:history:${index}`,
         role: message.role,
-        text,
+        text: shown,
         streaming: false,
       });
     }

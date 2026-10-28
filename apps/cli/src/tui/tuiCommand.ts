@@ -25,7 +25,8 @@ export type TuiCommand =
   | { readonly type: "mcp" }
   | { readonly type: "model" }
   | { readonly type: "reasoning" }
-  | { readonly type: "mode" }
+  /** `slug` switches directly; without it the picker opens. */
+  | { readonly type: "mode"; readonly slug?: string }
   | { readonly type: "new" }
   | { readonly type: "output"; readonly commandId: string }
   | { readonly type: "processes" }
@@ -50,7 +51,8 @@ export function parseTuiCommand(input: string): TuiCommand | undefined {
     case "/thinking":
       return { type: "reasoning" };
     case "/mode":
-      return { type: "mode" };
+      if (args.length > 1) throw new Error("Usage: /mode, or /mode SLUG");
+      return args[0] ? { type: "mode", slug: args[0] } : { type: "mode" };
     case "/mcp":
       return { type: "mcp" };
     case "/condense":
@@ -113,7 +115,7 @@ function parseCondenseCommand(args: readonly string[]): TuiCommand {
 
 export function renderTuiHelp(): string {
   return [
-    "Commands: /new, /sessions, /model, /reasoning, /mode, /mcp, /condense, /condense threshold [0.1-1|default], /processes, /output ID,",
+    "Commands: /new, /sessions, /model, /reasoning, /mode [SLUG], /mcp, /condense, /condense threshold [0.1-1|default], /processes, /output ID,",
     "/stop ID, /agents, /approvals, /agent-steer ID MESSAGE, /agent-stop ID, /exit",
     "Keys: Enter send, Ctrl+J newline, Tab focus, Ctrl+O controls, Ctrl+T TODOs, Ctrl+N continue action, Ctrl+Z suspend; transcript Page Up/Down/Home/End and Enter tool details; activity Up/Down/Home/End and Enter/Space details; Ctrl+C cancel/exit",
     "Composer: type / for commands and @ for project file attachments; pasting a project file path also attaches it.",

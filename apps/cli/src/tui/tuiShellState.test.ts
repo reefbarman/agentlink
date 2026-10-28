@@ -215,6 +215,12 @@ describe("TUI commands", () => {
     expect(parseTuiCommand("normal prompt")).toBeUndefined();
   });
 
+  it("parses /mode with and without a slug", () => {
+    expect(parseTuiCommand("/mode")).toEqual({ type: "mode" });
+    expect(parseTuiCommand("/mode ask")).toEqual({ type: "mode", slug: "ask" });
+    expect(() => parseTuiCommand("/mode ask code")).toThrow("Usage: /mode");
+  });
+
   it("parses /condense and its threshold setting", () => {
     expect(parseTuiCommand("/condense")).toEqual({ type: "condense" });
     expect(parseTuiCommand("/condense threshold")).toEqual({

@@ -89,6 +89,8 @@ function controllerFixture(): StandaloneSessionController {
     listModels: vi.fn(async () => []),
     setModel: vi.fn(async () => undefined),
     setReasoningEffort: vi.fn(async () => undefined),
+    listModes: vi.fn(async () => []),
+    setMode: vi.fn(async () => undefined),
     refreshActivity: () => fixture.projection,
     refreshMcpState: vi.fn(async () => fixture.projection),
     observeCommand: vi.fn(),

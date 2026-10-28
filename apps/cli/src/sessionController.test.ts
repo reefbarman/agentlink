@@ -69,6 +69,11 @@ function fixture(overrides: Partial<WorkspaceHost> = {}) {
     listModels: vi.fn(async () => ({ models: [] })),
     setSessionModel: vi.fn(async () => undefined),
     setSessionReasoningEffort: vi.fn(async () => undefined),
+    listModes: vi.fn(async () => [
+      { slug: "code", name: "Code", custom: false, writes: true },
+      { slug: "ask", name: "Ask", custom: false, writes: false },
+    ]),
+    setSessionMode: vi.fn(async () => undefined),
     isBackgroundSession: vi.fn(() => false),
     listBackgroundAgents: vi.fn(() => []),
     listBackgroundApprovals: vi.fn(() => []),
@@ -264,6 +269,26 @@ describe("standalone session controller", () => {
       model: { providerId: "openai", modelId: "gpt-5.6-sol" },
       reasoningEffort: "high",
     });
+  });
+
+  it("switches the session's mode and keeps it for a new session", async () => {
+    const { host, controller } = fixture();
+    await controller.initialize();
+    expect(controller.getState()).toMatchObject({
+      mode: "code",
+      writePolicy: "prompt",
+    });
+
+    await controller.setMode("ask");
+
+    expect(host.setSessionMode).toHaveBeenCalledWith("session-1", "ask");
+    expect(controller.getState()).toMatchObject({
+      mode: "ask",
+      writePolicy: "none",
+    });
+    await controller.newSession();
+    expect(host.createSession).toHaveBeenLastCalledWith({ mode: "ask" });
+    expect(controller.getState().mode).toBe("ask");
   });
 
   it("projects session todo state during activity refresh", async () => {

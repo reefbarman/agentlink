@@ -239,7 +239,10 @@ export function ShellHeader({
   const fields = [
     { text: projection.mode, color: tuiTheme.accent, priority: 2 },
     {
-      text: `${projection.writePolicy} writes`,
+      text:
+        projection.writePolicy === "none"
+          ? "read-only"
+          : `${projection.writePolicy} writes`,
       color: tuiTheme.muted,
       priority: 3,
     },

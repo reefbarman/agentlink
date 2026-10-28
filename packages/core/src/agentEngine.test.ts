@@ -460,6 +460,48 @@ describe("public E6 agent engine", () => {
     ]);
   });
 
+  it("stores, changes and clears a session mode", async () => {
+    const backend = new ScriptedBackend([]);
+    const agent = engine(backend);
+    await expect(
+      agent.sessions.create({ principal: PRINCIPAL, mode: "bad\nmode" }),
+    ).rejects.toThrow("mode must be a single-line slug");
+    const created = await agent.sessions.create({
+      principal: PRINCIPAL,
+      mode: "architect",
+    });
+    expect(created.record.mode).toBe("architect");
+    const sessionId = created.record.sessionId;
+
+    const updated = await agent.sessions.setMode({
+      principal: PRINCIPAL,
+      sessionId,
+      mode: "ask",
+      expectedRevision: created.revision,
+    });
+    await expect(
+      agent.sessions.read({ principal: PRINCIPAL, sessionId }),
+    ).resolves.toMatchObject({
+      revision: updated.revision,
+      record: { mode: "ask" },
+    });
+    expect(
+      (await agent.sessions.list({ principal: PRINCIPAL })).find(
+        (session) => session.sessionId === sessionId,
+      )?.mode,
+    ).toBe("ask");
+
+    const cleared = await agent.sessions.setMode({
+      principal: PRINCIPAL,
+      sessionId,
+      mode: undefined,
+      expectedRevision: updated.revision,
+    });
+    const read = await agent.sessions.read({ principal: PRINCIPAL, sessionId });
+    expect(read).toMatchObject({ revision: cleared.revision });
+    expect(read.ok && "mode" in read.record).toBe(false);
+  });
+
   it("updates and clears a session reasoning default with revision checks", async () => {
     const backend = new ScriptedBackend([]);
     const agent = engine(backend);

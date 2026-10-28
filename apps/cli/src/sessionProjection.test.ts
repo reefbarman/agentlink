@@ -277,6 +277,31 @@ describe("standalone session projection", () => {
     ]);
   });
 
+  it("shows restored messages without their mode block and keeps the mode", () => {
+    const state = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "session.selected",
+        sessionId: "session-1",
+        mode: "ask",
+        writePolicy: "none",
+        messages: [
+          {
+            role: "user",
+            content:
+              '<current_mode mode="ask">\nAsk instructions\n</current_mode>\n\nWhat is this?',
+          },
+          { role: "assistant", content: "A file." },
+        ],
+      },
+    );
+    expect(state.transcript.map((message) => message.text)).toEqual([
+      "What is this?",
+      "A file.",
+    ]);
+    expect(state).toMatchObject({ mode: "ask", writePolicy: "none" });
+  });
+
   it("hides stored condense summaries and tracks condense events", () => {
     let state = reduceStandaloneSessionProjection(
       initialStandaloneSessionProjection("/project"),

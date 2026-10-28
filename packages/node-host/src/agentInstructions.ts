@@ -150,6 +150,12 @@ export interface NodeHostAgentInstructionsOptions {
   readonly builtinSkillDirs?: readonly string[];
   /** Mode for `skills-<mode>` and `rules-<mode>` folders. Defaults to `code`. */
   readonly modeSlug?: string;
+  /**
+   * Put `rules-<mode>` content in the prompt's Mode Rules section. Hosts
+   * that send mode rules in a `<current_mode>` block pass false. Defaults
+   * to true.
+   */
+  readonly includeModeRules?: boolean;
   /** Skill catalog budget. Defaults to VS Code's (8,000 characters). */
   readonly skillCatalogBudgetChars?: number;
   /**
@@ -250,7 +256,9 @@ export function createNodeHostAgentInstructions<
       root
         ? loadAllInstructionBlocks(root, { homeDir: options.homeDir })
         : loadGlobalInstructionBlocks({ homeDir: options.homeDir }),
-      root ? loadModeRules(root, modeSlug) : Promise.resolve(""),
+      root && options.includeModeRules !== false
+        ? loadModeRules(root, modeSlug)
+        : Promise.resolve(""),
       root
         ? loadSkillCatalog(root, modeSlug, discovery)
         : loadProjectlessSkillCatalog(modeSlug, discovery),

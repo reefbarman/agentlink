@@ -2504,4 +2504,158 @@ describe("createWorkspaceHost", () => {
     // Two real turns with a command supervisor, under full-suite load.
     30_000,
   );
+
+  it("runs each mode with its instructions, tools and persisted choice", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-modes-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(path.join(projectRoot, ".agentlink"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectRoot, ".agentlink", "modes.json"),
+      JSON.stringify([
+        {
+          slug: "docs",
+          name: "Docs",
+          roleDefinition: "You write documentation.",
+          toolGroups: ["read", "edit"],
+          customInstructions: "Keep docs short.",
+        },
+      ]),
+    );
+    await fs.writeFile(path.join(projectRoot, "notes.txt"), "hello\n");
+    const requests: Array<{
+      messages: Array<{ role: string; content: unknown }>;
+      tools?: Array<{ function: { name: string } }>;
+    }> = [];
+    const replies: Response[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return replies.shift() ?? completion("ok");
+      });
+    // The CLI's configuration.
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "modes-owner",
+      sharedPromptGuidance: true,
+      modes: { enabled: true },
+      files: { enabled: true },
+      commands: { enabled: true },
+      sessionRecall: { enabled: true },
+      sessionInteractions: {
+        finalStatus: true,
+        askQuestions: async () => ({ answers: {}, notes: {} }),
+      },
+    });
+    const userText = (request: (typeof requests)[number]) => {
+      const last = request.messages.findLast(
+        (message) => message.role === "user",
+      )!;
+      return typeof last.content === "string"
+        ? last.content
+        : JSON.stringify(last.content);
+    };
+    try {
+      const modes = await host.listModes();
+      expect(modes.map((mode) => mode.slug)).toEqual([
+        "code",
+        "architect",
+        "ask",
+        "debug",
+        "review",
+        "docs",
+      ]);
+      expect(modes.find((mode) => mode.slug === "ask")).toMatchObject({
+        custom: false,
+        writes: false,
+      });
+      expect(modes.find((mode) => mode.slug === "docs")).toMatchObject({
+        custom: true,
+        writes: true,
+      });
+
+      const { sessionId } = await host.createSession();
+      const prompts = new Set<string>();
+      for (const [index, mode] of modes.entries()) {
+        await host.setSessionMode(sessionId, mode.slug);
+        await host.runTurn(sessionId, `Work in ${mode.slug}`);
+        const request = requests.at(-1)!;
+        // History recall joins the prompt once there is an earlier turn.
+        if (index > 0)
+          prompts.add(
+            String(
+              request.messages.find((message) => message.role === "system")!
+                .content,
+            ),
+          );
+        const text = userText(request);
+        expect(text).toMatch(
+          new RegExp(`^<current_mode mode="${mode.slug}">`, "u"),
+        );
+        expect(text).toContain(`Work in ${mode.slug}`);
+        // Mode instructions name only tools this host advertises.
+        const tools = new Set(
+          (request.tools ?? []).map((tool) => tool.function.name),
+        );
+        const block = text.slice(0, text.indexOf("</current_mode>"));
+        for (const name of new Set(
+          [...block.matchAll(/`([a-z]+(?:_[a-z]+)+)`/gu)].map(
+            (match) => match[1]!,
+          ),
+        )) {
+          expect(
+            tools.has(name),
+            `${mode.slug} names ${name} but it is not advertised`,
+          ).toBe(true);
+        }
+        expect(block).not.toContain("switch_mode");
+      }
+      // The system prompt stays the same; it describes modes generally.
+      expect(prompts.size).toBe(1);
+      const [prompt] = [...prompts];
+      expect(prompt).toContain("## Modes");
+      expect(prompt).toContain("You cannot change modes yourself");
+      expect(prompt).not.toContain("orchestrate");
+      expect(userText(requests.at(-1)!)).toContain("Keep docs short.");
+
+      // Same mode again: the block already in history is not repeated.
+      await host.runTurn(sessionId, "Again in docs");
+      expect(userText(requests.at(-1)!)).toBe("Again in docs");
+
+      // Ask mode refuses edits and commands, before any approval.
+      await host.setSessionMode(sessionId, "ask");
+      replies.push(
+        toolCall("write_file", { path: "notes.txt", content: "changed\n" }),
+        completion("refused"),
+      );
+      await expect(
+        host.runTurn(sessionId, "Change the notes"),
+      ).resolves.toMatchObject({ status: "completed", text: "refused" });
+      expect(
+        await fs.readFile(path.join(projectRoot, "notes.txt"), "utf8"),
+      ).toBe("hello\n");
+      const toolResult = JSON.stringify(requests.at(-1)!.messages.at(-1));
+      expect(toolResult).toContain("tool_not_in_mode");
+      expect(toolResult).toContain("not available in ask mode");
+      // Every tool is still advertised, as in VS Code.
+      expect(
+        (requests.at(-1)!.tools ?? []).map((tool) => tool.function.name),
+      ).toContain("write_file");
+
+      // The mode is stored with the session.
+      expect(
+        (await host.listSessions()).find(
+          (session) => session.sessionId === sessionId,
+        ),
+      ).toMatchObject({ mode: "ask" });
+      await expect(
+        host.setSessionMode(sessionId, "orchestrate"),
+      ).rejects.toThrow("unknown_mode");
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  }, 30_000); // Seven real turns with a command supervisor, under full-suite load.
 });

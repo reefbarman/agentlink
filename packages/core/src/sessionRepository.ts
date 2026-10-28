@@ -118,6 +118,8 @@ export interface AgentSessionRecord<
   readonly selectedModel?: AgentModelReference;
   /** Session default; `"none"` explicitly disables runtime reasoning defaults. */
   readonly reasoningEffort?: CoreReasoningEffort;
+  /** Agent mode slug chosen for the session, for hosts that offer modes. */
+  readonly mode?: string;
   readonly usage?: CoreModelUsage;
   readonly runState: AgentSessionRunState;
   readonly pendingInteractionId?: string;
@@ -133,9 +135,21 @@ export interface AgentSessionSummary<
   readonly updatedAt: number;
   readonly selectedModel?: AgentModelReference;
   readonly reasoningEffort?: CoreReasoningEffort;
+  readonly mode?: string;
   readonly runState: AgentSessionRunState;
   readonly pendingInteractionId?: string;
   readonly revision: AgentSessionRevision;
+}
+
+/** A session mode slug: one line, 1 to 64 characters. */
+export function isAgentSessionMode(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    value.trim() === value &&
+    !/[\r\n\u2028\u2029]/u.test(value)
+  );
 }
 
 export type CreateAgentSessionResult =
@@ -279,6 +293,9 @@ export class InMemoryAgentStateRepository<
           : {}),
         ...(stored.record.reasoningEffort !== undefined
           ? { reasoningEffort: stored.record.reasoningEffort }
+          : {}),
+        ...(stored.record.mode !== undefined
+          ? { mode: stored.record.mode }
           : {}),
         runState: structuredClone(stored.record.runState),
         ...(stored.record.pendingInteractionId
@@ -611,6 +628,9 @@ function validateSessionRecord(record: AgentSessionRecord): void {
     !isCoreReasoningEffort(record.reasoningEffort)
   ) {
     throw new Error("Session reasoningEffort must be supported");
+  }
+  if (record.mode !== undefined && !isAgentSessionMode(record.mode)) {
+    throw new Error("Session mode must be a single-line slug");
   }
 }
 

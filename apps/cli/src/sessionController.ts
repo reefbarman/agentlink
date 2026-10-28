@@ -95,6 +95,10 @@ export interface StandaloneSessionController {
   listModels(): Promise<readonly CoreQualifiedModelCatalogEntry[]>;
   setModel(model: AgentModelReference): Promise<void>;
   setReasoningEffort(reasoningEffort: CoreReasoningEffort): Promise<void>;
+  /** Modes this session can use (empty when the host has no modes). */
+  listModes(): ReturnType<WorkspaceHost["listModes"]>;
+  /** Change the session's mode; persisted with the session. */
+  setMode(mode: string): Promise<void>;
   refreshActivity(): StandaloneSessionProjection;
   refreshMcpState(): Promise<StandaloneSessionProjection>;
   observeCommand(
@@ -259,10 +263,20 @@ export function createStandaloneSessionController(
         ),
     );
   };
+  // The footer's write policy for a mode: `none` when it cannot edit files.
+  const writePolicyForMode = async (
+    mode: string,
+  ): Promise<StandaloneSessionProjection["writePolicy"]> => {
+    const modes = await options.host.listModes();
+    const found = modes.find((candidate) => candidate.slug === mode);
+    return found && !found.writes ? "none" : "prompt";
+  };
   const selectExistingSession = async (
     nextSessionId: string,
   ): Promise<StandaloneSessionInitialization> => {
     const hydration = await options.host.readSession(nextSessionId);
+    const mode = hydration.record.mode ?? "code";
+    const writePolicy = await writePolicyForMode(mode);
     sessionId = nextSessionId;
     dispatch({
       type: "session.selected",
@@ -274,6 +288,8 @@ export function createStandaloneSessionController(
           : undefined,
       model: hydration.record.selectedModel,
       reasoningEffort: hydration.record.reasoningEffort,
+      mode,
+      writePolicy,
       todos: options.host.readSessionInteractions(nextSessionId).todos,
       usage: hydration.record.usage,
     });
@@ -507,7 +523,15 @@ export function createStandaloneSessionController(
       if (activeTurn)
         throw new Error("Cannot switch sessions during an active turn");
       await stopChildren("Parent started a new session");
-      sessionId = (await options.host.createSession()).sessionId;
+      // The new session keeps the current mode, when it is still offered.
+      const offered = (await options.host.listModes()).some(
+        (mode) => mode.slug === state.mode,
+      );
+      sessionId = (
+        await options.host.createSession(
+          offered && state.mode !== "code" ? { mode: state.mode } : {},
+        )
+      ).sessionId;
       initialization = {
         sessionId,
         restored: false,
@@ -558,6 +582,20 @@ export function createStandaloneSessionController(
         type: "session.settings",
         model: state.model,
         reasoningEffort,
+      });
+    },
+    listModes() {
+      return options.host.listModes();
+    },
+    async setMode(mode) {
+      const currentSession = requireSession();
+      if (activeTurn)
+        throw new Error("Cannot change mode during an active turn");
+      await options.host.setSessionMode(currentSession, mode);
+      dispatch({
+        type: "session.mode",
+        mode,
+        writePolicy: await writePolicyForMode(mode),
       });
     },
     refreshActivity,

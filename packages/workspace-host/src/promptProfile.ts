@@ -48,7 +48,7 @@ export function composeWorkspaceIdentity(
   return `You are AgentLink, ${validateWorkspacePromptIdentity(identity)}.`;
 }
 
-function resolveWorkspacePromptProfile(model: CoreResolvedModel) {
+export function resolveWorkspacePromptProfile(model: CoreResolvedModel) {
   return resolvePromptProfile({
     providerId: model.reference.providerId,
     modelId: model.reference.modelId,

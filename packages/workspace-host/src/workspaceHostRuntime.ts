@@ -1,6 +1,7 @@
 import {
   createSummarizingContextCondenser,
   createTurnInteractionTokenService,
+  projectCondensedHistory,
   type AgentEngine,
   type AgentModelReference,
   type AgentPrincipal,
@@ -19,12 +20,29 @@ import {
 } from "@agentlink/core";
 import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
+  buildModesOverviewSection,
+  formatModeInstructionBlock,
+} from "@agentlink/core/system-prompt";
+import {
   createNodeHostAgentInstructions,
   createFileNodeHostPersistence,
   createNodeHostAgent,
   createNodeHostLocalFileSystem,
   createNodeHostSessionRecallTools,
+  loadModeRules,
 } from "@agentlink/node-host";
+import {
+  isBuiltInWorkspaceMode,
+  isToolAllowedInWorkspaceMode,
+  latestModeInstructionBlock,
+  loadWorkspaceModes,
+  outOfModeTool,
+  resolveWorkspaceMode,
+  WORKSPACE_BUILT_IN_MODE_SLUGS,
+  workspaceModeAllowsWrites,
+  workspaceModePromptCapabilities,
+  workspaceToolsForMode,
+} from "./workspaceModes.js";
 import { randomBytes } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -100,6 +118,7 @@ import {
   composeSharedWorkspaceGuidance,
   composeWorkspaceIdentity,
   composeWorkspacePromptProfile,
+  resolveWorkspacePromptProfile,
   validateWorkspacePromptIdentity,
   type WorkspacePromptIdentity,
 } from "./promptProfile.js";
@@ -177,6 +196,17 @@ export interface CreateWorkspaceHostOptions {
    * hosts keep the short standalone prompt until they opt in.
    */
   readonly sharedPromptGuidance?: boolean;
+  /**
+   * VS Code's agent modes for foreground sessions: Code, Architect, Ask,
+   * Debug and Review plus custom modes from the project's `modes.json`
+   * (Orchestrate needs tiered background agents and is not offered). Every
+   * tool is advertised, as in VS Code, and tools outside the session's mode
+   * are refused when called. The mode's instructions travel in a
+   * `<current_mode>` block in front of the first message after a change,
+   * so the system prompt stays the same across modes. Background children
+   * keep their parent's mode.
+   */
+  readonly modes?: { readonly enabled: true };
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
@@ -383,7 +413,18 @@ export interface WorkspaceHostSession {
   readonly updatedAt: number;
   readonly model: AgentModelReference | undefined;
   readonly reasoningEffort: CoreReasoningEffort | undefined;
+  /** The session's mode slug, when modes are enabled and one was chosen. */
+  readonly mode?: string;
   readonly state: string;
+}
+
+/** A mode a session can use, from `listModes`. */
+export interface WorkspaceModeSummary {
+  readonly slug: string;
+  readonly name: string;
+  readonly custom: boolean;
+  /** Whether the mode's tools can change project files. */
+  readonly writes: boolean;
 }
 
 export interface WorkspaceHost {
@@ -441,7 +482,16 @@ export interface WorkspaceHost {
     readonly sessionId?: string;
     readonly model?: AgentModelReference;
     readonly reasoningEffort?: CoreReasoningEffort;
+    /** Requires the `modes` option. */
+    readonly mode?: string;
   }): Promise<{ readonly sessionId: string }>;
+  /** Modes a session can use. Empty without the `modes` option. */
+  listModes(): Promise<readonly WorkspaceModeSummary[]>;
+  /**
+   * Change an idle session's mode. Requires the `modes` option; throws
+   * `unknown_mode` for a slug `listModes` does not offer.
+   */
+  setSessionMode(sessionId: string, mode: string): Promise<void>;
   listSessions(): Promise<readonly WorkspaceHostSession[]>;
   readSession(
     sessionId: string,
@@ -656,6 +706,8 @@ export async function createWorkspaceHost(
         projectRoot: project.root,
         homeDir: options.agentInstructions.homeDir,
         builtinSkillDirs: options.agentInstructions.builtinSkillDirs,
+        // With modes, each mode's rules travel in its <current_mode> block.
+        ...(options.modes ? { includeModeRules: false } : {}),
       })
     : undefined;
   let engine!: AgentEngine;
@@ -687,6 +739,10 @@ export async function createWorkspaceHost(
             principal,
             model,
             reasoningEffort,
+            // A child works within its parent's mode.
+            ...(options.modes && parent.record.mode !== undefined
+              ? { mode: parent.record.mode }
+              : {}),
           });
           return {
             sessionId: created.record.sessionId,
@@ -720,7 +776,10 @@ export async function createWorkspaceHost(
             {
               principal,
               sessionId,
-              input: { text, attachments: undefined },
+              input: {
+                text: await withModeBlock(sessionId, text),
+                attachments: undefined,
+              },
               model: undefined,
             },
             {
@@ -995,6 +1054,91 @@ export async function createWorkspaceHost(
       (tools ?? []).map((tool) => tool.definition.name),
     );
   };
+
+  // The `modes` option. Custom modes are read again each time, so edits to
+  // modes.json apply from the next turn, as VS Code's file watcher does.
+  const listWorkspaceModes = async () =>
+    options.modes ? await loadWorkspaceModes(project.root, hostFileSystem) : [];
+  const readSessionMode = async (sessionId: string) => {
+    const current = await engine.sessions.read({ principal, sessionId });
+    if (!current.ok) throw new Error("session_not_found");
+    return {
+      mode: resolveWorkspaceMode(
+        current.record.mode,
+        await listWorkspaceModes(),
+      ),
+      record: current.record,
+    };
+  };
+  // Every tool stays advertised, as in VS Code; one outside the session's
+  // mode is refused when called, before any approval card.
+  const gateToolsToMode = async (
+    sessionId: string,
+    tools: HostTool<typeof principal>[],
+    mcpToolNames: ReadonlySet<string>,
+  ): Promise<HostTool<typeof principal>[]> => {
+    if (!options.modes) return tools;
+    const { mode } = await readSessionMode(sessionId);
+    const allowed = workspaceToolsForMode(mode);
+    const mcpAllowed = mode.toolGroups.includes("mcp");
+    return tools.map((tool) => {
+      const name = tool.definition.name;
+      const permitted = mcpToolNames.has(name)
+        ? mcpAllowed
+        : isToolAllowedInWorkspaceMode(name, allowed);
+      return permitted ? tool : outOfModeTool(tool, mode.slug);
+    });
+  };
+  // VS Code sends the mode's instructions in front of the first message
+  // after a change. The block is stored with the message here, so a later
+  // turn only repeats it when the mode changed or condensing dropped it.
+  const withModeBlock = async (
+    sessionId: string,
+    text: string,
+  ): Promise<string> => {
+    if (!options.modes) return text;
+    const { mode, record } = await readSessionMode(sessionId);
+    const model = runtime.resolveModel({
+      principal,
+      authContext: undefined,
+      model: record.selectedModel ?? options.defaultModel,
+    });
+    const toolNames = await resolvePromptToolNames({
+      principal,
+      sessionId,
+      turnId: "mode-instructions",
+      input: { text, attachments: undefined },
+    });
+    const block = formatModeInstructionBlock(mode.slug, {
+      agentMode: mode,
+      promptProfile: resolveWorkspacePromptProfile(model),
+      ...(agentInstructions
+        ? { modeRules: await loadModeRules(project.root, mode.slug) }
+        : {}),
+      ...(mode.slug === "architect"
+        ? {
+            plansFolderExists: await hostFileSystem
+              .stat(path.join(project.root, "plans"))
+              .then((stat) => stat.kind === "directory")
+              .catch(() => false),
+          }
+        : {}),
+      capabilities: workspaceModePromptCapabilities(toolNames),
+    });
+    return latestModeInstructionBlock(
+      projectCondensedHistory(record.messages),
+    ) === block
+      ? text
+      : `${block}\n\n${text}`;
+  };
+  const requireOfferedMode = async (slug: string): Promise<string> => {
+    if (!options.modes) throw new Error("modes_not_enabled");
+    const modes = await listWorkspaceModes();
+    if (!modes.some((mode) => mode.slug === slug)) {
+      throw new Error("unknown_mode");
+    }
+    return slug;
+  };
   const interactionTokens =
     options.files ||
     options.commands ||
@@ -1050,6 +1194,11 @@ export async function createWorkspaceHost(
             resolveTools: async (request) => {
               const shared = await sharedMcpTools?.resolveTools(request);
               try {
+                const projectMcpTools = mcpTools
+                  ? (await mcpTools.resolveTools(request)).map((tool) =>
+                      serializeMcpToolExecution(tool, mutations),
+                    )
+                  : [];
                 const tools = [
                   ...(fileTools ? await fileTools.resolveTools(request) : []),
                   ...(commandTools
@@ -1068,11 +1217,7 @@ export async function createWorkspaceHost(
                         await sessionRecallTools.resolveTools(request),
                       )
                     : []),
-                  ...(mcpTools
-                    ? (await mcpTools.resolveTools(request)).map((tool) =>
-                        serializeMcpToolExecution(tool, mutations),
-                      )
-                    : []),
+                  ...projectMcpTools,
                   ...(backgroundTools
                     ? await backgroundTools.resolveTools(request)
                     : []),
@@ -1097,17 +1242,22 @@ export async function createWorkspaceHost(
                       )
                     : []),
                 ];
-                return shared
-                  ? {
-                      tools: [
-                        ...tools,
-                        ...shared.tools.map((tool) =>
-                          serializeMcpToolExecution(tool, mutations),
-                        ),
-                      ],
-                      dispose: shared.dispose,
-                    }
-                  : tools;
+                const mcpToolNames = new Set(
+                  [...projectMcpTools, ...(shared?.tools ?? [])].map(
+                    (tool) => tool.definition.name,
+                  ),
+                );
+                const all = await gateToolsToMode(
+                  request.sessionId,
+                  [
+                    ...tools,
+                    ...(shared?.tools ?? []).map((tool) =>
+                      serializeMcpToolExecution(tool, mutations),
+                    ),
+                  ],
+                  mcpToolNames,
+                );
+                return shared ? { tools: all, dispose: shared.dispose } : all;
               } catch (error) {
                 await shared?.dispose();
                 throw error;
@@ -1267,6 +1417,12 @@ export async function createWorkspaceHost(
           ];
       return [
         ...lead,
+        options.modes
+          ? buildModesOverviewSection({
+              builtInModes: WORKSPACE_BUILT_IN_MODE_SLUGS,
+              modeSwitching: false,
+            }).trim()
+          : undefined,
         options.files
           ? 'Use only the project-relative file tools that are actually exposed. Prefer read_file with view "context" for first-pass orientation; its working_set.content_hash is the SHA-256 baseline for an edit. Expect every ungranted write to pause for human review.'
           : "File tools are not enabled.",
@@ -1525,13 +1681,38 @@ export async function createWorkspaceHost(
     },
     async createSession(sessionOptions = {}) {
       await pruneResponsesConversationStates();
+      const mode =
+        sessionOptions.mode === undefined
+          ? undefined
+          : await requireOfferedMode(sessionOptions.mode);
       const created = await engine.sessions.create({
         principal,
         sessionId: sessionOptions.sessionId,
         model: sessionOptions.model,
         reasoningEffort: sessionOptions.reasoningEffort,
+        ...(mode !== undefined ? { mode } : {}),
       });
       return { sessionId: created.record.sessionId };
+    },
+    async listModes() {
+      return (await listWorkspaceModes()).map((mode) => ({
+        slug: mode.slug,
+        name: mode.name,
+        custom: !isBuiltInWorkspaceMode(mode),
+        writes: workspaceModeAllowsWrites(mode),
+      }));
+    },
+    async setSessionMode(sessionId, mode) {
+      assertForegroundSession(sessionId);
+      const slug = await requireOfferedMode(mode);
+      const current = await engine.sessions.hydrate({ principal, sessionId });
+      if (current.record.mode === slug) return;
+      await engine.sessions.setMode({
+        principal,
+        sessionId,
+        mode: slug,
+        expectedRevision: current.summary.revision,
+      });
     },
     async listSessions() {
       return (await engine.sessions.list({ principal }))
@@ -1546,6 +1727,9 @@ export async function createWorkspaceHost(
           updatedAt: session.updatedAt,
           model: session.selectedModel,
           reasoningEffort: session.reasoningEffort,
+          ...(options.modes && session.mode !== undefined
+            ? { mode: session.mode }
+            : {}),
           state: session.runState.phase,
         }))
         .sort(
@@ -1652,7 +1836,10 @@ export async function createWorkspaceHost(
         {
           principal,
           sessionId,
-          input: { text, attachments: runOptions.attachments },
+          input: {
+            text: await withModeBlock(sessionId, text),
+            attachments: runOptions.attachments,
+          },
           model: undefined,
         },
         {
