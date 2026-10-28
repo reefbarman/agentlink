@@ -8,16 +8,22 @@ import {
 } from "@agentlink/core";
 import {
   TODO_WRITE_INPUT_SCHEMA,
+  completeTodos,
   getLatestTodoState,
   handleTodoWrite,
   todoTool,
 } from "@agentlink/core/todo-tool";
 import {
+  SET_TASK_STATUS_TOOL,
   askUserToolDefinition,
   buildAskUserResultPayload,
+  buildTaskStatusMarker,
+  buildTaskStatusResultPayload,
+  isTaskStatus,
   parseAskUserInput,
 } from "@agentlink/core/interaction-tools";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type {
   UserQuestion,
   UserQuestionResponse,
@@ -41,6 +47,12 @@ export interface WorkspaceSessionInteractionSnapshot {
   readonly todos: readonly TodoItem[];
 }
 
+/** `set_task_status`'s `displayContent`: the final card, plus todos it completed. */
+export interface WorkspaceFinalStatusDisplay {
+  readonly finalStatus: FinalMessageMarker;
+  readonly todos?: readonly TodoItem[];
+}
+
 export interface CreateWorkspaceSessionInteractionToolsOptions {
   /**
    * Answers VS Code's `ask_user`. Without it only `todo_write` is offered,
@@ -51,6 +63,11 @@ export interface CreateWorkspaceSessionInteractionToolsOptions {
     request: WorkspaceQuestionsRequest,
     context: { readonly sessionId: string; readonly signal?: AbortSignal },
   ) => Promise<WorkspaceQuestionsResponse>;
+  /**
+   * Offer VS Code's `set_task_status`, which ends the turn with a final
+   * summary and optional continue action unless a user message is queued.
+   */
+  readonly finalStatus?: boolean;
   readonly onTodosChanged?: (
     sessionId: string,
     todos: readonly TodoItem[],
@@ -102,6 +119,9 @@ export function createWorkspaceSessionInteractionTools(
     return [
       ...(askQuestions ? [createAskUserTool(request, askQuestions)] : []),
       createTodoWriteTool(request, todos, options),
+      ...(options.finalStatus
+        ? [createSetTaskStatusTool(request, todos, options)]
+        : []),
     ];
   };
   return { resolveTools, snapshot, restore };
@@ -192,6 +212,57 @@ function createTodoWriteTool<TPrincipal extends AgentPrincipal>(
       return {
         modelContent: result.content,
         displayContent: { todos: next },
+      };
+    },
+  });
+}
+
+/**
+ * VS Code's `set_task_status` without background `result` envelopes:
+ * standalone background children report through their own runtime.
+ */
+function createSetTaskStatusTool<TPrincipal extends AgentPrincipal>(
+  discovery: HostToolResolveRequest<TPrincipal>,
+  todos: Map<string, readonly TodoItem[]>,
+  options: CreateWorkspaceSessionInteractionToolsOptions,
+): HostTool<TPrincipal> {
+  return defineTool({
+    name: SET_TASK_STATUS_TOOL.name,
+    description: SET_TASK_STATUS_TOOL.description,
+    inputSchema: SET_TASK_STATUS_TOOL.input_schema,
+    effect: "read",
+    parallelSafe: false,
+    displayInput: (input) => ({
+      status: typeof input.status === "string" ? input.status : undefined,
+    }),
+    handler: async (input, context) => {
+      if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
+      const status = input.status;
+      if (!isTaskStatus(status)) return toolError("Invalid status");
+      const marker = buildTaskStatusMarker({ status, params: input });
+      const completeTodosRequested = input.completeTodos === true;
+      let completed: TodoItem[] | undefined;
+      if (status === "completed" && completeTodosRequested) {
+        completed = completeTodos(
+          structuredClone([...(todos.get(context.sessionId) ?? [])]),
+        );
+        todos.set(context.sessionId, completed);
+        options.onTodosChanged?.(context.sessionId, completed);
+      }
+      const display: WorkspaceFinalStatusDisplay = {
+        finalStatus: marker,
+        ...(completed ? { todos: completed } : {}),
+      };
+      return {
+        modelContent: JSON.stringify(
+          buildTaskStatusResultPayload({
+            status,
+            completeTodosRequested,
+            completedTodos: completed,
+          }),
+        ),
+        displayContent: display,
+        endTurn: { finalText: marker.summary ?? "" },
       };
     },
   });

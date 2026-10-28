@@ -898,6 +898,8 @@ async function createHost(options: {
         }
       : {}),
     sessionInteractions: {
+      // VS Code's set_task_status: a final card and optional continue action.
+      finalStatus: true,
       askQuestions: (request, { signal }) =>
         requireInteractionBroker(options.interactionBridge).askQuestions(
           request,

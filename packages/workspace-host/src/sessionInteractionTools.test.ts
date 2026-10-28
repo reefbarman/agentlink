@@ -1,6 +1,7 @@
 import { TODO_WRITE_INPUT_SCHEMA, todoTool } from "@agentlink/core/todo-tool";
 import { describe, expect, it, vi } from "vitest";
 
+import { SET_TASK_STATUS_TOOL } from "@agentlink/core/interaction-tools";
 import { createWorkspaceSessionInteractionTools } from "./sessionInteractionTools.js";
 
 const discovery = {
@@ -136,6 +137,121 @@ describe("workspace session interaction tools", () => {
     expect(
       (await tools.resolveTools(discovery)).map((tool) => tool.definition.name),
     ).toEqual(["todo_write"]);
+  });
+
+  it("offers set_task_status only when the host opts in", async () => {
+    const names = async (finalStatus?: boolean) =>
+      (
+        await createWorkspaceSessionInteractionTools({
+          finalStatus,
+        }).resolveTools(discovery)
+      ).map((tool) => tool.definition.name);
+    expect(await names()).toEqual(["todo_write"]);
+    expect(await names(true)).toEqual(["todo_write", "set_task_status"]);
+  });
+
+  it("sets VS Code's final status and ends the turn", async () => {
+    const onTodosChanged = vi.fn();
+    const tools = createWorkspaceSessionInteractionTools({
+      finalStatus: true,
+      onTodosChanged,
+    });
+    const resolved = await tools.resolveTools(discovery);
+    const find = (name: string) =>
+      resolved.find((tool) => tool.definition.name === name)!;
+    const setStatus = find("set_task_status");
+    expect(setStatus.definition).toMatchObject({
+      name: "set_task_status",
+      description: SET_TASK_STATUS_TOOL.description,
+      input_schema: SET_TASK_STATUS_TOOL.input_schema,
+    });
+    await find("todo_write").execute(
+      {
+        todos: [
+          {
+            id: "a",
+            content: "Build",
+            activeForm: "Building",
+            status: "in_progress",
+            children: [
+              {
+                id: "a1",
+                content: "Test",
+                activeForm: "Testing",
+                status: "pending",
+              },
+            ],
+          },
+        ],
+      },
+      execution,
+    );
+    const done = [
+      {
+        id: "a",
+        content: "Build",
+        activeForm: "Building",
+        status: "completed",
+        children: [
+          {
+            id: "a1",
+            content: "Test",
+            activeForm: "Testing",
+            status: "completed",
+          },
+        ],
+      },
+    ];
+    await expect(
+      setStatus.execute(
+        {
+          status: "completed",
+          summary: "  Built it.  ",
+          completeTodos: true,
+          continueLabel: "Ship",
+          continuePrompt: "Ship the build",
+        },
+        execution,
+      ),
+    ).resolves.toEqual({
+      modelContent: JSON.stringify({ ok: true, completedTodos: 1 }),
+      displayContent: {
+        finalStatus: {
+          status: "completed",
+          source: "tool",
+          summary: "Built it.",
+          continueAction: { label: "Ship", prompt: "Ship the build" },
+        },
+        todos: done,
+      },
+      endTurn: { finalText: "Built it." },
+    });
+    expect(tools.snapshot("session-1").todos).toEqual(done);
+    expect(onTodosChanged).toHaveBeenLastCalledWith("session-1", done);
+  });
+
+  it("ignores completeTodos unless the status is completed, as VS Code does", async () => {
+    const tools = createWorkspaceSessionInteractionTools({ finalStatus: true });
+    const setStatus = (await tools.resolveTools(discovery)).find(
+      (tool) => tool.definition.name === "set_task_status",
+    )!;
+    await expect(
+      setStatus.execute(
+        { status: "blocked", summary: "Need a key.", completeTodos: true },
+        execution,
+      ),
+    ).resolves.toMatchObject({
+      modelContent: JSON.stringify({
+        ok: true,
+        completeTodosIgnored:
+          "completeTodos only applies when status is 'completed'",
+      }),
+      endTurn: { finalText: "Need a key." },
+    });
+    // The schema's enum rejects an unknown status before the handler runs.
+    await expect(
+      setStatus.execute({ status: "done" }, execution),
+    ).rejects.toThrow(/set_task_status/u);
   });
 
   it("replaces and snapshots session-scoped todo state", async () => {

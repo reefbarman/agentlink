@@ -29,6 +29,12 @@ export interface HostToolResult {
   /** Optional explicitly safe content projected into public events. */
   readonly displayContent?: unknown;
   readonly isError?: boolean;
+  /**
+   * End the turn after this call, as VS Code's `set_task_status` does:
+   * later calls in the same response are skipped, and the turn completes
+   * with `finalText` unless a queued user message is waiting.
+   */
+  readonly endTurn?: { readonly finalText?: string };
 }
 
 export interface HostToolExecutionContext<

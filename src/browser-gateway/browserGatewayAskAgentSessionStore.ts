@@ -1276,8 +1276,21 @@ export class BrowserGatewayAskAgentSessionStore {
     return true;
   }
 
-  applyFinalMarker(marker: FinalMessageMarker | null): boolean {
+  /**
+   * Attach a final-status card to the latest assistant message in the open
+   * chat, or to `messageId` (in any chat) when a turn names its reply.
+   */
+  applyFinalMarker(
+    marker: FinalMessageMarker | null,
+    messageId?: string,
+  ): boolean {
     if (!marker) return false;
+    if (messageId !== undefined) {
+      const message = this.getAssistantMessage(messageId);
+      if (!message) return false;
+      message.finalMarker = marker;
+      return true;
+    }
     const session = this.getActiveSession();
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const message = session.messages[i];

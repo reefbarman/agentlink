@@ -434,6 +434,7 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
         shouldAutoContinue({
           completed: outcome.state === "implementing",
           madeProgress: progress.madeProgress,
+          finalStatus: progress.finalStatus !== undefined,
           todos: entry.todos.get(sessionId) ?? [],
         })
       ) {

@@ -115,7 +115,7 @@ export function renderTuiHelp(): string {
   return [
     "Commands: /new, /sessions, /model, /reasoning, /mode, /mcp, /condense, /condense threshold [0.1-1|default], /processes, /output ID,",
     "/stop ID, /agents, /approvals, /agent-steer ID MESSAGE, /agent-stop ID, /exit",
-    "Keys: Enter send, Ctrl+J newline, Tab focus, Ctrl+O controls, Ctrl+T TODOs, Ctrl+Z suspend; transcript Page Up/Down/Home/End and Enter tool details; activity Up/Down/Home/End and Enter/Space details; Ctrl+C cancel/exit",
+    "Keys: Enter send, Ctrl+J newline, Tab focus, Ctrl+O controls, Ctrl+T TODOs, Ctrl+N continue action, Ctrl+Z suspend; transcript Page Up/Down/Home/End and Enter tool details; activity Up/Down/Home/End and Enter/Space details; Ctrl+C cancel/exit",
     "Composer: type / for commands and @ for project file attachments; pasting a project file path also attaches it.",
   ].join("\n");
 }

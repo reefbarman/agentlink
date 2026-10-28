@@ -2,6 +2,7 @@ import type { AgentTurnEvent, AgentTurnResult } from "@agentlink/core";
 import { describe, expect, it } from "vitest";
 import {
   initialStandaloneSessionProjection,
+  latestContinueAction,
   reduceStandaloneSessionProjection,
 } from "./sessionProjection.js";
 
@@ -413,6 +414,89 @@ describe("standalone session projection", () => {
     ]);
     expect(JSON.stringify(state.transcript)).not.toContain("private");
     expect(JSON.stringify(state.transcript)).not.toContain("secret");
+  });
+
+  it("shows set_task_status as a final card with its continue action, live and restored", () => {
+    const finalStatus = {
+      status: "completed",
+      source: "tool",
+      summary: "Built it.",
+      continueAction: { label: "Ship", prompt: "Ship the build" },
+    };
+    let state = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      { type: "session.new", sessionId: "session-1" },
+    );
+    state = reduceStandaloneSessionProjection(state, {
+      type: "user.submitted",
+      text: "Build it",
+    });
+    const events = [
+      { type: "turn.started" },
+      { type: "text.delta", text: "Done building." },
+      {
+        type: "tool.completed",
+        toolCallId: "s",
+        toolName: "set_task_status",
+        effect: "read",
+        displayContent: { finalStatus },
+      },
+    ];
+    for (const [sequence, value] of events.entries()) {
+      state = reduceStandaloneSessionProjection(state, {
+        type: "turn.event",
+        event: event(value, sequence),
+      });
+    }
+    expect(state.transcript.slice(1)).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Done building." }),
+      expect.objectContaining({
+        role: "assistant",
+        text: "Built it.",
+        finalStatus,
+      }),
+    ]);
+    expect(latestContinueAction(state)).toEqual(finalStatus.continueAction);
+    // A new message makes the action stale, as in VS Code.
+    state = reduceStandaloneSessionProjection(state, {
+      type: "user.submitted",
+      text: "Thanks",
+    });
+    expect(latestContinueAction(state)).toBeUndefined();
+
+    const restored = reduceStandaloneSessionProjection(
+      initialStandaloneSessionProjection("/project"),
+      {
+        type: "session.selected",
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "Build it" },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Done building." },
+              {
+                type: "tool_use",
+                id: "s",
+                name: "set_task_status",
+                input: {
+                  status: "completed",
+                  summary: "Built it.",
+                  continueLabel: "Ship",
+                  continuePrompt: "Ship the build",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    expect(restored.transcript.map((message) => message.finalStatus)).toEqual([
+      undefined,
+      undefined,
+      finalStatus,
+    ]);
+    expect(latestContinueAction(restored)).toEqual(finalStatus.continueAction);
   });
 
   it("projects pending interactions and refreshed activity independently of a renderer", () => {

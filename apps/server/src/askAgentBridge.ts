@@ -74,8 +74,10 @@ import type { RememberedCard } from "./assistantMemory.js";
 import {
   AUTO_CONTINUE_PROMPT,
   TurnProgress,
+  finalStatusFromToolResult,
   shouldAutoContinue,
   todosFromToolResult,
+  withFinalStatusHints,
   withoutAutoContinuePrompts,
 } from "./sessionProgress.js";
 import type { AssistantSessionOperations } from "./workspaceRoutes.js";
@@ -101,6 +103,8 @@ interface TurnEnd {
   /** Completed normally: not stopped, failed, or left waiting. */
   readonly completed: boolean;
   readonly madeProgress: boolean;
+  /** Set a final status with `set_task_status`, which ends Auto Continue. */
+  readonly finalStatus: boolean;
 }
 
 /**
@@ -711,7 +715,9 @@ export async function createAskAgentBridge(
     const messages = withoutAutoContinuePrompts(
       withTaskResultNotices(
         withAgentResultCards(
-          agentMessagesToChatMessages([...read.messages], { baseIndex: 0 }),
+          agentMessagesToChatMessages(withFinalStatusHints(read.messages), {
+            baseIndex: 0,
+          }),
         ),
       ),
     );
@@ -1675,6 +1681,14 @@ export async function createAskAgentBridge(
     const onTurnEvent = (event: EmbeddedAgentTurnEvent) => {
       progress.observe(event);
       noteTodos(workspaceSessionId, event);
+      if (event.type === "tool.completed") {
+        // VS Code's final-status card, on the reply the call ended.
+        const marker = finalStatusFromToolResult(
+          event.toolName,
+          event.displayContent,
+        );
+        if (marker) controller.applyFinalMarker(marker, messageId);
+      }
       if (projectTurnContent(messageId, toolStarts, event)) return;
       switch (event.type) {
         case "user.interjected":
@@ -1890,14 +1904,23 @@ export async function createAskAgentBridge(
             queueContinue(detached, workspaceSessionId, storeSessionId, {
               completed,
               madeProgress: progress.madeProgress,
+              finalStatus: progress.finalStatus !== undefined,
             });
           }
         })
         .catch(() => undefined)
         .finally(() => parkedDone());
-      return { completed: false, madeProgress: progress.madeProgress };
+      return {
+        completed: false,
+        madeProgress: progress.madeProgress,
+        finalStatus: progress.finalStatus !== undefined,
+      };
     }
-    return { completed, madeProgress: progress.madeProgress };
+    return {
+      completed,
+      madeProgress: progress.madeProgress,
+      finalStatus: progress.finalStatus !== undefined,
+    };
   };
 
   const handleSend = async (

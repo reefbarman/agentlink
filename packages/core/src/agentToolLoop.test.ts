@@ -381,6 +381,92 @@ describe("runAgentToolLoop interjections", () => {
     expect(result.text).toBe(" Answered 2 messages.");
   });
 
+  it("ends the turn on a final-status call, skipping later calls in the response", async () => {
+    const ran: string[] = [];
+    let completed: readonly CoreModelMessage[] = [];
+    let calls = 0;
+    const result = await runAgentToolLoop(
+      makeHandlers({
+        takeInterjections: () => [],
+        callModel: async () => {
+          calls += 1;
+          return {
+            text: "",
+            toolCalls: [
+              { id: "a", name: "read", input: {} },
+              { id: "s", name: "set_task_status", input: {} },
+              { id: "b", name: "write", input: {} },
+            ],
+          };
+        },
+        runTool: async (call) => {
+          ran.push(call.name);
+          return call.name === "set_task_status"
+            ? {
+                stop: false,
+                endTurn: true,
+                content: "Summary",
+                toolMessage: toolMessage("ok"),
+              }
+            : { stop: false, content: "", toolMessage: toolMessage("read") };
+        },
+        onIterationMessagesComplete: (messages) => {
+          completed = structuredClone(messages);
+        },
+      }),
+    );
+    expect(calls).toBe(1);
+    expect(ran).toEqual(["read", "set_task_status"]);
+    expect(result).toEqual({ outcome: "model_success", text: "Summary" });
+    expect(completed.at(-1)).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "b",
+          content: JSON.stringify({
+            status: "skipped",
+            skipped_by: "set_task_status",
+            reason: "Skipped because final task status was set for this turn.",
+          }),
+        },
+      ],
+    });
+  });
+
+  it("answers a queued message instead of ending on a final-status call", async () => {
+    const queue: CoreModelMessage[] = [];
+    const seen: CoreModelMessage[][] = [];
+    let calls = 0;
+    const result = await runAgentToolLoop(
+      makeHandlers({
+        takeInterjections: () => queue.splice(0),
+        callModel: async ({ iterationMessages }) => {
+          seen.push(structuredClone(iterationMessages));
+          calls += 1;
+          return calls === 1
+            ? {
+                text: "",
+                toolCalls: [{ id: "s", name: "set_task_status", input: {} }],
+              }
+            : { text: "Answered.", toolCalls: [] };
+        },
+        runTool: async () => {
+          queue.push(user("wait, also this"));
+          return {
+            stop: false,
+            endTurn: true,
+            content: "Summary",
+            toolMessage: toolMessage("ok"),
+          };
+        },
+      }),
+    );
+    expect(calls).toBe(2);
+    expect(seen[1]!.at(-1)).toEqual(user("wait, also this"));
+    expect(result.text).toBe("Answered.");
+  });
+
   it("hands back an admitted message when the model call for it fails", async () => {
     const queue: CoreModelMessage[] = [];
     let failedWith: readonly CoreModelMessage[] | undefined;

@@ -390,7 +390,8 @@ export async function startSessionRunner(options: {
       maxElapsedMs: 0,
       maxToolResultBytes: 0,
     },
-    sessionInteractions: {},
+    // Todos and VS Code's set_task_status, as the Assistant's own chats.
+    sessionInteractions: { finalStatus: true },
     instructions: spec.instructions,
     // The task repository's AGENTS.md, rules and skills, as VS Code reads
     // them. Never the runner's home folder: the persona and memory stand in

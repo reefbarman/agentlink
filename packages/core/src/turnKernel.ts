@@ -111,6 +111,8 @@ export interface HeadlessTurnToolResult {
   /** Optional explicitly safe content projected into public events. */
   readonly displayContent?: unknown;
   readonly isError?: boolean;
+  /** See `HostToolResult.endTurn`. */
+  readonly endTurn?: { readonly finalText?: string };
 }
 
 export interface HeadlessTurnToolContext<
@@ -1544,10 +1546,16 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
         ? { displayContent: result.displayContent }
         : {}),
     });
+    // A successful final-status call ends the turn; a failed one never does.
+    const endTurn = result.endTurn !== undefined && result.isError !== true;
     return {
       stop: false,
-      content:
-        typeof result.modelContent === "string" ? result.modelContent : "",
+      ...(endTurn ? { endTurn: true } : {}),
+      content: endTurn
+        ? (result.endTurn?.finalText ?? "")
+        : typeof result.modelContent === "string"
+          ? result.modelContent
+          : "",
       toolMessage: {
         role: "user",
         content: [

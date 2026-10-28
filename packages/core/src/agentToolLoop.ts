@@ -57,6 +57,13 @@ export interface AgentToolLoopToolResult<TOutcome extends string = string> {
   outcome?: TOutcome;
   /** Keep this call's durable execution reservation open across suspension. */
   preserveReservation?: boolean;
+  /**
+   * The call set the turn's final status (VS Code's `set_task_status`).
+   * Later calls in the same assistant response are answered as skipped,
+   * then the turn ends with `content` as its fallback text, unless a queued
+   * user message is admitted first, in which case the model answers it.
+   */
+  endTurn?: boolean;
 }
 
 export interface AgentToolLoopHandlers<
@@ -233,6 +240,12 @@ export async function runAgentToolLoop<
       }
 
       let nextCallIndex = 0;
+      let ended:
+        | {
+            readonly call: AgentToolLoopCall;
+            readonly executed: AgentToolLoopToolResult<TOutcome>;
+          }
+        | undefined;
       while (nextCallIndex < result.toolCalls.length) {
         const batchStartIndex = nextCallIndex;
         const firstCall = result.toolCalls[nextCallIndex];
@@ -297,6 +310,7 @@ export async function runAgentToolLoop<
         const stopped = completedBatch.find(
           (completed) => completed.executed.stop,
         )?.executed;
+        ended = completedBatch.find((completed) => completed.executed.endTurn);
         const completedForAccounting = completedBatch.filter(
           (completed) => !completed.executed.preserveReservation,
         );
@@ -310,7 +324,7 @@ export async function runAgentToolLoop<
                   ? toolResultByteLength(completed.toolMessage)
                   : 0,
             })),
-            { checkLimits: !stopped },
+            { checkLimits: !stopped && !ended },
           );
         }
         if (stopped) {
@@ -320,6 +334,22 @@ export async function runAgentToolLoop<
             stopped.outcome,
           );
         }
+        if (ended) break;
+      }
+      if (ended) {
+        // VS Code's barrier: every later call in this response is skipped.
+        for (const call of result.toolCalls.slice(nextCallIndex)) {
+          const skipped = skippedToolResultMessage(call, ended.call.name);
+          toolMessages.push(skipped);
+          iterationMessages.push(skipped);
+        }
+        // A queued message takes priority over ending the turn.
+        if (admitInterjections()) continue;
+        handlers.onIterationMessagesComplete?.(iterationMessages);
+        return handlers.finishSuccess(
+          assistantText || ended.executed.content,
+          ended.executed.outcome,
+        );
       }
       admitInterjections();
     }
@@ -332,6 +362,26 @@ export async function runAgentToolLoop<
     }
     throw error;
   }
+}
+
+function skippedToolResultMessage(
+  call: AgentToolLoopCall,
+  skippedBy: string,
+): CoreModelMessage {
+  return {
+    role: "user",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: call.id,
+        content: JSON.stringify({
+          status: "skipped",
+          skipped_by: skippedBy,
+          reason: "Skipped because final task status was set for this turn.",
+        }),
+      },
+    ],
+  };
 }
 
 function toAssistantMessage(

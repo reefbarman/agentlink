@@ -1421,6 +1421,73 @@ describe("createWorkspaceHost", () => {
     }
   });
 
+  it("ends the turn on VS Code's set_task_status and completes the todos", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-final-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    const todos = [
+      { id: "a", content: "Build", activeForm: "Building", status: "pending" },
+    ];
+    const bodies: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        bodies.push(String(init?.body));
+        if (bodies.length === 1) return toolCall("todo_write", { todos });
+        if (bodies.length === 2) {
+          return toolCall("set_task_status", {
+            status: "completed",
+            summary: "Built it.",
+            completeTodos: true,
+            continueLabel: "Ship",
+            continuePrompt: "Ship the build",
+          });
+        }
+        return completion("model kept going");
+      });
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "final-owner",
+      sessionInteractions: { finalStatus: true },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      const completed: unknown[] = [];
+      await expect(
+        host.runTurn(sessionId, "Build it", {
+          onEvent: (event) => {
+            if (
+              event.type === "tool.completed" &&
+              event.toolName === "set_task_status"
+            ) {
+              completed.push(event.displayContent);
+            }
+          },
+        }),
+      ).resolves.toMatchObject({ status: "completed", text: "Built it." });
+      // The turn ended without another model call.
+      expect(fetch).toHaveBeenCalledTimes(2);
+      const done = todos.map((todo) => ({ ...todo, status: "completed" }));
+      expect(host.readSessionInteractions(sessionId).todos).toEqual(done);
+      expect(completed).toEqual([
+        {
+          finalStatus: {
+            status: "completed",
+            source: "tool",
+            summary: "Built it.",
+            continueAction: { label: "Ship", prompt: "Ship the build" },
+          },
+          todos: done,
+        },
+      ]);
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("sends each session's own Codex conversation state and request controls to the model", async () => {
     // VS Code keeps one ResponsesConversationState per session
     // (AgentSession.codexConversationState) so a WebSocket-to-HTTP fallback

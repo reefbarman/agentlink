@@ -465,6 +465,8 @@ function transcriptItemRows(
       message.streaming,
       message.attachments,
     ) +
+    // The final-status card's continue line.
+    (message.finalStatus?.continueAction ? 1 : 0) +
     turnActivityRows(
       projection,
       message.turnId,

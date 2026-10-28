@@ -684,6 +684,47 @@ describe("Ask Agent bridge", () => {
       expect(fake.operations.startTurn).toHaveBeenCalledTimes(2);
     });
 
+    it("stops on set_task_status and shows its final card", async () => {
+      const { fake, call } = await startBridge();
+      scriptSteps(fake, [
+        {
+          tools: [
+            { name: "todo_write", display: { todos: [todo("a", "pending")] } },
+            { name: "write_file", display: { path: "a.txt" } },
+            {
+              name: "set_task_status",
+              display: {
+                finalStatus: {
+                  status: "blocked",
+                  source: "tool",
+                  summary: "Need the API key.",
+                  continueAction: { label: "Retry", prompt: "Try again" },
+                },
+              },
+            },
+          ],
+          text: "",
+        },
+      ]);
+      await call("/api/ask-agent/send", { text: "do it" });
+      await vi.waitFor(async () => {
+        const { foreground } = snapshotOf(
+          (await call("/api/ask-agent/session")).body,
+        ).session;
+        expect(foreground.projectedMessages.at(-1)).toMatchObject({
+          role: "assistant",
+          finalMarker: {
+            status: "blocked",
+            summary: "Need the API key.",
+            continueAction: { label: "Retry", prompt: "Try again" },
+          },
+        });
+      });
+      // Unfinished todos, but an explicit final status: no second turn.
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(fake.operations.startTurn).toHaveBeenCalledTimes(1);
+    });
+
     it("stops after a turn that made no progress", async () => {
       const { fake, call } = await startBridge();
       scriptSteps(fake, [

@@ -1770,6 +1770,8 @@ Mark the current built-in agent turn's final status. This ends the current respo
 
 The summary is the single home for the turn's final response: the agent puts the full answer, findings, or change report there instead of writing it as text first and then restating it, so the last thing in the transcript is the complete response. It is sized to the content: one sentence for a tiny answer, a full structured breakdown for detailed explanations or non-trivial work, and never a terse “Done.” For code changes, include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help. Use `completeTodos: true` only when the existing todo list accurately represents finished work.
 
+The standalone CLI and the Assistant offer the same tool with the same parameters and result. The CLI shows the summary as a final card and puts the continue prompt in the composer on `Ctrl+N`; the Assistant shows the card on its reply, and a final status stops its Auto Continue. They have no background `result` envelopes, elapsed time, Work summary, default Continue action, or missing-status reminder.
+
 ### ask_user
 
 Ask the user one or more structured questions and wait for responses before continuing. Every call must include visible context in top-level `context` or at least one `questions[].context`. Preceding assistant messages are intentionally not considered: the rendered question card and restored session must remain understandable on their own.

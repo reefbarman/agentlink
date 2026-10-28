@@ -6,7 +6,12 @@ import type {
   CoreModelMessage,
   CoreReasoningEffort,
 } from "@agentlink/core";
+import {
+  buildTaskStatusMarker,
+  isTaskStatus,
+} from "@agentlink/core/interaction-tools";
 
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 export type StandaloneSessionPhase =
@@ -32,6 +37,8 @@ export interface StandaloneTranscriptMessage {
   readonly turnId?: string;
   readonly streaming: boolean;
   readonly attachments?: readonly StandaloneTranscriptAttachment[];
+  /** Set on the final-status card a `set_task_status` call produced. */
+  readonly finalStatus?: FinalMessageMarker;
 }
 
 export interface StandaloneThinkingActivity {
@@ -524,9 +531,32 @@ function reduceTurnEvent(
       const existing = state.tools.find(
         (tool) => tool.toolCallId === event.toolCallId,
       );
+      const finalStatus =
+        event.toolName === "set_task_status"
+          ? finalStatusFromDisplay(event.displayContent)
+          : undefined;
       return {
         ...state,
         revision,
+        ...(finalStatus
+          ? {
+              transcript: [
+                ...state.transcript.map((message) =>
+                  message.streaming
+                    ? { ...message, streaming: false }
+                    : message,
+                ),
+                {
+                  id: `${event.sessionId}:final:${event.turnId}:${event.toolCallId}`,
+                  role: "assistant" as const,
+                  text: finalStatus.summary ?? "",
+                  turnId: event.turnId,
+                  streaming: false,
+                  finalStatus,
+                },
+              ],
+            }
+          : {}),
         tools: upsertTool(state.tools, {
           toolCallId: event.toolCallId,
           turnId: event.turnId,
@@ -630,7 +660,13 @@ function appendAssistantDelta(
   let index = -1;
   for (let at = transcript.length - 1; at >= 0; at -= 1) {
     if (transcript[at]!.turnId === event.turnId) {
-      if (transcript[at]!.role === "assistant") index = at;
+      // Text after a final-status card is a new message, not part of it.
+      if (
+        transcript[at]!.role === "assistant" &&
+        !transcript[at]!.finalStatus
+      ) {
+        index = at;
+      }
       break;
     }
   }
@@ -704,17 +740,63 @@ function projectHydratedTranscript(
             )
             .map((block) => block.text)
             .join("\n");
-    if (!text) continue;
-    projected.push({
-      id: `${sessionId}:history:${index}`,
-      role: message.role,
-      text,
-      streaming: false,
-    });
+    if (text) {
+      projected.push({
+        id: `${sessionId}:history:${index}`,
+        role: message.role,
+        text,
+        streaming: false,
+      });
+    }
+    if (message.role !== "assistant" || typeof message.content === "string") {
+      continue;
+    }
+    // Rebuild each final-status card from its call, as VS Code restores it.
+    for (const block of message.content) {
+      if (block.type !== "tool_use" || block.name !== "set_task_status") {
+        continue;
+      }
+      const input = (block.input ?? {}) as Record<string, unknown>;
+      if (!isTaskStatus(input.status)) continue;
+      const finalStatus = buildTaskStatusMarker({
+        status: input.status,
+        params: input,
+      });
+      projected.push({
+        id: `${sessionId}:history:${index}:final:${block.id}`,
+        role: "assistant",
+        text: finalStatus.summary ?? "",
+        streaming: false,
+        finalStatus,
+      });
+    }
   }
   return activeTurnId
     ? associateLatestUserWithTurn(projected, activeTurnId)
     : projected;
+}
+
+function finalStatusFromDisplay(
+  displayContent: unknown,
+): FinalMessageMarker | undefined {
+  if (typeof displayContent !== "object" || displayContent === null) {
+    return undefined;
+  }
+  const marker = (displayContent as { finalStatus?: unknown }).finalStatus;
+  if (typeof marker !== "object" || marker === null) return undefined;
+  return isTaskStatus((marker as { status?: unknown }).status)
+    ? (marker as FinalMessageMarker)
+    : undefined;
+}
+
+/**
+ * The continue action offered after the latest turn, as VS Code's final
+ * card offers it: only while that card is the newest transcript entry.
+ */
+export function latestContinueAction(
+  projection: StandaloneSessionProjection,
+): FinalMessageMarker["continueAction"] | undefined {
+  return projection.transcript.at(-1)?.finalStatus?.continueAction;
 }
 
 function phaseForResult(result: AgentTurnResult): StandaloneSessionPhase {

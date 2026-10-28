@@ -23,12 +23,14 @@ import {
   hasVisibleReleaseUpdate,
   type ReleaseUpdateState,
 } from "../../../../src/updates/releaseUpdateTypes.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { StandaloneSessionController } from "../sessionController.js";
-import type {
-  StandaloneSessionProjection,
-  StandaloneThinkingActivity,
-  StandaloneTranscriptAttachment,
-  StandaloneToolActivity,
+import {
+  latestContinueAction,
+  type StandaloneSessionProjection,
+  type StandaloneThinkingActivity,
+  type StandaloneTranscriptAttachment,
+  type StandaloneToolActivity,
 } from "../sessionProjection.js";
 import { ActivityShelf, buildActivityShelfItems } from "./ActivityShelf.js";
 import type { TuiControlRequest, TuiControlResponse } from "./controlTypes.js";
@@ -409,6 +411,18 @@ export function InkChatApp({
       onOpenControlCenter?.();
       return;
     }
+    if (key.ctrl && input === "n") {
+      // VS Code's continue button: the prompt goes to the composer to edit.
+      const action = latestContinueAction(projection);
+      if (action && !busyRef.current) {
+        dispatch({
+          type: "composer.replaced",
+          value: sanitizeTerminalText(action.prompt),
+        });
+        composer.focus("composer");
+      }
+      return;
+    }
     if (key.ctrl && input === "t") {
       const todoIndex = activityItems.findIndex((item) => item.id === "tasks");
       if (todoIndex >= 0) {
@@ -733,6 +747,7 @@ export function InkChatApp({
                   text={item.message.text}
                   streaming={item.message.streaming}
                   attachments={item.message.attachments}
+                  finalStatus={item.message.finalStatus}
                   width={transcriptWidth}
                 />
                 {item.message.role === "user" && item.message.turnId ? (
@@ -926,15 +941,18 @@ function TranscriptMessage({
   text,
   streaming,
   attachments,
+  finalStatus,
   width,
 }: {
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly streaming: boolean;
   readonly attachments?: readonly StandaloneTranscriptAttachment[];
+  readonly finalStatus?: FinalMessageMarker;
   readonly width: number;
 }): React.JSX.Element {
   const user = role === "user";
+  const final = finalStatus ? finalStatusMeta(finalStatus.status) : undefined;
   // Row budget (see transcriptMessageRows): header + body + one gap row.
   return (
     <Box flexDirection="column" flexShrink={0} marginBottom={1}>
@@ -957,6 +975,12 @@ function TranscriptMessage({
               <Text bold color={tuiTheme.accentSoft}>
                 agentlink
               </Text>
+              {final ? (
+                <Text color={final.color}>
+                  {" · "}
+                  {final.icon} {final.label}
+                </Text>
+              ) : null}
             </>
           )}
         </Text>
@@ -974,10 +998,34 @@ function TranscriptMessage({
             />
           ))}
           {streaming ? <Text color={tuiTheme.accent}>▌</Text> : null}
+          {finalStatus?.continueAction ? (
+            <Text color={tuiTheme.muted} wrap="truncate-end">
+              <Text color={tuiTheme.accent}>↳ ^n </Text>
+              {sanitizeTerminalText(finalStatus.continueAction.label)}
+            </Text>
+          ) : null}
         </Box>
       </Box>
     </Box>
   );
+}
+
+/** VS Code's final-card labels (MessageBubble's getFinalMarkerMeta). */
+function finalStatusMeta(status: FinalMessageMarker["status"]): {
+  readonly icon: string;
+  readonly label: string;
+  readonly color: string;
+} {
+  switch (status) {
+    case "completed":
+      return { icon: "✓", label: "Task complete", color: tuiTheme.accent };
+    case "waiting_for_user":
+      return { icon: "?", label: "Waiting for input", color: tuiTheme.blue };
+    case "blocked":
+      return { icon: "!", label: "Blocked", color: tuiTheme.warn };
+    case "cancelled":
+      return { icon: "■", label: "Stopped", color: tuiTheme.muted };
+  }
 }
 
 function TurnActivityBlocks({

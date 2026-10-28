@@ -1428,9 +1428,10 @@ export async function startAssistantService(
         defaultModel: liveModelReference(currentDefaultModel),
         promptIdentity: { role: "a personal assistant" },
         turnLimits: SESSION_TURN_LIMITS,
-        // The todo list, for Auto Continue; no ask_user (approval cards and
-        // messages are how a chat reaches the owner).
-        sessionInteractions: {},
+        // The todo list, for Auto Continue, and VS Code's set_task_status
+        // (a final card that ends Auto Continue); no ask_user (approval
+        // cards and messages are how a chat reaches the owner).
+        sessionInteractions: { finalStatus: true },
         // The project's AGENTS.md, rules and skills, as VS Code reads them.
         // Never the server's home folder: the persona and memory stand in
         // for the owner's global instructions.
