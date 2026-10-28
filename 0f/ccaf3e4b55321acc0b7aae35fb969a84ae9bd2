@@ -1,0 +1,80 @@
+package.json
+  h_e08a86bb3a33a2 5
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_e08a86bb3a33a2 339-341
+  s_671e2a1764ea5e::t_58e7e36f51d902 336-338
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_e08a86bb3a33a2 170-171,236,406,410
+  s_09995add51ad52::t_15c024d93ba501 405,407-409
+src/agent/webview/components/ChatView.tsx
+  h_e08a86bb3a33a2 197-203,205-207,209-214,236-237,239-246,248,251
+  s_62f8dec57f3409::t_0a6d640a371a72 247
+src/browser-gateway/webview/styles.css
+  h_e08a86bb3a33a2 675-676,684-783,2771-2772,2951-2989
+  s_671e2a1764ea5e::t_e0c30e2552c947 784-785
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 654-657,2417-2445
+  s_671e2a1764ea5e::t_f7e8710081f3d7 652-653,2446-2453
+src/browser-gateway/webview/workspaceTabsBridge.ts
+  h_e08a86bb3a33a2 1-72
+src/agent/webview/components/ChatView.test.tsx
+  h_e08a86bb3a33a2 286-332
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_e08a86bb3a33a2 339-346,3083-3128
+  s_671e2a1764ea5e::t_1f30e007af7f47 3129
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 5314-5332
+src/browser-gateway/webview/browserGatewayNotificationsWorker.ts
+  h_e08a86bb3a33a2 13,106,109-114
+src/browser-gateway/webview/components/BrowserDiffViewer.tsx
+  h_e08a86bb3a33a2 41
+src/browser-gateway/BrowserGatewayService.ts
+  h_e08a86bb3a33a2 598-600,602-603,766
+  s_62f8dec57f3409::t_0e526ba91137b6 601,604
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 56-64,252-255,1282-1301,1670-1673,1676,1683,6366-6443,9258-9414,9918,10026-10027,10053-10060,10062,10064,10066-10089,10091-10095,10225-10230,10255
+  s_671e2a1764ea5e::t_f0619bccde1aff 1674-1675,1677,9415,10028-10052,10090,10231-10232
+src/browser-gateway/webview/WorkspaceTabList.tsx
+  h_e08a86bb3a33a2 1-150
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0fccaf3e4b55321acc0b7aae35fb969a84ae9bd2",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_09995add51ad52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6691439a-ef98-4b40-8d37-1e2326dc59a0",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_62f8dec57f3409": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a0f877e1-da5e-4199-a028-830daefb8e71",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_671e2a1764ea5e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "246f81f4-c6fe-4d0d-ae55-5c7d6b5135e4",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
