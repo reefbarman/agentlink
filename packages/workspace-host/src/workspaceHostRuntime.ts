@@ -41,6 +41,7 @@ import {
   WORKSPACE_BUILT_IN_MODE_SLUGS,
   workspaceModeAllowsWrites,
   workspaceModePromptCapabilities,
+  workspaceModeRunsReadOnlyCommands,
   workspaceToolsForMode,
 } from "./workspaceModes.js";
 import { randomBytes } from "node:crypto";
@@ -62,6 +63,7 @@ import {
   isWorkspaceCommandApprovalDisplay,
   type WorkspaceCommandApprovalDisplay,
   type WorkspaceCommandRule,
+  type WorkspaceReadOnlyCommandPolicy,
 } from "./commandTools.js";
 import {
   WorkspaceCommandSupervisor,
@@ -286,6 +288,16 @@ export interface CreateWorkspaceHostOptions {
      * has, so host-set values (proxy settings, tokens) cannot be replaced.
      */
     readonly environmentOverrides?: "allow" | "add_only";
+    /**
+     * A read-only command policy for a session, such as `refuse` for a
+     * reviewer that must not change anything. Commands VS Code's read-only
+     * check clears then run without asking. Sessions in a mode with VS
+     * Code's `read-only-command` group (Ask) use `prompt` without this.
+     */
+    readonly readOnlyCommands?: (request: {
+      readonly sessionId: string;
+      readonly turnId: string;
+    }) => WorkspaceReadOnlyCommandPolicy | undefined;
     readonly hasSessionGrant?: (
       proposal: WorkspaceCommandApprovalDisplay,
       request: { readonly sessionId: string; readonly turnId: string },
@@ -694,6 +706,18 @@ export async function createWorkspaceHost(
           ...(options.commands.environmentOverrides
             ? { environmentOverrides: options.commands.environmentOverrides }
             : {}),
+          readOnlyCommands: async (request) => {
+            // A background child follows its parent's policy.
+            const hosted = options.commands?.readOnlyCommands?.(
+              grantRequest(request),
+            );
+            if (hosted) return hosted;
+            if (!options.modes) return undefined;
+            const { mode } = await readSessionMode(request.sessionId);
+            return workspaceModeRunsReadOnlyCommands(mode)
+              ? "prompt"
+              : undefined;
+          },
           hasSessionGrant:
             inheritSessionGrants && options.commands.hasSessionGrant
               ? (proposal, request) =>

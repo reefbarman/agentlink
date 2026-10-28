@@ -5,6 +5,7 @@ import {
   readModeInstructionBlock,
   stripModeInstructionBlock,
   workspaceModeAllowsWrites,
+  workspaceModeRunsReadOnlyCommands,
   workspaceToolsForMode,
 } from "./workspaceModes.js";
 
@@ -31,8 +32,11 @@ describe("workspace modes", () => {
     expect(architect.has("get_terminal_output")).toBe(true);
     expect(architect.has("close_terminals")).toBe(false);
     const ask = workspaceToolsForMode(mode("ask"));
-    // read-only-command is not ported, so Ask runs no commands here.
-    expect(ask.has("execute_command")).toBe(false);
+    // Ask runs commands under VS Code's read-only policy.
+    expect(ask.has("execute_command")).toBe(true);
+    expect(ask.has("get_terminal_output")).toBe(false);
+    expect(workspaceModeRunsReadOnlyCommands(mode("ask"))).toBe(true);
+    expect(workspaceModeRunsReadOnlyCommands(mode("code"))).toBe(false);
     expect(ask.has("read_file")).toBe(true);
     expect(isToolAllowedInWorkspaceMode("write_file", ask)).toBe(false);
     // Tools in no group work in every mode.

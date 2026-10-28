@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New `@agentlink/core/command-classifier` subpath: VS Code's command classifier, including `isCommandEligibleForReadOnlyExecution` and `isCommandPathInsideWorkspace`. New browser-safe `@agentlink/core/shell-command` subpath: VS Code's shell lexer and compound-command splitter. VS Code delegates to both unchanged.
 - `@agentlink/core/command-output` also exports `COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES` (the JSON Schema for VS Code's `output_*` filter parameters) and `parseCommandOutputFilter`.
 - New `@agentlink/core/command-output` subpath: VS Code's command output filter (`filterCommandOutput` with `output_grep`, `output_grep_context`, `output_offset`, `output_head` and `output_tail`, the 200-line default and 64 KiB bound) and `redactCommandOutput`.
 - `buildBasePrompt` takes `codingAssistant: false` to leave out the "primarily a coding assistant" rule for a general assistant. It defaults to true, so VS Code's text is unchanged.

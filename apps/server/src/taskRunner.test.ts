@@ -187,6 +187,13 @@ function createFakeOperations(events: SessionEventHub) {
         return mode;
       },
     ),
+    markReviewSession: vi.fn(
+      async (
+        _auth: AssistantServerAuth,
+        _projectId: string,
+        _sessionId: string,
+      ) => {},
+    ),
     // A refused tool request resumes the review, which then finishes.
     answerInteraction: vi.fn(
       async (
@@ -555,6 +562,11 @@ describe("task runner", () => {
       created.projectId,
       "s2",
       "ask",
+    );
+    expect(test.calls.markReviewSession).toHaveBeenCalledWith(
+      expect.anything(),
+      created.projectId,
+      "s2",
     );
     expect(test.reviewTurns[0]!.text).toContain("Fix the clock test");
     expect(test.reviewTurns[0]!.text).toContain("-a\n+b");

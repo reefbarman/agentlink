@@ -28,6 +28,14 @@ export interface SessionApprovalModes {
     sessionId: string,
     mode: SessionApprovalMode,
   ): Promise<void>;
+  /**
+   * Mark an `ask` session as a reviewer: commands VS Code's read-only check
+   * clears run without asking and others are refused. Kept in memory only,
+   * so after a restart the session is plain `ask` again (every command
+   * waits), the safe side. Setting the session autonomous clears it.
+   */
+  markReviewer(projectId: string, sessionId: string): void;
+  isReviewer(projectId: string, sessionId: string): boolean;
 }
 
 interface StoredModes {
@@ -46,6 +54,7 @@ export async function openSessionApprovalModes(options: {
   readonly file: string;
 }): Promise<SessionApprovalModes> {
   const ask = new Set<string>();
+  const reviewers = new Set<string>();
   let raw: string | undefined;
   try {
     raw = await fs.readFile(options.file, "utf8");
@@ -114,10 +123,20 @@ export async function openSessionApprovalModes(options: {
         return;
       }
       // Autonomy applies only once it is durable.
+      reviewers.delete(entry);
       const next = new Set(ask);
       next.delete(entry);
       await persist(next);
       ask.delete(entry);
+    },
+    markReviewer(projectId, sessionId) {
+      const entry = key(projectId, sessionId);
+      if (!ask.has(entry)) throw new Error("reviewer_session_must_ask");
+      reviewers.add(entry);
+    },
+    isReviewer(projectId, sessionId) {
+      const entry = key(projectId, sessionId);
+      return reviewers.has(entry) && ask.has(entry);
     },
   };
 }

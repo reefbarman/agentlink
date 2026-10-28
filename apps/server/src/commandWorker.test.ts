@@ -214,6 +214,24 @@ describe("command worker", () => {
       enabled: true,
       shellExecutable: "/bin/bash",
     });
+    expect(commands?.readOnlyCommands).toBeUndefined();
+    // A reviewer session refuses commands the read-only check does not clear.
+    const reviewed = commandHostOptions(
+      {
+        commandWorker: {
+          host: "127.0.0.1",
+          port: test.worker.port,
+          token: { file: "/unused" },
+          shell: "/bin/bash",
+        },
+      },
+      test.client(),
+      undefined,
+      undefined,
+      (request) => request.sessionId === "review",
+    ).commands!.readOnlyCommands!;
+    expect(reviewed({ sessionId: "review", turnId: "t" })).toBe("refuse");
+    expect(reviewed({ sessionId: "chat", turnId: "t" })).toBeUndefined();
     await expect(
       executionBackend!.fileSystem.canExecute("/bin/sh"),
     ).resolves.toBe(true);

@@ -219,7 +219,7 @@ async function setup(
   script: Script,
   extra: Pick<
     Parameters<typeof startSessionRunnerPool>[0],
-    "approvalHostTools" | "approvalMode"
+    "approvalHostTools" | "approvalMode" | "reviewer"
   > = { approvalMode: () => "autonomous" },
   tamper?: (value: unknown) => unknown,
 ) {
@@ -397,6 +397,51 @@ describe("session runners", () => {
     );
     expect(JSON.stringify(read.messages)).toContain("All done.");
     expect(harness.manager.starts).toBe(1);
+  });
+
+  it("runs only read-only commands for a reviewer, refusing the rest without a card", async () => {
+    const results: string[] = [];
+    const harness = await setup(
+      async function* (request) {
+        const blocks = request.messages.flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        );
+        const done = blocks.filter((block) => block.type === "tool_result");
+        if (done.length > results.length) {
+          results.push(JSON.stringify(done.at(-1)));
+        }
+        if (done.length === 0) {
+          yield* toolCall("execute_command", { command: "pwd" });
+        } else if (done.length === 1) {
+          yield* toolCall("execute_command", {
+            command: "printf ran > blocked.txt",
+          });
+        } else {
+          yield* final("Reviewed.");
+        }
+      },
+      { approvalMode: () => "ask", reviewer: () => true },
+    );
+    const { sessionId } = await harness.routes.operations.createSession(
+      auth(),
+      "task-t1",
+    );
+    await harness.run(sessionId, "Review the task");
+
+    // pwd is cleared by the read-only check: it ran in the clone, unasked.
+    expect(results[0]).toContain(harness.clone);
+    expect(results[0]).toContain("exit_code");
+    // A write is refused outright, not put on a card.
+    expect(results[1]).toContain("readonly_policy_rejected");
+    await expect(
+      fs.stat(path.join(harness.clone, "blocked.txt")),
+    ).rejects.toThrow();
+    const read = await harness.routes.operations.readSession(
+      auth(),
+      "task-t1",
+      sessionId,
+    );
+    expect(JSON.stringify(read.messages)).toContain("Reviewed.");
   });
 
   it("runs an approval tool only for the card the owner answered", async () => {

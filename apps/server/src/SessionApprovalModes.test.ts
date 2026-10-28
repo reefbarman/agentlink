@@ -44,6 +44,29 @@ describe("session approval modes", () => {
     expect(reopened.get("home", "b")).toBe("autonomous");
   });
 
+  it("marks asking sessions as reviewers in memory only", async () => {
+    const file = await tempFile();
+    const modes = await openSessionApprovalModes({ file });
+    expect(() => modes.markReviewer("home", "a")).toThrow(
+      "reviewer_session_must_ask",
+    );
+    await modes.set("home", "a", "ask");
+    modes.markReviewer("home", "a");
+    expect(modes.isReviewer("home", "a")).toBe(true);
+    expect(modes.isReviewer("other", "a")).toBe(false);
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+      schemaVersion: 1,
+      ask: ["home/a"],
+    });
+    // After a restart the session still asks, but is no longer a reviewer.
+    const reopened = await openSessionApprovalModes({ file });
+    expect(reopened.get("home", "a")).toBe("ask");
+    expect(reopened.isReviewer("home", "a")).toBe(false);
+    // Becoming autonomous clears the mark.
+    await modes.set("home", "a", "autonomous");
+    expect(modes.isReviewer("home", "a")).toBe(false);
+  });
+
   it("keeps asking when a write fails, and refuses an unreadable file", async () => {
     const file = await tempFile();
     const modes = await openSessionApprovalModes({ file });

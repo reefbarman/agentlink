@@ -527,6 +527,11 @@ export function commandHostOptions(
     readonly policy: () => NetworkPolicy;
     readonly key: Buffer | undefined;
   },
+  /**
+   * Whether the session is a read-only reviewer: commands VS Code's
+   * read-only check clears run, others are refused.
+   */
+  reviewer?: (request: { readonly sessionId: string }) => boolean,
 ): Pick<CreateWorkspaceHostOptions, "executionBackend" | "commands"> {
   if (!client || !config.commandWorker) return {};
   return {
@@ -553,6 +558,12 @@ export function commandHostOptions(
       // A call's env adds variables; it never replaces the proxy settings
       // and other values set here.
       environmentOverrides: "add_only",
+      ...(reviewer
+        ? {
+            readOnlyCommands: (request) =>
+              reviewer(request) ? ("refuse" as const) : undefined,
+          }
+        : {}),
       ...(autonomous
         ? { hasSessionGrant: (_proposal, request) => autonomous(request) }
         : {}),
@@ -1379,10 +1390,16 @@ export async function startAssistantService(
     ) => {
       const autonomous = (request: { readonly sessionId: string }) =>
         approvalModes.get(project.id, request.sessionId) === "autonomous";
-      const commandOptions = commandHostOptions(config, worker, autonomous, {
-        policy: () => projectNetworkPolicy(catalog.get(project.id)),
-        key: policyKey,
-      });
+      const commandOptions = commandHostOptions(
+        config,
+        worker,
+        autonomous,
+        {
+          policy: () => projectNetworkPolicy(catalog.get(project.id)),
+          key: policyKey,
+        },
+        (request) => approvalModes.isReviewer(project.id, request.sessionId),
+      );
       const webTools = projectWebTools(config, {
         policy: () => projectNetworkPolicy(catalog.get(project.id)),
         key: policyKey,
@@ -2269,6 +2286,8 @@ export async function startAssistantService(
         cacheRoot: path.join(config.dataRoot, "runner-sessions"),
         approvalMode: (projectId, sessionId) =>
           approvalModes.get(projectId, sessionId),
+        reviewer: (projectId, sessionId) =>
+          approvalModes.isReviewer(projectId, sessionId),
         onAgentApproval: (request) =>
           agentNotifier?.notifyAgentApproval(request),
         onAgentChanged: (change) => agentNotifier?.notifyAgentChange(change),

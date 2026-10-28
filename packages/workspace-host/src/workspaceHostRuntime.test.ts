@@ -2797,4 +2797,105 @@ describe("createWorkspaceHost", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("runs only read-only commands in Ask mode and for refusing reviewers", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-ro-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "notes.txt"), "a\nb\n");
+    const toolResults: string[] = [];
+    const replies: Response[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content?: unknown }>;
+        };
+        const last = body.messages.at(-1);
+        if (last?.role === "tool") toolResults.push(String(last.content));
+        return replies.shift() ?? completion("done");
+      });
+    const reviewers = new Set<string>();
+    const host = await createWorkspaceHost({
+      ...readProfileConfig(fetch),
+      projectRoot,
+      dataRoot: path.join(parent, "data"),
+      ownerId: "read-only-owner",
+      modes: { enabled: true },
+      commands: {
+        enabled: true,
+        shellExecutable: "/bin/sh",
+        resolveEnvironment: () => ({ PATH: process.env.PATH }),
+        // Allow everything: the read-only policy must still decide.
+        hasSessionGrant: () => true,
+        readOnlyCommands: (request) =>
+          reviewers.has(request.sessionId) ? "refuse" : undefined,
+      },
+    });
+    try {
+      const { sessionId } = await host.createSession({ mode: "ask" });
+      // Cleared by VS Code's read-only check: runs without asking.
+      replies.push(toolCall("execute_command", { command: "wc -l notes.txt" }));
+      expect(await host.runTurn(sessionId, "count")).toMatchObject({
+        status: "completed",
+      });
+      expect(JSON.parse(toolResults.at(-1)!)).toMatchObject({
+        exit_code: 0,
+        output: expect.stringContaining("2 notes.txt"),
+      });
+      // Not cleared: a card, despite the session grant.
+      replies.push(
+        toolCall("execute_command", { command: "printf x > out.txt" }),
+      );
+      expect(await host.runTurn(sessionId, "write")).toMatchObject({
+        status: "suspended",
+        interaction: {
+          toolName: "execute_command",
+          summary: expect.stringContaining("not read-only"),
+        },
+      });
+      await host.cancel(sessionId);
+      await expect(
+        fs.stat(path.join(projectRoot, "out.txt")),
+      ).rejects.toThrow();
+      // background is refused under the read-only policy.
+      replies.push(
+        toolCall("execute_command", { command: "ls", background: true }),
+      );
+      await host.runTurn(sessionId, "background");
+      expect(toolResults.at(-1)).toContain(
+        "does not allow the background parameter",
+      );
+
+      // A reviewer refuses instead of asking, in any mode.
+      const reviewer = await host.createSession();
+      reviewers.add(reviewer.sessionId);
+      replies.push(toolCall("execute_command", { command: "ls" }));
+      await host.runTurn(reviewer.sessionId, "list");
+      expect(JSON.parse(toolResults.at(-1)!)).toMatchObject({ exit_code: 0 });
+      replies.push(
+        toolCall("execute_command", { command: "printf x > out.txt" }),
+      );
+      expect(await host.runTurn(reviewer.sessionId, "write")).toMatchObject({
+        status: "completed",
+      });
+      expect(toolResults.at(-1)).toContain("readonly_policy_rejected");
+      await expect(
+        fs.stat(path.join(projectRoot, "out.txt")),
+      ).rejects.toThrow();
+
+      // Code mode keeps the normal policy.
+      const code = await host.createSession({ mode: "code" });
+      replies.push(
+        toolCall("execute_command", { command: "printf x > out.txt" }),
+      );
+      await host.runTurn(code.sessionId, "write");
+      expect(await fs.readFile(path.join(projectRoot, "out.txt"), "utf8")).toBe(
+        "x",
+      );
+    } finally {
+      await host.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

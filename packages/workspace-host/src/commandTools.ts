@@ -7,6 +7,10 @@ import {
   type HostToolResolver,
 } from "@agentlink/core";
 import {
+  isCommandEligibleForReadOnlyExecution,
+  isCommandPathInsideWorkspace,
+} from "@agentlink/core/command-classifier";
+import {
   COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
   filterCommandOutput,
   parseCommandOutputFilter,
@@ -52,6 +56,14 @@ export interface WorkspaceCommandApprovalDisplay {
   readonly operationDigest: string;
 }
 
+/**
+ * How a read-only session (VS Code's Ask mode, a read-only reviewer) treats
+ * a command VS Code's read-only check does not clear: `prompt` shows an
+ * approval card whatever allow rules and session grants say, `refuse`
+ * refuses it. Cleared commands run without asking either way.
+ */
+export type WorkspaceReadOnlyCommandPolicy = "prompt" | "refuse";
+
 export interface WorkspaceCommandSessionGrant {
   readonly command: string;
   readonly cwd: string;
@@ -87,6 +99,13 @@ export interface CreateWorkspaceCommandToolsOptions {
    * `add_only` refuses one the host environment already has.
    */
   readonly environmentOverrides?: "allow" | "add_only";
+  /** The read-only policy for a call, or undefined for the normal one. */
+  readonly readOnlyCommands?: (
+    request: Pick<HostToolResolveRequest, "principal" | "sessionId" | "turnId">,
+  ) =>
+    | WorkspaceReadOnlyCommandPolicy
+    | undefined
+    | Promise<WorkspaceReadOnlyCommandPolicy | undefined>;
   readonly hasSessionGrant?: (
     proposal: WorkspaceCommandApprovalDisplay,
     request: Pick<HostToolResolveRequest, "principal" | "sessionId" | "turnId">,
@@ -281,6 +300,45 @@ export async function createWorkspaceCommandTools(
       launch: prepared.launch,
       ...(outputFilter ? { outputFilter } : {}),
     };
+    const boundary = unsandboxed ? "unsandboxed" : "sandboxed";
+    const readOnly = await options.readOnlyCommands?.(request);
+    if (readOnly) {
+      const parameter = (["background", "env"] as const).find(
+        (name) => request.input[name] !== undefined,
+      );
+      if (parameter) {
+        return {
+          decision: "deny",
+          reason: `readonly_policy_rejected: Read-only command execution does not allow the ${parameter} parameter`,
+        };
+      }
+      const rejection = readOnlyRejection(
+        prepared.launch.command,
+        prepared.launch.cwd,
+        commandRoot,
+      );
+      if (!rejection) {
+        // Cleared, as VS Code's read-only profile runs it. A prompt rule
+        // still asks.
+        if (prepared.display.ruleDecision !== "prompt") {
+          return { decision: "allow", preparedInput };
+        }
+      } else if (readOnly === "refuse") {
+        return {
+          decision: "deny",
+          reason: `readonly_policy_rejected: ${rejection}. Use a dedicated read or search tool, or a simpler local read the check recognises (for example rg --no-config, or git diff --no-ext-diff --no-textconv).`,
+        };
+      }
+      // Not cleared: the user decides, whatever allow rules say.
+      return {
+        decision: "require_user",
+        summary: rejection
+          ? `Run ${boundary} command that is not read-only (${rejection})`
+          : `Run ${boundary} foreground command`,
+        displayContent: prepared.display,
+        preparedInput,
+      };
+    }
     if (
       prepared.display.mode === "foreground" &&
       !options.requiresApproval?.(prepared.display, request) &&
@@ -289,7 +347,6 @@ export async function createWorkspaceCommandTools(
     ) {
       return { decision: "allow", preparedInput };
     }
-    const boundary = unsandboxed ? "unsandboxed" : "sandboxed";
     return {
       decision: "require_user",
       summary:
@@ -878,6 +935,28 @@ function parseRequestedEnvironment(
     requested[key] = entry;
   }
   return requested;
+}
+
+/**
+ * Why VS Code's read-only command check does not clear a command, or
+ * undefined when it does.
+ */
+function readOnlyRejection(
+  command: string,
+  cwd: string,
+  root: string,
+): string | undefined {
+  const workspaceRoots = [root];
+  if (!isCommandPathInsideWorkspace(cwd, workspaceRoots)) {
+    return "Read-only command execution requires a working directory inside the workspace";
+  }
+  const eligibility = isCommandEligibleForReadOnlyExecution(command, {
+    cwd,
+    workspaceRoots,
+  });
+  return eligibility.eligible
+    ? undefined
+    : `Read-only command execution rejected ${eligibility.reason}`;
 }
 
 /** VS Code's `timeout` in seconds, or a replayed `timeoutMs`. */

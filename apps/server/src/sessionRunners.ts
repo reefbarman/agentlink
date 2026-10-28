@@ -158,6 +158,8 @@ export interface SessionRunnerPoolOptions {
     projectId: string,
     sessionId: string,
   ) => SessionApprovalMode;
+  /** Whether the session is a read-only reviewer (see `markReviewer`). */
+  readonly reviewer?: (projectId: string, sessionId: string) => boolean;
   readonly onAgentApproval?: (request: {
     readonly projectId: string;
     readonly parentSessionId: string;
@@ -317,6 +319,8 @@ export async function startSessionRunnerPool(
           options.log(`Stopped the runner for ${projectId}`);
         },
         approvalMode: (sessionId) => options.approvalMode(projectId, sessionId),
+        reviewer: (sessionId) =>
+          options.reviewer?.(projectId, sessionId) ?? false,
         onAgentApproval: (request) =>
           options.onAgentApproval?.({ ...request, projectId }),
         onAgentChanged: (change) =>

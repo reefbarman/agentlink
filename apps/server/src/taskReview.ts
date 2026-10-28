@@ -91,7 +91,7 @@ export function reviewPrompt(
           "",
         ]
       : []),
-    `The change is ${task.baseCommit ?? "the base"}..${task.headCommit ?? "HEAD"} on branch ${task.branch}, checked out in this project. You may read any file here for context. Do not edit files, run commands or start other agents: those requests will be refused.`,
+    `The change is ${task.baseCommit ?? "the base"}..${task.headCommit ?? "HEAD"} on branch ${task.branch}, checked out in this project. You may read any file here for context and run read-only inspection commands (for example \`git log\`, \`git diff --no-ext-diff --no-textconv\`, \`rg --no-config <pattern> <path>\`, \`ls\` or \`wc\`). Do not edit files, run other commands or start other agents: those requests will be refused.`,
     ...taskLayout(task),
     "- In findings, give `file` relative to the repository (as in the diff).",
     "",

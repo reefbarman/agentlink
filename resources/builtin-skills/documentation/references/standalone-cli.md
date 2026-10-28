@@ -282,7 +282,7 @@ As in VS Code, every tool stays in the model's tool list and a tool outside the 
 
 - Only you can change the mode. The model has no `switch_mode` and no `ask_user` `modeSwitch`; the instructions tell it to ask you to switch instead.
 - Orchestrate is not offered, because the CLI's background agents don't have model tiers.
-- Ask mode runs no commands. VS Code lets it run commands it can verify are read-only, which the CLI doesn't check yet.
+- Ask mode runs commands through VS Code's read-only check. Commands it clears (for example `git status`, `git log`, `rg --no-config x src`, `ls`, `wc`) run inside the project without asking; anything else gets an approval card even when an allow rule or earlier approval would cover it, so you decide each one. `background` and `env` are refused. VS Code refuses those other commands outright in Ask mode instead of asking.
 - Review mode can't write review notes to temporary files, because the CLI's file tools only write inside the project.
 
 ## Session recall and condensing

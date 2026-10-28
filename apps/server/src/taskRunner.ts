@@ -609,6 +609,8 @@ export function createTaskRunner(options: TaskRunnerOptions): TaskRunner {
       model,
     );
     await operations.setApprovalMode(entry.auth, projectId, sessionId, "ask");
+    // Read-only commands run; anything else is refused, not asked.
+    await operations.markReviewSession?.(entry.auth, projectId, sessionId);
     assertNotStopping(entry);
     const unavailable = (outcome: Outcome): Outcome => {
       // Read once: the host hands each failure's reason out a single time.

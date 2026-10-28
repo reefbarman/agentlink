@@ -52,6 +52,24 @@
         "default": "./dist/cjs/codexDeviceAuth.cjs"
       }
     },
+    "./shell-command": {
+      "browser": {
+        "types": "./dist/shellCommand.d.ts",
+        "default": "./dist/shellCommand.js"
+      },
+      "edge": {
+        "types": "./dist/shellCommand.d.ts",
+        "default": "./dist/shellCommand.js"
+      },
+      "import": {
+        "types": "./dist/shellCommand.d.ts",
+        "default": "./dist/shellCommand.js"
+      },
+      "require": {
+        "types": "./dist/cjs/shellCommand.d.cts",
+        "default": "./dist/cjs/shellCommand.cjs"
+      }
+    },
     ".": {
       "browser": null,
       "edge": null,
@@ -326,6 +344,18 @@
       "require": {
         "types": "./dist/cjs/applyDiff.d.cts",
         "default": "./dist/cjs/applyDiff.cjs"
+      }
+    },
+    "./command-classifier": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/commandClassifier.d.ts",
+        "default": "./dist/commandClassifier.js"
+      },
+      "require": {
+        "types": "./dist/cjs/commandClassifier.d.cts",
+        "default": "./dist/cjs/commandClassifier.cjs"
       }
     },
     "./command-output": {

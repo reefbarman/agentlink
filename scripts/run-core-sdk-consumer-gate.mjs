@@ -24,6 +24,8 @@ const BROWSER_SAFE_CORE_EXPORTS = new Set([
   "./voice",
   "./browser-runtime",
   "./codex-device-auth",
+  // VS Code's shell lexer and command splitter: pure string code.
+  "./shell-command",
 ]);
 
 async function run(command, args, options = {}) {

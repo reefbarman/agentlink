@@ -195,6 +195,16 @@ export interface AssistantSessionOperations {
     sessionId: string,
     mode: SessionApprovalMode,
   ): Promise<SessionApprovalMode>;
+  /**
+   * Make an `ask` session a read-only reviewer: commands VS Code's
+   * read-only check clears run, others are refused (see
+   * `SessionApprovalModes.markReviewer`).
+   */
+  markReviewSession?(
+    auth: AssistantServerAuth,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void>;
   createSession(
     auth: AssistantServerAuth,
     projectId: string,
@@ -710,6 +720,15 @@ export function createAssistantWorkspaceRoutes(
       await assertStillAuthorized(auth);
       await options.approvalModes.set(projectId, sessionId, mode);
       return approvalMode(projectId, sessionId);
+    },
+    async markReviewSession(auth, projectId, sessionId) {
+      assertSessionId(sessionId);
+      await authorize(auth, projectId, "approve");
+      if (!options.approvalModes) {
+        throw new HttpError(409, "approval_mode_unavailable");
+      }
+      await assertStillAuthorized(auth);
+      options.approvalModes.markReviewer(projectId, sessionId);
     },
     async createSession(auth, projectId, model, reasoningEffort) {
       const mount = await authorize(auth, projectId, "write");

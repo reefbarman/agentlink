@@ -54,14 +54,13 @@ const MODE_GOVERNED_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Tool names a mode allows here. Follows VS Code's `getToolsForMode`,
- * except `read-only-command` (VS Code's read-only command review is not
- * ported, so it grants nothing) and Review mode's temporary-file
- * `write_file` (this host only writes inside the project).
+ * except Review mode's temporary-file `write_file` (this host only writes
+ * inside the project). `read-only-command` grants `execute_command` under
+ * the read-only policy (see `workspaceModeRunsReadOnlyCommands`).
  */
 export function workspaceToolsForMode(mode: AgentMode): Set<string> {
   const allowed = new Set<string>();
   for (const group of mode.toolGroups) {
-    if (group === "read-only-command") continue;
     for (const tool of group === "mcp" ? [] : (TOOL_GROUPS[group] ?? [])) {
       allowed.add(tool);
     }
@@ -75,6 +74,17 @@ export function isToolAllowedInWorkspaceMode(
   allowed: ReadonlySet<string>,
 ): boolean {
   return !MODE_GOVERNED_TOOLS.has(toolName) || allowed.has(toolName);
+}
+
+/**
+ * Whether a mode's commands run under VS Code's read-only policy: it has
+ * the `read-only-command` group and not the full `command` group (Ask).
+ */
+export function workspaceModeRunsReadOnlyCommands(mode: AgentMode): boolean {
+  return (
+    mode.toolGroups.includes("read-only-command") &&
+    !mode.toolGroups.includes("command")
+  );
 }
 
 /** Whether a mode can change project files. */

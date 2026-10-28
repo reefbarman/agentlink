@@ -99,6 +99,7 @@ export type RunnerEvent =
  */
 export function createRunnerSessionState() {
   const modes = new Map<string, SessionApprovalMode>();
+  const reviewers = new Set<string>();
   const queued = new Map<string, AgentTurnInterjection[]>();
   const turns = new Map<string, AbortController>();
   const failures = new Map<string, string>();
@@ -113,6 +114,18 @@ export function createRunnerSessionState() {
       (modes.get(request.sessionId) ?? "autonomous") === "autonomous",
     setMode(sessionId: string, mode: unknown) {
       if (mode === "autonomous" || mode === "ask") modes.set(sessionId, mode);
+      if (mode === "autonomous") reviewers.delete(sessionId);
+    },
+    /**
+     * A read-only reviewer (an `ask` session the control plane marked):
+     * commands VS Code's read-only check clears run, others are refused.
+     */
+    reviewer: (request: { readonly sessionId: string }) =>
+      reviewers.has(request.sessionId) &&
+      modes.get(request.sessionId) === "ask",
+    setReviewer(sessionId: string, reviewer: unknown) {
+      if (reviewer === true) reviewers.add(sessionId);
+      else reviewers.delete(sessionId);
     },
     onAgentApproval(request: {
       readonly parentSessionId: string;
@@ -238,6 +251,7 @@ export function runnerHostRoutes(
     async (body, { signal, stream }) => {
       const sessionId = text(body.sessionId, "session_id");
       state.setMode(sessionId, body.approvalMode);
+      state.setReviewer(sessionId, body.reviewer);
       if (state.turns.has(sessionId)) {
         throw Object.assign(new Error("turn_in_progress"), {
           code: "turn_in_progress",
@@ -411,6 +425,8 @@ export async function startSessionRunner(options: {
       resolveEnvironment: () => ({ ...spec.commandEnvironment }),
       // A call's env adds variables; it never replaces the task's own.
       environmentOverrides: "add_only",
+      readOnlyCommands: (request) =>
+        state.reviewer(request) ? "refuse" : undefined,
       hasSessionGrant: (_proposal, request) => state.autonomous(request),
     },
     hostTools: remoteHostTools(control),

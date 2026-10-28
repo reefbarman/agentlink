@@ -43,6 +43,11 @@ export interface RemoteWorkspaceHostOptions {
   readonly stop: () => Promise<void>;
   /** The session's mode, sent with every turn. */
   readonly approvalMode: (sessionId: string) => SessionApprovalMode;
+  /**
+   * Whether the session is a read-only reviewer, sent with every turn: its
+   * commands run only when VS Code's read-only check clears them.
+   */
+  readonly reviewer?: (sessionId: string) => boolean;
   readonly onAgentApproval?: (request: {
     readonly parentSessionId: string;
     readonly childSessionId: string;
@@ -319,6 +324,7 @@ export function createRemoteWorkspaceHost(
           {
             sessionId,
             approvalMode: options.approvalMode(sessionId),
+            ...(options.reviewer?.(sessionId) ? { reviewer: true } : {}),
             ...body,
           },
           connection.signal,
