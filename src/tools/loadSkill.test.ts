@@ -372,6 +372,60 @@ describe("handleLoadSkill", () => {
     });
   });
 
+  it("follows a built-in skill path from another extension install to the catalog entry", async () => {
+    const skillContent = "# Built-in documentation";
+    const revision = createHash("sha256").update(skillContent).digest("hex");
+    const currentPath =
+      "/extensions/agentlink.agentlink-1.68.9/resources/builtin-skills/documentation/SKILL.md";
+    const stalePath =
+      "/extensions/agentlink.agentlink-1.68.8/resources/builtin-skills/documentation/SKILL.md";
+    const artifactProvider = {
+      resolvePath: vi.fn((filePath: string) => filePath),
+      normalizeExistingPath: vi.fn((filePath: string) => filePath),
+      readTextFile: vi.fn(async () => skillContent),
+    };
+    const skills = [
+      {
+        id: "builtin:agentlink:documentation",
+        name: "documentation",
+        revision,
+        skillPath: currentPath,
+        realSkillPath: currentPath,
+        sourceScope: "builtin" as const,
+      },
+    ];
+
+    const loaded = await loadSkill(
+      { path: stalePath },
+      skills,
+      artifactProvider,
+    );
+
+    expect(loaded.activation).toMatchObject({
+      id: "builtin:agentlink:documentation",
+      skillPath: currentPath,
+    });
+    expect(artifactProvider.readTextFile).toHaveBeenCalledWith(currentPath);
+    expect(artifactProvider.readTextFile).not.toHaveBeenCalledWith(stalePath);
+    expect(JSON.parse(textOf(loaded.result))).toMatchObject({
+      kind: "skill_activation",
+      skillPath: currentPath,
+      requestedPath: stalePath,
+      content: skillContent,
+    });
+
+    // Non-built-in skills keep the exact-path requirement.
+    const globalLoad = await loadSkill(
+      { path: "/old/skills/documentation/SKILL.md" },
+      [{ ...skills[0], sourceScope: "global" as const }],
+      artifactProvider,
+    );
+    expect(globalLoad.activation).toBeUndefined();
+    expect(JSON.parse(textOf(globalLoad.result)).status).toBe(
+      "skill_not_in_catalog",
+    );
+  });
+
   it("reads legacy built-in resource paths without activating the owner", async () => {
     const skillContent = "# Built-in documentation";
     const resourceContent = "# Complete reference\nBundled documentation.";

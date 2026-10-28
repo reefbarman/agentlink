@@ -399,6 +399,37 @@ export async function loadSkill(
   const matches = advertisedSkills.filter(
     (skill) => skill.name === requestedName || skill.id === requestedName,
   );
+
+  // A built-in skill path from an older or newer extension install (for
+  // example after an update mid-session) names the same bundled skill as the
+  // live catalog entry. Follow it to that entry instead of failing; the load
+  // still goes through the normal advertised-path verification.
+  const builtInRedirect =
+    !diagnostics.length && requestedPath
+      ? builtInSkillRedirect(requestedPath, matches)
+      : undefined;
+  if (builtInRedirect) {
+    const redirected = await loadSkill(
+      { path: builtInRedirect.skillPath },
+      advertisedSkills,
+      artifactProvider,
+      catalogDiagnostics,
+      fallbackArtifactProvider,
+    );
+    if (!redirected.result.isError && redirected.activation) {
+      const data = redirected.result.data as Record<string, unknown>;
+      return {
+        result: jsonResult({
+          ...data,
+          requestedPath: params.path,
+          pathNote:
+            "The requested built-in skill path belongs to a different extension install. Loaded the current catalog entry; use skillPath for later references.",
+        }),
+        activation: redirected.activation,
+      };
+    }
+  }
+
   const candidates = matches.slice(0, 10).map((skill) => ({
     id: skill.id,
     name: skill.name,
@@ -431,6 +462,30 @@ export async function loadSkill(
             : "No matching skill exists in the current session catalog. Refresh the session catalog or check the skill's enabled state and mode; reading an arbitrary file does not activate it.",
     }),
   };
+}
+
+const BUILTIN_SKILL_SUFFIX =
+  /[\\/]resources[\\/]builtin-skills[\\/]([^\\/]+)[\\/]SKILL\.md$/;
+
+/**
+ * The unique built-in catalog skill a stale built-in `SKILL.md` path refers
+ * to: same bundled skill directory name, differing only in install root.
+ */
+function builtInSkillRedirect(
+  requestedPath: string,
+  matches: readonly AllowedSkill[],
+): AllowedSkill | undefined {
+  const requestedDir = BUILTIN_SKILL_SUFFIX.exec(requestedPath)?.[1];
+  if (!requestedDir) return undefined;
+  const builtIns = matches.filter(
+    (skill) =>
+      skill.sourceScope === "builtin" &&
+      BUILTIN_SKILL_SUFFIX.exec(skill.skillPath)?.[1] === requestedDir,
+  );
+  return builtIns.length === 1 &&
+    path.resolve(builtIns[0].skillPath) !== path.resolve(requestedPath)
+    ? builtIns[0]
+    : undefined;
 }
 
 // --- read_skill_resource (was src/tools/readSkillResource.ts) ---
