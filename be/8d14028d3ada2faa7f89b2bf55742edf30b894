@@ -1,0 +1,89 @@
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_e08a86bb3a33a2 107
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 9,829
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 8-11,411,8835
+  s_0b219f714aa42b::t_07c8e941db1aa2 410
+packages/workspace-host/src/sessionInteractionTools.ts
+  h_e08a86bb3a33a2 20-21,24,27-28,42-44,48-63,97-101,150-152,155,161,168-170,176-177,179-183,191,193-195,197-199,213-217,221,225-245,249-251,256-265,357-409
+  s_0b219f714aa42b::t_6ca72b7c30630c 41,64-65,154,156,178,184,218-219,410-414
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 107,110-112,160-176,240-253,1108-1161,1165,1198,1204-1269,1291-1292,1631,1903-1904,2007,2034,2036-2039,2041-2044,2070-2073,2079-2081
+  s_0b219f714aa42b::t_a602b77a0a7ba1 109,177-178,239,254,1270,1287-1290,1293,2040,2074
+apps/cli/src/sessionController.ts
+  h_e08a86bb3a33a2 137-142,672-680
+  s_0b219f714aa42b::t_6ec8fa24f666ba 681
+apps/cli/src/modeSwitchControl.ts
+  h_e08a86bb3a33a2 1-43
+packages/core/src/hostTools.ts
+  h_e08a86bb3a33a2 36-39,42-44
+  s_0b219f714aa42b::t_60a5bc5f33c76d 41,45
+apps/cli/src/sessionController.test.ts
+  h_e08a86bb3a33a2 294-306
+packages/core/src/interactionTools.test.ts
+  h_e08a86bb3a33a2 3,5,9-11,17,21-75
+  s_0b219f714aa42b::t_60ec14a6a9ff55 76
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 250-251
+packages/core/src/agentToolLoop.test.ts
+  h_e08a86bb3a33a2 437-484
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 17-18
+apps/cli/src/questionControls.ts
+  h_e08a86bb3a33a2 79-94
+apps/cli/src/questionControls.test.ts
+  h_e08a86bb3a33a2 152-182
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 47-48,53,170-173,828-838,2246-2250
+  s_0b219f714aa42b::t_bd87332e836d7f 2251
+packages/workspace-host/src/workspaceModes.ts
+  h_e08a86bb3a33a2 146-148,206-207,213-214,217-219,222
+  s_0b219f714aa42b::t_1021d4fd35cd58 211-212,215
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 281,283-286
+packages/core/src/interactionTools.ts
+  h_e08a86bb3a33a2 346-457
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/cli/src/cli.test.ts
+  h_e08a86bb3a33a2 515,519,594-604,606,613
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 78,80,5115-5119
+  s_0b219f714aa42b::t_46afd43fccf529 5114,5120
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 116-118,1558-1563
+  s_0b219f714aa42b::t_d6550013e8015a 115,119
+apps/cli/src/modeSwitchControl.test.ts
+  h_e08a86bb3a33a2 1-68
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2901-3119
+packages/core/src/agentToolLoop.ts
+  h_e08a86bb3a33a2 67-73,351-352,357-359,361,384,393,397
+  s_0b219f714aa42b::t_801e6e7812da78 349-350,353,360,392,394-396,398
+resources/builtin-skills/documentation/references/release-notes.md
+  s_0b219f714aa42b::t_d2cf990d93714e 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be8d14028d3ada2faa7f89b2bf55742edf30b894",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0b219f714aa42b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d365e3b1-08f5-42d5-b4c1-598db898b0f7",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
