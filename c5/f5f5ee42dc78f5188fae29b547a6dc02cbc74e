@@ -1,0 +1,109 @@
+packages/core/src/agentToolLoop.test.ts
+  h_e08a86bb3a33a2 384-469
+apps/cli/src/tui/tuiCommand.ts
+  h_e08a86bb3a33a2 118
+packages/core/src/hostTools.ts
+  h_e08a86bb3a33a2 32-37
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 393-394
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/core/src/turnKernel.ts
+  h_e08a86bb3a33a2 114-115,1549-1550,1553-1555
+  s_1eec73383ab273::t_95357b25efb962 1556-1558
+packages/core/src/agentToolLoop.ts
+  h_e08a86bb3a33a2 60-66,243-248,313,327,337-352,367-384
+  s_1eec73383ab273::t_9c0e5083ee9239 385-386
+apps/cli/src/sessionProjection.ts
+  h_e08a86bb3a33a2 9-12,14,40-41,534-537,541-559,663,665-667,669,743,746-768,770,772,779-799
+  s_0862082b29c992::t_0481354214fc88 664,668,744-745,769,771,800-801
+apps/cli/src/tui/InkChatApp.tsx
+  h_e08a86bb3a33a2 26,28-33,414-425,750,944,951,955,978-983,1001-1006,1013-1028
+  s_0862082b29c992::t_2162457285f973 1029-1030
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1431-1434
+apps/cli/src/sessionProjection.test.ts
+  h_e08a86bb3a33a2 5,419-499
+  s_0862082b29c992::t_705a05336f4fec 500-501
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 254
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_e08a86bb3a33a2 1279-1282,1284-1285,1288-1293
+  s_0862082b29c992::t_1d64a1739efc51 1283,1286
+apps/server/src/sessionProgress.test.ts
+  h_e08a86bb3a33a2 4,8,35-40,46,49-54,61-71,89,98-105,108,110-113,116,118,120,123,126-159
+  s_0862082b29c992::t_ec50f10a566b51 72-74,114,160
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 1424-1490
+packages/workspace-host/src/sessionInteractionTools.test.ts
+  h_e08a86bb3a33a2 4,142-254
+  s_0862082b29c992::t_699a5d550879d5 255-256
+apps/server/src/askAgentBridge.test.ts
+  h_e08a86bb3a33a2 687-727
+apps/server/src/askAgentBridge.ts
+  h_e08a86bb3a33a2 77,80,106-107,718-719,1684-1691,1907,1915-1916,1921-1922
+  s_0862082b29c992::t_53761a4b0416df 720,1913-1914,1917,1919-1920,1923
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 157
+apps/cli/src/cli.ts
+  h_e08a86bb3a33a2 901-902
+apps/server/src/sessionProgress.ts
+  h_e08a86bb3a33a2 1-5,7,15-16,24,27-29,34,36,43-55,74,81-85,92-94,105-106,112,118,123-155
+  s_0862082b29c992::t_fe73c129212e4f 26,35,56-57,95-96,116-117,119,156-157
+packages/workspace-host/src/sessionInteractionTools.ts
+  h_e08a86bb3a33a2 11,17,20-22,26,50-55,66-70,122-124,220-265
+  s_2f0a2ac9efaa66::t_255b5ff6154ae9 266-270
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 437
+apps/cli/src/tui/tuiShellState.ts
+  h_e08a86bb3a33a2 468-469
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1773-1774
+resources/builtin-skills/documentation/references/release-notes.md
+  s_a4728abbf35cf5::t_3c08857584ca85 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5f5f5ee42dc78f5188fae29b547a6dc02cbc74e",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0862082b29c992": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "003287cd-dff8-4c2a-9ca1-c537810fc521",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_1eec73383ab273": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3720fa2-ea65-45bf-87a5-624a0b43c6a3",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_2f0a2ac9efaa66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c8cd52d3-eb2f-4a81-a1c5-1e6f8d3e2dba",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_a4728abbf35cf5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b1144ad-d856-4f3f-86df-5cddd7ae63a5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
