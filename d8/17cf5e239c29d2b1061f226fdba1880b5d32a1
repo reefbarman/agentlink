@@ -1,0 +1,74 @@
+apps/server/src/workspaceRoutes.ts
+  h_e08a86bb3a33a2 198-207,724-731
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2800-2900
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 285
+packages/core/src/commandSplitter.ts
+  h_e08a86bb3a33a2 1-211
+packages/core/src/shellCommand.ts
+  h_e08a86bb3a33a2 1-7
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/SessionApprovalModes.test.ts
+  h_e08a86bb3a33a2 47-69
+apps/server/src/taskReview.ts
+  h_e08a86bb3a33a2 94
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 155
+src/approvals/commandTierClassifier.ts
+  h_e08a86bb3a33a2 1-14
+apps/server/src/taskRunner.test.ts
+  h_e08a86bb3a33a2 190-196,566-569
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 10-12,59-65,102-108,303-341,940-959
+packages/workspace-host/src/workspaceModes.test.ts
+  h_e08a86bb3a33a2 8,35-39
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 102,117,119-128,254,428-429
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 530-534,561-566,1400-1401,2289-2290
+apps/server/src/remoteWorkspaceHost.ts
+  h_e08a86bb3a33a2 46-50,327
+packages/workspace-host/src/workspaceModes.ts
+  h_e08a86bb3a33a2 57-59,79-87
+apps/server/src/sessionRunner.test.ts
+  h_e08a86bb3a33a2 402-443
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 14,16,40-41,63,65,72-73
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 44,66,291-300,709-720
+packages/core/src/commandClassifier.ts
+  h_e08a86bb3a33a2 1-1514
+src/util/shellLex.ts
+  h_e08a86bb3a33a2 1-23
+src/approvals/commandSplitter.ts
+  h_e08a86bb3a33a2 1,4-6
+apps/server/src/SessionApprovalModes.ts
+  h_e08a86bb3a33a2 31-38,57,126,132-139
+apps/server/src/commandWorker.test.ts
+  h_e08a86bb3a33a2 217-234
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/sessionRunners.ts
+  h_e08a86bb3a33a2 161-162,322-323
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 13
+apps/server/README.md
+  h_e08a86bb3a33a2 701
+packages/core/package.json
+  h_e08a86bb3a33a2 55-72,349-360
+apps/server/src/taskRunner.ts
+  h_e08a86bb3a33a2 612-613
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d817cf5e239c29d2b1061f226fdba1880b5d32a1",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
