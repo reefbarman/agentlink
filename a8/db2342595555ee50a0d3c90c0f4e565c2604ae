@@ -1,0 +1,66 @@
+src/agent/AgentSessionManager.background.test.ts
+  h_e08a86bb3a33a2 2625,2627,2630,4792,4812-4814,5180-5226,5228,5238-5241,5244,5247-5248,5250-5257,5259,5262,5271-5272,5274-5276,5278,5281-5283,5285-5291,5293,5295-5296,5298-5301,5303-5309,5311,6786,6791-6792,6843,6871,6875-6876
+  h_9630b74bdac540 5249
+  s_07a02e6c379d37::t_43ae301841bd6e 5227,5273,5277,5279,5302
+src/agent/background/backgroundBudgetPolicy.ts
+  h_e08a86bb3a33a2 3,5,11-19,31
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/agent/background/reviewHandoff.ts
+  h_e08a86bb3a33a2 39,41
+packages/core/src/backgroundAgentTools.ts
+  h_e08a86bb3a33a2 290,414
+src/agent/backgroundModelRouter.ts
+  h_e08a86bb3a33a2 369
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 269-270
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1552,1558,1564,1577,1582
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 188,513-516,610-613,618,621-638,640-648,650-651,981,10545-10548,12061-12063,14252-14255,14269
+  s_690572877a3635::t_3483966713a250 512,517,639,10541-10544
+packages/core/src/systemPromptSections.ts
+  h_e08a86bb3a33a2 1221,1228,1233,1235-1236
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1660,1668-1672,1676,1678,2029,2033
+  h_e08a86bb3a33a2 1659,1661-1667
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 161
+src/agent/backgroundModelRouter.test.ts
+  h_e08a86bb3a33a2 628
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 1899-1901
+resources/builtin-skills/documentation/references/release-notes.md
+  s_690572877a3635::t_2f1c8558a047f9 5
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 844-846,851-853,858-860,865-867,872-874,879-881,889-891,897,899,905,907,913,915,921,923,929,931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8db2342595555ee50a0d3c90c0f4e565c2604ae",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_07a02e6c379d37": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07b07dc9-5613-4276-a077-87f70d6c63b9",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_690572877a3635": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0484fbd6-b38b-4de2-a40a-5f49436515b4",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
