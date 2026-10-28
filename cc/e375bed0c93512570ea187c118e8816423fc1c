@@ -1,0 +1,50 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 11-23,93-95,104-109,156,288-293,322,325,327,435-436,438-442,461-464,473,556
+  s_02edd3bb2b2907::t_727b502b638780 308-313,437
+packages/core/build-cjs.mjs
+  h_e08a86bb3a33a2 7,39,54,64
+packages/core/src/systemPromptSections.ts
+  h_e08a86bb3a33a2 1-954
+packages/core/src/agentModes.ts
+  h_e08a86bb3a33a2 1-177
+packages/core/README.md
+  h_e08a86bb3a33a2 67
+packages/core/package.json
+  h_e08a86bb3a33a2 355-378
+packages/core/src/agentModes.test.ts
+  h_e08a86bb3a33a2 1-55
+packages/core/watch.mjs
+  h_e08a86bb3a33a2 32,59,86,113
+src/agent/modes.ts
+  h_e08a86bb3a33a2 5-17,26-27,29-32,34,36
+  s_02edd3bb2b2907::t_d4f25ef88d273e 4,28
+packages/core/src/systemPromptSections.test.ts
+  h_e08a86bb3a33a2 1-169
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/release-notes.md
+  s_02edd3bb2b2907::t_fb05d933bfc15f 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cce375bed0c93512570ea187c118e8816423fc1c",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02edd3bb2b2907": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f5ba0613-9547-4ee7-a434-2f4bf59bb94b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
