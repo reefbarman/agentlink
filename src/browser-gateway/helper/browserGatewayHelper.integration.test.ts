@@ -9663,6 +9663,14 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     server.on("request", helper.handleRequest);
     await helper.start();
+    // The helper polls these files every second. Under full-suite load a poll
+    // can see the config written above and queue a debounced refresh, so
+    // stop watching and let any queued refresh settle before counting.
+    const { getAskAgentMcpConfigPaths } =
+      await import("../../agent/mcpConfig.js");
+    for (const file of getAskAgentMcpConfigPaths()) unwatchFile(file);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    refresh.mockClear();
     const base = `http://127.0.0.1:${port}`;
     const root = await fetch(base);
     const cookie = String(root.headers.get("set-cookie")?.split(";")[0] ?? "");
