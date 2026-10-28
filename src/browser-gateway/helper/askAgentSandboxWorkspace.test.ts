@@ -107,20 +107,29 @@ describe("AskAgentSandboxWorkspace", () => {
   it("advertises the command, file and present tools", () => {
     expect(ASK_AGENT_SANDBOX_TOOLS.map((tool) => tool.name)).toEqual([
       "execute_command",
-      "get_command_output",
-      "list_commands",
-      "stop_command",
+      "get_terminal_output",
+      "close_terminals",
       "write_file",
       "apply_diff",
       "present_files",
     ]);
     const execute = ASK_AGENT_SANDBOX_TOOLS[0]!;
+    // VS Code's execute_command parameters, plus the sandbox's own.
     expect(
       Object.keys(
         (execute.input_schema as { properties: Record<string, unknown> })
           .properties,
       ),
-    ).toContain("background");
+    ).toEqual(
+      expect.arrayContaining([
+        "background",
+        "timeout",
+        "env",
+        "output_grep",
+        "output_tail",
+        "sandbox_permissions",
+      ]),
+    );
   });
 
   it("advertises the same apply_diff contract the shared workspace file tools enforce", async () => {
@@ -294,15 +303,56 @@ describe("AskAgentSandboxWorkspace", () => {
       { workDirectory: work, denied: ["/Users/example", "/Users"] },
     ]);
 
-    const commandId = (parse(ran.content).record as { commandId: string })
-      .commandId;
+    // VS Code's execute_command result.
+    const result = parse(ran.content) as {
+      command_id: string;
+      exit_code: number;
+      output: string;
+    };
+    expect(result).toMatchObject({ exit_code: 0, state: "completed" });
     const observed = await workspace.execute({
       sessionId: "chat-1",
       turnId: "turn-2",
-      toolName: "get_command_output",
-      input: { commandId },
+      toolName: "get_terminal_output",
+      input: { command_id: result.command_id, output_grep: "scratch|work" },
     });
     expect(observed.isError).toBe(false);
+    expect(parse(observed.content)).toMatchObject({
+      command_id: result.command_id,
+      lines_shown: 1,
+      total_lines: 2,
+    });
+
+    // env adds variables in the scratch folder but never replaces PATH.
+    const withEnv = await workspace.execute({
+      sessionId: "chat-1",
+      turnId: "turn-3",
+      toolName: "execute_command",
+      input: {
+        command: 'printf "$SMOKE"',
+        env: { SMOKE: "added" },
+        timeout: 5,
+      },
+    });
+    expect(parse(withEnv.content)).toMatchObject({ output: "added" });
+    const replaced = await workspace.execute({
+      sessionId: "chat-1",
+      turnId: "turn-3",
+      toolName: "execute_command",
+      input: { command: "true", env: { PATH: "/tmp" } },
+    });
+    expect(replaced.content).toContain("env_override_not_allowed");
+    // Names the sandbox drops or sets itself are refused, not lost.
+    for (const name of ["API_TOKEN", "HOME", "NODE_OPTIONS"]) {
+      const managed = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-3",
+        toolName: "execute_command",
+        input: { command: "true", env: { [name]: "x" } },
+      });
+      expect(managed.content).toContain(`env_override_not_allowed`);
+      expect(managed.content).toContain(name);
+    }
 
     await fs.writeFile(
       path.join(work, "chart.png"),
@@ -378,16 +428,29 @@ describe("AskAgentSandboxWorkspace", () => {
         grantedRoot: project,
       });
 
-      // get_command_output finds granted-folder commands too.
-      const commandId = (parse(ran.content).record as { commandId: string })
-        .commandId;
+      // get_terminal_output finds granted-folder commands too.
+      const commandId = (parse(ran.content) as { command_id: string })
+        .command_id;
       const observed = await workspace.execute({
         sessionId: "chat-1",
         turnId: "turn-2",
-        toolName: "get_command_output",
-        input: { commandId },
+        toolName: "get_terminal_output",
+        input: { command_id: commandId },
       });
       expect(observed.isError).toBe(false);
+
+      // The approval card shows the command, not env, so env stays in the
+      // scratch folder.
+      const withEnv = await workspace.execute({
+        sessionId: "chat-1",
+        turnId: "turn-3",
+        toolName: "execute_command",
+        input: { command: "true", cwd: project, env: { CI: "1" } },
+        commandRoots: [project],
+        requestApproval,
+      });
+      expect(withEnv.content).toContain("env_needs_scratch_folder");
+      expect(requestApproval).toHaveBeenCalledTimes(1);
     });
 
     it("starts background commands that outlive the turn until stopped", async () => {
@@ -423,15 +486,16 @@ describe("AskAgentSandboxWorkspace", () => {
         command: "sleep 30",
         cwd: project,
         background: true,
-        timeoutMs: 9 * 60 * 60 * 1_000,
+        timeout: 9 * 60 * 60,
       });
-      expect(tooLong.content).toContain("timeoutMs must be at most");
+      expect(tooLong.content).toContain("timeout must be at most");
+      // timeoutMs from older chats is still checked.
       const foregroundTooLong = await run({
         command: "true",
         cwd: project,
         timeoutMs: 20 * 60 * 1_000,
       });
-      expect(foregroundTooLong.content).toContain("timeoutMs must be at most");
+      expect(foregroundTooLong.content).toContain("timeout must be at most");
       expect(requestApproval).not.toHaveBeenCalled();
 
       const turn = new AbortController();
@@ -444,12 +508,15 @@ describe("AskAgentSandboxWorkspace", () => {
         background: true,
         timeoutMs: ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS,
       });
-      const record = parse(started.content).record as {
-        commandId: string;
+      const record = parse(started.content) as {
+        command_id: string;
         state: string;
-        mode: string;
       };
-      expect(record).toMatchObject({ state: "running", mode: "background" });
+      expect(record).toMatchObject({
+        state: "running",
+        is_running: true,
+        backgrounded: true,
+      });
       // Stopping the turn that started it does not stop it.
       turn.abort();
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -463,13 +530,15 @@ describe("AskAgentSandboxWorkspace", () => {
           toolName,
           input,
         });
-      const listed = parse((await tool("list_commands")).content) as unknown;
-      expect(listed).toEqual([
-        expect.objectContaining({
-          commandId: record.commandId,
-          state: "running",
-        }),
-      ]);
+      const waited = parse(
+        (
+          await tool("get_terminal_output", {
+            command_id: record.command_id,
+            wait_seconds: 0.3,
+          })
+        ).content,
+      );
+      expect(waited).toMatchObject({ is_running: true, output: "started\n" });
       // Edits wait for it.
       const edit = await workspace.execute({
         sessionId: "chat-bg",
@@ -484,14 +553,21 @@ describe("AskAgentSandboxWorkspace", () => {
         requestEditApproval: async () => ({ decision: "run" }),
       });
       expect(edit.content).toContain("command_running");
-      const stopped = await tool("stop_command", {
-        commandId: record.commandId,
+      const stopped = await tool("close_terminals", {
+        names: [record.command_id, "missing"],
       });
-      expect(parse(stopped.content)).toMatchObject({ state: "cancelled" });
-      const output = await tool("get_command_output", {
-        commandId: record.commandId,
+      expect(parse(stopped.content)).toEqual({
+        closed: [record.command_id],
+        not_found: ["missing"],
+        remaining: [],
       });
-      expect(output.content).toContain("started");
+      const output = await tool("get_terminal_output", {
+        command_id: record.command_id,
+      });
+      expect(parse(output.content)).toMatchObject({
+        state: "cancelled",
+        output: "started\n",
+      });
     });
 
     it("holds edits in a nested grant while a command from the enclosing grant runs", async () => {
@@ -564,23 +640,32 @@ describe("AskAgentSandboxWorkspace", () => {
           commandRoots: [project],
           requestApproval: approver({ decision: "run" }),
         });
+      const commandIds: string[] = [];
       for (let i = 0; i < ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS; i += 1) {
-        expect((await start()).isError).toBe(false);
+        const started = await start();
+        expect(started.isError).toBe(false);
+        commandIds.push(
+          (parse(started.content) as { command_id: string }).command_id,
+        );
       }
       expect((await start()).content).toContain("too_many_background_commands");
       await workspace.revokeCommandRoot(project);
-      const listed = parse(
-        (
-          await workspace.execute({
-            sessionId: "chat-cap",
-            turnId: "turn-2",
-            toolName: "list_commands",
-            input: {},
-          })
-        ).content,
-      ) as unknown as Array<{ state: string }>;
-      expect(listed).toHaveLength(ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS);
-      expect(listed.every((entry) => entry.state === "cancelled")).toBe(true);
+      for (const commandId of commandIds) {
+        const observed = await workspace.execute({
+          sessionId: "chat-cap",
+          turnId: "turn-2",
+          toolName: "get_terminal_output",
+          input: { command_id: commandId },
+        });
+        expect(parse(observed.content)).toMatchObject({ state: "cancelled" });
+      }
+      const closed = await workspace.execute({
+        sessionId: "chat-cap",
+        turnId: "turn-2",
+        toolName: "close_terminals",
+        input: {},
+      });
+      expect(closed.content).toBe("No running commands to close.");
     });
 
     it("does not run a declined command and runs an edited one as written", async () => {
@@ -674,7 +759,7 @@ describe("AskAgentSandboxWorkspace", () => {
       });
       await workspace.revokeCommandRoot(project);
       const stopped = await running;
-      expect(parse(stopped.content).record).toMatchObject({
+      expect(parse(stopped.content)).toMatchObject({
         state: "cancelled",
       });
 
@@ -862,8 +947,8 @@ describe("AskAgentSandboxWorkspace", () => {
       expect(ran.isError).toBe(false);
       await vi.waitFor(() => expect(networkDecisions).toEqual(["reject"]));
       expect(proposals[0]!.signal.aborted).toBe(true);
-      const commandId = (parse(ran.content).record as { commandId: string })
-        .commandId;
+      const commandId = (parse(ran.content) as { command_id: string })
+        .command_id;
       expect(proposals[0]!.commandId).toBe(commandId);
     });
 

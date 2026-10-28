@@ -387,6 +387,21 @@ export async function createSandboxPrivateDirectories(
   };
 }
 
+/**
+ * Whether a variable passed in the host environment would not reach a
+ * sandboxed command as given: the default policy drops `*KEY*`, `*SECRET*`
+ * and `*TOKEN*` names, and the sandbox sets or reserves the others itself.
+ */
+export function isSandboxManagedEnvironmentName(name: string): boolean {
+  return (
+    isReservedEnvironmentName(name) ||
+    name.toLowerCase() === "npm_config_cache" ||
+    name === "GOCACHE" ||
+    name === "GOLANGCI_LINT_CACHE" ||
+    /KEY|SECRET|TOKEN/i.test(name)
+  );
+}
+
 function isReservedEnvironmentName(name: string): boolean {
   return (
     RESERVED_ENVIRONMENT_NAMES.has(name) ||

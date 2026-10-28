@@ -19,6 +19,70 @@ export interface CommandOutputFilterOptions {
   output_grep_context?: number;
 }
 
+/**
+ * JSON Schema properties for VS Code's output filters, as `execute_command`
+ * and `get_terminal_output` advertise them.
+ */
+export const COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES = Object.freeze({
+  output_head: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "Return only the first N lines of output. Overrides the default 200-line tail cap.",
+  },
+  output_tail: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "Return only the last N lines of output. Overrides the default 200-line tail cap.",
+  },
+  output_offset: {
+    type: "integer",
+    minimum: 0,
+    description:
+      'Skip first N lines/entries before applying head/tail, equivalent to "| tail -n +N | head -N". Defaults to 0.',
+  },
+  output_grep: {
+    type: "string",
+    description:
+      "Filter output to lines matching this regex pattern (case-insensitive). Applied before head/tail. Use this instead of piping through grep.",
+  },
+  output_grep_context: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "Number of context lines around each grep match (like grep -C). Only used with output_grep.",
+  },
+} as const);
+
+/** The output filter fields of a tool input, ignoring anything invalid. */
+export function parseCommandOutputFilter(
+  value: unknown,
+): CommandOutputFilterOptions | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const count = (field: unknown) =>
+    typeof field === "number" && Number.isFinite(field) && field >= 0
+      ? Math.floor(field)
+      : undefined;
+  const filter: CommandOutputFilterOptions = {};
+  for (const key of [
+    "output_head",
+    "output_tail",
+    "output_offset",
+    "output_grep_context",
+  ] as const) {
+    const parsed = count(input[key]);
+    if (parsed !== undefined) filter[key] = parsed;
+  }
+  if (typeof input.output_grep === "string") {
+    filter.output_grep = input.output_grep;
+  }
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
 export interface CommandOutputFilterResult {
   filtered: string;
   totalLines: number;

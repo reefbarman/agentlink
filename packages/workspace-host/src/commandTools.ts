@@ -7,7 +7,9 @@ import {
   type HostToolResolver,
 } from "@agentlink/core";
 import {
+  COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
   filterCommandOutput,
+  parseCommandOutputFilter,
   type CommandOutputFilterOptions,
 } from "@agentlink/core/command-output";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -85,12 +87,6 @@ export interface CreateWorkspaceCommandToolsOptions {
    * `add_only` refuses one the host environment already has.
    */
   readonly environmentOverrides?: "allow" | "add_only";
-  /**
-   * `execute_command`'s model result: `vscode` (default) is VS Code's
-   * result with filtered output; `observation` is the raw supervisor
-   * observation, for a host that advertises its own older schema.
-   */
-  readonly executeResult?: "vscode" | "observation";
   readonly hasSessionGrant?: (
     proposal: WorkspaceCommandApprovalDisplay,
     request: Pick<HostToolResolveRequest, "principal" | "sessionId" | "turnId">,
@@ -130,6 +126,11 @@ interface RulesFile {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
+/** The whole retained window (the supervisor keeps at most 1 MB). */
+const RETAINED_OBSERVATION_BYTES = 1_000_000;
+/** The tail kept as display content for the UI. */
+const DISPLAY_OBSERVATION_BYTES = 128_000;
+const MAX_WAIT_SECONDS = 600;
 const POLICY_REVISION = "standalone-cli-commands-v1";
 
 export async function createWorkspaceCommandTools(
@@ -252,11 +253,9 @@ export async function createWorkspaceCommandTools(
         return true;
       },
       commandRootRelative,
-      options.executeResult ?? "vscode",
     ),
-    observeCommandTool(request, options.supervisor, options.ownerId),
-    listCommandsTool(request, options.supervisor, options.ownerId),
-    stopCommandTool(request, options.supervisor, options.ownerId),
+    terminalOutputTool(request, options.supervisor, options.ownerId),
+    closeTerminalsTool(request, options.supervisor, options.ownerId),
   ];
 
   const authorizeToolCall: AuthorizeToolCall = async (request) => {
@@ -277,7 +276,7 @@ export async function createWorkspaceCommandTools(
       };
     }
     // The output filters only shape the result; the launch is what's bound.
-    const outputFilter = parseOutputFilter(request.input);
+    const outputFilter = parseCommandOutputFilter(request.input);
     const preparedInput = {
       launch: prepared.launch,
       ...(outputFilter ? { outputFilter } : {}),
@@ -397,12 +396,11 @@ function executeCommandTool(
   consumeBackgroundAcknowledgement: (commandId: string) => boolean,
   /** The command root relative to the project root; "" for the root. */
   commandRootRelative = "",
-  resultFormat: "vscode" | "observation" = "vscode",
 ): HostTool {
   return defineTool({
     name: "execute_command",
     description:
-      "Run an exact non-interactive command through /bin/zsh -c. There is no PTY, stdin, persistent shell state, or sandbox. Background launch requires explicit concurrent-editing acknowledgement. Use output_grep, output_head and output_tail instead of piping through grep, head or tail.",
+      "Run an exact non-interactive command through /bin/zsh -c. There is no PTY, stdin, persistent shell state, or sandbox. Background launch requires explicit concurrent-editing acknowledgement; read a background command's output with get_terminal_output and its command_id. Use output_grep, output_head and output_tail instead of piping through grep, head or tail.",
     inputSchema: {
       type: "object",
       properties: {
@@ -441,35 +439,7 @@ function executeCommandTool(
           description:
             'Environment variables to set for this command (e.g. {"CI":"1"}), merged with the base environment. Values are literal, not shell-expanded. PWD is set by the host.',
         },
-        output_head: {
-          type: "integer",
-          minimum: 0,
-          description:
-            "Return only the first N lines of output. Overrides the default 200-line tail cap.",
-        },
-        output_tail: {
-          type: "integer",
-          minimum: 0,
-          description:
-            "Return only the last N lines of output. Overrides the default 200-line tail cap.",
-        },
-        output_offset: {
-          type: "integer",
-          minimum: 0,
-          description:
-            'Skip first N lines/entries before applying head/tail, equivalent to "| tail -n +N | head -N". Defaults to 0.',
-        },
-        output_grep: {
-          type: "string",
-          description:
-            "Filter output to lines matching this regex pattern (case-insensitive). Applied before head/tail. Use this instead of piping through grep.",
-        },
-        output_grep_context: {
-          type: "integer",
-          minimum: 0,
-          description:
-            "Number of context lines around each grep match (like grep -C). Only used with output_grep.",
-        },
+        ...COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
       },
       required: ["command"],
       additionalProperties: false,
@@ -524,123 +494,190 @@ function executeCommandTool(
           ? await supervisor.launchBackground(launch, context.signal)
           : await supervisor.launchForeground(launch, context.signal);
       const record = await mutations.withExclusive(run, context.signal);
-      const observation = supervisor.observe(
+      const identity = { ownerId: launch.ownerId, sessionId: launch.sessionId };
+      const result = commandOutputResult(
+        supervisor,
         record.commandId,
-        { ownerId: launch.ownerId, sessionId: launch.sessionId },
-        { offset: 0, limitBytes: 128_000 },
+        identity,
+        parseCommandOutputFilter(input.outputFilter),
       );
-      if (resultFormat === "observation") {
-        return commandResult(observation);
-      }
-      return executeCommandResult(
-        observation,
-        parseOutputFilter(input.outputFilter),
-      );
-    },
-  });
-}
-
-function observeCommandTool(
-  discovery: HostToolResolveRequest,
-  supervisor: WorkspaceCommandSupervisor,
-  ownerId: string,
-): HostTool {
-  return defineTool({
-    name: "get_command_output",
-    description:
-      "Observe bounded retained stdout/stderr and current state for a command owned by this session.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        commandId: { type: "string", minLength: 1 },
-        offset: { type: "integer", minimum: 0 },
-        limitBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
-      },
-      required: ["commandId"],
-      additionalProperties: false,
-    },
-    effect: "read",
-    displayInput: (input) => ({ commandId: input.commandId }),
-    handler: async (input, context) => {
-      if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      try {
-        return commandResult(
-          supervisor.observe(
-            requiredString(input.commandId, "commandId"),
-            { ownerId, sessionId: context.sessionId },
-            {
-              offset: optionalInteger(input.offset),
-              limitBytes: optionalInteger(input.limitBytes),
-            },
-          ),
-        );
-      } catch (error) {
-        return toolError(errorMessage(error));
-      }
-    },
-  });
-}
-
-function listCommandsTool(
-  discovery: HostToolResolveRequest,
-  supervisor: WorkspaceCommandSupervisor,
-  ownerId: string,
-): HostTool {
-  return defineTool({
-    name: "list_commands",
-    description:
-      "List retained foreground and background commands for this session.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-    effect: "read",
-    handler: async (_input, context) => {
-      if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
-      const records = supervisor.list({
-        ownerId,
-        sessionId: context.sessionId,
-      });
       return {
-        modelContent: JSON.stringify(records),
-        displayContent: records,
+        ...result,
+        isError:
+          result.record.state === "failed" ||
+          result.record.state === "timed_out" ||
+          result.record.state === "interrupted",
       };
     },
   });
 }
 
-function stopCommandTool(
+/**
+ * VS Code's `get_terminal_output`. Commands here have no terminals, so a
+ * command is selected by its `command_id` alone.
+ */
+function terminalOutputTool(
   discovery: HostToolResolveRequest,
   supervisor: WorkspaceCommandSupervisor,
   ownerId: string,
 ): HostTool {
   return defineTool({
-    name: "stop_command",
+    name: "get_terminal_output",
     description:
-      "Stop a running command owned by this session with TERM then KILL escalation.",
+      "Read retained output and state for a running, timed-out or finished command this session started with execute_command, selected by its command_id. Uses execute_command's output filters; `kill` stops only that command if it is still running.",
     inputSchema: {
       type: "object",
-      properties: { commandId: { type: "string", minLength: 1 } },
-      required: ["commandId"],
+      properties: {
+        command_id: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Command ID returned by execute_command. A missing or expired ID never selects another command.",
+        },
+        wait_seconds: {
+          type: "number",
+          minimum: 0,
+          maximum: MAX_WAIT_SECONDS,
+          description:
+            "Wait up to N seconds before returning. Polls every 250ms and returns early when the command finishes. The command keeps running when the wait ends unless kill is true.",
+        },
+        kill: {
+          type: "boolean",
+          description:
+            "Stop the running command (TERM, then KILL). Returns captured output.",
+        },
+        ...COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
+      },
+      required: ["command_id"],
       additionalProperties: false,
     },
     effect: "write",
-    displayInput: (input) => ({ commandId: input.commandId }),
+    displayInput: (input) => ({
+      command_id: input.command_id,
+      ...(typeof input.wait_seconds === "number"
+        ? { wait_seconds: input.wait_seconds }
+        : {}),
+      ...(input.kill === true ? { kill: true } : {}),
+    }),
     handler: async (input, context) => {
       if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
+      const commandId =
+        typeof input.command_id === "string" ? input.command_id : "";
+      const identity = { ownerId, sessionId: context.sessionId };
+      const running = () => {
+        const state = supervisor.observe(commandId, identity, {
+          limitBytes: 1,
+        }).record.state;
+        return state === "running";
+      };
       try {
-        const record = await supervisor.stop(
-          requiredString(input.commandId, "commandId"),
-          { ownerId, sessionId: context.sessionId },
-        );
-        return {
-          modelContent: JSON.stringify(record),
-          displayContent: record,
-        };
-      } catch (error) {
-        return toolError(errorMessage(error));
+        running();
+      } catch {
+        return unavailableCommandResult(commandId);
       }
+      const waitSeconds =
+        typeof input.wait_seconds === "number" && input.wait_seconds > 0
+          ? Math.min(input.wait_seconds, MAX_WAIT_SECONDS)
+          : 0;
+      const deadline = Date.now() + waitSeconds * 1_000;
+      while (Date.now() < deadline && !context.signal?.aborted && running()) {
+        await delay(Math.min(250, deadline - Date.now()), context.signal);
+      }
+      // Ending or cancelling the call must not stop the command it watches.
+      let killed: boolean | undefined;
+      if (input.kill === true && !context.signal?.aborted) {
+        killed = running();
+        if (killed) await supervisor.stop(commandId, identity);
+      }
+      const result = commandOutputResult(
+        supervisor,
+        commandId,
+        identity,
+        parseCommandOutputFilter(input),
+        killed === undefined ? {} : { killed },
+        false,
+      );
+      return {
+        modelContent: result.modelContent,
+        displayContent: result.displayContent,
+      };
+    },
+  });
+}
+
+/**
+ * VS Code's `close_terminals`. Commands here have no terminals or names:
+ * it stops this session's running commands, or those whose command IDs
+ * are given in `names`.
+ */
+function closeTerminalsTool(
+  discovery: HostToolResolveRequest,
+  supervisor: WorkspaceCommandSupervisor,
+  ownerId: string,
+): HostTool {
+  return defineTool({
+    name: "close_terminals",
+    description:
+      "Stop this session's running commands, for example a background dev server you no longer need. With no arguments, stops every running command; pass command IDs in names to stop only those. Output and final state stay readable with get_terminal_output.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        names: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          description:
+            "Command IDs to stop (commands here have no terminal names). Omit to stop all running commands.",
+        },
+      },
+      additionalProperties: false,
+    },
+    effect: "write",
+    displayInput: (input) =>
+      Array.isArray(input.names) ? { names: input.names } : {},
+    handler: async (input, context) => {
+      if (!sameTurn(discovery, context)) return toolError("tool_turn_mismatch");
+      const identity = { ownerId, sessionId: context.sessionId };
+      const records = supervisor.list(identity);
+      const isRunning = (record: { readonly state: string }) =>
+        record.state === "running";
+      const requested = Array.isArray(input.names)
+        ? input.names.filter((name): name is string => typeof name === "string")
+        : undefined;
+      if (!requested?.length && !records.some(isRunning)) {
+        return {
+          modelContent: "No running commands to close.",
+          displayContent: { closed: [] },
+        };
+      }
+      const known = new Set(records.map((record) => record.commandId));
+      const targets = requested?.length
+        ? records.filter(
+            (record) =>
+              requested.includes(record.commandId) && isRunning(record),
+          )
+        : records.filter(isRunning);
+      const notFound = requested?.filter((name) => !known.has(name)) ?? [];
+      const closed: string[] = [];
+      for (const record of targets) {
+        await supervisor.stop(record.commandId, identity);
+        closed.push(record.commandId);
+      }
+      const remaining = supervisor
+        .list(identity)
+        .filter(isRunning)
+        .map((record) => ({
+          command_id: record.commandId,
+          command: record.command,
+          cwd: record.cwd,
+          state: record.state,
+          ...(record.mode === "background" ? { backgrounded: true } : {}),
+        }));
+      const result = {
+        closed,
+        ...(notFound.length > 0 ? { not_found: notFound } : {}),
+        remaining,
+      };
+      return { modelContent: JSON.stringify(result), displayContent: result };
     },
   });
 }
@@ -852,37 +889,6 @@ function requestedTimeoutMs(input: Readonly<Record<string, unknown>>): number {
   return boundedInteger(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS);
 }
 
-function parseOutputFilter(
-  value: unknown,
-): CommandOutputFilterOptions | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const input = value as Record<string, unknown>;
-  const count = (field: unknown) =>
-    typeof field === "number" && Number.isFinite(field) && field >= 0
-      ? Math.floor(field)
-      : undefined;
-  const filter: CommandOutputFilterOptions = {
-    ...(count(input.output_head) !== undefined
-      ? { output_head: count(input.output_head) }
-      : {}),
-    ...(count(input.output_tail) !== undefined
-      ? { output_tail: count(input.output_tail) }
-      : {}),
-    ...(count(input.output_offset) !== undefined
-      ? { output_offset: count(input.output_offset) }
-      : {}),
-    ...(typeof input.output_grep === "string"
-      ? { output_grep: input.output_grep }
-      : {}),
-    ...(count(input.output_grep_context) !== undefined
-      ? { output_grep_context: count(input.output_grep_context) }
-      : {}),
-  };
-  return Object.keys(filter).length > 0 ? filter : undefined;
-}
-
 function digestEnvironment(
   environment: Readonly<Record<string, string>>,
   secret: string,
@@ -972,27 +978,34 @@ function sameDisplay(
   );
 }
 
-function commandResult(observation: WorkspaceCommandObservation) {
-  return {
-    modelContent: JSON.stringify(observation),
-    displayContent: observation,
-    isError:
-      observation.record.state === "failed" ||
-      observation.record.state === "timed_out" ||
-      observation.record.state === "interrupted",
-  };
-}
-
 /**
- * VS Code's `execute_command` result for the model: the filtered output and
- * its line counts, with the exit code and state. The UI keeps the full
- * observation as display content.
+ * VS Code's `execute_command` / `get_terminal_output` result for the model:
+ * state, exit code and the filtered retained output with its line and byte
+ * counts. The UI gets the tail of the raw observation as display content.
  */
-function executeCommandResult(
-  observation: WorkspaceCommandObservation,
+function commandOutputResult(
+  supervisor: WorkspaceCommandSupervisor,
+  commandId: string,
+  identity: { readonly ownerId: string; readonly sessionId: string },
   filter: CommandOutputFilterOptions | undefined,
+  extra: Readonly<Record<string, unknown>> = {},
+  includeCommand = true,
 ) {
+  const observation = supervisor.observe(commandId, identity, {
+    limitBytes: RETAINED_OBSERVATION_BYTES,
+  });
   const record = observation.record;
+  const display: WorkspaceCommandObservation = supervisor.observe(
+    commandId,
+    identity,
+    {
+      offset: Math.max(
+        record.outputStartOffset,
+        record.outputEndOffset - DISPLAY_OBSERVATION_BYTES,
+      ),
+      limitBytes: DISPLAY_OBSERVATION_BYTES,
+    },
+  );
   const raw = observation.output.map((chunk) => chunk.text).join("");
   const { filtered, totalLines, linesShown, truncated } = filterCommandOutput(
     raw,
@@ -1000,12 +1013,10 @@ function executeCommandResult(
   );
   const running = record.state === "running";
   const complete =
-    !observation.truncatedBeforeOffset &&
     record.outputDroppedBytes === 0 &&
     observation.nextOffset >= record.outputEndOffset;
   const result = {
-    command: record.command,
-    cwd: record.cwd,
+    ...(includeCommand ? { command: record.command, cwd: record.cwd } : {}),
     command_id: record.commandId,
     state: record.state,
     exit_code: record.exitCode ?? null,
@@ -1013,34 +1024,59 @@ function executeCommandResult(
     timed_out: record.state === "timed_out",
     is_running: running,
     ...(record.mode === "background" ? { backgrounded: true } : {}),
+    ...extra,
     output: filtered,
+    output_captured: true,
     output_complete: complete,
     output_finalized: !running,
+    output_total_bytes: record.outputEndOffset,
+    output_retained_bytes: record.outputEndOffset - record.outputStartOffset,
     output_dropped_bytes: record.outputDroppedBytes,
     total_lines: totalLines,
     lines_shown: linesShown,
     output_truncated: truncated,
-    total_lines_scope: complete && !running ? "complete" : "retained",
+    total_lines_scope: complete ? "complete" : "retained",
     ...(running
       ? {
           output_warning:
-            "The command is still running. Read more output with get_command_output.",
+            "The command is still running. Filtering applies to output retained so far; call get_terminal_output with its command_id for more.",
         }
       : !complete
         ? {
-            output_warning:
-              "Older output was not retained. Filtering applies only to retained output.",
+            output_warning: `⚠️ Command output exceeded the bounded capture limit. ${record.outputDroppedBytes} bytes were not retained; filtering applies only to the retained tail and no full-output file is available.`,
           }
         : {}),
   };
   return {
+    record,
     modelContent: JSON.stringify(result),
-    displayContent: observation,
-    isError:
-      record.state === "failed" ||
-      record.state === "timed_out" ||
-      record.state === "interrupted",
+    displayContent: display,
   };
+}
+
+function unavailableCommandResult(commandId: string) {
+  const result = {
+    error: `Command "${commandId}" is unavailable. It may belong to another session or have been forgotten; no other command was selected.`,
+    command_id: commandId,
+  };
+  return {
+    modelContent: JSON.stringify(result),
+    displayContent: result,
+    isError: true,
+  };
+}
+
+function delay(milliseconds: number, signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted || milliseconds <= 0) return resolve();
+    const timer = setTimeout(done, milliseconds);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 function validRule(value: WorkspaceCommandRule): boolean {
@@ -1073,10 +1109,6 @@ function requiredString(value: unknown, label: string): string {
     throw new Error(`${label}_required`);
   }
   return value;
-}
-
-function optionalInteger(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) ? Number(value) : undefined;
 }
 
 function boundedInteger(

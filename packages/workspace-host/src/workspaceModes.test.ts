@@ -20,11 +20,16 @@ describe("workspace modes", () => {
     for (const tool of [
       "write_file",
       "execute_command",
-      "get_command_output",
+      "get_terminal_output",
+      "close_terminals",
       "call_mcp_tool",
     ]) {
       expect(code.has(tool), tool).toBe(true);
     }
+    // Architect plans with VS Code's plan group: output, but no close.
+    const architect = workspaceToolsForMode(mode("architect"));
+    expect(architect.has("get_terminal_output")).toBe(true);
+    expect(architect.has("close_terminals")).toBe(false);
     const ask = workspaceToolsForMode(mode("ask"));
     // read-only-command is not ported, so Ask runs no commands here.
     expect(ask.has("execute_command")).toBe(false);

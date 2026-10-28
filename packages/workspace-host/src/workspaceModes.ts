@@ -37,14 +37,8 @@ const MCP_BRIDGE_TOOLS = [
   "get_mcp_prompt",
 ];
 
-/**
- * workspace-host's own names for tools in VS Code's groups. Its
- * `get_command_output`, `list_commands` and `stop_command` stand in for
- * VS Code's `get_terminal_output` and `close_terminals`.
- */
+/** workspace-host's own names for tools in VS Code's groups. */
 const HOST_GROUP_MEMBERS: Readonly<Record<string, readonly string[]>> = {
-  command: ["get_command_output", "list_commands", "stop_command"],
-  plan: ["get_command_output", "list_commands", "stop_command"],
   mcp: MCP_BRIDGE_TOOLS,
 };
 

@@ -2735,6 +2735,46 @@ describe("createWorkspaceHost", () => {
         exit_code: 0,
         output: "ok",
       });
+
+      // VS Code's get_terminal_output and close_terminals replace
+      // get_command_output, list_commands and stop_command.
+      const advertised = (
+        JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body)) as {
+          tools: Array<{ function: { name: string } }>;
+        }
+      ).tools.map((tool) => tool.function.name);
+      expect(advertised).toEqual(
+        expect.arrayContaining(["get_terminal_output", "close_terminals"]),
+      );
+      for (const old of [
+        "get_command_output",
+        "list_commands",
+        "stop_command",
+      ]) {
+        expect(advertised).not.toContain(old);
+      }
+      replies.push(
+        toolCall("get_terminal_output", {
+          command_id: filtered.command_id,
+          output_grep: "two",
+        }),
+      );
+      await host.runTurn(sessionId, "read it again");
+      expect(JSON.parse(toolResults.at(-1)!)).toMatchObject({
+        command_id: filtered.command_id,
+        state: "completed",
+        output: "ERR two",
+        total_lines: 5,
+        lines_shown: 1,
+      });
+      replies.push(toolCall("get_terminal_output", { command_id: "missing" }));
+      await host.runTurn(sessionId, "unknown");
+      expect(toolResults.at(-1)).toContain(
+        'Command \\"missing\\" is unavailable',
+      );
+      replies.push(toolCall("close_terminals", {}));
+      await host.runTurn(sessionId, "clean up");
+      expect(toolResults.at(-1)).toBe("No running commands to close.");
     } finally {
       await host.close();
     }

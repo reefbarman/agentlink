@@ -10,6 +10,7 @@ import {
   SandboxHelperClient,
   checkLinuxSandboxPrerequisites,
   createNodeSandboxHelperTransportFactory,
+  isSandboxManagedEnvironmentName,
   linuxSandboxApplySeccompPath,
   type CheckLinuxSandboxPrerequisitesOptions,
   type LinuxSandboxPrerequisites,
@@ -17,6 +18,7 @@ import {
   type SandboxRuntimeProvider,
 } from "@agentlink/sandbox";
 import { APPLY_DIFF_INPUT_GRAMMAR } from "@agentlink/core/apply-diff";
+import { COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES } from "@agentlink/core/command-output";
 import type { CoreModelToolDefinition } from "@agentlink/core/model-runtime";
 
 type WorkspaceHostModule = typeof import("@agentlink/workspace-host", {
@@ -67,9 +69,8 @@ type WorkspaceProcessLaunchRequest = WorkspaceProcessLaunch["request"];
 
 export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
   "execute_command",
-  "get_command_output",
-  "list_commands",
-  "stop_command",
+  "get_terminal_output",
+  "close_terminals",
   "write_file",
   "apply_diff",
   "present_files",
@@ -77,7 +78,7 @@ export const ASK_AGENT_SANDBOX_TOOL_NAMES = [
 
 /** Tools only useful once a folder is granted for commands. */
 export const ASK_AGENT_GRANTED_FOLDER_TOOL_NAMES: readonly AskAgentSandboxToolName[] =
-  ["apply_diff", "list_commands", "stop_command"];
+  ["apply_diff", "close_terminals"];
 export type AskAgentSandboxToolName =
   (typeof ASK_AGENT_SANDBOX_TOOL_NAMES)[number];
 
@@ -172,7 +173,7 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
     {
       name: "execute_command",
       description:
-        "Run an exact non-interactive command with /bin/zsh -c in this chat's sandboxed scratch folder. There is no PTY, stdin, or persistent shell state. The sandbox allows writes only inside the scratch folder, hides the user's home folder, and has no internet access. Returns retained stdout/stderr and the exit state; use get_command_output with the commandId to page longer output. In a folder granted for commands, background: true starts a long-running command (for example a dev server or watcher) and returns as soon as it starts.",
+        "Run an exact non-interactive command with /bin/zsh -c in this chat's sandboxed scratch folder. There is no PTY, stdin, or persistent shell state. The sandbox allows writes only inside the scratch folder, hides the user's home folder, and has no internet access. Returns the exit state and filtered stdout/stderr (the last 200 lines unless an output filter is given) with its command_id; use output_grep, output_head and output_tail instead of piping through grep, head or tail, and get_terminal_output with the command_id to read it again. In a folder granted for commands, background: true starts a long-running command (for example a dev server or watcher) and returns as soon as it starts.",
       input_schema: {
         type: "object",
         properties: {
@@ -182,16 +183,23 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
             description:
               "Working directory relative to the scratch folder (the default), or an absolute path inside a folder the user granted for commands. Commands in a granted folder wait for the user's approval.",
           },
-          timeoutMs: {
-            type: "integer",
-            minimum: 1,
-            maximum: ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS,
-            description: `Defaults to ${ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS} ms (at most ${ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS}). Background commands default to ${ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS} ms (at most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS}) and are stopped when it runs out.`,
+          timeout: {
+            type: "number",
+            exclusiveMinimum: 0,
+            maximum: ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS / 1_000,
+            description: `Timeout in seconds. Defaults to ${ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS / 1_000} (at most ${ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS / 1_000}). Background commands default to ${ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS / 1_000} (at most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS / 1_000}) and are stopped when it runs out.`,
           },
           background: {
             type: "boolean",
-            description: `Only in a folder granted for commands, and not with require_managed_network. Starts the command and returns its commandId straight away; it keeps running after your reply until it exits, times out, you call stop_command, or the user revokes the folder or deletes the chat. Read its output with get_command_output. At most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS} at once per chat.`,
+            description: `Only in a folder granted for commands, and not with require_managed_network. Starts the command and returns its command_id straight away; it keeps running after your reply until it exits, times out, you call close_terminals, or the user revokes the folder or deletes the chat. Read its output with get_terminal_output. At most ${ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS} at once per chat.`,
           },
+          env: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description:
+              'Scratch folder only: environment variables to add for this command (e.g. {"CI":"1"}). Values are literal, not shell-expanded, and variables the sandbox already sets, such as PATH, cannot be replaced. In a granted folder, set them in the command itself so they show on the approval card.',
+          },
+          ...COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
           sandbox_permissions: {
             type: "string",
             enum: [...ASK_AGENT_SANDBOX_PERMISSIONS],
@@ -210,38 +218,48 @@ export const ASK_AGENT_SANDBOX_TOOLS: readonly CoreModelToolDefinition[] =
       },
     },
     {
-      name: "get_command_output",
+      name: "get_terminal_output",
       description:
-        "Read bounded retained stdout/stderr and the current state of a command this chat ran with execute_command.",
+        "Read retained stdout/stderr and the current state of a command this chat ran with execute_command, selected by its command_id. Uses execute_command's output filters; wait_seconds waits for a running command to finish, and kill stops it (TERM, then KILL).",
       input_schema: {
         type: "object",
         properties: {
-          commandId: { type: "string", minLength: 1 },
-          offset: { type: "integer", minimum: 0 },
-          limitBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
+          command_id: {
+            type: "string",
+            minLength: 1,
+            description: "Command ID returned by execute_command.",
+          },
+          wait_seconds: {
+            type: "number",
+            minimum: 0,
+            maximum: 600,
+            description:
+              "Wait up to N seconds for a running command to finish before returning. The command keeps running when the wait ends unless kill is true.",
+          },
+          kill: {
+            type: "boolean",
+            description: "Stop the command if it is still running.",
+          },
+          ...COMMAND_OUTPUT_FILTER_SCHEMA_PROPERTIES,
         },
-        required: ["commandId"],
+        required: ["command_id"],
         additionalProperties: false,
       },
     },
     {
-      name: "list_commands",
+      name: "close_terminals",
       description:
-        "List this chat's commands with their commandId, command, folder and state (running, completed, failed, cancelled or timed_out), newest first.",
+        "Stop this chat's running commands (TERM, then KILL), for example a background dev server you no longer need. With no arguments, stops all of them; pass command IDs in names to stop only those. Returns the commands still running.",
       input_schema: {
         type: "object",
-        properties: {},
-        additionalProperties: false,
-      },
-    },
-    {
-      name: "stop_command",
-      description:
-        "Stop a running command this chat started (TERM, then KILL), for example a background dev server you no longer need.",
-      input_schema: {
-        type: "object",
-        properties: { commandId: { type: "string", minLength: 1 } },
-        required: ["commandId"],
+        properties: {
+          names: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            description:
+              "Command IDs to stop (commands have no terminal names). Omit to stop every running command.",
+          },
+        },
         additionalProperties: false,
       },
     },
@@ -369,9 +387,9 @@ export function askAgentCommandFoldersPrompt(
     "",
     "A command there may wait for the user to approve it (saved rules or Approve for Me can let it run straight away, and saved rules can refuse it), so run one focused command at a time and explain why. Commands run in a sandbox: they can read files on this computer but only write inside the granted folder and temporary folders, cannot change the folder's Git metadata or agent instruction files, and have no internet access. present_files still only works in the scratch folder.",
     "",
-    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path (expectedContentHash is optional), or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed. Edits wait until no command is running in that folder, including background commands, so stop a background command with stop_command before editing files it is in.",
+    "To edit files there, read them with read_file (its result includes contentHash), then use apply_diff with the absolute path (expectedContentHash is optional), or write_file with expectedContentHash (or expectedAbsent: true for a new file). Each change shows the user a diff to approve. Agent instruction and configuration files (for example AGENTS.md or .agentlink/) can only be approved at the user's computer, and .git and .env files cannot be changed. Edits wait until no command is running in that folder, including background commands, so stop a background command with close_terminals before editing files it is in.",
     "",
-    "For a long-running command such as a dev server, test watcher or build in watch mode, pass background: true. The call returns once it starts; check on it with get_command_output, find it again with list_commands, and stop it with stop_command when you are done. Background commands cannot use require_managed_network.",
+    "For a long-running command such as a dev server, test watcher or build in watch mode, pass background: true. The call returns once it starts with its command_id; check on it with get_terminal_output, and stop it with close_terminals when you are done (with no arguments it stops every running command and lists any still running). Background commands cannot use require_managed_network.",
     "",
     localServers,
     "",
@@ -1260,13 +1278,24 @@ export class AskAgentSandboxWorkspace {
       const maxTimeoutMs = background
         ? ASK_AGENT_SANDBOX_MAX_BACKGROUND_TIMEOUT_MS
         : ASK_AGENT_SANDBOX_MAX_TIMEOUT_MS;
-      const timeoutMs = request.input.timeoutMs;
+      // VS Code's timeout in seconds; timeoutMs from older chats still runs.
+      const { timeout, timeoutMs } = request.input;
+      const requestedMs =
+        timeout !== undefined
+          ? typeof timeout === "number"
+            ? timeout * 1_000
+            : Number.NaN
+          : timeoutMs !== undefined
+            ? typeof timeoutMs === "number"
+              ? timeoutMs
+              : Number.NaN
+            : undefined;
       if (
-        timeoutMs !== undefined &&
-        (typeof timeoutMs !== "number" || timeoutMs > maxTimeoutMs)
+        requestedMs !== undefined &&
+        (Number.isNaN(requestedMs) || requestedMs > maxTimeoutMs)
       ) {
         return errorResult(
-          `timeoutMs must be at most ${maxTimeoutMs}${background ? " for a background command" : ""}`,
+          `timeout must be at most ${maxTimeoutMs / 1_000} seconds${background ? " for a background command" : ""}`,
         );
       }
     }
@@ -1315,6 +1344,22 @@ export class AskAgentSandboxWorkspace {
       );
       if (granted.error) return errorResult(granted.error);
       grantedRoot = granted.root;
+      if (grantedRoot && input.env !== undefined) {
+        // The approval card shows the command, not env values.
+        return errorResult(
+          "env_needs_scratch_folder: in a granted folder, set variables in the command itself (for example CI=1 npm test) so the user sees them on the approval card",
+        );
+      }
+      const managed =
+        input.env && typeof input.env === "object"
+          ? Object.keys(input.env).filter(isSandboxManagedEnvironmentName)
+          : [];
+      if (managed.length > 0) {
+        // These would be dropped or replaced by the sandbox, not added.
+        return errorResult(
+          `env_override_not_allowed: the sandbox sets or removes ${managed.join(", ")}`,
+        );
+      }
       if (background) {
         if (!grantedRoot) {
           return errorResult(
@@ -1338,7 +1383,7 @@ export class AskAgentSandboxWorkspace {
           ).length;
         if (running >= ASK_AGENT_SANDBOX_MAX_BACKGROUND_COMMANDS) {
           return errorResult(
-            `too_many_background_commands: this chat already has ${running} background commands running; stop one with stop_command first`,
+            `too_many_background_commands: this chat already has ${running} background commands running; stop one with close_terminals first`,
           );
         }
       }
@@ -1381,11 +1426,13 @@ export class AskAgentSandboxWorkspace {
     const validation = tool.validate({
       ...input,
       ...(request.toolName === "execute_command" &&
+      input.timeout === undefined &&
       input.timeoutMs === undefined
         ? {
-            timeoutMs: background
-              ? ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS
-              : ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS,
+            timeout:
+              (background
+                ? ASK_AGENT_SANDBOX_DEFAULT_BACKGROUND_TIMEOUT_MS
+                : ASK_AGENT_SANDBOX_DEFAULT_TIMEOUT_MS) / 1_000,
           }
         : {}),
     });
@@ -1653,8 +1700,8 @@ export class AskAgentSandboxWorkspace {
       stateDirectory,
       shellExecutable: this.shellExecutable(),
       sandboxed: true,
-      // Ask Agent still advertises its own schema (timeoutMs, commandId).
-      executeResult: "observation",
+      // A call's env adds variables; PATH and the rest stay the sandbox's.
+      environmentOverrides: "add_only",
       environmentDigestSecret: this.environmentDigestSecret(sessionId),
       resolveEnvironment: () => ({
         PATH: SANDBOX_PATH,
@@ -1825,7 +1872,7 @@ export class AskAgentSandboxWorkspace {
       stateDirectory,
       shellExecutable: this.shellExecutable(),
       sandboxed: true,
-      executeResult: "observation",
+      environmentOverrides: "add_only",
       environmentDigestSecret: this.environmentDigestSecret(chat.sessionId),
       resolveEnvironment: () => this.grantedEnvironment(),
       // A granted folder is real work: every command asks, whatever rules say.
@@ -2107,7 +2154,7 @@ export class AskAgentSandboxWorkspace {
     try {
       if (await this.commandRunningIn(root)) {
         return errorResult(
-          "command_running: a command that can write in this folder is still running; wait for it to finish, or stop a background command with stop_command (list_commands shows them), then retry the edit",
+          "command_running: a command that can write in this folder is still running; wait for it to finish, or stop a background command with close_terminals, then retry the edit",
         );
       }
       if ((await canonicalTarget(request.input.path)) !== target) {

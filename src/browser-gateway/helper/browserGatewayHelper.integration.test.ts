@@ -11378,7 +11378,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
         expect.arrayContaining(["execute_command", "write_file"]),
       );
       // Edits and background command control need a granted folder.
-      for (const name of ["apply_diff", "list_commands", "stop_command"]) {
+      expect(scratchToolNames).toContain("get_terminal_output");
+      for (const name of ["apply_diff", "close_terminals"]) {
         expect(scratchToolNames).not.toContain(name);
       }
       expect(completionParams[0]?.additionalInstructions).toContain(
@@ -12433,7 +12434,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
   });
 
-  it("shows a background command's card with its time limit and offers stop_command", async () => {
+  it("shows a background command's card with its time limit and offers close_terminals", async () => {
     const sandboxRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), ".tmp-ask-agent-sandbox-"),
     );
@@ -12516,9 +12517,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
       });
       const toolNames =
         completionParams[0]?.tools?.map((tool) => tool.name) ?? [];
-      expect(toolNames).toEqual(
-        expect.arrayContaining(["list_commands", "stop_command"]),
-      );
+      expect(toolNames).toContain("get_terminal_output");
+      // close_terminals is deferred behind find_native_tools, as in VS Code.
+      expect(
+        completionParams[0]?.tools?.find(
+          (tool) => tool.name === "find_native_tools",
+        )?.description,
+      ).toContain("close_terminals");
       expect(
         (
           await post("/api/ask-agent/approval", {
