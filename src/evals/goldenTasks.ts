@@ -161,6 +161,30 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    id: "investigation-starts-todos",
+    mode: "code",
+    intent:
+      "An open-ended 'I've noticed X' investigation starts a visible TODO list in the first response.",
+    prompt:
+      "I've noticed session restore feels slower recently. Can you look into why?",
+    expect: {
+      anyOf: ["todo_write"],
+      forbid: NO_DELEGATION,
+    },
+  },
+  {
+    id: "implementation-starts-todos",
+    mode: "code",
+    intent:
+      "Multi-step implementation work starts a visible TODO list in the first response.",
+    prompt:
+      "Add a --json output option to the telemetry:sessions report script, with a test and a docs mention.",
+    expect: {
+      anyOf: ["todo_write"],
+      forbid: NO_DELEGATION,
+    },
+  },
+  {
     id: "deferred-mcp-resources",
     mode: "ask",
     intent: "A deferred native tool is discovered or called by exact name.",

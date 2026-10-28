@@ -85,10 +85,11 @@ export const todoTool: ToolDefinition = {
   name: TODO_TOOL_NAME,
   description: `Create and manage a structured task list to track your progress on complex tasks. The entire todo list is replaced each call — always include all items (completed, in-progress, and pending).
 
-Use this when:
-- A task requires 3+ distinct steps
-- The user provides multiple tasks
-- You need to show progress on complex work
+Use this in your first response for any task needing more than one quick step, including:
+- Investigations, debugging, and "I've noticed X" questions, even if they look small at first
+- Implementation work, or when the user provides multiple tasks
+- Any work where the user benefits from seeing progress
+Skip it only for single-step answers such as one file read or one command.
 
 Task rules:
 - Exactly ONE task should be in_progress at a time
