@@ -816,6 +816,8 @@ async function createHost(options: {
     providers,
     defaultModel: options.config.defaultModel,
     defaultReasoningEffort: options.sharedCodeReasoningEffort,
+    // VS Code's prompt guidance for the tools each session registers.
+    sharedPromptGuidance: true,
     files: {
       enabled: true,
       ripgrepExecutable: path.join(

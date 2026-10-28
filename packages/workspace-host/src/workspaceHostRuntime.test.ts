@@ -2365,7 +2365,11 @@ describe("createWorkspaceHost", () => {
           return await local.readFile(target);
         },
       },
-      launchProcess: vi.fn(),
+      // No processes: read_file's git status probe reports unavailable
+      // instead of leaving a timer on an undefined handle.
+      launchProcess: vi.fn(() => {
+        throw new Error("no processes in this backend");
+      }),
     };
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -2396,4 +2400,108 @@ describe("createWorkspaceHost", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
+
+  // Backticked snake_case names the shared guidance uses for values, not tools.
+  const GUIDANCE_VALUE_NAMES = new Set(["in_progress", "waiting_for_user"]);
+
+  it.each([
+    ["with commands", true],
+    ["without commands", false],
+  ] as const)(
+    "shared prompt guidance names only advertised tools (%s)",
+    async (_label, withCommands) => {
+      const parent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "workspace-guidance-"),
+      );
+      const projectRoot = path.join(parent, "project");
+      await fs.mkdir(projectRoot);
+      const requests: Array<{
+        messages: Array<{ role: string; content: string }>;
+        tools?: Array<{ function: { name: string } }>;
+      }> = [];
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (_input, init) => {
+          requests.push(JSON.parse(String(init?.body)));
+          return completion("ok");
+        });
+      // The CLI's configuration: files, history recall, questions, todos and
+      // final status, plus commands and background children when enabled.
+      const host = await createWorkspaceHost({
+        ...readProfileConfig(fetch),
+        projectRoot,
+        dataRoot: path.join(parent, "data"),
+        ownerId: "guidance-owner",
+        sharedPromptGuidance: true,
+        files: { enabled: true },
+        sessionRecall: { enabled: true },
+        sessionInteractions: {
+          finalStatus: true,
+          askQuestions: async () => ({ answers: {}, notes: {} }),
+        },
+        ...(withCommands
+          ? {
+              commands: { enabled: true as const },
+              background: { enabled: true as const },
+            }
+          : {}),
+      });
+      try {
+        const { sessionId } = await host.createSession();
+        for (const modelId of ["compatibility-model", "reasoning-model"]) {
+          await host.setSessionModel(sessionId, {
+            providerId: "profiles",
+            modelId,
+          });
+          await host.runTurn(sessionId, `Use ${modelId}`);
+        }
+        expect(requests).toHaveLength(2);
+        const [compatibility, reasoning] = requests.map((request) => ({
+          prompt: request.messages.find((message) => message.role === "system")!
+            .content,
+          tools: new Set(
+            (request.tools ?? []).map((tool) => tool.function.name),
+          ),
+        }));
+        expect(compatibility!.prompt).toMatch(
+          /^You are AgentLink, a highly skilled software engineer/u,
+        );
+        expect(compatibility!.prompt).toContain("## TODO Discipline");
+        expect(compatibility!.prompt).toContain("## Final Response Status");
+        expect(compatibility!.prompt).toContain("## Questions & Clarification");
+        // Recall tools are offered once there is an earlier turn to search.
+        expect(compatibility!.prompt).not.toContain(
+          "## Session History Recall",
+        );
+        expect(reasoning!.prompt).toContain("## Session History Recall");
+        expect(compatibility!.prompt).toContain(
+          `The project root directory is: ${host.project.root}`,
+        );
+        expect(reasoning!.prompt).toMatch(
+          /^You are AgentLink, a software engineering agent/u,
+        );
+        expect(reasoning!.prompt).toContain("## Core Contract");
+        expect(
+          compatibility!.prompt.includes("Create or edit file *contents*"),
+        ).toBe(withCommands);
+        for (const { prompt, tools } of [compatibility!, reasoning!]) {
+          expect(prompt).not.toContain("The canonical project root is");
+          const named = [...prompt.matchAll(/`([a-z]+(?:_[a-z]+)+)`/gu)]
+            .map((match) => match[1]!)
+            .filter((name) => !GUIDANCE_VALUE_NAMES.has(name));
+          expect(named.length).toBeGreaterThan(0);
+          for (const name of new Set(named)) {
+            expect(tools.has(name), `${name} is named but not advertised`).toBe(
+              true,
+            );
+          }
+        }
+      } finally {
+        await host.close();
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+    // Two real turns with a command supervisor, under full-suite load.
+    30_000,
+  );
 });

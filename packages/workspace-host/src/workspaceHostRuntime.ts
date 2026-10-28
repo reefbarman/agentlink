@@ -13,6 +13,7 @@ import {
   type CoreModelMessage,
   type CoreReasoningEffort,
   type HostTool,
+  type HostToolResolveRequest,
   type HostToolResolver,
   type TurnExecutionLimits,
 } from "@agentlink/core";
@@ -96,6 +97,7 @@ import {
   type WorkspaceProjectIdentity,
 } from "./projectIdentity.js";
 import {
+  composeSharedWorkspaceGuidance,
   composeWorkspaceIdentity,
   composeWorkspacePromptProfile,
   validateWorkspacePromptIdentity,
@@ -168,6 +170,13 @@ export interface CreateWorkspaceHostOptions {
    * `You are AgentLink, <role>.` for foreground and background sessions.
    */
   readonly promptIdentity?: WorkspacePromptIdentity;
+  /**
+   * Lead the prompt with VS Code's shared guidance (`@agentlink/core/system-prompt`)
+   * for the tools each session actually registers: file edits, `ask_user`,
+   * `todo_write`, `set_task_status` and history recall. Off by default, so
+   * hosts keep the short standalone prompt until they opt in.
+   */
+  readonly sharedPromptGuidance?: boolean;
   readonly artifacts?: {
     readonly roots: readonly WorkspaceArtifactRoot[];
   };
@@ -969,6 +978,23 @@ export async function createWorkspaceHost(
             .messages,
       })
     : undefined;
+  // The tool names the shared prompt guidance may mention, from the same
+  // resolvers the turn uses. MCP, web, language and index tools are not
+  // resolved here: the guidance never names them.
+  const resolvePromptToolNames = async (
+    request: HostToolResolveRequest<typeof principal>,
+  ): Promise<string[]> => {
+    const groups = await Promise.all([
+      fileTools?.resolveTools(request),
+      commandTools?.resolveTools(request),
+      backgroundTools?.resolveTools(request),
+      sessionInteractionTools?.resolveTools(request),
+      sessionRecallTools?.resolveTools(request),
+    ]);
+    return groups.flatMap((tools) =>
+      (tools ?? []).map((tool) => tool.definition.name),
+    );
+  };
   const interactionTokens =
     options.files ||
     options.commands ||
@@ -1218,10 +1244,29 @@ export async function createWorkspaceHost(
         typeof resolvedArtifacts === "string"
           ? resolvedArtifacts
           : resolvedArtifacts?.instructions;
+      const lead = options.sharedPromptGuidance
+        ? [
+            composeSharedWorkspaceGuidance({
+              model,
+              projectRoot: project.root,
+              toolNames: await resolvePromptToolNames({
+                principal: request.principal,
+                sessionId: request.session.sessionId,
+                turnId: request.turnId,
+                input: request.input ?? { text: "", attachments: undefined },
+              }),
+              ...(options.promptIdentity
+                ? { identity: options.promptIdentity }
+                : {}),
+            }),
+          ]
+        : [
+            composeWorkspaceIdentity(options.promptIdentity),
+            `The canonical project root is ${project.root}.`,
+            composeWorkspacePromptProfile(model),
+          ];
       return [
-        composeWorkspaceIdentity(options.promptIdentity),
-        `The canonical project root is ${project.root}.`,
-        composeWorkspacePromptProfile(model),
+        ...lead,
         options.files
           ? 'Use only the project-relative file tools that are actually exposed. Prefer read_file with view "context" for first-pass orientation; its working_set.content_hash is the SHA-256 baseline for an edit. Expect every ungranted write to pause for human review.'
           : "File tools are not enabled.",

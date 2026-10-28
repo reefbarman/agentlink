@@ -263,6 +263,13 @@ Skills are discovered from the same global and project skill folders as VS Code 
 - A skill's `allowed-tools` is not enforced. The prompt tells the model to keep to those tools itself.
 - Prompt files under `commands/` are not offered to the model or as slash commands. The old `<data root>/artifacts/` folder is no longer read.
 
+### System prompt
+
+The CLI's system prompt starts with the VS Code agent's guidance, from the same shared code, for both prompt profiles. It covers communication, judgement, file edits, `ask_user`, `todo_write`, `set_task_status` and session recall. Guidance is included only for tools the session actually has: without commands, for example, the file-edit rules are left out, and recall guidance appears once a session has an earlier turn to search. Limits compared with VS Code:
+
+- There are no mode or provider-specific sections yet, and no Approve for Me or Auto Continue guidance.
+- Background agent guidance stays a short CLI-specific description, because the CLI's `spawn_background_agent` doesn't take VS Code's task classes or owned paths.
+
 ## Session recall and condensing
 
 Once a chat has an earlier turn, the model can search it with `search_session_history` and read exact messages with `read_session_excerpt`, the same tools and results as VS Code. They cover the chat's stored transcript from earlier turns, including messages a summary has replaced.

@@ -4,10 +4,13 @@ import {
   buildBackgroundAgentSection,
   buildBasePrompt,
   buildModePrompt,
+  buildSessionHistoryRecallGuidance,
   buildWorkspaceFoldersSection,
+  deriveSystemPromptCapabilities,
   formatModeInstructionBlock,
   FULL_SYSTEM_PROMPT_CAPABILITIES,
   getProviderPrompt,
+  SESSION_HISTORY_RECALL_GUIDANCE,
   type SystemPromptCapabilities,
 } from "./systemPromptSections.js";
 
@@ -22,6 +25,9 @@ const NO_CAPABILITIES: SystemPromptCapabilities = {
   finalStatus: false,
   approvalFollowUp: false,
   backgroundAgents: false,
+  autoContinue: false,
+  sessionHistoryRecall: false,
+  workspaceSessionRecall: false,
 };
 
 const GATED_TOOL_MENTIONS = [
@@ -102,6 +108,70 @@ describe("system prompt sections", () => {
     expect(prompt).toContain("## Questions & Clarification");
     expect(prompt).toContain("Use the most appropriate question type");
     expect(prompt).not.toContain("modeSwitch");
+  });
+
+  it("derives tool capabilities from registered names only", () => {
+    expect(deriveSystemPromptCapabilities([])).toEqual(NO_CAPABILITIES);
+    const derived = deriveSystemPromptCapabilities([
+      "write_file",
+      "apply_diff",
+      "execute_command",
+      "ask_user",
+      "todo_write",
+      "set_task_status",
+      "search_session_history",
+      "read_session_excerpt",
+      "spawn_background_agent",
+    ]);
+    expect(derived).toEqual({
+      ...NO_CAPABILITIES,
+      fileEdits: true,
+      askUser: true,
+      todos: true,
+      finalStatus: true,
+      sessionHistoryRecall: true,
+    });
+    // Edit guidance also routes copies and moves to execute_command.
+    expect(
+      deriveSystemPromptCapabilities(["write_file", "apply_diff"]).fileEdits,
+    ).toBe(false);
+  });
+
+  it("drops Auto Continue and ask_user sentences from the final status guidance", () => {
+    const prompt = buildBasePrompt("compatibility", {
+      identity: "You are AgentLink, a test agent.",
+      cwd: "/repo",
+      capabilities: { ...NO_CAPABILITIES, finalStatus: true, todos: true },
+    });
+    expect(prompt).toContain("## Final Response Status");
+    expect(prompt).toContain("pass `completeTodos: true`");
+    expect(prompt).not.toContain("Auto Continue");
+    expect(prompt).not.toContain("trigger automatic continuation");
+    expect(prompt).not.toContain("ask_user");
+    expect(prompt).toContain(
+      "Do not call it for intermediate progress updates when you will continue working in the same turn.",
+    );
+    const reasoning = buildBasePrompt("reasoning", {
+      identity: "You are AgentLink, a test agent.",
+      cwd: "/repo",
+      capabilities: { ...NO_CAPABILITIES, finalStatus: true },
+    });
+    expect(reasoning).toContain("never for intermediate progress. Its summary");
+    expect(reasoning).not.toContain("ask_user");
+  });
+
+  it("names only the recall tools a host has", () => {
+    expect(buildSessionHistoryRecallGuidance(NO_CAPABILITIES)).toBe("");
+    const sessionOnly = buildSessionHistoryRecallGuidance({
+      sessionHistoryRecall: true,
+      workspaceSessionRecall: false,
+    });
+    expect(sessionOnly).toContain("`search_session_history`");
+    expect(sessionOnly).not.toContain("search_workspace_sessions");
+    expect(sessionOnly).not.toContain("another session");
+    expect(SESSION_HISTORY_RECALL_GUIDANCE).toContain(
+      "`search_workspace_sessions` then `read_workspace_session_excerpt`",
+    );
   });
 
   it("selects provider tuning by profile and maps openai to codex", () => {

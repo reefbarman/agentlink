@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `@agentlink/core/system-prompt`: `deriveSystemPromptCapabilities(toolNames)` maps a host's registered tools to guidance capabilities, `buildSessionHistoryRecallGuidance` names only the recall tools present, and new `autoContinue`, `sessionHistoryRecall` and `workspaceSessionRecall` capabilities drop Auto Continue, `ask_user` and `set_task_status` sentences a host can't honour. VS Code's text is unchanged.
 - New `@agentlink/core/system-prompt` subpath: VS Code's system prompt guidance as builders (`buildBasePrompt` for both profiles, `buildModePrompt`, `formatModeInstructionBlock`, `getProviderPrompt`, and the modes overview, Compose routing, background and session-recall sections). `SystemPromptCapabilities` leaves out guidance for tools a host does not register; `FULL_SYSTEM_PROMPT_CAPABILITIES` reproduces VS Code's text. Surface identity and filesystem probes stay with the host.
 - New `@agentlink/core/agent-modes` subpath: `BUILT_IN_MODES`, `buildUnionAgentMode`, `getAllModes`, `resolveMode`, and `parseCustomModesJson` / `mergeCustomModeSources` with `CUSTOM_MODE_FILE_PATHS`, so hosts read the files and core applies the priority rules.
 - `WorkspaceSessionHistory` commits index backfill in batches through a new optional `WorkspaceSessionHistoryIndex.publishBatch`, retrying a failed batch one session at a time. Reconciliation a search starts now runs on the background budget instead of stopping when the search stops waiting.
