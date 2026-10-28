@@ -194,13 +194,24 @@ export function ChatView({
   const hiddenMessageCount = messages.length - visibleMessages.length;
   const lastMsg = visibleMessages[visibleMessages.length - 1];
   const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
-  const latestUserMessageId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === "user") return messages[i].id;
+  const latestUserMessage = useMemo(() => {
+    let count = 0;
+    let latest: ChatMessage | undefined;
+    for (const message of messages) {
+      if (message.role !== "user") continue;
+      count += 1;
+      latest = message;
     }
-    return null;
+    return latest
+      ? { id: latest.id, content: latest.content, count }
+      : { id: null, content: "", count: 0 };
   }, [messages]);
-  const previousLatestUserMessageId = useRef<string | null>(null);
+
+  const previousLatestUserMessage = useRef<{
+    id: string | null;
+    content: string;
+    count: number;
+  } | null>(null);
   const scrollKey = lastMsg
     ? `${messages.length}:${lastMsg.blocks.length}:${
         lastBlock?.type === "text"
@@ -222,13 +233,22 @@ export function ChatView({
   // Always reveal a newly submitted user turn, even if the user had scrolled up
   // while reading previous output. Subsequent assistant streaming still respects
   // the user's scroll position through the guarded auto-scroll effect below.
+  // A changed id alone is not a new turn: snapshot re-projection and
+  // optimistic-to-confirmed handoff can rename the same message.
   useEffect(() => {
-    const previous = previousLatestUserMessageId.current;
-    previousLatestUserMessageId.current = latestUserMessageId;
-    if (!latestUserMessageId || previous === latestUserMessageId) return;
+    const previous = previousLatestUserMessage.current;
+    previousLatestUserMessage.current = latestUserMessage;
+    if (!latestUserMessage.id || previous?.id === latestUserMessage.id) return;
+    if (
+      previous?.id &&
+      latestUserMessage.count <= previous.count &&
+      latestUserMessage.content === previous.content
+    ) {
+      return;
+    }
     shouldAutoScrollRef.current = true;
     return scrollToBottomAfterLayout();
-  }, [latestUserMessageId, scrollToBottomAfterLayout, shouldAutoScrollRef]);
+  }, [latestUserMessage, scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   // Auto-scroll to bottom when content changes
   useEffect(() => {

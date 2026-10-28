@@ -38,7 +38,7 @@ interface BrowserDiffViewerProps {
 }
 
 const MIN_SIDE_BY_SIDE_WIDTH = 780;
-const MOBILE_DIFF_MEDIA_QUERY = "(max-width: 720px)";
+const MOBILE_DIFF_MEDIA_QUERY = "(max-width: 600px)";
 
 function createModelUri(
   monaco: MonacoModule,

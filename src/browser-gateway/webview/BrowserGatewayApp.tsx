@@ -53,6 +53,15 @@ import {
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar, storedSidebarWidth } from "./DesktopSidebar";
+import { WorkspaceTabList } from "./WorkspaceTabList";
+import {
+  WORKSPACE_TAB_ACTION_MESSAGE,
+  WORKSPACE_TABS_HOST_MESSAGE,
+  WORKSPACE_TABS_MESSAGE,
+  isWorkspaceTabAction,
+  type WorkspaceTabAction,
+  type WorkspaceTabGroup,
+} from "./workspaceTabsBridge";
 import { AssistantProjectSwitcher } from "./AssistantProjects";
 import { AssistantHub } from "./AssistantJobs";
 import { ChatTaskStrip, type ChatTaskCard } from "./AssistantTasks";
@@ -240,7 +249,10 @@ const MAX_SIDE_PANE_PERCENT = 70;
 const MIN_SIDE_PANE_WIDTH = 280;
 const MIN_CHAT_PANE_WIDTH = 420;
 const SIDE_PANE_KEYBOARD_STEP = 32;
-const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
+// Phones (and iPhone Duo's outer screen and split view, ~385px) stay below
+// 600px; the Duo's upright inner screen (669px) gets the tablet layout.
+// Keep in sync with the phone-layout block in styles.css.
+const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 600px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const ASK_AGENT_MOBILE_MEDIA_PICKER_SOURCES: readonly MediaPickerSource[] = [
   "files",
@@ -1267,6 +1279,26 @@ interface BrowserGatewayAppProps {
   reloadPage?: () => void;
 }
 
+const SHELL_VIEW_KEY = "agentlink.browserShellView";
+
+function readStoredShellView(): DesktopMode {
+  try {
+    const value = window.localStorage.getItem(SHELL_VIEW_KEY);
+    // The Assistant view depends on a remote server that may not be up yet.
+    return value === "vscode" ? "vscode" : "ask";
+  } catch {
+    return "ask";
+  }
+}
+
+function writeStoredShellView(mode: DesktopMode): void {
+  try {
+    window.localStorage.setItem(SHELL_VIEW_KEY, mode);
+  } catch {
+    // Private windows may refuse storage; the view lasts this page only.
+  }
+}
+
 function readCachedTheme(): BrowserGatewayThemeSnapshot | null {
   try {
     const raw = window.localStorage.getItem(THEME_CACHE_KEY);
@@ -1635,13 +1667,20 @@ export function BrowserGatewayApp({
 }: BrowserGatewayAppProps) {
   const consumerShell = askAgentOnly || browserShell;
   const productCopy = PRODUCT_COPY[product];
-  const [desktopMode, setDesktopMode] = useState<DesktopMode>("ask");
-  const [browserWorkspaceMounted, setBrowserWorkspaceMounted] = useState(false);
+  // The browser shell reopens the view it was on: mobile browsers often
+  // reload a backgrounded page, which otherwise dropped back to Ask Agent.
+  const [desktopMode, setDesktopMode] = useState<DesktopMode>(() =>
+    browserShell ? readStoredShellView() : "ask",
+  );
+  const [browserWorkspaceMounted, setBrowserWorkspaceMounted] = useState(
+    () => desktopMode === "vscode",
+  );
   const desktopModesAvailable =
     browserShell || (askAgentOnly && Boolean(window.agentlinkDesktopShell));
   const selectSurfaceMode = (mode: DesktopMode) => {
     if (mode === "vscode") setBrowserWorkspaceMounted(true);
     setDesktopMode(mode);
+    if (browserShell) writeStoredShellView(mode);
     if (browserShell && window.innerWidth <= 720) setDesktopSidebarOpen(false);
   };
   const desktopRemoteSelected = desktopModesAvailable && desktopMode !== "ask";
@@ -6324,6 +6363,84 @@ export function BrowserGatewayApp({
     }
   }
 
+  /**
+   * Close a VS Code chat tab. A running tab asks first, then closes with
+   * `stopRunning`. Closing the selected tab moves the browser to whichever
+   * tab VS Code focuses next.
+   */
+  async function handleCloseTab(
+    instanceId: string,
+    workspace: BrowserGatewayChatWorkspaceSummary,
+    tab: { tabId: string; sessionId: string | null },
+  ): Promise<void> {
+    if (newTabPendingRef.current) return;
+    newTabPendingRef.current = true;
+    setNewTabPendingInstance(instanceId);
+    setNewTabError(null);
+    const wasSelected =
+      selectedLogicalTabRef.current?.instanceId === instanceId &&
+      selectedLogicalTabRef.current.tabId === tab.tabId;
+    const request = (stopRunning: boolean) =>
+      fetch(buildApiPathForInstance("/api/tabs/close", instanceId), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          selection: {
+            controllerEpoch: workspace.controllerEpoch,
+            tabId: tab.tabId,
+            sessionId: tab.sessionId,
+          },
+          ...(stopRunning ? { stopRunning: true } : {}),
+        }),
+      });
+    try {
+      let response = await request(false);
+      let body = (await response.json()) as {
+        ok?: boolean;
+        reason?: string;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (body.reason === "confirmation_required") {
+        if (!window.confirm("This chat is still running. Stop it and close?"))
+          return;
+        response = await request(true);
+        body = (await response.json()) as typeof body;
+      }
+      const nextWorkspace = body.snapshot?.session.chatWorkspace;
+      if (!response.ok || !body.ok || !body.snapshot || !nextWorkspace) {
+        throw new Error(
+          body.reason === "close_blocked"
+            ? "the last docked tab can't be closed"
+            : (body.reason ??
+                body.error ??
+                `Request failed (${response.status})`),
+        );
+      }
+      snapshotCacheRef.current.set(instanceId, {
+        generation: selectedTabGenerationRef.current,
+        snapshot: body.snapshot,
+      });
+      setOwnerSnapshotRevision((revision) => revision + 1);
+      if (wasSelected) {
+        const nextTab =
+          nextWorkspace.tabs.find(
+            (candidate) => candidate.tabId === nextWorkspace.focusedTabId,
+          ) ?? selectableLogicalTabs(nextWorkspace)[0];
+        if (nextTab) handleLogicalTabSelect(instanceId, nextWorkspace, nextTab);
+      }
+    } catch (error) {
+      setNewTabError(`Unable to close this tab: ${String(error)}`);
+    } finally {
+      newTabPendingRef.current = false;
+      setNewTabPendingInstance(null);
+    }
+  }
+
   const handleSetReasoningEffort = (effort: ReasoningEffort): void => {
     if (!foreground || thinkingPending) {
       logAskAgentBrowserEvent("thinking.ignored", {
@@ -9138,6 +9255,164 @@ export function BrowserGatewayApp({
       ? (filePath, line) => setViewedFile({ path: filePath, line })
       : undefined;
 
+  // ── VS Code tabs in the shell sidebar (see workspaceTabsBridge.ts) ──
+  // Workspace page role: post the tab list to the shell and act on its
+  // requests. The strip stays until the shell confirms it lists the tabs,
+  // so the desktop app and the classic per-window page keep it.
+  const embeddedInShell =
+    workspaceOnly && !externalBrowserUnavailable && window.parent !== window;
+  const [tabsHostedByShell, setTabsHostedByShell] = useState(false);
+  const workspaceTabActionRef = useRef<(action: WorkspaceTabAction) => void>(
+    () => undefined,
+  );
+  workspaceTabActionRef.current = (action) => {
+    const workspace = snapshotCacheRef.current.get(action.instanceId)?.snapshot
+      .session.chatWorkspace;
+    if (action.action === "select") {
+      const tab =
+        action.tabId && workspace
+          ? workspace.tabs.find((candidate) => candidate.tabId === action.tabId)
+          : undefined;
+      if (workspace && tab) {
+        handleLogicalTabSelect(action.instanceId, workspace, tab);
+      } else {
+        selectTab(action.instanceId);
+      }
+      return;
+    }
+    if (!workspace) return;
+    if (action.action === "new") {
+      void handleNewTab(action.instanceId, workspace);
+      return;
+    }
+    const tab = workspace.tabs.find(
+      (candidate) => candidate.tabId === action.tabId,
+    );
+    if (tab) void handleCloseTab(action.instanceId, workspace, tab);
+  };
+  useEffect(() => {
+    if (!embeddedInShell) return;
+    const onMessage = (event: MessageEvent) => {
+      if (
+        event.source !== window.parent ||
+        event.origin !== window.location.origin
+      ) {
+        return;
+      }
+      const data = event.data as { type?: unknown; action?: unknown } | null;
+      if (data?.type === WORKSPACE_TABS_HOST_MESSAGE) {
+        setTabsHostedByShell(true);
+      } else if (
+        data?.type === WORKSPACE_TAB_ACTION_MESSAGE &&
+        isWorkspaceTabAction(data.action)
+      ) {
+        workspaceTabActionRef.current(data.action);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [embeddedInShell]);
+  const workspaceTabGroupsJson = embeddedInShell
+    ? JSON.stringify(
+        instanceOptions.map((instance): WorkspaceTabGroup => {
+          const instanceStatus = getInstanceStatus(instance);
+          const workspace = snapshotCacheRef.current.get(instance.instanceId)
+            ?.snapshot.session.chatWorkspace;
+          const tabs = workspace ? selectableLogicalTabs(workspace) : [];
+          const activeInstance = instance.instanceId === selectedInstanceId;
+          const disconnected = instance.disconnectedAt !== undefined;
+          return {
+            instanceId: instance.instanceId,
+            workspaceName: instance.workspaceName,
+            color: instanceGroupColor(instance.instanceId),
+            statusKind: instanceStatus.kind,
+            statusLabel: instanceStatus.label,
+            active: activeInstance,
+            disconnected,
+            manageable: Boolean(workspace) && tabs.length > 0,
+            pending: newTabPendingInstance === instance.instanceId,
+            tabs: workspace
+              ? tabs.map((tab) => {
+                  const selection = logicalTabSelection(
+                    instance.instanceId,
+                    workspace,
+                    tab,
+                  );
+                  const status = disconnected
+                    ? instanceStatus
+                    : getLogicalTabStatus(tab.status);
+                  return {
+                    tabId: tab.tabId,
+                    label: tab.label,
+                    title: tab.title ?? "Empty chat",
+                    statusKind: status.kind,
+                    statusLabel: status.label,
+                    active: Boolean(
+                      activeInstance &&
+                      selection &&
+                      selectedLogicalTab &&
+                      logicalTabSelectionKey(selection) ===
+                        logicalTabSelectionKey(selectedLogicalTab),
+                    ),
+                    selectable: Boolean(selection),
+                    popped: tab.placement === "popped",
+                  };
+                })
+              : [],
+          };
+        }),
+      )
+    : "";
+  useEffect(() => {
+    if (!workspaceTabGroupsJson) return;
+    window.parent.postMessage(
+      {
+        type: WORKSPACE_TABS_MESSAGE,
+        groups: JSON.parse(workspaceTabGroupsJson) as WorkspaceTabGroup[],
+      },
+      window.location.origin,
+    );
+  }, [workspaceTabGroupsJson]);
+
+  // Shell role: list the workspace page's tabs in the sidebar.
+  const workspaceFrameRef = useRef<HTMLIFrameElement>(null);
+  const [hostedWorkspaceTabs, setHostedWorkspaceTabs] = useState<
+    WorkspaceTabGroup[] | null
+  >(null);
+  useEffect(() => {
+    if (!browserShell) return;
+    const onMessage = (event: MessageEvent) => {
+      const frame = workspaceFrameRef.current?.contentWindow;
+      if (
+        !frame ||
+        event.source !== frame ||
+        event.origin !== window.location.origin
+      ) {
+        return;
+      }
+      const data = event.data as { type?: unknown; groups?: unknown } | null;
+      if (data?.type !== WORKSPACE_TABS_MESSAGE || !Array.isArray(data.groups))
+        return;
+      setHostedWorkspaceTabs(data.groups as WorkspaceTabGroup[]);
+      frame.postMessage(
+        { type: WORKSPACE_TABS_HOST_MESSAGE },
+        window.location.origin,
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [browserShell]);
+  const sendWorkspaceTabAction = (action: WorkspaceTabAction): void => {
+    workspaceFrameRef.current?.contentWindow?.postMessage(
+      { type: WORKSPACE_TAB_ACTION_MESSAGE, action },
+      window.location.origin,
+    );
+    // The sidebar overlays the chat on small screens; get out of the way.
+    if (action.action === "select" && window.innerWidth <= 720) {
+      setDesktopSidebarOpen(false);
+    }
+  };
+
   quickAskSubmissionHandlerRef.current = (submission) => {
     selectSurfaceMode("ask");
     const started = startAskAgentSession();
@@ -9640,7 +9915,7 @@ export function BrowserGatewayApp({
         </div>
       )}
 
-      {!consumerShell && (
+      {!consumerShell && !tabsHostedByShell && (
         <div
           class="browser-instance-tabs"
           role="tablist"
@@ -9748,49 +10023,76 @@ export function BrowserGatewayApp({
                       : instanceStatus;
                   const groupPosition = tabIndex === 0 ? "start" : "middle";
                   return (
-                    <button
-                      key={`${instance.instanceId}:${tab.tabId}`}
-                      aria-controls="browser-instance-panel"
-                      aria-label={`${tab.label} · ${tab.title ?? "Empty chat"} · ${instance.workspaceName} · ${tab.placement === "popped" ? "Popped out" : "Docked"} · ${tabStatus.label}`}
-                      aria-selected={active}
-                      class={`instance-tab logical-tab logical-tab-group-${groupPosition} instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
-                      disabled={!selection}
-                      id={logicalTabDomId(instance.instanceId, tab.tabId)}
-                      onClick={() =>
-                        handleLogicalTabSelect(
-                          instance.instanceId,
-                          workspace,
-                          tab,
-                        )
-                      }
-                      role="tab"
-                      style={
-                        {
-                          "--instance-group-color": groupColor,
-                        } as unknown as CSSProperties
-                      }
-                      title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
-                      type="button"
-                    >
-                      <span class="instance-tab-main">
-                        <span class="logical-tab-label">{tab.label}</span>
-                        <span class="instance-tab-name">
-                          {tab.title ?? "Empty chat"}
+                    <Fragment key={`${instance.instanceId}:${tab.tabId}`}>
+                      <button
+                        aria-controls="browser-instance-panel"
+                        aria-label={`${tab.label} · ${tab.title ?? "Empty chat"} · ${instance.workspaceName} · ${tab.placement === "popped" ? "Popped out" : "Docked"} · ${tabStatus.label}`}
+                        aria-selected={active}
+                        class={`instance-tab logical-tab logical-tab-group-${groupPosition} instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
+                        disabled={!selection}
+                        id={logicalTabDomId(instance.instanceId, tab.tabId)}
+                        onClick={() =>
+                          handleLogicalTabSelect(
+                            instance.instanceId,
+                            workspace,
+                            tab,
+                          )
+                        }
+                        role="tab"
+                        style={
+                          {
+                            "--instance-group-color": groupColor,
+                          } as unknown as CSSProperties
+                        }
+                        title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
+                        type="button"
+                      >
+                        <span class="instance-tab-main">
+                          <span class="logical-tab-label">{tab.label}</span>
+                          <span class="instance-tab-name">
+                            {tab.title ?? "Empty chat"}
+                          </span>
+                          {tab.placement === "popped" && (
+                            <i
+                              aria-label="Popped out"
+                              class="codicon codicon-opened-editors"
+                            />
+                          )}
                         </span>
-                        {tab.placement === "popped" && (
+                        <span class="instance-tab-status">
                           <i
-                            aria-label="Popped out"
-                            class="codicon codicon-opened-editors"
+                            class={`codicon codicon-${instance.disconnectedAt !== undefined ? "debug-disconnect" : tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
                           />
-                        )}
-                      </span>
-                      <span class="instance-tab-status">
-                        <i
-                          class={`codicon codicon-${instance.disconnectedAt !== undefined ? "debug-disconnect" : tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
-                        />
-                        <span>{tabStatus.label}</span>
-                      </span>
-                    </button>
+                          <span>{tabStatus.label}</span>
+                        </span>
+                      </button>
+                      {active && (
+                        <button
+                          class="instance-tab logical-tab logical-tab-group-middle logical-tab-close"
+                          type="button"
+                          aria-label={`Close ${tab.label} · ${tab.title ?? "Empty chat"}`}
+                          title="Close tab"
+                          disabled={
+                            instance.disconnectedAt !== undefined ||
+                            newTabPendingInstance !== null
+                          }
+                          onClick={() =>
+                            void handleCloseTab(
+                              instance.instanceId,
+                              workspace,
+                              tab,
+                            )
+                          }
+                          style={
+                            {
+                              "--instance-group-color": groupColor,
+                            } as unknown as CSSProperties
+                          }
+                        >
+                          <i aria-hidden="true" class="codicon codicon-close" />
+                        </button>
+                      )}
+                    </Fragment>
                   );
                 })}
                 <button
@@ -9920,6 +10222,14 @@ export function BrowserGatewayApp({
                 <AssistantLauncher />
               ) : undefined
             }
+            vscodeContent={
+              browserShell && hostedWorkspaceTabs ? (
+                <WorkspaceTabList
+                  groups={hostedWorkspaceTabs}
+                  onAction={sendWorkspaceTabAction}
+                />
+              ) : undefined
+            }
             header={
               product === "assistant" ? (
                 <>
@@ -9942,6 +10252,7 @@ export function BrowserGatewayApp({
         )}
         {browserShell && browserWorkspaceMounted && (
           <iframe
+            ref={workspaceFrameRef}
             class="browser-workspace-frame"
             title="VS Code workspaces"
             src="/?browserWorkspace=1"

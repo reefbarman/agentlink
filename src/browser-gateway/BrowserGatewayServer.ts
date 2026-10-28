@@ -651,6 +651,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/tabs/close"),
+        ({ req, res }) => this.handleTabCloseAction(req, res),
+        json("tab close action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/tabs/fork"),
         ({ req, res }) => this.handleTabForkAction(req, res),
         json("tab fork action failed"),
@@ -2400,6 +2406,43 @@ export class BrowserGatewayServer implements vscode.Disposable {
       selection,
       body.mode,
       projectId,
+    );
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleTabCloseAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      selection?: unknown;
+      stopRunning?: unknown;
+    };
+    const selection = this.parseOptionalChatTabSelection(body?.selection, res);
+    if (selection === false) return;
+    if (!selection) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return;
+    }
+    if (
+      body.stopRunning !== undefined &&
+      typeof body.stopRunning !== "boolean"
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserCloseTab(
+      selection,
+      body.stopRunning === true,
     );
     this.writeJson(
       res,

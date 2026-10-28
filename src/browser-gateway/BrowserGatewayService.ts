@@ -595,8 +595,13 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projectionStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
-    const persistedProjectedMessages =
-      agentMessagesToChatMessages(persistedMessages);
+    // Deterministic ids keep repeated snapshots of an unchanged transcript
+    // stable; random ids made the browser treat every snapshot as a new user
+    // turn and yank the transcript back to the bottom.
+    const persistedProjectedMessages = agentMessagesToChatMessages(
+      persistedMessages,
+      { baseIndex: 0 },
+    );
     const projectedMessages = projectedMatchesForeground
       ? projected.projectedMessages
       : persistedProjectedMessages;
@@ -758,7 +763,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projectedMatchesSession = projected?.sessionId === session.id;
     const projectedMessages = projectedMatchesSession
       ? projected.projectedMessages
-      : agentMessagesToChatMessages(messages);
+      : agentMessagesToChatMessages(messages, { baseIndex: 0 });
     const sessionInfo = this.sessionManager
       .getSessionInfos()
       .find((candidate) => candidate.id === session.id);

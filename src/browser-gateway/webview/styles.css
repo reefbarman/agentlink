@@ -672,12 +672,115 @@ textarea {
   border-right-color: var(--instance-group-color);
 }
 
-.instance-tab.logical-tab-new {
+.instance-tab.logical-tab-new,
+.instance-tab.logical-tab-close {
   flex-shrink: 0;
   justify-content: center;
   min-width: 35px;
   padding: 0 10px;
   color: var(--instance-group-color);
+}
+
+.instance-tab.logical-tab-close {
+  min-width: 28px;
+  padding: 0 6px;
+  color: var(--ag-muted);
+}
+
+/* VS Code chat tabs listed in the browser shell sidebar. */
+.workspace-tab-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px;
+}
+
+.workspace-tab-group {
+  border-left: 2px solid var(--instance-group-color, var(--ag-border));
+  padding-left: 4px;
+}
+
+.workspace-tab-group.disconnected {
+  opacity: 0.6;
+}
+
+.workspace-tab-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workspace-tab-group-header > .desktop-sidebar-heading {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding-bottom: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-tab-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-tab-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.browser-shell.browser-shell-desktop .workspace-tab-select,
+.browser-shell.browser-shell-desktop .workspace-tab-window {
+  flex: 1;
+  min-width: 0;
+  padding-block: 9px;
+}
+
+.workspace-tab-label {
+  flex-shrink: 0;
+  color: var(--instance-group-color, var(--ag-muted));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workspace-tab-error {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.browser-shell .workspace-tab-icon-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ag-muted);
+  cursor: pointer;
+}
+
+.browser-shell .workspace-tab-icon-button:hover:not(:disabled) {
+  background: var(--ag-hover, #ffffff12);
+  color: var(--ag-text);
+}
+
+.browser-shell .workspace-tab-icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Mouse users get the close button on hover; touch always shows it. */
+@media (hover: hover) and (pointer: fine) {
+  .workspace-tab-row:not(.active):not(:hover):not(:focus-within)
+    .workspace-tab-close {
+    opacity: 0;
+  }
 }
 
 .instance-tab-main,
@@ -2665,7 +2768,8 @@ pre {
   }
 }
 
-@media (max-width: 720px) {
+/* Phone layout. Keep in sync with MOBILE_LAYOUT_MEDIA_QUERY. */
+@media (max-width: 600px) {
   .browser-header {
     align-items: center;
     flex-direction: row;
@@ -2841,6 +2945,45 @@ pre {
   .browser-diff-viewer {
     flex: 1;
     min-height: 0;
+  }
+}
+
+/* iOS enlarges text in landscape unless told not to. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/*
+ * Touch screens: denser transcript type so more of the chat fits on a phone
+ * or foldable. VS Code's theme sends its own font sizes (including the
+ * user's editor size, used for code and tool output), so override them here.
+ */
+@media (hover: none) and (pointer: coarse) {
+  .browser-shell {
+    --vscode-font-size: 13px;
+    --vscode-editor-font-size: 12px;
+  }
+
+  .browser-shell .browser-transcript .chat-messages {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .browser-shell-consumer .assistant-content,
+  .browser-shell.browser-shell-desktop .assistant-content {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .browser-shell-consumer .user-content,
+  .browser-shell.browser-shell-desktop .user-content {
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .browser-shell.browser-shell-desktop .message {
+    padding: 6px 0;
   }
 }
 

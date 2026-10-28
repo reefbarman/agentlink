@@ -283,6 +283,53 @@ describe("ChatView message windowing", () => {
     expect(transcript.scrollTop).toBe(600);
   });
 
+  it("keeps a scrolled-up position when a snapshot only renames message ids", () => {
+    const messages = makeMessages(3);
+    const { container, rerender } = render(
+      h(ChatView, { messages, streaming: false, sessionId: "session-1" }),
+    );
+    const transcript = container.querySelector(".chat-messages")!;
+    Object.defineProperties(transcript, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 500 },
+      scrollTop: { configurable: true, writable: true, value: 1500 },
+    });
+    fireEvent.touchStart(transcript);
+    transcript.scrollTop = 200;
+    fireEvent.scroll(transcript);
+    fireEvent.touchEnd(transcript);
+
+    rerender(
+      h(ChatView, {
+        messages: messages.map((message) => ({
+          ...message,
+          id: `renamed-${message.id}`,
+        })),
+        streaming: false,
+        sessionId: "session-1",
+      }),
+    );
+    expect(transcript.scrollTop).toBe(200);
+
+    rerender(
+      h(ChatView, {
+        messages: [
+          ...messages,
+          {
+            id: "message-new",
+            role: "user" as const,
+            content: "New prompt",
+            timestamp: 4,
+            blocks: [],
+          },
+        ],
+        streaming: false,
+        sessionId: "session-1",
+      }),
+    );
+    expect(transcript.scrollTop).toBe(2000);
+  });
+
   it("renders supplied setup content for an empty foreground chat", () => {
     render(
       h(ChatView, {

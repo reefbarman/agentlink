@@ -336,6 +336,14 @@ function makeChatViewProviderStub() {
       sessionId: "session-new",
       projectId: "project-a",
     })),
+    submitBrowserCloseTab: vi.fn(
+      async (_selection: unknown, _stopRunning?: boolean) =>
+        ({ ok: true, tabId: "tab-1" }) as {
+          ok: boolean;
+          tabId?: string;
+          reason?: string;
+        },
+    ),
     submitBrowserNewSession: vi.fn(async () => ({ ok: true })),
     submitBrowserLoadSession: vi.fn(async () => ({ ok: true })),
     submitBrowserAttachFile: vi.fn(async () => ({
@@ -3071,6 +3079,53 @@ describe("BrowserGatewayServer", () => {
       reason: "project_not_found",
     });
     expect(chatViewProvider.submitBrowserNewTab).toHaveBeenCalledTimes(2);
+
+    const closeTab = (body: unknown, authorized = true) =>
+      fetch(`${baseUrl}/api/tabs/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authorized ? { Authorization: "Bearer test-token" } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (await closeTab({ selection: browserSelection }, false)).status,
+    ).toBe(401);
+    expect((await closeTab({}, true)).status).toBe(400);
+    expect(
+      (await closeTab({ selection: browserSelection, stopRunning: "yes" }))
+        .status,
+    ).toBe(400);
+    expect(chatViewProvider.submitBrowserCloseTab).not.toHaveBeenCalled();
+    chatViewProvider.submitBrowserCloseTab.mockResolvedValueOnce({
+      ok: false,
+      reason: "confirmation_required",
+    });
+    const busyClose = await closeTab({ selection: browserSelection });
+    expect(busyClose.status).toBe(409);
+    expect(await busyClose.json()).toEqual({
+      ok: false,
+      reason: "confirmation_required",
+    });
+    expect(chatViewProvider.submitBrowserCloseTab).toHaveBeenLastCalledWith(
+      browserSelection,
+      false,
+    );
+    const closed = await closeTab({
+      selection: browserSelection,
+      stopRunning: true,
+    });
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toEqual({
+      ok: true,
+      tabId: "tab-1",
+      snapshot: server.getSnapshot(),
+    });
+    expect(chatViewProvider.submitBrowserCloseTab).toHaveBeenLastCalledWith(
+      browserSelection,
+      true,
+    );
 
     const selectedLoadSession = await fetch(`${baseUrl}/api/session/load`, {
       method: "POST",

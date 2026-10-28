@@ -167,6 +167,8 @@ interface DesktopSidebarProps {
   assistantLoading?: boolean;
   /** Or a link to it, shown with the views (the browser gateway). */
   assistantLink?: ComponentChildren;
+  /** Shown under the views in VS Code mode, for example its chat tabs. */
+  vscodeContent?: ComponentChildren;
 }
 
 /** What a chat is for; hosts that predate `kind` mark only scheduled runs. */
@@ -231,6 +233,7 @@ export function DesktopSidebar({
   assistantUnread = 0,
   assistantLoading = false,
   assistantLink,
+  vscodeContent,
 }: DesktopSidebarProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ChatFilter>("all");
@@ -399,11 +402,12 @@ export function DesktopSidebar({
             Manage chats
           </button>
         </div>
-        {mode === "vscode" && (
-          <p class="desktop-sidebar-empty">
-            Your open VS Code windows and chats, connected through AgentLink.
-          </p>
-        )}
+        {mode === "vscode" &&
+          (vscodeContent ?? (
+            <p class="desktop-sidebar-empty">
+              Your open VS Code windows and chats, connected through AgentLink.
+            </p>
+          ))}
         {mode === "assistant" && (
           <p class="desktop-sidebar-empty">
             Your self-hosted AgentLink Assistant. Its chats and projects live on

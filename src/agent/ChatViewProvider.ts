@@ -5311,6 +5311,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  /**
+   * Close a VS Code chat tab from the browser. A busy tab returns
+   * `confirmation_required` unless `stopRunning` is set; closing the focused
+   * tab moves VS Code focus to another docked tab, as closing it locally does.
+   */
+  public async submitBrowserCloseTab(
+    address: ChatTabActionAddress,
+    stopRunning = false,
+  ): Promise<{ ok: boolean; tabId?: string; reason?: string }> {
+    const result = await this.chatTabHostCoordinator?.close(
+      address,
+      stopRunning,
+    );
+    if (!result) return { ok: false, reason: "tab_host_unavailable" };
+    if (!result.ok) return { ok: false, reason: result.reason };
+    this.log(`Tab closed from browser: ${address.tabId}`);
+    return { ok: true, tabId: address.tabId };
+  }
+
   public async submitBrowserForkTab(
     address: ChatTabActionAddress,
     editInFork?: EditInForkRequest,

@@ -10,6 +10,7 @@ type PushEvent = Event & {
 
 type ServiceWorkerClient = {
   url: string;
+  frameType?: "auxiliary" | "top-level" | "nested" | "none";
   focus(): Promise<ServiceWorkerClient>;
   postMessage(message: unknown): void;
 };
@@ -102,9 +103,15 @@ worker.addEventListener("notificationclick", (event) => {
     worker.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then(async (clients) => {
-        const existing = clients.find(
+        const sameOrigin = clients.filter(
           (client) => new URL(client.url).origin === worker.location.origin,
         );
+        // The browser shell embeds its VS Code view as a same-origin frame.
+        // Focusing that frame does not bring the page forward, so prefer
+        // the top-level page.
+        const existing =
+          sameOrigin.find((client) => client.frameType === "top-level") ??
+          sameOrigin.find((client) => client.frameType !== "nested");
         if (existing) {
           if (target !== "/") {
             existing.postMessage({ type: OPEN_URL_MESSAGE, url: target });
