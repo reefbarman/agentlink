@@ -625,7 +625,7 @@ describe("resolveBackgroundRoute", () => {
         modelTier: "deep_reasoning",
         fallbackUsed: false,
       });
-      expect(route.defaultBudget).toBeUndefined();
+      expect(route).not.toHaveProperty("defaultBudget");
       if (taskClass === "readonly-research") {
         expect(route.toolProfile).toBe("readonly-research");
       }

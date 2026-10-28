@@ -287,7 +287,7 @@ export function appendOwnershipHandoff(
 export const GET_BACKGROUND_STATUS_TOOL: ToolDefinition = {
   name: "get_background_status",
   description:
-    "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, budget usage, canSteer/canKill controls, and preserved output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
+    "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, resource usage, canSteer/canKill controls, streamingPreview, and preserved output. There is no automatic deadline: judge useful progress, not elapsed time or tokens. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If status cannot show whether it is progressing, steer it with a progress question. If it is unproductive or the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
   input_schema: {
     type: "object",
     properties: {
@@ -411,7 +411,7 @@ export const KILL_BACKGROUND_AGENT_TOOL: ToolDefinition = {
 export const STEER_BACKGROUND_AGENT_TOOL: ToolDefinition = {
   name: "steer_background_agent",
   description:
-    'Send a course-correction to a running authorized descendant. To ask for an early result, say "Stop using tools and return your best findings now." The instruction is queued for the next safe tool boundary, so it cannot interrupt an in-flight provider request or tool; check idleMs later and kill if the instruction cannot be delivered promptly.',
+    'Send a course-correction to a running authorized descendant. For a progress check, ask what it has established, what remains, and whether to continue; it replies (see streamingPreview) and keeps working. To ask for an early result, say "Stop using tools and return your best findings now." The instruction is queued for the next safe tool boundary, so it cannot interrupt an in-flight provider request or tool; check idleMs later and kill if the instruction cannot be delivered promptly.',
   input_schema: {
     type: "object",
     properties: {

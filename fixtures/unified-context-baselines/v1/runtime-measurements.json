@@ -841,44 +841,44 @@
     {
       "mode": "code",
       "toolCount": 66,
-      "chars": 106041,
-      "estimatedTokens": 26511,
-      "sha256": "606b12db9a185d180ff33bdf3716b155f5671c4f1f437730441877bc48dbd009"
+      "chars": 105719,
+      "estimatedTokens": 26430,
+      "sha256": "6a8a0f3fcd5b11f45f1570f627aaac5444cf2694eee0385fca71a2f1af46f84d"
     },
     {
       "mode": "architect",
       "toolCount": 61,
-      "chars": 99680,
-      "estimatedTokens": 24920,
-      "sha256": "a543a28df0beb5f10db86462434247f1a2a0660cf30be1358d75d8a7165e12d0"
+      "chars": 99358,
+      "estimatedTokens": 24840,
+      "sha256": "527c72f49c6a1732c8946ee22d6cf8baea9d111a21997173c941277ff027ec92"
     },
     {
       "mode": "orchestrate",
       "toolCount": 55,
-      "chars": 72718,
-      "estimatedTokens": 18180,
-      "sha256": "890c99bbd92f9d09fdac76a3c435f424ba898d123df635a396a68c584991f22d"
+      "chars": 72396,
+      "estimatedTokens": 18099,
+      "sha256": "e80d8ba68688317ec6458ec6ba9d0a6340d764b42f677024cc0d37004e2c0b6e"
     },
     {
       "mode": "ask",
       "toolCount": 40,
-      "chars": 64260,
-      "estimatedTokens": 16065,
-      "sha256": "5b7bb0eb870911b2ded3c3e6d7d830607245c7e71ef56ae29e0f6ffd66fce969"
+      "chars": 63938,
+      "estimatedTokens": 15985,
+      "sha256": "748ae527e47aca4c7bcc5dc53c606a112eaeb9c63487b187aef383d6dedd859a"
     },
     {
       "mode": "debug",
       "toolCount": 58,
-      "chars": 88199,
-      "estimatedTokens": 22050,
-      "sha256": "a8f288fc06c31129d8e4412c3e103f58a2aa12643ae48e3b6978d436935cce20"
+      "chars": 87877,
+      "estimatedTokens": 21970,
+      "sha256": "00b40d406aea89cf5df73002ba8e939fae97afbc61cb7fa23827c257364f14ec"
     },
     {
       "mode": "review",
       "toolCount": 52,
-      "chars": 84496,
-      "estimatedTokens": 21124,
-      "sha256": "96464dcb95a4dcbc024da2aa50f2294f6e347c75bbcbcd6a31f41fe36ecfdfb0"
+      "chars": 84174,
+      "estimatedTokens": 21044,
+      "sha256": "c9712c66b6138b8e8cc11f38a6f38f39dda79959e1f45c8c6f59639c9cfe8902"
     }
   ],
   "projectedToolsByMode": [
@@ -886,49 +886,49 @@
       "mode": "code",
       "toolCount": 27,
       "deferredToolCount": 39,
-      "chars": 65540,
-      "estimatedTokens": 16385,
-      "sha256": "bdcd56c26d19ddbbd1519135f3f6c0d037cf0e90f54736797493ecbca9f83a1c"
+      "chars": 65541,
+      "estimatedTokens": 16386,
+      "sha256": "47512424ecd19539a8e190728231ab803c8d197adec468f03476f97960ccaa3a"
     },
     {
       "mode": "architect",
       "toolCount": 26,
       "deferredToolCount": 35,
-      "chars": 63802,
+      "chars": 63803,
       "estimatedTokens": 15951,
-      "sha256": "43e9056aebce4966762b084ca787bf1a5471e91c1045edf2723d514f3f06f073"
+      "sha256": "71cb416df166206003306dfc391cc6a3b48f6903fc6f59b3a890eaa7509a328b"
     },
     {
       "mode": "orchestrate",
       "toolCount": 22,
       "deferredToolCount": 33,
-      "chars": 43534,
+      "chars": 43535,
       "estimatedTokens": 10884,
-      "sha256": "38315c8ca751c12da03613555e54284f2925d95e535589769a5e4d8a98ee8608"
+      "sha256": "e1d0c106e3894e9af871a2c4233f4b3b2078d5236d3ef8ce3eb0af1e5f431087"
     },
     {
       "mode": "ask",
       "toolCount": 21,
       "deferredToolCount": 19,
-      "chars": 43827,
+      "chars": 43828,
       "estimatedTokens": 10957,
-      "sha256": "7a2066da364e4008b2bb25876901e1d20a13d983f6a902f47659c71bccc851dc"
+      "sha256": "d066b68c48249a2c9cadbb0d9f4c9519b35f1ab46bdd4b846f3518302cb38105"
     },
     {
       "mode": "debug",
       "toolCount": 24,
       "deferredToolCount": 34,
-      "chars": 58474,
+      "chars": 58475,
       "estimatedTokens": 14619,
-      "sha256": "4f1312930f37b9c251674d7493c4c408243d3bd10a7e4241cef61a6a3292c58e"
+      "sha256": "58b329b206e62d2d1225ed0108971223e9c67c77a07d91c2248f495b01ae61a4"
     },
     {
       "mode": "review",
       "toolCount": 23,
       "deferredToolCount": 29,
-      "chars": 57634,
+      "chars": 57635,
       "estimatedTokens": 14409,
-      "sha256": "38fa26b8661aa5ec5397b6f0bfcf285584284cdbc7ff84c0f39719a5c87eb642"
+      "sha256": "bcdb52acb92a81f95b3d011eb113bea48c5a7ef18fb9f5f46a4c56fa152347e7"
     }
   ],
   "profileMatrix": {

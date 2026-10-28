@@ -2622,16 +2622,12 @@ describe("AgentSessionManager background agents", () => {
     const acpPrompt = acpBackgroundRunner.run.mock.calls[0]?.[0].prompt;
     expect(acpPrompt).toContain("Paths: src/review.ts");
     expect(acpPrompt).toContain('"type":"review_findings"');
+    expect(acpPrompt).not.toContain("Requested resource limit");
     expect(acpPrompt).toContain(
-      "Planned budget: 100 tool calls, 50 model turns, 30 minutes",
+      "There is no automatic time or resource deadline",
     );
     const session = (mgr as any).sessions.get(spawned.sessionId);
-    expect(session.fleetMetadata.budget).toEqual({
-      maxToolCalls: 100,
-      maxApiTurns: 50,
-      maxElapsedMs: 1_800_000,
-      warningThresholdRatio: 0.8,
-    });
+    expect(session.fleetMetadata.budget).toBeUndefined();
     expect(session.fleetMetadata.delegation).toMatchObject({
       permissionProfile: "review-only",
       expectedResult: "review_findings",
@@ -4793,7 +4789,7 @@ describe("AgentSessionManager background agents", () => {
     expect(meta.tokenUsage).toBe(500);
   });
 
-  it("requests a wrap-up at the budget limit and lets the agent deliver findings", async () => {
+  it("does not request a wrap-up at an explicit budget's nominal limit", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
@@ -4813,12 +4809,9 @@ describe("AgentSessionManager background agents", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const session = (mgr as any).sessions.get(spawned.sessionId);
 
-    // Hitting the limit injects a wrap-up instruction instead of killing the
-    // run, so the agent's findings survive.
-    expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      expect.stringContaining("planned tool call budget"),
-      expect.any(String),
-    );
+    // Reaching the nominal value neither rushes nor kills the run; only the
+    // hard boundary (3x for non-review work) stops it.
+    expect(session.setPendingInterjection).not.toHaveBeenCalled();
     expect(session.abort).not.toHaveBeenCalled();
     expect(session.fleetMetadata).toEqual(
       expect.objectContaining({
@@ -5184,77 +5177,138 @@ describe("AgentSessionManager background agents", () => {
     mgr.stopSession(parent.sessionId);
   });
 
-  it("warns automatic review agents late in the generous safety allowance", async () => {
+  it.each(["review_code", "readonly-research", "general"])(
+    "gives %s background agents no automatic budget or wrap-up pressure",
+    async (taskClass) => {
+      mocks.runBehavior.mockReturnValue(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      );
+      const mgr = new AgentSessionManager(config, "/tmp");
+      mgr.setToolContext(toolCtx);
+      const spawned = await mgr.spawnBackground({
+        task: "long task",
+        message: "take the time this needs",
+        taskClass,
+      });
+      const session = (mgr as any).sessions.get(spawned.sessionId);
+      await waitFor(
+        () => mocks.runArgs.mock.calls.length,
+        (calls) => calls === 1,
+      );
+      expect(session.fleetMetadata.budget).toBeUndefined();
+      expect(mocks.runArgs).toHaveBeenCalledWith(
+        session,
+        expect.objectContaining({
+          maxToolCalls: undefined,
+          maxApiTurns: undefined,
+        }),
+      );
+
+      // Far beyond every former automatic review threshold.
+      const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+      meta.apiTurns = 500;
+      meta.toolCalls = 1_000;
+      meta.tokenUsage = 50_000_000;
+      meta.startedAt = Date.now() - 24 * 60 * 60 * 1000;
+
+      expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
+      expect(session.setPendingInterjection).not.toHaveBeenCalled();
+      expect(session.fleetMetadata.budgetWarning).toBeUndefined();
+      expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+        done: false,
+        canSteer: expect.any(Boolean),
+      });
+      mgr.stopSession(spawned.sessionId);
+    },
+  );
+
+  it("enforces an explicit budget only at its hard boundary, without wrap-up messages", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         await new Promise<never>(() => undefined);
         yield { type: "done" };
       })(),
     );
-    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
-      resolvedMode: "review",
-      resolvedModel: "claude-sonnet-4-6",
-      resolvedProvider: "anthropic",
-      taskClass: "review_code",
-      routingReason: "balanced bounded review",
-      fallbackUsed: false,
-      defaultBudget: {
-        maxToolCalls: 100,
-        maxApiTurns: 50,
-        maxElapsedMs: 1_800_000,
-        warningThresholdRatio: 0.8,
-      },
-    });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
     const spawned = await mgr.spawnBackground({
-      task: "review warning",
-      message: "review the change",
-      taskClass: "review_code",
-    });
-    const session = (mgr as any).sessions.get(spawned.sessionId);
-    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
-    meta.apiTurns = 40;
-
-    expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
-    expect(session.fleetMetadata.budgetWarning).toEqual(
-      expect.objectContaining({ kind: "api_turns", ratio: 0.8 }),
-    );
-    expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      expect.stringContaining("80% of the API turn budget"),
-      expect.any(String),
-    );
-    mgr.stopSession(spawned.sessionId);
-  });
-
-  it("emits a durable warning and nudges the agent before a session budget is exhausted", async () => {
-    mocks.runBehavior.mockReturnValue(
-      (async function* () {
-        await new Promise<never>(() => undefined);
-        yield { type: "done" };
-      })(),
-    );
-    const mgr = new AgentSessionManager(config, "/tmp");
-    mgr.setToolContext(toolCtx);
-    const spawned = await mgr.spawnBackground({
-      task: "warning",
+      task: "deliberately limited",
       message: "work",
       taskClass: "research",
       budget: { maxTokens: 100, warningThresholdRatio: 0.8 },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.fleetMetadata.budget).toEqual({ maxTokens: 100 });
     const meta = (mgr as any).bgMeta.get(spawned.sessionId);
-    meta.tokenUsage = 80;
 
-    expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
-    expect(session.fleetMetadata.budgetWarning).toEqual(
-      expect.objectContaining({ kind: "tokens", ratio: 0.8 }),
+    for (const used of [80, 100, 299]) {
+      meta.tokenUsage = used;
+      expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
+    }
+    expect(session.setPendingInterjection).not.toHaveBeenCalled();
+    expect(session.fleetMetadata.budgetWarning).toBeUndefined();
+
+    meta.tokenUsage = 300;
+    expect((mgr as any).enforceBackgroundBudget(session)).toBe(true);
+    expect(session.fleetMetadata.terminalReason).toBe(
+      "budget_exhausted:tokens",
     );
+    expect(session.setPendingInterjection).not.toHaveBeenCalled();
+  });
+
+  it("delivers a foreground progress question without ending the background agent", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "investigate",
+        message: "find the root cause",
+        taskClass: "debug",
+      },
+      parent.id,
+    );
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    session.status = "tool_executing";
+    const question =
+      "Brief progress check, not a wrap-up request: what have you established?";
+
+    expect(
+      mgr.steerAuthorizedBackground(parent.id, spawned.sessionId, question),
+    ).toEqual({ accepted: true });
     expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      expect.stringContaining("80% of the token budget"),
+      question,
       expect.any(String),
+      undefined,
+      question,
     );
+
+    mgr.appendBgStreamingText(
+      spawned.sessionId,
+      "Established: the cache key omits the tenant. Next: confirm the eviction path.",
+    );
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      done: false,
+      streamingPreview: expect.stringContaining(
+        "the cache key omits the tenant",
+      ),
+    });
+    expect(session.fleetMetadata.terminalReason).toBeUndefined();
     mgr.stopSession(spawned.sessionId);
+    mgr.stopSession(parent.id);
   });
 
   it("exposes route summaries for debug payloads", async () => {
@@ -6689,12 +6743,6 @@ describe("AgentSessionManager background agents", () => {
       modelTier: "deep_reasoning",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
-      defaultBudget: {
-        maxToolCalls: 100,
-        maxApiTurns: 50,
-        maxElapsedMs: 1_800_000,
-        warningThresholdRatio: 0.8,
-      },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -6733,20 +6781,15 @@ describe("AgentSessionManager background agents", () => {
           expectedResult: "review_findings",
           reviewScopeSummary: "review thoroughly",
         }),
-        budget: {
-          maxToolCalls: 100,
-          maxApiTurns: 50,
-          maxElapsedMs: 1_800_000,
-          warningThresholdRatio: 0.8,
-        },
       }),
     );
+    expect(session.fleetMetadata.budget).toBeUndefined();
     expect(mocks.runArgs).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
         toolProfile: "review",
-        maxToolCalls: 150,
-        maxApiTurns: 75,
+        maxToolCalls: undefined,
+        maxApiTurns: undefined,
       }),
     );
     expect(createToolRuntime).toHaveBeenCalledWith(
@@ -6797,7 +6840,7 @@ describe("AgentSessionManager background agents", () => {
     expect(handedOff).toContain("+const value = 2;");
   });
 
-  it("keeps review work-unit defaults when a caller supplies only a token cap", async () => {
+  it("ignores token and cost caps for reviews instead of inventing work-unit limits", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
       resolvedModel: "claude-sonnet-4-6",
@@ -6805,12 +6848,6 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "review_code",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
-      defaultBudget: {
-        maxToolCalls: 48,
-        maxApiTurns: 16,
-        maxElapsedMs: 600_000,
-        warningThresholdRatio: 0.8,
-      },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -6831,17 +6868,12 @@ describe("AgentSessionManager background agents", () => {
       (calls) => calls === 1,
     );
 
-    expect(session.fleetMetadata.budget).toEqual({
-      maxToolCalls: 48,
-      maxApiTurns: 16,
-      maxElapsedMs: 600_000,
-      warningThresholdRatio: 0.8,
-    });
+    expect(session.fleetMetadata.budget).toBeUndefined();
     expect(mocks.runArgs).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        maxToolCalls: 72,
-        maxApiTurns: 24,
+        maxToolCalls: undefined,
+        maxApiTurns: undefined,
       }),
     );
   });
@@ -6854,7 +6886,6 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "review_code",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
-      defaultBudget: { maxToolCalls: 72, maxApiTurns: 32 },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

@@ -14,7 +14,6 @@ import type { BackgroundModelTierGroups } from "./background/acpAgentConfig.js";
 import { CODEX_ROUTING_TIER_GROUPS } from "@agentlink/core/codex";
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
-import { getAutomaticBackgroundBudget } from "./background/backgroundBudgetPolicy.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 interface TaskRouteRule {
@@ -338,9 +337,6 @@ export async function resolveBackgroundRoute(
         ? undefined
         : requestedModelClassification?.tier))
     : resolveRoutingTier(request, rule, foregroundClassification);
-  const defaultBudget = modelTier
-    ? getAutomaticBackgroundBudget(taskClass, modelTier)
-    : undefined;
   const ruleOverrides = {
     ...((modelTier && rule.thinkingBudgetByTier?.[modelTier] !== undefined) ||
     rule.thinkingBudget !== undefined
@@ -370,7 +366,7 @@ export async function resolveBackgroundRoute(
       ...(classification.group ? { modelGroup: classification.group } : {}),
       routingReason,
       fallbackUsed,
-      ...(defaultBudget ? { defaultBudget } : {}),
+
       ...ruleOverrides,
     };
   };

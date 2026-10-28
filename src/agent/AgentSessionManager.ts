@@ -184,10 +184,8 @@ import {
 } from "./background/backgroundConcurrency.js";
 import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
 import {
-  getAutomaticBackgroundBudget,
   inferReviewTier,
-  isAutomaticallyBudgetedTaskClass,
-  isResearchTaskClass,
+  isSharedBudgetMemberTaskClass,
 } from "./background/backgroundBudgetPolicy.js";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
@@ -511,7 +509,12 @@ When the configuration is ready, briefly summarize it and end with exactly one m
 
 Only task and prompt are required. Omit optional JSON properties to use AgentLink defaults. Do not emit the envelope until all necessary user questions have been answered. When asking a question, do not emit the envelope.`;
 
-/** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
+/**
+ * Hard-stop boundary for an explicitly requested budget, as a multiple of its
+ * nominal value. Background agents never receive automatic budgets, and
+ * reaching the nominal value does not ask the agent to wrap up: progress is
+ * supervised by the foreground coordinator.
+ */
 const DEFAULT_BUDGET_HARD_LIMIT_RATIO = 3;
 const REVIEW_BUDGET_HARD_LIMIT_RATIO = 1.5;
 
@@ -604,64 +607,48 @@ function getEngineHardLimit(
     : Math.ceil(limit * getBudgetHardLimitRatio(taskClass));
 }
 
+/**
+ * Background agents only receive budgets their caller explicitly requested.
+ * There is no automatic budget for any task class or model tier.
+ */
 function resolveBackgroundBudget(
   taskClass: string,
-  defaultBudget: AgentBudget | undefined,
   requestedBudget: AgentBudget | undefined,
 ): AgentBudget | undefined {
-  if (isResearchTaskClass(taskClass)) {
-    const researchBudget: AgentBudget = { ...defaultBudget };
-    for (const [key, value] of Object.entries(requestedBudget ?? {})) {
-      if (value !== undefined) {
-        (researchBudget as Record<string, unknown>)[key] = value;
-      }
-    }
-    return Object.values(researchBudget).some((value) => value !== undefined)
-      ? researchBudget
-      : undefined;
-  }
-  if (!isReviewTaskClass(taskClass)) return requestedBudget;
-
+  if (!requestedBudget) return undefined;
   // Review input size is not a useful proxy for progress: a captured diff can
   // consume a token cap before the agent has inspected surrounding code. Keep
-  // reviews bounded by committed work units and wall-clock time instead.
-  const workUnitBudget: AgentBudget = {
-    ...defaultBudget,
-    ...(requestedBudget?.maxToolCalls !== undefined
-      ? { maxToolCalls: requestedBudget.maxToolCalls }
-      : {}),
-    ...(requestedBudget?.maxApiTurns !== undefined
-      ? { maxApiTurns: requestedBudget.maxApiTurns }
-      : {}),
-    ...(requestedBudget?.maxElapsedMs !== undefined
-      ? { maxElapsedMs: requestedBudget.maxElapsedMs }
-      : {}),
-    ...(requestedBudget?.warningThresholdRatio !== undefined
-      ? { warningThresholdRatio: requestedBudget.warningThresholdRatio }
-      : {}),
-    ...(requestedBudget?.scope !== undefined
-      ? { scope: requestedBudget.scope }
-      : {}),
-  };
-  return Object.keys(workUnitBudget).length > 0 ? workUnitBudget : undefined;
-}
-
-/** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
-function formatBudgetKind(kind: string): string {
-  switch (kind) {
-    case "tokens":
-      return "token";
-    case "tool_calls":
-      return "tool call";
-    case "api_turns":
-      return "API turn";
-    case "elapsed_time":
-      return "elapsed time";
-    case "estimated_cost":
-      return "estimated cost";
-    default:
-      return kind.replace(/_/g, " ");
+  // explicit review budgets to committed work units and wall-clock time.
+  const limitKeys: ReadonlyArray<keyof AgentBudget> = isReviewTaskClass(
+    taskClass,
+  )
+    ? ["maxToolCalls", "maxApiTurns", "maxElapsedMs"]
+    : [
+        "maxTokens",
+        "maxToolCalls",
+        "maxApiTurns",
+        "maxElapsedMs",
+        "maxEstimatedCostUsd",
+      ];
+  const budget: AgentBudget = {};
+  for (const key of limitKeys) {
+    const value = requestedBudget[key];
+    if (typeof value === "number") {
+      (budget as Record<string, unknown>)[key] = value;
+    }
   }
+  // A budget without any limit (for example, only a default scope) is not a
+  // configured constraint.
+  if (Object.keys(budget).length === 0) return undefined;
+  if (
+    budget.maxEstimatedCostUsd !== undefined &&
+    requestedBudget.estimatedCostPerMillionTokens !== undefined
+  ) {
+    budget.estimatedCostPerMillionTokens =
+      requestedBudget.estimatedCostPerMillionTokens;
+  }
+  if (requestedBudget.scope !== undefined) budget.scope = requestedBudget.scope;
+  return budget;
 }
 
 export interface CheckpointRevertPreviewResult {
@@ -991,7 +978,7 @@ export class AgentSessionManager {
     ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>[]
   >();
   /** Budget owners that have already received a soft-limit wrap-up request. */
-  private bgBudgetWrapUps = new Map<string, { kind: string }>();
+
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
   /** In-flight ACP output used to rebuild transcripts before the final turn is committed. */
@@ -10551,14 +10538,14 @@ export class AgentSessionManager {
       const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
         const timers = [
-          maxElapsedMs,
-          maxElapsedMs *
-            getBudgetHardLimitRatio(session.fleetMetadata?.taskClass),
-        ].map((delayMs) =>
-          this.host.timers.setTimeout(() => {
-            this.enforceBackgroundBudget(session);
-          }, delayMs),
-        );
+          this.host.timers.setTimeout(
+            () => {
+              this.enforceBackgroundBudget(session);
+            },
+            maxElapsedMs *
+              getBudgetHardLimitRatio(session.fleetMetadata?.taskClass),
+          ),
+        ];
         this.bgSafetyTimers.set(session.id, timers);
       }
       if (this.hookRuntimeProvider) {
@@ -11414,7 +11401,6 @@ export class AgentSessionManager {
       this.ensureParentWriterCanSpawnSharedChild(parent, acpEnforcedReadOnly);
       const effectiveBudget = resolveBackgroundBudget(
         taskClass,
-        getAutomaticBackgroundBudget(taskClass, modelTier),
         request.budget,
       );
       this.ensureChildBudgetAdmission(parent, effectiveBudget);
@@ -11844,7 +11830,6 @@ export class AgentSessionManager {
       request.expectedResult ?? (isReviewTask ? "review_findings" : undefined);
     const effectiveBudget = resolveBackgroundBudget(
       route.taskClass,
-      route.defaultBudget,
       request.budget,
     );
     this.ensureChildBudgetAdmission(parent, effectiveBudget);
@@ -12073,9 +12058,9 @@ export class AgentSessionManager {
         () => persistIfHistoryChanged("checkpoint"),
       );
 
-      // Session-scoped caps also flow into the engine as a final safety net.
-      // The nominal caps stay soft: the manager warns and interjects while the
-      // engine only refuses work at the same 3x boundary as the hard backstop.
+      // Explicit session-scoped caps also flow into the engine as a final
+      // safety net at the same hard boundary the manager enforces. Nominal
+      // values never inject wrap-up instructions.
       // Subtree/goal budgets are shared pools, so their totals don't apply to
       // a single engine run.
       const budget = session.fleetMetadata?.budget;
@@ -13710,7 +13695,6 @@ export class AgentSessionManager {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.clearSessionApprovalAuthority(this.getSessionSubtreeIds(session.id));
-    this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resolution.resultText;
     fleet.structuredResult = resolution.structuredResult;
@@ -14265,29 +14249,11 @@ export class AgentSessionManager {
   }
 
   /**
-   * Best-effort budget message injection into running in-process members.
-   * External backends (ACP, worktree) have no interjection channel and are
-   * skipped. Returns true when at least one member accepted the message.
+   * Enforce an explicitly requested budget at its hard boundary. Nominal
+   * values and warning ratios never inject wrap-up instructions: whether a
+   * background agent is still making useful progress is the foreground
+   * coordinator's call, through status and steering.
    */
-  private injectBudgetInterjection(
-    members: AgentSession[],
-    text: string,
-  ): boolean {
-    let accepted = false;
-    for (const member of members) {
-      const fleet = member.fleetMetadata;
-      if (!fleet || fleet.backend !== "native") continue;
-      if (fleet.placement !== "background") continue;
-      if (fleet.lifecycle !== "running" && fleet.lifecycle !== "queued") {
-        continue;
-      }
-      if (member.setPendingInterjection(text, crypto.randomUUID())) {
-        accepted = true;
-      }
-    }
-    return accepted;
-  }
-
   private enforceBudgetOwner(owner: AgentSession): boolean {
     const fleet = owner.fleetMetadata;
     const budget = fleet?.budget;
@@ -14300,7 +14266,7 @@ export class AgentSessionManager {
     const members = Array.from(this.sessions.values()).filter((candidate) => {
       if (
         candidate.id !== owner.id &&
-        !isAutomaticallyBudgetedTaskClass(candidate.fleetMetadata?.taskClass)
+        !isSharedBudgetMemberTaskClass(candidate.fleetMetadata?.taskClass)
       ) {
         return false;
       }
@@ -14340,35 +14306,6 @@ export class AgentSessionManager {
       [budget.maxElapsedMs, usage.elapsedMs, "elapsed_time"],
       [budget.maxEstimatedCostUsd, estimatedCostUsd, "estimated_cost"],
     ];
-    const warningThreshold = Math.min(
-      0.99,
-      Math.max(0, budget.warningThresholdRatio ?? 0.8),
-    );
-    const warning = checks
-      .map(([limit, used, kind]) => ({
-        kind,
-        ratio: limit && limit > 0 ? used / limit : 0,
-      }))
-      .find(({ ratio }) => ratio >= warningThreshold);
-    if (warning && warning.ratio < 1 && !fleet.budgetWarning) {
-      fleet.budgetWarning = {
-        ...warning,
-        emittedAt: Date.now(),
-      };
-      this.appendFleetEvent(
-        owner,
-        "budget_warning",
-        `${warning.kind} budget at ${Math.round(warning.ratio * 100)}%`,
-      );
-      // Tell the agent, not just the UI — leave enough budget headroom to
-      // finish and deliver findings rather than getting cut off mid-work.
-      this.injectBudgetInterjection(
-        members,
-        `[fleet budget] About ${Math.round(warning.ratio * 100)}% of the ${formatBudgetKind(warning.kind)} budget for this task is used. Prioritize the remaining work and start wrapping up so you can deliver your findings before the budget runs out.`,
-      );
-      this.saveSession(owner.id);
-      this.notifySessionsChanged();
-    }
     const hardLimitRatio = getBudgetHardLimitRatio(fleet.taskClass);
     const nativeSessionReviewEngineOwnsWorkUnitBackstop =
       fleet.backend === "native" &&
@@ -14384,31 +14321,8 @@ export class AgentSessionManager {
         limit >= 0 &&
         used >= limit * hardLimitRatio,
     );
-    const exhausted = checks.find(
-      ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
-    );
-    if (!exhausted) return false;
-
-    const [, , exhaustedKind] = exhausted;
-    if (!this.bgBudgetWrapUps.has(owner.id)) {
-      const accepted = this.injectBudgetInterjection(
-        members,
-        `[fleet budget] The planned ${formatBudgetKind(exhaustedKind)} budget for this task has been reached. Finish promptly, but use any additional tool calls that are genuinely needed to produce a correct, useful result. A hard safety backstop remains well beyond this soft limit.`,
-      );
-      this.bgBudgetWrapUps.set(owner.id, { kind: exhaustedKind });
-      this.appendFleetEvent(
-        owner,
-        "budget_warning",
-        accepted
-          ? `${exhaustedKind} planned budget reached — prompt finish requested`
-          : `${exhaustedKind} soft limit reached — hard backstop active`,
-      );
-      this.saveSession(owner.id);
-      this.notifySessionsChanged();
-    }
     if (!hardExhausted) return false;
 
-    this.bgBudgetWrapUps.delete(owner.id);
     const [, , hardExhaustedKind] = hardExhausted;
     const reason = `budget_exhausted:${hardExhaustedKind}`;
     fleet.terminalReason = reason;

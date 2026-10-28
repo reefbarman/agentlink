@@ -1549,19 +1549,19 @@ export const agentBudgetSchema = {
     .number()
     .optional()
     .describe(
-      "Cap on uncached input + output tokens summed across all API turns. Available for research tasks and ignored for review and writable task classes.",
+      "Cap on uncached input + output tokens summed across all API turns. Ignored for review task classes.",
     ),
   maxToolCalls: z
     .number()
     .optional()
     .describe(
-      "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
+      "Cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
     ),
   maxApiTurns: z
     .number()
     .optional()
     .describe(
-      "Soft cap on successful model API turns. Provider retry attempts are not charged.",
+      "Cap on successful model API turns. Provider retry attempts are not charged.",
     ),
   maxElapsedMs: z
     .number()
@@ -1574,17 +1574,12 @@ export const agentBudgetSchema = {
       "Estimated-cost cap in USD; only enforced when estimatedCostPerMillionTokens is also set.",
     ),
   estimatedCostPerMillionTokens: z.number().optional(),
-  warningThresholdRatio: z
-    .number()
-    .optional()
-    .describe(
-      "Usage ratio at which the agent is nudged to start wrapping up. Automatic review budgets default to 0.8.",
-    ),
+  warningThresholdRatio: z.number().optional().describe("Deprecated; ignored."),
   scope: z.enum(["session", "subtree", "goal"]).optional(),
 };
 
 export const agentBudgetDescription =
-  "Optional resource caps for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop. Research agents run uncapped by default (steer or kill them if they run too long); an explicit research budget supports every cap with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large.";
+  "Optional deliberate limit; omit unless the user asked for one. Background agents have no automatic budget: supervise progress with status and steering. An explicit limit sends no wrap-up messages and stops the agent as failed at 1.5x the value for reviews, 3x otherwise. Review token/cost caps are ignored.";
 
 const fleetWorkflowKindSchema = z.enum([
   "structured_diff_review",

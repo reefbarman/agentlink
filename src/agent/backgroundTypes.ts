@@ -9,7 +9,6 @@ export type {
 } from "../core/capabilities/background.js";
 
 import type {
-  AgentBudget,
   BackgroundModelTier as ModelTier,
   BackgroundModelTierSource as ModelTierSource,
 } from "../core/capabilities/background.js";
@@ -33,6 +32,4 @@ export interface BackgroundRouteResolution {
   thinkingBudget?: number;
   /** Tool profile name restricting available tools (e.g. "review"). */
   toolProfile?: string;
-  /** Automatic session budget used when the caller did not provide one. */
-  defaultBudget?: AgentBudget;
 }

@@ -36,9 +36,9 @@ export function buildReviewHandoff(options: BuildReviewHandoffOptions): string {
     "",
     "Review the target and only the directly affected callers, dependencies, and tests needed to validate a concrete correctness, safety, compatibility, or maintainability risk. Do not explore adjacent subsystems for general confidence. Prefer a few evidence-backed findings over broad commentary, and return no findings rather than inventing criticism.",
     budget
-      ? `Planned budget: ${budget}. Treat these as completion limits: prioritize the highest-risk hypotheses and finish within them unless one additional check is necessary to substantiate a critical or high-severity finding.`
+      ? `Requested resource limit: ${budget}. The delegating agent set this deliberately; the run is stopped at a hard boundary beyond it, so prioritize the highest-risk hypotheses first.`
       : undefined,
-    "Finish as soon as the target and its direct impact are understood. Cite workspace-relative paths and lines where practical.",
+    "There is no automatic time or resource deadline. Take the time a meaningful review needs, and finish as soon as the target and its direct impact are understood. If the coordinator asks for progress, briefly say what you have established, what material question remains, and what your next step will resolve, then continue. Cite workspace-relative paths and lines where practical.",
   ]
     .filter((section): section is string => section !== undefined)
     .join("\n");

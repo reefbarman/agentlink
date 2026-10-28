@@ -1896,7 +1896,9 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Review mode");
     expect(result).toContain("Background Agent");
     expect(result).toContain("background review agent");
-    expect(result).toContain("bounded background reviewer");
+    expect(result).toContain("scoped background reviewer");
+    expect(result).toContain("no automatic time or resource deadline");
+    expect(result).not.toContain("work-unit budget");
     expect(result).toContain("Inspect the live target");
     expect(result).toContain("Before each additional tool call");
     expect(result).toContain("Skip pre-task alignment");
