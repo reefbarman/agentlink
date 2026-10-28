@@ -1,0 +1,27 @@
+src/tools/loadSkill.test.ts
+  h_e08a86bb3a33a2 375-428
+packages/node-host/src/skillTools.ts
+  h_e08a86bb3a33a2 402-432,467-488
+  s_acf304b115fe01::t_57701f2788a899 489-490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d093d7eb21aa691b43acb082444602dfdde47270",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_acf304b115fe01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c901deeb-12ea-4eef-a9a7-770af7bb0d3b",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
