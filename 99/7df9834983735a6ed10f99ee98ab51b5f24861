@@ -1,0 +1,59 @@
+packages/workspace-host/src/commandTools.test.ts
+  h_e08a86bb3a33a2 175-183
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 553-555
+packages/workspace-host/src/commandSupervisor.ts
+  h_e08a86bb3a33a2 34-35
+packages/core/package.json
+  h_e08a86bb3a33a2 331-342
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 13-14
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 412-413
+packages/core/src/commandOutput.ts
+  h_e08a86bb3a33a2 1-302
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 283-288,694-696
+src/util/outputFilter.ts
+  h_e08a86bb3a33a2 5-10,12,14-15,19,25
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 1656-1657,1828
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 9-12,83-93,176-182,184,213,255,266-272,279-284,351,353,400,405,412-413,421-442,444-465,467,469-471,483-486,498,500,532-537,803-883,917-922,986-1042
+  s_0bd5feb4a98887::t_1c20228f257435 291,301,409-411,414,443,466,468,472,538,884-885,1043-1045
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2661-2759
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 188-189
+packages/core/src/commandOutput.test.ts
+  h_e08a86bb3a33a2 1-35
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 155
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/release-notes.md
+  s_0bd5feb4a98887::t_e59a8fc851df14 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "997df9834983735a6ed10f99ee98ab51b5f24861",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0bd5feb4a98887": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "671ef8d3-3875-465e-b291-b810c2e3a218",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
