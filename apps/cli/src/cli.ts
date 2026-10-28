@@ -677,6 +677,9 @@ export async function runCli(
   return 0;
 }
 
+/** Background agents a CLI session may run at once. */
+export const CLI_MAX_ACTIVE_BACKGROUND_CHILDREN = 4;
+
 async function createHost(options: {
   config: CliConfig;
   sharedCodeReasoningEffort?: import("@agentlink/protocol/model-catalog").CoreReasoningEffort;
@@ -880,6 +883,7 @@ async function createHost(options: {
       ? {
           background: {
             enabled: true as const,
+            maxActiveChildren: CLI_MAX_ACTIVE_BACKGROUND_CHILDREN,
             onApprovalAvailable: (request) =>
               options.interactionBridge.current?.notifyBackgroundApproval(
                 request,

@@ -370,7 +370,8 @@ export function createWorkspaceFileTools(
           ) {
             return {
               decision: "deny",
-              reason: "Path is reserved by another active workspace writer",
+              reason:
+                "Path is reserved by another active workspace writer, or is in this agent's forbiddenPaths",
             };
           }
         }
@@ -413,7 +414,8 @@ export function createWorkspaceFileTools(
       ) {
         return {
           decision: "deny",
-          reason: "Path is reserved by another active workspace writer",
+          reason:
+            "Path is reserved by another active workspace writer, or is in this agent's forbiddenPaths",
         };
       }
       if (
@@ -2268,6 +2270,19 @@ function createFindAndReplaceTool(
           const changes = file.replacements.length;
           if (failure) {
             results.push({ path: file.path, changes, status: "not_attempted" });
+            continue;
+          }
+          // Recheck right before each write: an earlier file's commit may
+          // have taken long enough for a child to be stopped or its scope
+          // to be revoked.
+          if (canWritePath && !(await canWritePath(discovery, file.path))) {
+            failure = file.path;
+            results.push({
+              path: file.path,
+              changes,
+              status: "error",
+              error: "path_reserved_by_active_writer",
+            });
             continue;
           }
           const written = await writeFile.execute(

@@ -9,13 +9,17 @@ import type {
   BackgroundResultState,
 } from "@agentlink/protocol";
 
+import { appendOwnershipHandoff } from "@agentlink/core/background-agent-tools";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 const STATE_VERSION = 1;
 const STATE_FILE = "background-agents.json";
-const DEFAULT_MAX_ACTIVE_CHILDREN = 2;
+/** Active children a foreground session may have when the host sets none. */
+export const DEFAULT_MAX_ACTIVE_BACKGROUND_CHILDREN = 2;
+/** The most active children any host may allow. */
+export const MAX_ACTIVE_BACKGROUND_CHILDREN = 8;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_TASK_BYTES = 8 * 1024;
 const MAX_MESSAGE_BYTES = 64 * 1024;
@@ -41,6 +45,11 @@ export interface WorkspaceBackgroundPathScope {
   readonly access: "read" | "read_write";
 }
 
+export interface WorkspaceBackgroundForbiddenPath {
+  readonly path: string;
+  readonly kind: "file" | "directory";
+}
+
 export interface WorkspaceBackgroundApproval {
   readonly interactionId: string;
   readonly source: "durable_interaction" | "host_operation";
@@ -61,6 +70,11 @@ export interface WorkspaceBackgroundRecord {
   readonly depth: 1;
   readonly task: string;
   readonly scopes: readonly WorkspaceBackgroundPathScope[];
+  /**
+   * Paths the child must not modify, even inside its write scopes (VS Code's
+   * `forbiddenPaths`). Absent on records written before they existed.
+   */
+  readonly forbidden?: readonly WorkspaceBackgroundForbiddenPath[];
   readonly model?: AgentModelReference;
   readonly reasoningEffort?: CoreReasoningEffort;
   readonly lifecycle: WorkspaceBackgroundLifecycle;
@@ -83,14 +97,26 @@ export interface SpawnWorkspaceBackgroundRequest {
   readonly callerTurnId: string;
   readonly task: string;
   readonly message: string;
-  readonly readScopes: readonly {
+  /**
+   * What the child may read. When absent, it may read the whole project
+   * (still limited to what its parent can read).
+   */
+  readonly readScopes?: readonly {
     readonly path: string;
     readonly kind: "file" | "directory";
   }[];
-  readonly writeScopes: readonly {
+  readonly writeScopes?: readonly {
     readonly path: string;
     readonly kind: "file" | "directory";
   }[];
+  /**
+   * VS Code's `ownedPaths`: project-relative (or absolute in-project) files
+   * and directories the child may write. A trailing slash or an existing
+   * directory makes a directory scope. Without any, the child is read-only.
+   */
+  readonly ownedPaths?: readonly string[];
+  /** VS Code's `forbiddenPaths`: never writable, even inside owned paths. */
+  readonly forbiddenPaths?: readonly string[];
   readonly model?: AgentModelReference;
   readonly reasoningEffort?: CoreReasoningEffort;
 }
@@ -164,7 +190,18 @@ export interface CreateWorkspaceBackgroundSupervisorOptions {
   readonly stateDirectory: string;
   readonly projectRoot: string;
   readonly projectId: string;
+  /** Children one foreground session may have active at once. */
   readonly maxActiveChildren?: number;
+  /**
+   * What a child spawned without read scopes may read: everything its parent
+   * can. Without this, the whole project.
+   */
+  readonly resolveParentReadScopes?: (request: {
+    readonly parentSessionId: string;
+    readonly parentTurnId: string;
+  }) => Promise<
+    readonly { readonly path: string; readonly kind: "file" | "directory" }[]
+  >;
   readonly maxOutputBytes?: number;
   readonly now?: () => number;
   readonly createChildSession: (request: {
@@ -270,8 +307,16 @@ export class WorkspaceBackgroundSupervisor {
   ) {
     this.statePath = path.join(options.stateDirectory, STATE_FILE);
     this.projectRoot = path.resolve(options.projectRoot);
-    this.maxActiveChildren =
-      options.maxActiveChildren ?? DEFAULT_MAX_ACTIVE_CHILDREN;
+    const limit =
+      options.maxActiveChildren ?? DEFAULT_MAX_ACTIVE_BACKGROUND_CHILDREN;
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > MAX_ACTIVE_BACKGROUND_CHILDREN
+    ) {
+      throw new Error("background_max_active_children_invalid");
+    }
+    this.maxActiveChildren = limit;
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     this.now = options.now ?? Date.now;
   }
@@ -290,6 +335,11 @@ export class WorkspaceBackgroundSupervisor {
     const supervisor = new WorkspaceBackgroundSupervisor(options);
     await supervisor.open();
     return supervisor;
+  }
+
+  /** How many children may be active at once. */
+  get activeChildLimit(): number {
+    return this.maxActiveChildren;
   }
 
   list(callerSessionId: string): readonly WorkspaceBackgroundRecord[] {
@@ -326,7 +376,7 @@ export class WorkspaceBackgroundSupervisor {
     try {
       if (this.closed) throw new Error("background_supervisor_closed");
       this.assertForegroundCaller(request.callerSessionId);
-      if (this.activeCount() >= this.maxActiveChildren) {
+      if (this.activeCount(request.callerSessionId) >= this.maxActiveChildren) {
         throw new Error("background_child_capacity_reached");
       }
       const task = boundedRequiredText(request.task, MAX_TASK_BYTES, "task");
@@ -337,10 +387,29 @@ export class WorkspaceBackgroundSupervisor {
       );
       // No write scopes makes a read-only child (for example a reviewer):
       // `assertWriteAllowed` refuses every write it attempts.
-      const scopes = await this.resolveScopes(
-        request.readScopes,
-        request.writeScopes,
+      const ownedScopes = await Promise.all(
+        (request.ownedPaths ?? []).map((value) =>
+          this.resolvePathString(value, "read_write"),
+        ),
       );
+      const forbidden = (
+        await Promise.all(
+          (request.forbiddenPaths ?? []).map((value) =>
+            this.resolvePathString(value, "read"),
+          ),
+        )
+      ).map(({ path: scopePath, kind }) => ({ path: scopePath, kind }));
+      const readScopes =
+        request.readScopes ??
+        (await this.options.resolveParentReadScopes?.({
+          parentSessionId: request.callerSessionId,
+          parentTurnId: request.callerTurnId,
+        })) ??
+        ([{ path: ".", kind: "directory" }] as const);
+      const scopes = await this.resolveScopes(readScopes, [
+        ...(request.writeScopes ?? []),
+        ...ownedScopes,
+      ]);
       if (
         this.options.validateScopes &&
         !(await this.options.validateScopes({
@@ -368,6 +437,7 @@ export class WorkspaceBackgroundSupervisor {
         depth: 1,
         task,
         scopes,
+        ...(forbidden.length > 0 ? { forbidden: uniquePaths(forbidden) } : {}),
         ...(child.model ? { model: structuredClone(child.model) } : {}),
         ...(child.reasoningEffort
           ? { reasoningEffort: child.reasoningEffort }
@@ -382,7 +452,22 @@ export class WorkspaceBackgroundSupervisor {
       this.records.set(record.childSessionId, record);
       this.steering.set(record.childSessionId, []);
       await this.persist();
-      this.startRun(record.childSessionId, message, false);
+      // As in VS Code, a child given ownership is told its paths, which the
+      // host enforces.
+      const handoff =
+        request.ownedPaths !== undefined || request.forbiddenPaths !== undefined
+          ? appendOwnershipHandoff(message, {
+              ownedPaths: scopes
+                .filter((scope) => scope.access === "read_write")
+                .map((scope) => scope.path),
+              forbiddenPaths: (record.forbidden ?? []).map(
+                (entry) => entry.path,
+              ),
+              backend: "workspace",
+              executionRoot: this.projectRoot,
+            })
+          : message;
+      this.startRun(record.childSessionId, handoff, false);
       return cloneRecord(
         this.requireOwned({
           callerSessionId: request.callerSessionId,
@@ -689,6 +774,13 @@ export class WorkspaceBackgroundSupervisor {
     const child = this.records.get(sessionId);
     if (child) {
       if (!isActive(child)) return false;
+      if (
+        child.forbidden?.some((entry) =>
+          scopeContains({ ...entry, access: "read" }, relativePath),
+        )
+      ) {
+        return false;
+      }
       return child.scopes.some(
         (scope) =>
           scope.access === "read_write" && scopeContains(scope, relativePath),
@@ -1000,8 +1092,12 @@ export class WorkspaceBackgroundSupervisor {
     }
   }
 
-  private activeCount(): number {
-    return [...this.records.values()].filter(isActive).length;
+  /** Active children of one foreground session; write overlap stays global. */
+  private activeCount(parentSessionId: string): number {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.parentSessionId === parentSessionId && isActive(record),
+    ).length;
   }
 
   private assertDisjointWriteReservations(
@@ -1024,8 +1120,8 @@ export class WorkspaceBackgroundSupervisor {
   }
 
   private async resolveScopes(
-    readScopes: SpawnWorkspaceBackgroundRequest["readScopes"],
-    writeScopes: SpawnWorkspaceBackgroundRequest["writeScopes"],
+    readScopes: NonNullable<SpawnWorkspaceBackgroundRequest["readScopes"]>,
+    writeScopes: NonNullable<SpawnWorkspaceBackgroundRequest["writeScopes"]>,
   ): Promise<readonly WorkspaceBackgroundPathScope[]> {
     if (readScopes.length + writeScopes.length === 0) {
       throw new Error("background_scope_required");
@@ -1045,6 +1141,44 @@ export class WorkspaceBackgroundSupervisor {
     );
     return [...unique.values()].sort((left, right) =>
       JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    );
+  }
+
+  /**
+   * A path string from `ownedPaths` or `forbiddenPaths` as a scope: absolute
+   * paths must be inside the project, and a trailing slash or an existing
+   * directory makes a directory scope.
+   */
+  private async resolvePathString(
+    value: string,
+    access: WorkspaceBackgroundPathScope["access"],
+  ): Promise<WorkspaceBackgroundPathScope> {
+    if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+      throw new Error("background_scope_path_invalid");
+    }
+    let relative = value.trim();
+    if (path.isAbsolute(relative)) {
+      relative = path.relative(this.projectRoot, path.resolve(relative));
+      if (
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      ) {
+        throw new Error("background_scope_outside_project");
+      }
+      relative = relative.split(path.sep).join("/") || ".";
+    }
+    const normalized = normalizeRelativePath(relative);
+    const directory =
+      /[\\/]$/u.test(relative) ||
+      normalized === "." ||
+      (await fs
+        .stat(path.resolve(this.projectRoot, ...normalized.split("/")))
+        .then((stats) => stats.isDirectory())
+        .catch(() => false));
+    return await this.resolveScope(
+      { path: normalized, kind: directory ? "directory" : "file" },
+      access,
     );
   }
 
@@ -1300,6 +1434,14 @@ function validRecord(value: unknown): value is WorkspaceBackgroundRecord {
         (scope.kind === "file" || scope.kind === "directory") &&
         (scope.access === "read" || scope.access === "read_write"),
     ) &&
+    (record.forbidden === undefined ||
+      (Array.isArray(record.forbidden) &&
+        record.forbidden.every(
+          (entry) =>
+            Boolean(entry) &&
+            typeof entry.path === "string" &&
+            (entry.kind === "file" || entry.kind === "directory"),
+        ))) &&
     typeof record.lifecycle === "string" &&
     typeof record.phase === "string" &&
     typeof record.resultState === "string" &&
@@ -1307,6 +1449,16 @@ function validRecord(value: unknown): value is WorkspaceBackgroundRecord {
     typeof record.updatedAt === "number" &&
     typeof record.steeringQueued === "number"
   );
+}
+
+function uniquePaths(
+  entries: readonly WorkspaceBackgroundForbiddenPath[],
+): WorkspaceBackgroundForbiddenPath[] {
+  return [
+    ...new Map(
+      entries.map((entry) => [JSON.stringify([entry.path, entry.kind]), entry]),
+    ).values(),
+  ].sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function boundedUtf8Tail(value: string, maxBytes: number): string {

@@ -1514,6 +1514,79 @@ describe("assistant workspace routes", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
+  it("refuses a child's write outside its ownedPaths", async () => {
+    const harness = await startHarness({
+      approvalModes: true,
+      inheritSessionGrants: true,
+    });
+    const { owner, request } = harness;
+    const childResults: string[] = [];
+    harness.fetch.mockImplementation(async (_url, init) => {
+      const user = String(lastUser(init) ?? "");
+      if (user.startsWith("write child.txt")) {
+        const results = (requestBody(init).messages ?? []).filter(
+          (message) => message.role === "tool",
+        );
+        if (results.length === 0) {
+          return toolCall("write_file", {
+            path: "other.txt",
+            content: "outside\n",
+            expectedAbsent: true,
+          });
+        }
+        if (results.length === 1) {
+          return toolCall("write_file", {
+            path: "child.txt",
+            content: "from child\n",
+            expectedAbsent: true,
+          });
+        }
+        childResults.push(...results.map((message) => String(message.content)));
+        return completion("child done");
+      }
+      return hasToolResult(init)
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Write child.txt",
+            message: "write child.txt",
+            ownedPaths: ["child.txt"],
+          });
+    });
+    const sessionId = await createSession(harness);
+    const base = `/api/projects/home/sessions/${sessionId}`;
+    await request({
+      method: "POST",
+      path: `${base}/turns`,
+      session: owner,
+      body: { text: "delegate" },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        request({ path: `${base}/agents`, session: owner }),
+      ).resolves.toMatchObject({
+        body: {
+          agents: [
+            {
+              lifecycle: "completed",
+              resultText: "child done",
+              scopes: [
+                { path: ".", kind: "directory", access: "read" },
+                { path: "child.txt", kind: "file", access: "read_write" },
+              ],
+            },
+          ],
+        },
+      });
+    });
+    expect(childResults[0]).toContain("outside the active write scope");
+    await expect(
+      fs.access(path.join(harness.projectRoot, "other.txt")),
+    ).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(harness.projectRoot, "child.txt"), "utf8"),
+    ).resolves.toBe("from child\n");
+  });
+
   it("lets a child of an autonomous chat write without asking when children inherit its grant", async () => {
     const harness = await startHarness({
       approvalModes: true,

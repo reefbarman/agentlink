@@ -9,6 +9,8 @@ import {
   type HostToolResolver,
 } from "@agentlink/core";
 import {
+  FORBIDDEN_PATHS_PROPERTY,
+  OWNED_PATHS_PROPERTY,
   GET_BACKGROUND_STATUS_TOOL,
   KILL_BACKGROUND_AGENT_TOOL,
   STEER_BACKGROUND_AGENT_TOOL,
@@ -59,6 +61,7 @@ export type WorkspaceBackgroundStatus = BackgroundAgentStatusResult & {
   readonly sessionId: string;
   readonly task: string;
   readonly scopes: WorkspaceBackgroundRecord["scopes"];
+  readonly forbiddenPaths?: readonly string[];
   readonly pendingApproval?: {
     readonly toolName: string;
     readonly summary: string;
@@ -93,10 +96,11 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
   options: CreateWorkspaceBackgroundToolsOptions,
 ): HostTool<TPrincipal> {
   const roles = Object.keys(options.modelRoles ?? {}).sort();
+  const limit = options.supervisor.activeChildLimit;
   return defineTool({
     name: "spawn_background_agent",
     description: [
-      "Start one native child session with explicit project-relative read and write scopes. Leave write_paths empty for a read-only child such as a reviewer. At most two children may be active, write scopes must not overlap, and children cannot delegate. Returns the child's sessionId for get_background_status, get_background_result, steer_background_agent and kill_background_agent.",
+      `Start one native child session in this project. It may write only inside its ownedPaths (none makes a read-only child, such as a reviewer), never inside forbiddenPaths, and reads the whole project unless read_paths narrows it. At most ${limit} ${limit === 1 ? "child" : "children"} may be active, owned paths must not overlap another running child's, and children cannot delegate. Returns the child's sessionId for get_background_status, get_background_result, steer_background_agent and kill_background_agent.`,
       roles.length > 0
         ? `Set model_role to run the child on a configured model (${roles.join(", ")}); use "review" for reviews when available.`
         : undefined,
@@ -106,10 +110,40 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
     inputSchema: {
       type: "object",
       properties: {
-        task: { type: "string", minLength: 1, maxLength: 8_192 },
-        message: { type: "string", minLength: 1, maxLength: 65_536 },
-        read_paths: pathScopeArraySchema(),
-        write_paths: pathScopeArraySchema(),
+        task: {
+          type: "string",
+          minLength: 1,
+          maxLength: 8_192,
+          description: "Short label shown in the UI (max 50 chars)",
+        },
+        message: {
+          type: "string",
+          minLength: 1,
+          maxLength: 65_536,
+          description:
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include the files it owns, files to avoid, allowed commands/tests, and how to report conflicts.",
+        },
+        ownedPaths: {
+          ...OWNED_PATHS_PROPERTY,
+          maxItems: 64,
+          items: { type: "string", minLength: 1 },
+          description:
+            "Project-relative files or directories the agent may write (a trailing / marks a directory that does not exist yet). Enforced. Fixed when spawned; steering cannot widen this boundary. For additional paths, edit them in the coordinator or spawn a replacement with the required scope.",
+        },
+        forbiddenPaths: {
+          ...FORBIDDEN_PATHS_PROPERTY,
+          maxItems: 64,
+          items: { type: "string", minLength: 1 },
+        },
+        read_paths: {
+          ...pathScopeArraySchema(),
+          description:
+            "Optional: limit what the agent may read to these files and directories. Defaults to the whole project.",
+        },
+        write_paths: {
+          ...pathScopeArraySchema(),
+          description: "Deprecated: use ownedPaths.",
+        },
         ...(roles.length > 0
           ? { model_role: { type: "string", enum: roles } }
           : {}),
@@ -120,7 +154,7 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           enum: ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
       },
-      required: ["task", "message", "read_paths", "write_paths"],
+      required: ["task", "message"],
       additionalProperties: false,
     },
     effect: "external",
@@ -149,15 +183,23 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           ? { providerId, modelId }
           : undefined;
       try {
-        const readScopes = parseScopes(input.read_paths);
-        const writeScopes = parseScopes(input.write_paths);
         const record = await options.supervisor.spawn({
           callerSessionId: discovery.sessionId,
           callerTurnId: discovery.turnId,
           task: String(input.task),
           message: String(input.message),
-          readScopes,
-          writeScopes,
+          ...(input.read_paths !== undefined
+            ? { readScopes: parseScopes(input.read_paths) }
+            : {}),
+          ...(input.write_paths !== undefined
+            ? { writeScopes: parseScopes(input.write_paths) }
+            : {}),
+          ...(Array.isArray(input.ownedPaths)
+            ? { ownedPaths: input.ownedPaths.map(String) }
+            : {}),
+          ...(Array.isArray(input.forbiddenPaths)
+            ? { forbiddenPaths: input.forbiddenPaths.map(String) }
+            : {}),
           ...(model ? { model } : {}),
           ...(typeof input.reasoning_effort === "string"
             ? {
@@ -185,6 +227,9 @@ function spawnTool<TPrincipal extends AgentPrincipal>(
           fallbackUsed: false,
           task: record.task,
           scopes: record.scopes,
+          ...(record.forbidden
+            ? { forbiddenPaths: record.forbidden.map((entry) => entry.path) }
+            : {}),
         });
       } catch (error) {
         return toolError(errorMessage(error));
@@ -486,6 +531,9 @@ export function workspaceBackgroundStatus(
     sessionId: record.childSessionId,
     task: record.task,
     scopes: record.scopes,
+    ...(record.forbidden
+      ? { forbiddenPaths: record.forbidden.map((entry) => entry.path) }
+      : {}),
     ...(record.approval
       ? {
           pendingApproval: {

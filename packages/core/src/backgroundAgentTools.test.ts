@@ -1,5 +1,6 @@
 import {
   GET_BACKGROUND_RESULT_TOOL,
+  appendOwnershipHandoff,
   buildBackgroundDenialPayload,
   buildBackgroundFailurePayload,
   buildBackgroundResultsPayload,
@@ -11,6 +12,24 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("background agent tool contract", () => {
+  it("tells a workspace child that no owned paths means no writes", () => {
+    const handoff = appendOwnershipHandoff("task", {
+      ownedPaths: [],
+      forbiddenPaths: ["secret"],
+      backend: "workspace",
+      executionRoot: "/project",
+    });
+    expect(handoff).toContain('"ownedPaths":[],"forbiddenPaths":["secret"]');
+    expect(handoff).toContain("means you cannot write files at all");
+    expect(handoff).not.toContain("adds no ownership restriction");
+    expect(
+      appendOwnershipHandoff("task", {
+        backend: "workspace",
+        executionRoot: "/project",
+      }),
+    ).toBe("task");
+  });
+
   it("drops the user-message promise only for hosts whose waits cannot see one", () => {
     expect(
       getBackgroundResultToolDefinition({ interruptsOnUserMessage: true }),

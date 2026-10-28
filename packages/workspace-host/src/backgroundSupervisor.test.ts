@@ -248,6 +248,33 @@ describe("WorkspaceBackgroundSupervisor", () => {
       await expect(
         test.supervisor.spawn(spawnRequest("src/a.ts")),
       ).rejects.toThrow("background_child_capacity_reached");
+      // The limit is per foreground session: another chat in the same
+      // project can still start a child, though not over a live reservation.
+      const other = await test.supervisor.spawn({
+        ...spawnRequest("src/other.ts"),
+        callerSessionId: "parent-b",
+        callerTurnId: "parent-turn-b",
+      });
+      await expect(
+        test.supervisor.spawn({
+          ...spawnRequest("src/a.ts"),
+          callerSessionId: "parent-b",
+          callerTurnId: "parent-turn-b",
+        }),
+      ).rejects.toThrow("background_write_scope_overlap");
+      await vi.waitFor(() => {
+        expect(blockers.has(other.childSessionId)).toBe(true);
+      });
+      blockers.get(other.childSessionId)?.(
+        completed(other.childSessionId, "other done"),
+      );
+      await expect(
+        test.supervisor.wait({
+          callerSessionId: "parent-b",
+          childSessionId: other.childSessionId,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toMatchObject({ status: "completed" });
       expect(test.supervisor.assertWriteAllowed("parent-a", "src/a.ts")).toBe(
         false,
       );

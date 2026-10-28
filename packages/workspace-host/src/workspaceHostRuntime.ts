@@ -360,6 +360,9 @@ export interface CreateWorkspaceHostOptions {
   }) => HostToolResolver;
   readonly background?: {
     readonly enabled: true;
+    /**
+     * Children a foreground session may run at once: 1 to 8, default 2.
+     */
     readonly maxActiveChildren?: number;
     /**
      * Named models a parent can request with `model_role` when it spawns a
@@ -799,6 +802,19 @@ export async function createWorkspaceHost(
         projectRoot: project.root,
         projectId: project.id,
         maxActiveChildren: options.background.maxActiveChildren,
+        // A child spawned without read_paths reads what its parent can.
+        ...(options.files?.resolveScopes
+          ? {
+              resolveParentReadScopes: async (request) =>
+                (
+                  await options.files!.resolveScopes!({
+                    principal,
+                    sessionId: request.parentSessionId,
+                    turnId: request.parentTurnId,
+                  })
+                ).map((scope) => ({ path: scope.path, kind: scope.kind })),
+            }
+          : {}),
         onApprovalAvailable: options.background.onApprovalAvailable,
         onAgentChanged: options.background.onAgentChanged,
         createChildSession: async (request) => {
@@ -1653,7 +1669,7 @@ export async function createWorkspaceHost(
         options.background
           ? backgroundSupervisor?.getRecordForSession(request.session.sessionId)
             ? "You are a one-level background child. Work only within your assigned file scopes. You cannot delegate. Commands, MCP calls, and writes may pause for foreground human approval."
-            : `You may delegate up to two one-level background children with explicit read paths and disjoint write paths (none for a read-only reviewer), then observe, steer, wait for, or stop them.${
+            : `You may run up to ${backgroundSupervisor?.activeChildLimit ?? 2} one-level background children at once, each writing only inside its ownedPaths (none for a read-only reviewer) without overlapping another running child, then observe, steer, wait for, or stop them.${
                 options.background.modelRoles?.review
                   ? ' For a review, spawn a read-only child with model_role "review".'
                   : ""

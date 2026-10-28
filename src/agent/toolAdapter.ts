@@ -85,6 +85,8 @@ import {
   parseAskUserInput,
 } from "@agentlink/core/interaction-tools";
 import {
+  FORBIDDEN_PATHS_PROPERTY,
+  OWNED_PATHS_PROPERTY,
   GET_BACKGROUND_RESULT_TOOL,
   GET_BACKGROUND_STATUS_TOOL,
   KILL_BACKGROUND_AGENT_TOOL,
@@ -670,17 +672,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             'Optional routing tier override. Research defaults to the foreground tier; other ordinary work defaults below it. Use "foreground" only when complexity or useful parallelization justifies the same model; use "deep_reasoning" only when the actual risk justifies the higher-cost model.',
         },
-        ownedPaths: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "Write-ownership paths, enforced for native agents and advisory for ACP agents. Fixed when spawned; answers and steering cannot widen this boundary. For additional paths, edit them in the coordinator or spawn a replacement with the required scope.",
-        },
-        forbiddenPaths: {
-          type: "array",
-          items: { type: "string" },
-          description: "Paths the delegated agent must not modify.",
-        },
+        ownedPaths: OWNED_PATHS_PROPERTY,
+        forbiddenPaths: FORBIDDEN_PATHS_PROPERTY,
         permissionProfile: {
           type: "string",
           enum: ["review-only", "workspace-safe", "interactive"],

@@ -311,6 +311,234 @@ describe("workspace host background composition", () => {
     }
   });
 
+  it("keeps a child's writes inside its ownedPaths and out of its forbiddenPaths", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-owned-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "README.md"), "readme\n");
+    const childFirstMessages: string[] = [];
+    const childResults: string[] = [];
+    let spawnDescription = "";
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string; description?: string } }>;
+      };
+      const messages = body.messages ?? [];
+      const firstUser = messages.find((m) => m.role === "user")?.content ?? "";
+      const results = messages.filter((m) => m.role === "tool");
+      if (firstUser.startsWith("write the files")) {
+        if (results.length === 0) childFirstMessages.push(firstUser);
+        const writes = [
+          { path: "outside.txt", content: "no\n", expectedAbsent: true },
+          { path: "src/secret.txt", content: "no\n", expectedAbsent: true },
+          { path: "src/ok.txt", content: "yes\n", expectedAbsent: true },
+        ];
+        const next = writes[results.length];
+        if (next) return toolCall("write_file", next);
+        childResults.push(...results.map((m) => String(m.content)));
+        return completion("child done");
+      }
+      spawnDescription =
+        body.tools?.find((t) => t.function?.name === "spawn_background_agent")
+          ?.function?.description ?? spawnDescription;
+      return results.length === 0
+        ? toolCall("spawn_background_agent", {
+            task: "Write src",
+            message: "write the files",
+            ownedPaths: ["src/"],
+            forbiddenPaths: ["src/secret.txt"],
+          })
+        : completion("parent done");
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-owned",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: {
+        enabled: true,
+        approvalPolicy: { hasSessionGrant: () => true },
+      },
+      background: {
+        enabled: true,
+        inheritSessionGrants: true,
+        maxActiveChildren: 4,
+      },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await expect(host.runTurn(sessionId, "delegate")).resolves.toMatchObject({
+        status: "completed",
+      });
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          resultText: "child done",
+        });
+      });
+      const [child] = host.listBackgroundAgents(sessionId);
+      // The whole project is readable; only src/ is writable.
+      expect(child!.scopes).toEqual([
+        { path: ".", kind: "directory", access: "read" },
+        { path: "src", kind: "directory", access: "read_write" },
+      ]);
+      expect(child!.forbidden).toEqual([
+        { path: "src/secret.txt", kind: "file" },
+      ]);
+      expect(spawnDescription).toContain("At most 4 children");
+      // VS Code's ownership handoff, in the workspace host's wording.
+      expect(childFirstMessages[0]).toContain("## Delegated file ownership");
+      expect(childFirstMessages[0]).toContain(
+        '"ownedPaths":["src"],"forbiddenPaths":["src/secret.txt"]',
+      );
+      expect(childFirstMessages[0]).toContain(
+        "an empty ownedPaths list means you cannot write files at all",
+      );
+      expect(childResults).toHaveLength(3);
+      await expect(
+        fs.access(path.join(projectRoot, "outside.txt")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(projectRoot, "src", "secret.txt")),
+      ).rejects.toThrow();
+      await expect(
+        fs.readFile(path.join(projectRoot, "src", "ok.txt"), "utf8"),
+      ).resolves.toBe("yes\n");
+      expect(childResults[0]).toContain("outside the active write scope");
+      expect(childResults[1]).toContain("forbiddenPaths");
+      expect(childResults[2]).toContain('"operation":"created"');
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a child without read_paths read only what its narrower parent can", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-narrow-"),
+    );
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const messages = body.messages ?? [];
+      const firstUser = messages.find((m) => m.role === "user")?.content ?? "";
+      if (firstUser.startsWith("child")) return completion("child done");
+      return messages.some((m) => m.role === "tool")
+        ? completion("parent done")
+        : toolCall("spawn_background_agent", {
+            task: "Narrow",
+            message: "child work",
+            ownedPaths: ["src/a.ts"],
+          });
+    });
+    const host = await createWorkspaceHost({
+      projectRoot,
+      dataRoot: path.join(root, "data"),
+      ownerId: "background-narrow",
+      providers: [
+        {
+          type: "openai-compatible",
+          id: "fixture",
+          baseURL: "https://example.invalid/v1",
+          noAuth: true,
+          models: [
+            {
+              id: "fixture-model",
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              supportsToolUse: true,
+            },
+          ],
+          fetch,
+        },
+      ],
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      files: {
+        enabled: true,
+        resolveScopes: async () => [
+          { path: "src", kind: "directory", access: "read_write" },
+        ],
+      },
+      background: { enabled: true },
+    });
+    try {
+      const { sessionId } = await host.createSession();
+      await host.runTurn(sessionId, "delegate");
+      await vi.waitFor(() => {
+        expect(host.listBackgroundAgents(sessionId)[0]).toMatchObject({
+          lifecycle: "completed",
+          scopes: [
+            { path: "src", kind: "directory", access: "read" },
+            { path: "src/a.ts", kind: "file", access: "read_write" },
+          ],
+        });
+      });
+    } finally {
+      await host.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a child limit above eight", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "workspace-background-limit-"),
+    );
+    try {
+      await expect(
+        createWorkspaceHost({
+          projectRoot: root,
+          dataRoot: path.join(root, ".data"),
+          ownerId: "background-limit",
+          providers: [
+            {
+              type: "openai-compatible",
+              id: "fixture",
+              baseURL: "https://example.invalid/v1",
+              noAuth: true,
+              models: [
+                {
+                  id: "fixture-model",
+                  contextWindow: 32_768,
+                  maxOutputTokens: 4_096,
+                  supportsToolUse: true,
+                },
+              ],
+              fetch: vi.fn<typeof globalThis.fetch>(),
+            },
+          ],
+          defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+          files: { enabled: true },
+          background: { enabled: true, maxActiveChildren: 9 },
+        }),
+      ).rejects.toThrow("background_max_active_children_invalid");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs a read-only reviewer on the configured review model", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "workspace-background-review-"),
