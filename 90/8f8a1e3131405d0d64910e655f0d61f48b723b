@@ -1,0 +1,51 @@
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+apps/server/src/assistantService.test.ts
+  h_e08a86bb3a33a2 985-1154
+apps/server/src/sessionProgress.ts
+  h_e08a86bb3a33a2 23-25,28
+  s_40efc096a40c08::t_96dc4786a2e00d 22,26
+apps/server/README.md
+  h_e08a86bb3a33a2 870
+packages/workspace-host/src/promptProfile.ts
+  h_e08a86bb3a33a2 74-75,95
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_e08a86bb3a33a2 196-198,201-202,1415-1417
+  s_40efc096a40c08::t_b054c22bc62545 200,1418
+apps/server/src/sessionRunner.ts
+  h_e08a86bb3a33a2 385-387
+packages/core/src/systemPromptSections.test.ts
+  h_e08a86bb3a33a2 260-272
+packages/core/src/systemPromptSections.ts
+  h_e08a86bb3a33a2 126-131,178-179,203-204,207-209,395
+  s_40efc096a40c08::t_e2eba2f0886cba 177,180,205-206
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 11
+apps/server/src/assistantService.ts
+  h_e08a86bb3a33a2 1430-1434
+resources/builtin-skills/documentation/references/release-notes.md
+  s_40efc096a40c08::t_f3de2f358935bb 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "908f8a1e3131405d0d64910e655f0d61f48b723b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_40efc096a40c08": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8255184a-351d-4e94-89a1-3eb4ebe536ae",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
