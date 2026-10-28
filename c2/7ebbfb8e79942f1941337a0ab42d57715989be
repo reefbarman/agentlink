@@ -1,0 +1,55 @@
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 188-190
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_e08a86bb3a33a2 2738-2777
+packages/workspace-host/src/workspaceModes.ts
+  h_e08a86bb3a33a2 40
+packages/sandbox/src/workspaceSandboxPolicy.ts
+  h_e08a86bb3a33a2 390-404
+packages/core/src/commandOutput.ts
+  h_e08a86bb3a33a2 22-85
+packages/workspace-host/README.md
+  h_e08a86bb3a33a2 13
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 11381-11382,12437,12520-12526
+src/browser-gateway/helper/askAgentSandboxWorkspace.ts
+  h_e08a86bb3a33a2 13,21,72-73,81,176,186-190,194,196-202,221,223,227,229-230,232-237,239-243,245,250,252,256-262,390,392,1281-1292,1294-1295,1298,1347-1362,1386,1429,1432-1433,1435,1703-1704,1875,2157
+  h_e08a86bb3a33a2 228,231,238,255,1434
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+packages/workspace-host/src/workspaceModes.test.ts
+  h_e08a86bb3a33a2 23-24,29-32
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 155,197-198,217-218,243
+src/browser-gateway/helper/askAgentSandboxWorkspace.test.ts
+  h_e08a86bb3a33a2 110-111,117,123-131,306-312,316-317,320-355,431-433,437-438,441-453,489,491-492,498,512,517-518,533,535-539,541,556-562,564-565,567-569,643,645-648,653-654,657-668,950-951
+  h_e08a86bb3a33a2 132,511,515-516,519,534,540,566,649,655-656,762
+packages/workspace-host/src/commandTools.ts
+  h_e08a86bb3a33a2 10,12,129-133,257-258,279,403,442,497-499,501-502,504-510,515-519,525,527,531,533-535,537-542,544-549,551,554,556-560,564-572,574-576,578-598,601-602,608-613,619,621,625-631,636,639-646,648-649,652-680,982-984,986-989,991-992,994-996,998-1008,1019,1027,1029,1032-1033,1038,1042,1046,1051,1053,1057-1081
+  s_5d370d8c3ef9f8::t_82bc5f119affec 532,536,543,555,561,599,624,635
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c27ebbfb8e79942f1941337a0ab42d57715989be",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_5d370d8c3ef9f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41bf74cb-a183-48b8-a208-6c959d489a57",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
