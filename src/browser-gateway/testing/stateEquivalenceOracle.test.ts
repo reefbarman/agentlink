@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
-import type { BrowserGatewayDataPlaneFeature } from "../protocol.js";
+import type { BrowserGatewayDataPlaneFeature } from "@agentlink/protocol/browser-gateway-helper-lifecycle";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import {

@@ -75,7 +75,7 @@ describe("tool detail transport", () => {
   });
 
   it.each([
-    ["stale_revision", "result has changed"],
+    ["stale_revision", "Waiting for an updated session snapshot"],
     ["not_found", "no longer available"],
     ["too_large", "8 MiB"],
   ] as const)(

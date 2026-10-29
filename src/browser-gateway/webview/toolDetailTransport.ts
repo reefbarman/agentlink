@@ -36,7 +36,7 @@ export async function loadRemoteFinalResult(
   if (response.state !== "final_result") {
     throw new Error(
       response.state === "stale_revision"
-        ? "This result has changed. Retry to load the current version."
+        ? "This result has changed. Waiting for an updated session snapshot."
         : response.state === "not_found"
           ? "This final result is no longer available in the selected session."
           : detailStateMessage(response.state),

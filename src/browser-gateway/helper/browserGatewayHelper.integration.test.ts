@@ -87,10 +87,8 @@ import {
 import { InMemoryRetrievalRepository } from "../../core/retrieval/InMemoryRetrievalRepository.js";
 import { DerivedSessionRetrievalService } from "../../core/session/DerivedSessionRetrievalService.js";
 import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
-import {
-  BROWSER_GATEWAY_DATA_PLANE_FEATURES,
-  type BrowserGatewayMemoryRuntimeDescriptor,
-} from "../protocol.js";
+import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
+import { BROWSER_GATEWAY_DATA_PLANE_FEATURES } from "@agentlink/protocol/browser-gateway-helper-lifecycle";
 import {
   BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
   BROWSER_GATEWAY_HELPER_SECRET_HEADER,
