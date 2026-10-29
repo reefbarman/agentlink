@@ -50,6 +50,7 @@ import {
   type FileWithContent,
 } from "./workerLib.js";
 import { CacheCheckpointCoordinator } from "./CacheCheckpointCoordinator.js";
+import { RetrievalStoreMaintenance } from "./RetrievalStoreMaintenance.js";
 import { runBoundedReadAheadPipeline } from "./boundedReadAheadPipeline.js";
 import {
   getFileIndexJournalPath,
@@ -363,10 +364,33 @@ function sendError(message: string, fatal: boolean): void {
  * every committed version until pruned, so mutations without periodic
  * optimize() grow the store without bound and slow every later operation.
  * The first mutating job after worker startup always optimizes, which lets a
- * store that bloated under an older worker recover on its next job.
+ * store that bloated under an older worker recover on its next job; long jobs
+ * also optimize between committed batches once the interval elapses.
  */
 const RETRIEVAL_OPTIMIZE_INTERVAL_MS = 30 * 60 * 1_000;
-let lastRetrievalOptimizeAt = 0;
+const retrievalStoreMaintenance = new RetrievalStoreMaintenance({
+  intervalMs: RETRIEVAL_OPTIMIZE_INTERVAL_MS,
+  reportFailure: (message) => {
+    // Non-fatal: the host logs it and surfaces it as index status detail.
+    console.error(message);
+    sendError(message, false);
+  },
+});
+
+async function optimizeRetrievalStore(
+  repository: LanceDbRetrievalRepository,
+  stagedPort: StagedRepositoryPublicationPort | undefined,
+): Promise<void> {
+  const startedAt = Date.now();
+  // optimize() refreshes native indexes before compacting and pruning.
+  const outcome = await repository.optimize();
+  await stagedPort?.optimizeStagedStore();
+  const reclaimedMiB = (outcome.bytesReclaimed ?? 0) / (1024 * 1024);
+  console.log(
+    `Retrieval store optimized in ${Date.now() - startedAt}ms; ` +
+      `reclaimed ${reclaimedMiB.toFixed(1)} MiB of retrieval tables`,
+  );
+}
 
 /**
  * Heals a degraded store before per-file work begins. Runs the same throttled
@@ -380,31 +404,35 @@ async function optimizeRetrievalStoreIfDue(
   stagedPort: StagedRepositoryPublicationPort,
   totalFiles: number,
 ): Promise<void> {
-  if (Date.now() - lastRetrievalOptimizeAt < RETRIEVAL_OPTIMIZE_INTERVAL_MS) {
-    return;
-  }
-  lastRetrievalOptimizeAt = Date.now();
-  const report = () =>
-    sendStartupProgress(totalFiles, "optimizing retrieval store");
-  report();
-  const heartbeat = setInterval(report, 30_000);
-  heartbeat.unref();
-  try {
-    await repository.optimize();
-    await stagedPort.optimizeStagedStore();
-  } catch (error) {
-    console.error(`Retrieval store optimization failed: ${error}`);
-  } finally {
-    clearInterval(heartbeat);
-  }
+  await retrievalStoreMaintenance.runIfDue(
+    () => optimizeRetrievalStore(repository, stagedPort),
+    () => sendStartupProgress(totalFiles, "optimizing retrieval store"),
+  );
+}
+
+/**
+ * Keeps a long job's store maintained between committed batches. A first
+ * index of a large repository can run for many hours as one job, so start-
+ * and end-of-job optimization alone lets versions accumulate for its whole
+ * duration. Batch processing is serial, so no publication is in flight here.
+ */
+function createBatchStoreMaintenance(
+  repository: LanceDbRetrievalRepository,
+  stagedPort: StagedRepositoryPublicationPort,
+): (reportActivity: (detail: string) => void) => Promise<void> {
+  return async (reportActivity) => {
+    await retrievalStoreMaintenance.runIfDue(
+      () => optimizeRetrievalStore(repository, stagedPort),
+      () => reportActivity("optimizing retrieval store"),
+    );
+  };
 }
 
 async function refreshRetrievalIndexes(
   repository: LanceDbRetrievalRepository,
   stagedPort?: StagedRepositoryPublicationPort,
 ): Promise<void> {
-  const optimizeDue =
-    Date.now() - lastRetrievalOptimizeAt >= RETRIEVAL_OPTIMIZE_INTERVAL_MS;
+  const optimizeDue = retrievalStoreMaintenance.isDue();
   // Indeterminate phase: no per-item counts exist for index refresh/optimize.
   const report = () =>
     sendProgress(
@@ -420,15 +448,10 @@ async function refreshRetrievalIndexes(
   heartbeat.unref();
   try {
     if (optimizeDue) {
-      lastRetrievalOptimizeAt = Date.now();
-      try {
-        // optimize() refreshes native indexes before compacting and pruning.
-        await repository.optimize();
-        await stagedPort?.optimizeStagedStore();
-        return;
-      } catch (error) {
-        console.error(`Retrieval store optimization failed: ${error}`);
-      }
+      const outcome = await retrievalStoreMaintenance.run(() =>
+        optimizeRetrievalStore(repository, stagedPort),
+      );
+      if (outcome === "optimized") return;
     }
     await repository.refreshNativeIndexes();
   } finally {
@@ -1083,6 +1106,13 @@ interface BatchConfig {
   checkpoints: CacheCheckpointCoordinator;
   useTreeSitter: boolean;
   /**
+   * Store maintenance run after each fully committed batch. Receives a
+   * liveness reporter so the host watchdog sees activity while it runs.
+   */
+  maintainStoreAfterBatch?: (
+    reportActivity: (detail: string) => void,
+  ) => Promise<void>;
+  /**
    * Liveness signal emitted during long intra-batch phases (embedding,
    * publication) so the host's job watchdog sees IPC traffic even when a
    * large batch takes a while to commit. `completedInBatch` carries per-file
@@ -1386,7 +1416,13 @@ async function processFilePaths(
       result.errors.push(...batchResult.errors);
       result.pendingOwnership ||= batchResult.pendingOwnership;
       onBatchCommitted?.(result.filesIndexed, batchNumber, totalBatches);
-      return !batchResult.pendingOwnership;
+      if (batchResult.pendingOwnership) return false;
+      if (!aborted && batchNumber + 1 < totalBatches) {
+        await config.maintainStoreAfterBatch?.((detail) =>
+          config.onActivity?.(detail),
+        );
+      }
+      return true;
     },
     releaseBatch(batch) {
       if (!batch.errorsReported) {
@@ -1764,6 +1800,10 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         granularity: msg.granularity,
         checkpoints,
         useTreeSitter,
+        maintainStoreAfterBatch: createBatchStoreMaintenance(
+          repository,
+          writer.port,
+        ),
         onActivity: (detail, completedInBatch = 0) =>
           sendProgress(
             "upserting",
@@ -2076,6 +2116,10 @@ async function handleIncrementalUpdate(
           granularity: msg.granularity,
           checkpoints,
           useTreeSitter,
+          maintainStoreAfterBatch: createBatchStoreMaintenance(
+            repository,
+            writer.port,
+          ),
           onActivity: (detail, completedInBatch = 0) =>
             sendProgress(
               "upserting",
