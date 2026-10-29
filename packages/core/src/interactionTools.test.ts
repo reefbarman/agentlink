@@ -275,6 +275,53 @@ describe("set_task_status contract", () => {
     });
   });
 
+  it.each(["completed", "blocked", "waiting_for_user", "cancelled"] as const)(
+    "uses text results as the visible summary for %s",
+    (status) => {
+      const result = {
+        type: "text",
+        text: "  ## Result\n\nDistinctive response.  ",
+      } as const;
+      for (const summary of [undefined, "", "  "]) {
+        expect(
+          buildTaskStatusMarker({ status, params: { summary }, result }),
+        ).toEqual({
+          status,
+          source: "tool",
+          summary: "## Result\n\nDistinctive response.",
+          result,
+        });
+      }
+      expect(
+        buildTaskStatusMarker({
+          status,
+          params: { summary: "Explicit summary" },
+          result,
+        }),
+      ).toMatchObject({
+        summary: "Explicit summary",
+        result,
+      });
+    },
+  );
+
+  it("applies summary guards to fallback text without inventing empty content", () => {
+    expect(
+      buildTaskStatusMarker({
+        status: "blocked",
+        params: {},
+        result: { type: "text", text: "Here is the prompt" },
+      }).summary,
+    ).toBe(TEASER_FINAL_SUMMARY_REPLACEMENT);
+    expect(
+      buildTaskStatusMarker({
+        status: "blocked",
+        params: {},
+        result: { type: "text", text: "  " },
+      }).summary,
+    ).toBeUndefined();
+  });
+
   it("reports completed and ignored completeTodos", () => {
     expect(
       buildTaskStatusResultPayload({

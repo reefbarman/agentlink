@@ -5813,10 +5813,33 @@ describe("dispatchToolCall", () => {
       expect(onFinalStatus).toHaveBeenCalledWith({
         status: "completed",
         source: "tool",
+        ...(envelope.type === "text" ? { summary: envelope.text } : {}),
         result: envelope,
       });
     },
   );
+
+  it("displays a blocked text result without a separate summary", async () => {
+    const onFinalStatus = vi.fn();
+    const result = {
+      type: "text",
+      text: "## Result and remaining limitation\n\nA required service is unavailable.",
+    };
+    await dispatchToolCall(
+      "set_task_status",
+      { status: "blocked", result },
+      {
+        ...mockCtx,
+        onFinalStatus,
+      },
+    );
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "blocked",
+      source: "tool",
+      summary: result.text,
+      result,
+    });
+  });
 
   it("records a validated structured background result", async () => {
     const onFinalStatus = vi.fn();

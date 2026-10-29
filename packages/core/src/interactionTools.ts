@@ -470,8 +470,9 @@ export const TEASER_FINAL_SUMMARY_REPLACEMENT =
   "Task status was set, but the final summary only promised an artifact and did not include it. Expand the `set_task_status` tool input below to inspect what the agent attempted to send.";
 
 /**
- * The final marker for a validated `set_task_status` call. A teaser-only
- * summary is replaced, and a continue action needs both label and prompt.
+ * The final marker for a validated `set_task_status` call. Text results supply
+ * a missing summary. A teaser-only summary is replaced, and a continue action
+ * needs both label and prompt.
  */
 export function buildTaskStatusMarker(args: {
   readonly status: FinalMessageStatus;
@@ -480,6 +481,9 @@ export function buildTaskStatusMarker(args: {
 }): FinalMessageMarker {
   const { params } = args;
   let summary = typeof params.summary === "string" ? params.summary.trim() : "";
+  if (!summary && args.result?.type === "text") {
+    summary = args.result.text.trim();
+  }
   if (isTeaserOnlyFinalSummary(summary)) {
     summary = TEASER_FINAL_SUMMARY_REPLACEMENT;
   }

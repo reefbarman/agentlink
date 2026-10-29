@@ -262,6 +262,8 @@ The agent can also edit files in a folder granted for commands, without running 
 
 In native background sessions, `set_task_status.result` advertises the accepted coordinator-facing envelopes: `text` requires `text`; `patch` requires `summary` and `files` (not `changedFiles`); `verification` requires `passed` and `summary`; `review_findings` requires `findings`. An expected review completion also requires `emptyDiff`. When no result type was delegated, the schema exposes all four alternatives. File paths, screenshot paths, and finding paths must be non-empty workspace-relative paths without `..` segments, and finding line numbers must be positive integers. Invalid envelopes return up to eight field-specific `issues` without echoing submitted content, and do not finalise the session or complete TODOs. Legacy extra fields remain compatible, but cannot replace required fields. Completed text results must be non-blank; interrupted tasks may omit a result.
 
+When a validated `set_task_status.result` has type `text` and `summary` is missing or blank, its `text` is also shown as the final status card's summary, including for blocked, cancelled, and waiting-for-user outcomes. A non-blank explicit `summary` takes precedence; the structured result is preserved for the coordinator.
+
 Exact session-tool parameters: [orchestration tools](complete-reference.md#built-in-agent-orchestration-tools).
 
 ## Delegate work
