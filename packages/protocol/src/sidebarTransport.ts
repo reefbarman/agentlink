@@ -149,6 +149,7 @@ type SimpleWebviewCommand =
   | "rebuildIndex"
   | "cancelIndex"
   | "resumeIndex"
+  | "maintainIndex"
   | "setOpenaiApiKey"
   | "setOpenaiModelsAndEmbeddingsApiKey";
 

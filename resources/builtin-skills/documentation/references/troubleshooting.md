@@ -111,7 +111,9 @@ See [indexed query search setup](complete-reference.md#code-search-setup).
 
 ## Workspace indexes use too much disk space
 
-In VS Code, run **AgentLink: Manage Index Storage** from the Command Palette, even when indexing is disabled. It lists current-generation workspace caches and their file sizes. Older caches without workspace identity metadata may appear as **Unknown workspace**.
+For the workspace open in the current window, click **Free Up Space** in the sidebar's **Codebase Index** section once the index has been built. It compacts that workspace's index and deletes database history older than one hour, without re-reading or re-embedding any files, then reports how much space was reclaimed. It runs in this window's indexer, so it is unavailable while indexing is in progress. Indexing also performs the same maintenance automatically at the start of each run and about every 30 minutes during long runs.
+
+For other workspaces, run **AgentLink: Manage Index Storage** from the Command Palette, even when indexing is disabled. It lists current-generation workspace caches and their file sizes. Older caches without workspace identity metadata may appear as **Unknown workspace**.
 
 - **Compact and prune** performs database-aware maintenance while retaining one hour of table history. It preserves indexed content and may not reclaim every orphan file.
 - **Remove workspace index** deletes the selected cache and matching index metadata, not source files. Search for that workspace is unavailable until it is indexed again. Enabled embeddings may incur regeneration cost.

@@ -435,6 +435,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "resumeIndex":
           vscode.commands.executeCommand("agentlink.resumeIndex");
           break;
+        case "maintainIndex":
+          vscode.commands.executeCommand("agentlink.maintainIndex");
+          break;
         case "setOpenaiApiKey":
           vscode.commands.executeCommand("agentlink.setOpenaiApiKey");
           break;

@@ -73,6 +73,7 @@ it("pins webview-to-extension command discriminants", () => {
     | "rebuildIndex"
     | "cancelIndex"
     | "resumeIndex"
+    | "maintainIndex"
     | "setOpenaiApiKey"
     | "setOpenaiModelsAndEmbeddingsApiKey"
     | "setWriteApproval"

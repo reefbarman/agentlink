@@ -43,6 +43,11 @@ export class RetrievalStoreMaintenance {
     );
   }
 
+  /** Restarts the interval after an optimization run outside this throttle. */
+  markRun(): void {
+    this.lastRunAt = this.now();
+  }
+
   async runIfDue(
     optimize: () => Promise<void>,
     reportProgress?: () => void,

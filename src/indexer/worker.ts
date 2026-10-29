@@ -86,6 +86,7 @@ import type {
   ExtensionToWorkerMessage,
   StartIndexMessage,
   IncrementalUpdateMessage,
+  MaintainIndexMessage,
   IndexPhase,
   IndexStats,
   IndexCache,
@@ -377,19 +378,21 @@ const retrievalStoreMaintenance = new RetrievalStoreMaintenance({
   },
 });
 
+/** Returns bytes reclaimed from the retrieval tables. */
 async function optimizeRetrievalStore(
   repository: LanceDbRetrievalRepository,
   stagedPort: StagedRepositoryPublicationPort | undefined,
-): Promise<void> {
+): Promise<number> {
   const startedAt = Date.now();
   // optimize() refreshes native indexes before compacting and pruning.
   const outcome = await repository.optimize();
   await stagedPort?.optimizeStagedStore();
-  const reclaimedMiB = (outcome.bytesReclaimed ?? 0) / (1024 * 1024);
+  const bytesReclaimed = outcome.bytesReclaimed ?? 0;
   console.log(
     `Retrieval store optimized in ${Date.now() - startedAt}ms; ` +
-      `reclaimed ${reclaimedMiB.toFixed(1)} MiB of retrieval tables`,
+      `reclaimed ${(bytesReclaimed / (1024 * 1024)).toFixed(1)} MiB of retrieval tables`,
   );
+  return bytesReclaimed;
 }
 
 /**
@@ -405,7 +408,9 @@ async function optimizeRetrievalStoreIfDue(
   totalFiles: number,
 ): Promise<void> {
   await retrievalStoreMaintenance.runIfDue(
-    () => optimizeRetrievalStore(repository, stagedPort),
+    async () => {
+      await optimizeRetrievalStore(repository, stagedPort);
+    },
     () => sendStartupProgress(totalFiles, "optimizing retrieval store"),
   );
 }
@@ -422,10 +427,69 @@ function createBatchStoreMaintenance(
 ): (reportActivity: (detail: string) => void) => Promise<void> {
   return async (reportActivity) => {
     await retrievalStoreMaintenance.runIfDue(
-      () => optimizeRetrievalStore(repository, stagedPort),
+      async () => {
+        await optimizeRetrievalStore(repository, stagedPort);
+      },
       () => reportActivity("optimizing retrieval store"),
     );
   };
+}
+
+/**
+ * User-requested store maintenance. Unlike the throttled path it always runs
+ * and reports failures in the job result, so the requester learns the outcome.
+ */
+async function handleMaintain(msg: MaintainIndexMessage): Promise<void> {
+  const startTime = Date.now();
+  const errors: string[] = [];
+  let bytesReclaimed = 0;
+  let repository: LanceDbRetrievalRepository | undefined;
+  let writer: Awaited<ReturnType<typeof acquireWorkerWriterLease>> | undefined;
+  const report = (detail: string) => sendProgress("finalizing", 0, 0, detail);
+  const heartbeat = setInterval(
+    () => report("optimizing retrieval store"),
+    30_000,
+  );
+  heartbeat.unref();
+  try {
+    if (msg.workspaceScopeId !== getCodeWorkspaceScopeId(msg.workspaceRoot)) {
+      throw new Error("Workspace scope identity does not match workspace root");
+    }
+    report("opening retrieval store");
+    writer = await acquireWorkerWriterLease({
+      storeRoot: msg.retrievalStoreRoot,
+      workspaceScopeId: msg.workspaceScopeId,
+      workspaceRoot: msg.workspaceRoot,
+    });
+    repository = createRetrievalRepository(
+      msg.retrievalStoreRoot,
+      writer.lease,
+    );
+    report("optimizing retrieval store");
+    bytesReclaimed = await optimizeRetrievalStore(repository, writer.port);
+    retrievalStoreMaintenance.markRun();
+  } catch (error) {
+    const message = `Retrieval store optimization failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    console.error(message);
+    errors.push(message);
+  } finally {
+    clearInterval(heartbeat);
+    await releaseWorkerWriterLease(writer);
+    await closeRetrievalRepository(repository);
+  }
+  sendComplete({
+    filesIndexed: 0,
+    totalFilesInIndex: 0,
+    chunksCreated: 0,
+    totalChunksInIndex: 0,
+    recordsUpserted: 0,
+    recordsDeleted: 0,
+    durationMs: Date.now() - startTime,
+    errors,
+    bytesReclaimed,
+  });
 }
 
 async function refreshRetrievalIndexes(
@@ -448,9 +512,9 @@ async function refreshRetrievalIndexes(
   heartbeat.unref();
   try {
     if (optimizeDue) {
-      const outcome = await retrievalStoreMaintenance.run(() =>
-        optimizeRetrievalStore(repository, stagedPort),
-      );
+      const outcome = await retrievalStoreMaintenance.run(async () => {
+        await optimizeRetrievalStore(repository, stagedPort);
+      });
       if (outcome === "optimized") return;
     }
     await repository.refreshNativeIndexes();
@@ -1010,6 +1074,13 @@ process.on("message", (msg: ExtensionToWorkerMessage) => {
       }
       break;
     }
+    case "maintain":
+      aborted = false;
+      metrics = createIndexWorkerMetrics();
+      handleMaintain(msg).catch((err) => {
+        sendError(String(err), false);
+      });
+      break;
     case "incrementalUpdate":
       aborted = false;
       metrics = createIndexWorkerMetrics();

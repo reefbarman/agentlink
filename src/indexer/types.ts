@@ -53,11 +53,23 @@ export interface IncrementalUpdateMessage {
   granularity: ChunkGranularity;
 }
 
+/**
+ * Compacts the workspace's retrieval store and prunes old table versions
+ * without reading or re-indexing any files.
+ */
+export interface MaintainIndexMessage {
+  type: "maintain";
+  workspaceRoot: string;
+  workspaceScopeId: string;
+  retrievalStoreRoot: string;
+}
+
 export type ExtensionToWorkerMessage =
   | StartIndexMessage
   | CancelMessage
   | EmbeddingAuthRefreshResponseMessage
-  | IncrementalUpdateMessage;
+  | IncrementalUpdateMessage
+  | MaintainIndexMessage;
 
 // ============================================================
 // Child → Extension messages
@@ -110,6 +122,8 @@ export interface IndexStats {
   errors: string[];
   /** True if this run was cancelled before completing */
   cancelled?: boolean;
+  /** Bytes freed by store maintenance (maintain jobs only). */
+  bytesReclaimed?: number;
   /** Optional worker instrumentation used by reproducible performance fixtures. */
   metrics?: IndexWorkerMetricsSnapshot;
 }

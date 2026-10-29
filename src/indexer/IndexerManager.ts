@@ -6,6 +6,7 @@
  */
 
 import * as vscode from "vscode";
+import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { fork, type ChildProcess } from "child_process";
@@ -71,6 +72,14 @@ export interface IndexStatus {
   readinessMessage?: string;
 }
 
+export interface IndexMaintenanceResult {
+  /** Workspace folders whose stores were maintained successfully. */
+  maintainedRoots: number;
+  bytesReclaimed: number;
+  errors: string[];
+  cancelled?: boolean;
+}
+
 // --- Constants ---
 
 const WATCHER_DEBOUNCE_MS = 2000;
@@ -91,7 +100,7 @@ export class IndexerManager implements vscode.Disposable {
         currentOffset?: number;
         total?: number;
         detailPrefix?: string;
-        jobType: "start" | "incrementalUpdate";
+        jobType: "start" | "incrementalUpdate" | "maintain";
         workspaceRoot: string;
         retrievalStoreRoot: string;
         watchdog: WorkerJobWatchdog;
@@ -330,6 +339,113 @@ export class IndexerManager implements vscode.Disposable {
         error: message,
       });
     } finally {
+      this.rearmPendingIncrementalUpdate();
+    }
+  }
+
+  /**
+   * Compacts each indexed workspace folder's retrieval store and prunes old
+   * table versions, without re-reading or re-embedding any files. Runs in the
+   * indexer worker so it holds the same writer lease as indexing does.
+   */
+  async maintainIndex(): Promise<IndexMaintenanceResult> {
+    const result: IndexMaintenanceResult = {
+      maintainedRoots: 0,
+      bytesReclaimed: 0,
+      errors: [],
+    };
+    if (
+      this.status.state === "indexing" ||
+      this.status.state === "discovering" ||
+      this.activeWorkerJob
+    ) {
+      result.errors.push(
+        "Indexing is in progress. Try again once it has finished.",
+      );
+      return result;
+    }
+    const workspaceRoots = this.getWorkspaceRoots().filter((workspaceRoot) =>
+      fs.existsSync(
+        getCodeRetrievalStoreRoot(this.globalStorageUri.fsPath, workspaceRoot),
+      ),
+    );
+    if (workspaceRoots.length === 0) {
+      result.errors.push("This workspace has no codebase index to maintain.");
+      return result;
+    }
+
+    const previous = this.status;
+    this.cancelRequested = false;
+    this.updateStatus({
+      state: "indexing",
+      phase: "finalizing",
+      current: undefined,
+      total: undefined,
+      detail: "optimizing retrieval store",
+      error: undefined,
+    });
+    try {
+      for (const [index, workspaceRoot] of workspaceRoots.entries()) {
+        if (this.cancelRequested) break;
+        const label = path.basename(workspaceRoot);
+        try {
+          const stats = await this.runWorkerJob(
+            {
+              type: "maintain",
+              workspaceRoot,
+              workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
+              retrievalStoreRoot: getCodeRetrievalStoreRoot(
+                this.globalStorageUri.fsPath,
+                workspaceRoot,
+              ),
+            },
+            {
+              detailPrefix:
+                workspaceRoots.length > 1
+                  ? `${label} (${index + 1}/${workspaceRoots.length})`
+                  : undefined,
+            },
+          );
+          if (stats.cancelled) {
+            result.cancelled = true;
+            break;
+          }
+          result.bytesReclaimed += stats.bytesReclaimed ?? 0;
+          if (stats.errors.length > 0) {
+            result.errors.push(
+              ...stats.errors.map((error) => `${label}: ${error}`),
+            );
+          } else {
+            result.maintainedRoots++;
+          }
+        } catch (error) {
+          result.errors.push(
+            `${label}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      this.log(
+        `Index maintenance finished: ${result.maintainedRoots}/${workspaceRoots.length} workspace folder(s), ` +
+          `reclaimed ${(result.bytesReclaimed / (1024 * 1024)).toFixed(1)} MiB` +
+          (result.errors.length > 0
+            ? `; errors:\n${result.errors.join("\n")}`
+            : ""),
+      );
+      return result;
+    } finally {
+      // A watchdog timeout or worker crash already reported an error status.
+      if (this.getStatus().state === "indexing") {
+        this.updateStatus({
+          state: previous.state,
+          phase: undefined,
+          current: undefined,
+          total: undefined,
+          detail: undefined,
+          error: previous.error,
+          readinessReason: previous.readinessReason,
+          readinessMessage: previous.readinessMessage,
+        });
+      }
       this.rearmPendingIncrementalUpdate();
     }
   }

@@ -14,6 +14,11 @@ function createTarget(): IndexCommandTarget {
   return {
     startIndexing: vi.fn(),
     cancelIndexing: vi.fn(),
+    maintainIndex: vi.fn(async () => ({
+      maintainedRoots: 1,
+      bytesReclaimed: 0,
+      errors: [],
+    })),
   };
 }
 
@@ -42,8 +47,66 @@ describe("registerIndexCommands", () => {
       "agentlink.rebuildIndex",
       "agentlink.cancelIndex",
       "agentlink.resumeIndex",
+      "agentlink.maintainIndex",
     ]);
-    expect(disposables).toHaveLength(3);
+    expect(disposables).toHaveLength(4);
+  });
+
+  it("reports reclaimed space after maintenance", async () => {
+    const target = createTarget();
+    vi.mocked(target.maintainIndex).mockResolvedValueOnce({
+      maintainedRoots: 1,
+      bytesReclaimed: 3.5 * 1024 ** 3,
+      errors: [],
+    });
+    const info = vi
+      .spyOn(vscode.window, "showInformationMessage")
+      .mockResolvedValue(undefined);
+    registerIndexCommands(() => target);
+
+    await invoke("agentlink.maintainIndex");
+
+    expect(target.maintainIndex).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith(
+      "Codebase index maintained. Reclaimed 3.5 GB.",
+    );
+  });
+
+  it("warns with the failure reasons when maintenance fails", async () => {
+    const target = createTarget();
+    vi.mocked(target.maintainIndex).mockResolvedValueOnce({
+      maintainedRoots: 0,
+      bytesReclaimed: 0,
+      errors: ["Indexing is in progress. Try again once it has finished."],
+    });
+    const warning = vi
+      .spyOn(vscode.window, "showWarningMessage")
+      .mockResolvedValue(undefined);
+    registerIndexCommands(() => target);
+
+    await invoke("agentlink.maintainIndex");
+
+    expect(warning).toHaveBeenCalledWith(
+      "Codebase index maintenance failed: Indexing is in progress. Try again once it has finished.",
+    );
+  });
+
+  it("stays silent when maintenance is cancelled", async () => {
+    const target = createTarget();
+    vi.mocked(target.maintainIndex).mockResolvedValueOnce({
+      maintainedRoots: 0,
+      bytesReclaimed: 0,
+      errors: [],
+      cancelled: true,
+    });
+    const info = vi.spyOn(vscode.window, "showInformationMessage");
+    const warning = vi.spyOn(vscode.window, "showWarningMessage");
+    registerIndexCommands(() => target);
+
+    await invoke("agentlink.maintainIndex");
+
+    expect(info).not.toHaveBeenCalled();
+    expect(warning).not.toHaveBeenCalled();
   });
 
   it("forwards rebuild, cancel, and resume to the current manager", async () => {
@@ -79,5 +142,6 @@ describe("registerIndexCommands", () => {
     await invoke("agentlink.rebuildIndex");
     await invoke("agentlink.cancelIndex");
     await invoke("agentlink.resumeIndex");
+    await invoke("agentlink.maintainIndex");
   });
 });

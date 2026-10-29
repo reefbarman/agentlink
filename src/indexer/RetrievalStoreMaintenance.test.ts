@@ -47,6 +47,15 @@ describe("RetrievalStoreMaintenance", () => {
     expect(outcomes[1]).toBe("skipped");
   });
 
+  it("restarts the interval when an external run is marked", () => {
+    const now = { value: 0 };
+    const { maintenance } = createMaintenance(now);
+    now.value = 5_000;
+    maintenance.markRun();
+    now.value = 5_000 + INTERVAL_MS - 1;
+    expect(maintenance.isDue()).toBe(false);
+  });
+
   it("restarts the interval after an unthrottled run", async () => {
     const now = { value: 0 };
     const { maintenance } = createMaintenance(now);

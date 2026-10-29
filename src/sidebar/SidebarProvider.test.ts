@@ -559,6 +559,7 @@ describe("SidebarProvider retained activity behavior", () => {
     ["rebuildIndex", ["agentlink.rebuildIndex"]],
     ["cancelIndex", ["agentlink.cancelIndex"]],
     ["resumeIndex", ["agentlink.resumeIndex"]],
+    ["maintainIndex", ["agentlink.maintainIndex"]],
     ["setOpenaiApiKey", ["agentlink.setOpenaiApiKey"]],
     [
       "setOpenaiModelsAndEmbeddingsApiKey",

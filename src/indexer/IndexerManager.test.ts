@@ -18,6 +18,10 @@ import * as vscode from "vscode";
 import { createCodeIndexFingerprint } from "./retrievalFingerprint.js";
 import type { IndexStats } from "./types.js";
 import { IndexerManager, type IndexStatus } from "./IndexerManager.js";
+import {
+  getCodeRetrievalStoreRoot,
+  getCodeWorkspaceScopeId,
+} from "./codeRetrievalIdentity.js";
 import type { IndexableFileDiscovery } from "./IndexableFileDiscovery.js";
 
 const workspaceRoot = path.resolve("/workspace/project");
@@ -555,6 +559,129 @@ describe("IndexerManager incremental ownership", () => {
     await runDebounce();
     expect(internals.runWorkerJob).toHaveBeenCalledTimes(1);
     expect(internals.pendingAdded.size).toBe(0);
+    manager.dispose();
+  });
+});
+
+describe("IndexerManager maintenance", () => {
+  let storageRoot: string;
+  const lastCompleted = {
+    filesIndexed: 3,
+    totalFilesInIndex: 3,
+    chunksCreated: 9,
+    totalChunksInIndex: 9,
+    durationMs: 10,
+  };
+
+  function createMaintenanceManager(options: { indexed: boolean }) {
+    if (options.indexed) {
+      fs.mkdirSync(getCodeRetrievalStoreRoot(storageRoot, workspaceRoot), {
+        recursive: true,
+      });
+    }
+    const manager = new IndexerManager(
+      vscode.Uri.file("/extension"),
+      vscode.Uri.file(storageRoot),
+      vi.fn(),
+    );
+    const internals = manager as unknown as ManagerInternals;
+    internals.runWorkerJob = vi.fn(async () =>
+      cleanStats({ filesIndexed: 0, bytesReclaimed: 4096 }),
+    );
+    internals.status = { state: "idle", lastCompleted };
+    return { manager, internals };
+  }
+
+  beforeEach(() => {
+    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "index-maintain-"));
+    (
+      vscode.workspace as unknown as { workspaceFolders: unknown[] }
+    ).workspaceFolders = [
+      { uri: vscode.Uri.file(workspaceRoot), name: "project", index: 0 },
+    ];
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(storageRoot, { recursive: true, force: true });
+  });
+
+  it("dispatches a maintain job for the indexed store and restores status", async () => {
+    const { manager, internals } = createMaintenanceManager({ indexed: true });
+    let statusDuringJob: IndexStatus | undefined;
+    internals.runWorkerJob.mockImplementationOnce(async () => {
+      statusDuringJob = { ...manager.getStatus() };
+      return cleanStats({ filesIndexed: 0, bytesReclaimed: 4096 });
+    });
+
+    const result = await manager.maintainIndex();
+
+    expect(internals.runWorkerJob).toHaveBeenCalledWith(
+      {
+        type: "maintain",
+        workspaceRoot,
+        workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
+        retrievalStoreRoot: getCodeRetrievalStoreRoot(
+          storageRoot,
+          workspaceRoot,
+        ),
+      },
+      { detailPrefix: undefined },
+    );
+    expect(result).toEqual({
+      maintainedRoots: 1,
+      bytesReclaimed: 4096,
+      errors: [],
+    });
+    expect(statusDuringJob).toMatchObject({
+      state: "indexing",
+      phase: "finalizing",
+      detail: "optimizing retrieval store",
+    });
+    expect(manager.getStatus()).toMatchObject({ state: "idle", lastCompleted });
+    expect(manager.getStatus().phase).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("reports worker failures without marking the index as errored", async () => {
+    const { manager, internals } = createMaintenanceManager({ indexed: true });
+    internals.runWorkerJob.mockResolvedValueOnce(
+      cleanStats({ errors: ["Retrieval store optimization failed: busy"] }),
+    );
+
+    const result = await manager.maintainIndex();
+
+    expect(result.maintainedRoots).toBe(0);
+    expect(result.errors).toEqual([
+      "project: Retrieval store optimization failed: busy",
+    ]);
+    expect(manager.getStatus().state).toBe("idle");
+    manager.dispose();
+  });
+
+  it("skips workspaces without an index", async () => {
+    const { manager, internals } = createMaintenanceManager({ indexed: false });
+
+    const result = await manager.maintainIndex();
+
+    expect(internals.runWorkerJob).not.toHaveBeenCalled();
+    expect(result.errors).toEqual([
+      "This workspace has no codebase index to maintain.",
+    ]);
+    manager.dispose();
+  });
+
+  it("refuses to run while indexing is in progress", async () => {
+    const { manager, internals } = createMaintenanceManager({ indexed: true });
+    internals.status = { state: "indexing" };
+
+    const result = await manager.maintainIndex();
+
+    expect(internals.runWorkerJob).not.toHaveBeenCalled();
+    expect(result.errors).toEqual([
+      "Indexing is in progress. Try again once it has finished.",
+    ]);
+    expect(manager.getStatus().state).toBe("indexing");
     manager.dispose();
   });
 });

@@ -130,6 +130,15 @@ export function IndexStatus({ state, postCommand }: Props) {
                     : "Index Codebase"}
               </button>
             )}
+            {!isIndexing && !isError && status?.lastCompleted && (
+              <button
+                class="btn btn-secondary"
+                title="Compact the index and delete old database history to free disk space. Does not re-index or re-embed files."
+                onClick={() => postCommand("maintainIndex")}
+              >
+                Free Up Space
+              </button>
+            )}
             {isIndexing && (
               <button
                 class="btn btn-secondary"

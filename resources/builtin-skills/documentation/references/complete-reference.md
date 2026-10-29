@@ -598,7 +598,7 @@ Use either entry point:
 - Sidebar button: **Index Codebase** / **Rebuild Index**
 - Command palette: **AgentLink: Rebuild Codebase Index**
 
-If indexing is already running, use **AgentLink: Cancel Indexing**. Without embedding credentials, AgentLink publishes the same source and structural records with nullable vectors and serves them through lexical ranking.
+If indexing is already running, use **AgentLink: Cancel Indexing**. Once the index exists, the sidebar's **Free Up Space** button compacts it and deletes old database history without re-indexing (see [troubleshooting](troubleshooting.md#workspace-indexes-use-too-much-disk-space)). Without embedding credentials, AgentLink publishes the same source and structural records with nullable vectors and serves them through lexical ranking.
 
 ### 3. Optionally enable vector and hybrid ranking
 
