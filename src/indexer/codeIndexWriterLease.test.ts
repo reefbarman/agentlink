@@ -47,6 +47,23 @@ describe("codeIndexWriterLease", () => {
       options: options(pid, alive),
     });
 
+  it("applies caller lock options to fenced operations", async () => {
+    const lease = await acquire("window-1:job-1", 101);
+    let finishOperation!: () => void;
+    const operation = new Promise<void>((resolve) => {
+      finishOperation = resolve;
+    });
+
+    await expect(
+      withCodeIndexWriterFence(lease, () => operation, {
+        operationTimeoutMs: 50,
+      }),
+    ).rejects.toThrow("retrieval_store_operation_timeout");
+
+    finishOperation();
+    await operation;
+  });
+
   it("persists a monotonic first fence and renews the current owner", async () => {
     const lease = await acquire("window-1:job-1", 101);
 

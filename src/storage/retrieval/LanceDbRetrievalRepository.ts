@@ -76,7 +76,11 @@ import {
 } from "./lanceDbSchemas.js";
 import type { CodeIndexWriterLease } from "../../indexer/codeIndexWriterLease.js";
 import { assertCodeIndexWriterFenceCurrent } from "../../indexer/codeIndexWriterLease.js";
-import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
+import {
+  RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS,
+  withRetrievalStoreLock,
+  type RetrievalStoreLockOptions,
+} from "./retrievalStoreLock.js";
 import { buildRetrievalChunkSearchText } from "./retrievalSearchText.js";
 
 const FINGERPRINT_KEY = "fingerprint";
@@ -1371,32 +1375,38 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   }
 
   async optimize(): Promise<RetrievalOptimizeOutcome> {
-    return this.withTables(undefined, async (tables) => {
-      const recordCount =
-        (await tables.sources.countRows()) +
-        (await tables.chunks.countRows()) +
-        (await tables.relations.countRows());
-      let fragmentsRemoved = 0;
-      let bytesReclaimed = 0;
-      await this.refreshNativeIndexesFromTables(tables);
-      const options = {
-        cleanupOlderThan: new Date(Date.now() - RETRIEVAL_VERSION_RETENTION_MS),
-        deleteUnverified: false,
-      };
-      for (const table of Object.values(tables)) {
-        const stats = await table.optimize(options);
-        fragmentsRemoved += stats.compaction.fragmentsRemoved;
-        bytesReclaimed += stats.prune.bytesRemoved;
-      }
-      await this.updateMetrics(tables, (metrics) => {
-        metrics.optimizations += 1;
-      });
-      return {
-        status: "optimized",
-        recordsCompacted: fragmentsRemoved > 0 ? recordCount : 0,
-        ...(bytesReclaimed > 0 ? { bytesReclaimed } : {}),
-      };
-    });
+    return this.withTables(
+      undefined,
+      async (tables) => {
+        const recordCount =
+          (await tables.sources.countRows()) +
+          (await tables.chunks.countRows()) +
+          (await tables.relations.countRows());
+        let fragmentsRemoved = 0;
+        let bytesReclaimed = 0;
+        await this.refreshNativeIndexesFromTables(tables);
+        const options = {
+          cleanupOlderThan: new Date(
+            Date.now() - RETRIEVAL_VERSION_RETENTION_MS,
+          ),
+          deleteUnverified: false,
+        };
+        for (const table of Object.values(tables)) {
+          const stats = await table.optimize(options);
+          fragmentsRemoved += stats.compaction.fragmentsRemoved;
+          bytesReclaimed += stats.prune.bytesRemoved;
+        }
+        await this.updateMetrics(tables, (metrics) => {
+          metrics.optimizations += 1;
+        });
+        return {
+          status: "optimized",
+          recordsCompacted: fragmentsRemoved > 0 ? recordCount : 0,
+          ...(bytesReclaimed > 0 ? { bytesReclaimed } : {}),
+        };
+      },
+      { operationTimeoutMs: RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS },
+    );
   }
 
   metrics(): RetrievalAggregateMetrics {
@@ -1596,19 +1606,24 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   private async withTables<T>(
     dimensions: number | undefined,
     operation: (tables: RetrievalTables) => Promise<T>,
+    lockOptions?: RetrievalStoreLockOptions,
   ): Promise<T> {
     if (this.closing) throw new Error("retrieval_store_closed");
-    return withRetrievalStoreLock(this.root, async () => {
-      if (this.closing) throw new Error("retrieval_store_closed");
-      if (this.options.codeIndexWriterLease) {
-        assertCodeIndexWriterFenceCurrent(this.options.codeIndexWriterLease);
-      }
-      try {
-        return await operation(await this.ensureTables(dimensions));
-      } finally {
-        this.closeNativeHandles();
-      }
-    });
+    return withRetrievalStoreLock(
+      this.root,
+      async () => {
+        if (this.closing) throw new Error("retrieval_store_closed");
+        if (this.options.codeIndexWriterLease) {
+          assertCodeIndexWriterFenceCurrent(this.options.codeIndexWriterLease);
+        }
+        try {
+          return await operation(await this.ensureTables(dimensions));
+        } finally {
+          this.closeNativeHandles();
+        }
+      },
+      lockOptions,
+    );
   }
 
   private async updateMetrics(

@@ -10,6 +10,13 @@ import { sleep } from "../../util/sleep.js";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_WAIT_MS = 20_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
+/**
+ * Operation limit for compaction and version pruning. On a store that has
+ * accumulated tens of thousands of versions, one optimize pass can take far
+ * longer than the default limit; timing out then leaves the native operation
+ * running while it still holds the lock, so later operations fail as busy.
+ */
+export const RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS = 60 * 60 * 1_000;
 const DEFAULT_STALE_MS = 10_000;
 const RETRY_MS = 50;
 const execFileAsync = promisify(execFile);

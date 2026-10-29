@@ -19,6 +19,10 @@ import {
 import type { CodeIndexWriterLease } from "../../indexer/codeIndexWriterLease.js";
 import { withCodeIndexWriterFence } from "../../indexer/codeIndexWriterLease.js";
 import {
+  RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS,
+  type RetrievalStoreLockOptions,
+} from "./retrievalStoreLock.js";
+import {
   closeCodeIndexStagedTables,
   ensureCodeIndexStagedTables,
   type CodeIndexStagedTables,
@@ -506,33 +510,44 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
    * their version history grows without bound and slows every operation.
    */
   async optimizeStagedTables(): Promise<void> {
-    await this.withTables(async (tables) => {
-      const options = {
-        cleanupOlderThan: new Date(Date.now() - STAGED_VERSION_RETENTION_MS),
-        deleteUnverified: false,
-      };
-      for (const table of Object.values(tables)) {
-        await table.optimize(options);
-      }
-    });
+    await this.withTables(
+      async (tables) => {
+        const options = {
+          cleanupOlderThan: new Date(Date.now() - STAGED_VERSION_RETENTION_MS),
+          deleteUnverified: false,
+        };
+        for (const table of Object.values(tables)) {
+          await table.optimize(options);
+        }
+      },
+      { operationTimeoutMs: RETRIEVAL_STORE_MAINTENANCE_TIMEOUT_MS },
+    );
   }
 
   private async withTables<T>(
     operation: (tables: CodeIndexStagedTables) => Promise<T>,
+    lockOptions?: RetrievalStoreLockOptions,
   ): Promise<T> {
-    return withCodeIndexWriterFence(this.lease, async () => {
-      const connection = await connect(this.lease.storeRoot, {
-        readConsistencyInterval: 0,
-      });
-      let tables: CodeIndexStagedTables | undefined;
-      try {
-        tables = await ensureCodeIndexStagedTables(connection, this.dimensions);
-        return await operation(tables);
-      } finally {
-        if (tables) closeCodeIndexStagedTables(tables);
-        connection.close();
-      }
-    });
+    return withCodeIndexWriterFence(
+      this.lease,
+      async () => {
+        const connection = await connect(this.lease.storeRoot, {
+          readConsistencyInterval: 0,
+        });
+        let tables: CodeIndexStagedTables | undefined;
+        try {
+          tables = await ensureCodeIndexStagedTables(
+            connection,
+            this.dimensions,
+          );
+          return await operation(tables);
+        } finally {
+          if (tables) closeCodeIndexStagedTables(tables);
+          connection.close();
+        }
+      },
+      lockOptions,
+    );
   }
 }
 

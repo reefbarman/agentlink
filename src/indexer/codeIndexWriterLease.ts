@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { randomUUID } from "node:crypto";
-import { withRetrievalStoreLock } from "../storage/retrieval/retrievalStoreLock.js";
+import {
+  withRetrievalStoreLock,
+  type RetrievalStoreLockOptions,
+} from "../storage/retrieval/retrievalStoreLock.js";
 import { writeAtomicJsonFile } from "./atomicJsonFile.js";
 
 export const CODE_INDEX_WRITER_LEASE_VERSION = 1;
@@ -126,20 +129,25 @@ export function assertCodeIndexWriterFenceCurrent(
 export async function withCodeIndexWriterFence<T>(
   lease: CodeIndexWriterLease,
   operation: () => Promise<T>,
+  lockOptions?: RetrievalStoreLockOptions,
 ): Promise<T> {
-  return withRetrievalStoreLock(lease.storeRoot, async () => {
-    const statePath = getCodeIndexWriterLeasePath(lease.storeRoot);
-    assertCodeIndexWriterFenceCurrent(lease);
-    try {
-      return await operation();
-    } finally {
-      const current = requireCurrentLease(statePath, lease);
-      writeAtomicJsonFile(statePath, {
-        ...current,
-        heartbeatAt: Date.now(),
-      });
-    }
-  });
+  return withRetrievalStoreLock(
+    lease.storeRoot,
+    async () => {
+      const statePath = getCodeIndexWriterLeasePath(lease.storeRoot);
+      assertCodeIndexWriterFenceCurrent(lease);
+      try {
+        return await operation();
+      } finally {
+        const current = requireCurrentLease(statePath, lease);
+        writeAtomicJsonFile(statePath, {
+          ...current,
+          heartbeatAt: Date.now(),
+        });
+      }
+    },
+    lockOptions,
+  );
 }
 
 function loadLeaseState(statePath: string): CodeIndexWriterLeaseState | null {
