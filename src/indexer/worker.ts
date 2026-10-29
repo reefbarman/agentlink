@@ -51,6 +51,7 @@ import {
 } from "./workerLib.js";
 import { CacheCheckpointCoordinator } from "./CacheCheckpointCoordinator.js";
 import { RetrievalStoreMaintenance } from "./RetrievalStoreMaintenance.js";
+import { measureReclaimedBytes } from "./storeDiskUsage.js";
 import { runBoundedReadAheadPipeline } from "./boundedReadAheadPipeline.js";
 import {
   getFileIndexJournalPath,
@@ -214,16 +215,21 @@ function scheduleCacheMetadataCheckpoint(args: {
   args.checkpoints.scheduleVector();
 }
 
+/** Store folder of each repository, used to measure space reclaimed. */
+const retrievalStoreRoots = new WeakMap<LanceDbRetrievalRepository, string>();
+
 function createRetrievalRepository(
   root: string,
   lease: CodeIndexWriterLease,
 ): LanceDbRetrievalRepository {
-  return new LanceDbRetrievalRepository({
+  const repository = new LanceDbRetrievalRepository({
     root,
     embeddingDimensions: EMBEDDING_DIM,
     deferNativeIndexRefresh: true,
     codeIndexWriterLease: lease,
   });
+  retrievalStoreRoots.set(repository, root);
+  return repository;
 }
 
 function createStagedPublicationPort(
@@ -378,19 +384,37 @@ const retrievalStoreMaintenance = new RetrievalStoreMaintenance({
   },
 });
 
-/** Returns bytes reclaimed from the retrieval tables. */
+/**
+ * Returns bytes reclaimed on disk. Lance's prune statistics omit old version
+ * manifests, which make up most of a bloated store, so the store folder is
+ * measured before and after instead. The staged tables share that folder.
+ */
 async function optimizeRetrievalStore(
   repository: LanceDbRetrievalRepository,
   stagedPort: StagedRepositoryPublicationPort | undefined,
 ): Promise<number> {
   const startedAt = Date.now();
-  // optimize() refreshes native indexes before compacting and pruning.
-  const outcome = await repository.optimize();
-  await stagedPort?.optimizeStagedStore();
-  const bytesReclaimed = outcome.bytesReclaimed ?? 0;
+  const storeRoot = retrievalStoreRoots.get(repository);
+  const optimize = async () => {
+    // optimize() refreshes native indexes before compacting and pruning.
+    await repository.optimize();
+    await stagedPort?.optimizeStagedStore();
+  };
+  if (!storeRoot) {
+    await optimize();
+    console.log(
+      `Retrieval store optimized in ${Date.now() - startedAt}ms; store size not measured`,
+    );
+    return 0;
+  }
+  const { bytesReclaimed, bytesAfter } = await measureReclaimedBytes(
+    storeRoot,
+    optimize,
+  );
+  const mib = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
   console.log(
     `Retrieval store optimized in ${Date.now() - startedAt}ms; ` +
-      `reclaimed ${(bytesReclaimed / (1024 * 1024)).toFixed(1)} MiB of retrieval tables`,
+      `reclaimed ${mib(bytesReclaimed)} MiB on disk; store is now ${mib(bytesAfter)} MiB`,
   );
   return bytesReclaimed;
 }
