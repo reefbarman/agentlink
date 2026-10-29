@@ -387,4 +387,30 @@ describe("AgentPluginCatalog", () => {
     catalog.dispose();
     await observerStore.dispose();
   });
+
+  it("does not emit invalidation when another window only changes its live-host marker", async () => {
+    const observerStore = new AgentPluginStore({
+      rootPath: path.join(directory, ".agentlink", "plugins"),
+      processInspector: inspector(),
+    });
+    const catalog = new AgentPluginCatalog(observerStore, { enabled: true });
+    const listener = vi.fn();
+    catalog.subscribe(listener);
+    await installFixture();
+    await observerStore.checkForUpdates();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Another window starting registers its marker, bumping the revision.
+    await store.initializeHost();
+    const afterMarker = await observerStore.checkForUpdates();
+    expect(afterMarker.revision).toBeGreaterThan(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // A real install change after liveness churn still invalidates.
+    await installFixture("second-install", "second-plugin", "second-skill");
+    await observerStore.checkForUpdates();
+    expect(listener).toHaveBeenCalledTimes(2);
+    catalog.dispose();
+    await observerStore.dispose();
+  });
 });

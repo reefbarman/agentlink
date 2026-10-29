@@ -125,6 +125,12 @@ export interface AgentPluginRegistryInvalidation {
   readonly previousRevision: number;
   readonly revision: number;
   readonly source: "local-mutation" | "filesystem";
+  /**
+   * False when the revision only changed host liveness markers or purge
+   * bookkeeping. Install rows (what plugins provide) are unchanged, so
+   * consumers can skip rebuilding runtime state such as MCP connections.
+   */
+  readonly installsChanged: boolean;
 }
 
 export interface AgentPluginDisposable {
@@ -233,6 +239,7 @@ export class AgentPluginStore {
   private hostMarker: AgentPluginLiveHostMarker | undefined;
   private watcher: AgentPluginRegistryWatcher | undefined;
   private observedRevision = 0;
+  private observedInstallsKey: string | undefined;
   private refreshPromise: Promise<AgentPluginRegistry> | undefined;
 
   constructor(private readonly options: Readonly<AgentPluginStoreOptions>) {
@@ -286,7 +293,7 @@ export class AgentPluginStore {
       return next;
     });
     this.hostMarker = marker;
-    this.observeRevision(registry.revision, "local-mutation");
+    this.observeRevision(registry, "local-mutation");
     this.startWatcher();
     return registry;
   }
@@ -308,7 +315,7 @@ export class AgentPluginStore {
         await this.writeRegistry(updated);
         return updated;
       });
-      this.observeRevision(next.revision, "local-mutation");
+      this.observeRevision(next, "local-mutation");
     } catch {
       // Disposal is best effort. Token matching prevents removing another host.
     }
@@ -317,7 +324,7 @@ export class AgentPluginStore {
   async readRegistry(): Promise<Readonly<AgentPluginRegistry>> {
     this.requireSupportedPlatform();
     const registry = await this.readRegistryFile();
-    this.observeRevision(registry.revision, "filesystem");
+    this.observeRevision(registry, "filesystem");
     return registry;
   }
 
@@ -346,7 +353,7 @@ export class AgentPluginStore {
       await this.writeRegistry(validated);
       return { registry: validated, result: applied.result };
     });
-    this.observeRevision(committed.registry.revision, "local-mutation");
+    this.observeRevision(committed.registry, "local-mutation");
     return committed;
   }
 
@@ -766,14 +773,21 @@ export class AgentPluginStore {
   }
 
   private observeRevision(
-    revision: number,
+    registry: Readonly<AgentPluginRegistry>,
     source: AgentPluginRegistryInvalidation["source"],
   ): void {
+    const revision = registry.revision;
     if (revision <= this.observedRevision) return;
     const previousRevision = this.observedRevision;
     this.observedRevision = revision;
+    // Every window adds and removes its own live-host marker, which bumps the
+    // shared revision. Only report install changes when install rows differ so
+    // other windows do not rebuild plugin runtime state for liveness churn.
+    const installsKey = JSON.stringify(registry.installs);
+    const installsChanged = installsKey !== this.observedInstallsKey;
+    this.observedInstallsKey = installsKey;
     for (const listener of this.listeners) {
-      listener({ previousRevision, revision, source });
+      listener({ previousRevision, revision, source, installsChanged });
     }
   }
 }

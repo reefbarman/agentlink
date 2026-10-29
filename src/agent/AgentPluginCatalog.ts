@@ -129,6 +129,10 @@ export class AgentPluginCatalog implements AgentPluginCatalogProvider {
     this.platform = options.platform ?? process.platform;
     this.storeSubscription = store.subscribe((event) => {
       this.cache.clear();
+      // Liveness-only revisions (another window opening or closing) do not
+      // change what plugins provide. Notifying would make every window
+      // reconnect all of its MCP servers, respawning stdio processes.
+      if (!event.installsChanged) return;
       for (const listener of this.listeners) {
         listener({
           registryRevision: event.revision,
