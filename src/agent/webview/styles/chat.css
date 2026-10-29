@@ -4567,7 +4567,7 @@ body.chat-activity-shelf-resizing * {
 
 .final-marker-next-step {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: flex-start;
   gap: 8px;
   padding-top: 8px;
@@ -4575,7 +4575,7 @@ body.chat-activity-shelf-resizing * {
 }
 
 .final-marker-next-step-content {
-  flex: 1 1 220px;
+  width: 100%;
   min-width: 0;
 }
 

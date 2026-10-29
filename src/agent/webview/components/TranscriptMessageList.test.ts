@@ -1166,7 +1166,7 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(screen.queryByText("(No response)")).toBeNull();
   });
 
-  it("shows the default continuation prompt without an action button in read-only transcripts", () => {
+  it("hides the default continuation section in read-only transcripts", () => {
     const messages: ChatMessage[] = [
       {
         id: "a1",
@@ -1189,9 +1189,8 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(screen.getByText("Finished.")).toBeTruthy();
     expect(finalRegion).toBeTruthy();
     expect(finalRegion?.textContent).toContain("Task complete");
-    expect(
-      finalRegion?.querySelector(".final-marker-continue-prompt")?.textContent,
-    ).toContain("Continue working from where you left off.");
+    expect(finalRegion?.querySelector(".final-marker-next-step")).toBeNull();
+    expect(finalRegion?.querySelector(".final-marker-actions")).toBeNull();
     expect(finalRegion?.querySelector(".final-marker-continue")).toBeNull();
   });
 

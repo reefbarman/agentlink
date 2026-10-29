@@ -1315,6 +1315,13 @@ describe("MessageBubble slash-command rendering", () => {
         .closest(".final-marker-next-step")
         ?.querySelector(".final-marker-continue-prompt")?.textContent,
     ).toBe("Please implement this plan.");
+    const nextStep = button.closest(".final-marker-next-step")!;
+    expect(nextStep.lastElementChild).toBe(button);
+    expect(
+      nextStep.firstElementChild?.classList.contains(
+        "final-marker-next-step-content",
+      ),
+    ).toBe(true);
     expect(onContinue).not.toHaveBeenCalled();
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledWith("Please implement this plan.");
@@ -1351,8 +1358,9 @@ describe("MessageBubble slash-command rendering", () => {
     expect(
       button
         .closest(".final-marker-next-step")
-        ?.querySelector(".final-marker-continue-prompt")?.textContent,
-    ).toContain("Continue working from where you left off.");
+        ?.querySelector(".final-marker-continue-prompt"),
+    ).toBeNull();
+    expect(screen.queryByText("Next step")).toBeNull();
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledWith(
       "Continue working from where you left off. Before deciding the overall task is complete, re-check the original user request. If the completed work is a phase, handover, or scoped subtask, treat that boundary as a navigation point—not proof of overall completion—and locate and inspect its parent/source-of-truth plan, following references outward through higher-level plans if nested. Within the user-approved scope, identify and begin the next explicit unfinished phase, plan item, subtask, or validation step. If it needs a missing decision or prerequisite, surface that blocker. Do not invent work or broaden scope. Only if the full approved scope is complete, briefly confirm that no work remains.",

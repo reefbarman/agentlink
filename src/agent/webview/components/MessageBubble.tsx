@@ -723,7 +723,7 @@ export function MessageBubble({
             {(finalMarker.summary ||
               finalMarker.result ||
               message.remoteFinalResult ||
-              finalContinueAction ||
+              (finalMarker.continueAction && finalContinueAction) ||
               finalMarker.toolCall ||
               finalMarker.workSummary ||
               message.remoteWorkSummary ||
@@ -1043,12 +1043,14 @@ function FinalMarkerActions({
       {marker.toolCall && (
         <FinalMarkerToolCallBlock toolCall={marker.toolCall} />
       )}
-      {action && (
+      {action && (marker.continueAction || onContinue) && (
         <section class="final-marker-next-step" aria-label="Next step">
-          <div class="final-marker-next-step-content">
-            <div class="final-marker-section-label">Next step</div>
-            <div class="final-marker-continue-prompt">{action.prompt}</div>
-          </div>
+          {marker.continueAction && (
+            <div class="final-marker-next-step-content">
+              <div class="final-marker-section-label">Next step</div>
+              <div class="final-marker-continue-prompt">{action.prompt}</div>
+            </div>
+          )}
           {onContinue && (
             <button
               class="final-marker-continue"

@@ -266,7 +266,7 @@ Final status cards in VS Code and browser chat show the summary and any distinct
 
 When a validated `set_task_status.result` has type `text` and `summary` is missing or blank, its `text` also supplies the final status card's summary, including for blocked, cancelled and waiting-for-user outcomes. An explicit non-blank summary no longer hides a distinct result body.
 
-The card's **Next step** section displays the full available continuation prompt beside its action button, rather than hiding it in a tooltip. The button adds that exact prompt to the composer for review and editing, not immediate submission, preserving existing draft text and attachments. Long prompts wrap on narrow screens. Consumed or stale continuation actions remain unavailable; Auto Continue behaviour is unchanged.
+The card's **Next step** section displays a continuation prompt only when the agent explicitly supplies one, with its action button below the text at the bottom-left of the card. The built-in default continuation prompt stays hidden; its **Continue** button remains available. The button adds that exact prompt to the composer for review and editing, not immediate submission, preserving existing draft text and attachments. Long prompts wrap on narrow screens. Consumed or stale continuation actions remain unavailable; Auto Continue behaviour is unchanged.
 
 Browser relay sessions load structured final results automatically through the existing read-only detail route, keeping large results out of the live transcript stream. Both the owner and helper must support final-result delivery. Unavailable, changed or oversized results show an explicit loading error rather than silently disappearing; the existing 8 MiB detail-delivery limit applies.
 
