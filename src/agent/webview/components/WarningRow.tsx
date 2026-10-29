@@ -48,11 +48,18 @@ function isTruncationRecovery(message: ChatMessage): boolean {
 
 function getWarningTitle(message: string, resolved: boolean): string {
   const lower = message.toLowerCase();
-  if (lower.includes("rate_limit") || lower.includes("429")) {
+  if (
+    lower.includes("rate_limit") ||
+    lower.includes("rate limit") ||
+    lower.includes("429")
+  ) {
     return resolved ? "Rate limit cleared" : "Rate limit reached";
   }
   if (isOverloadedWarning(message)) {
     return resolved ? "Provider recovered" : "Provider is overloaded";
+  }
+  if (lower.includes("server error")) {
+    return resolved ? "Provider recovered" : "Provider server error";
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
     return resolved ? "Request resumed" : "Response timed out";
@@ -139,7 +146,7 @@ export function WarningRow({
           : isResolved
             ? "The agent continued successfully."
             : isOverloadedWarning(warningText)
-              ? "The provider may be having issues on their end — there's nothing to fix here. The agent will keep retrying until it recovers."
+              ? "The provider may be having issues on their end — there's nothing to fix here. The agent retries automatically up to its retry limit."
               : "The agent is still running; no action is needed."
       }
       details={messages.map((warning) => warning.warningMessage ?? "")}

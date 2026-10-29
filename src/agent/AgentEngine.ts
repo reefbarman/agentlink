@@ -24,6 +24,7 @@ import {
 import type { SkillSelectionFailure } from "@agentlink/protocol/chat-catalog";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { ToolResultArtifactManager } from "./toolResultArtifacts.js";
+import { formatCodexRetryWarning } from "./codexRetryWarning.js";
 import type {
   AgentEvent,
   AgentMessage,
@@ -2418,10 +2419,16 @@ export class AgentEngine {
             );
             yield {
               type: "warning",
-              message:
-                decision.action === "fallback"
-                  ? "WebSocket retries exhausted. Continuing this response over HTTP."
-                  : `Response interrupted. Retrying over ${phase === "websocket" ? "WebSocket" : "HTTP"}.`,
+              message: formatCodexRetryWarning({
+                retry,
+                error: streamErr,
+                attempt: responsesRetriesUsed,
+                maxAttempts: 11,
+                delayMs,
+                nextTransport:
+                  decision.action === "fallback" ? "http" : decision.phase,
+                fallback: decision.action === "fallback",
+              }),
               retryDelayMs: delayMs,
               retryAt: Date.now() + delayMs,
               retryAttempt: responsesRetriesUsed,

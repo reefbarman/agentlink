@@ -81,6 +81,15 @@ AgentLink lists GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, and GPT-6 Luna for Chat
 - AgentLink does not retry a different account specifically for Astra entitlement, switch to an API key automatically, or remap Astra to another model.
 - GPT-6.1 Sol replaced GPT-6 Sol, and saved GPT-6 Sol selections migrate to it. If your account does not have GPT-6.1 Sol yet, pick another model; AgentLink does not fall back to GPT-6 Sol automatically.
 
+## Codex responses keep retrying
+
+Each automatic Codex retry warning names its cause, the retry number, the scheduled delay and the transport the next attempt uses, for example `Codex is overloaded (503). Retry 2 of 11 in 1.1s over WebSocket.`
+
+- **Overloaded, rate limit or server error:** the problem is on the provider's side. Nothing in your setup needs fixing; wait, or switch model or provider if it persists.
+- **Timed out, connection interrupted or stream interrupted:** check your network if it keeps happening. A response that repeatedly makes no progress stops after one retry instead of using the full budget.
+- A Codex response gets up to 11 retries: five over WebSocket, then a switch to HTTP (`WebSocket retries exhausted`) and five more. Authentication and content-policy rejections are never retried.
+- The AgentLink Agent output log keeps the provider's original error line (`[codex] stream() error: status=...`) before each warning.
+
 ## Fast or Ultrafast does not seem faster
 
 The Speed control only applies to models that offer OpenAI's premium service tiers: Fast on GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Sol, GPT-6 Luna, GPT-5.6 models, and GPT-5.5, and Ultrafast on GPT-6 Astra only. It is hidden for other models, and a session tier the current model does not support runs at Standard. ChatGPT subscriptions allow premium tiers only on eligible plans, and OpenAI supports Ultrafast only for US or global processing. When the endpoint rejects a tier (including a body-less ChatGPT `400` while a premium tier was requested), AgentLink retries that request once at standard speed, records the `service_tier` rejection in the AgentLink output log, and skips that tier for that account and model until the window reloads. A rejected Ultrafast does not stop Fast from being tried. Each request's log line shows `serviceTier=priority` (Fast), `serviceTier=ultrafast`, or `serviceTier=default`. OpenAI recommends WebSocket transport for the full latency benefit. AgentLink prefers WebSockets for supported first-party Responses requests; expand the request details to check the actual transport. HTTP/SSE may indicate an explicit disable, an unsupported endpoint/history shape, or automatic fallback. See [transport and recovery](capabilities.md#models-and-providers).

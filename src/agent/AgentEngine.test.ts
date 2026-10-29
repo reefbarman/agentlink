@@ -8287,11 +8287,94 @@ describe("AgentEngine", () => {
           events.filter(
             (event) =>
               event.type === "warning" &&
-              /Retrying over WebSocket/.test(event.message),
+              /^Codex response timed out\. Retry 1 of 11 in .+ over WebSocket\.$/.test(
+                event.message,
+              ),
           ),
         ).toHaveLength(1);
         const error = events.find((event) => event.type === "error");
         expect((error as { error?: string }).error).toContain("no progress");
+      } finally {
+        backoffSpy.mockRestore();
+      }
+    });
+
+    it("names Codex overloads in retry warnings while keeping the retry limit and HTTP fallback", async () => {
+      let attempts = 0;
+      const provider: ModelProvider = {
+        ...makeMockProvider(),
+        id: "codex",
+        listModels(): ModelInfo[] {
+          return [
+            {
+              id: TEST_MODEL,
+              displayName: "Codex",
+              provider: "codex",
+              capabilities: TEST_CAPABILITIES,
+            },
+          ];
+        },
+        async *stream(request: StreamRequest) {
+          attempts += 1;
+          // Six WebSocket dispatches (first try + five retries), then HTTP.
+          request.onProviderRequestAttempt?.({
+            model: request.model,
+            dispatchEvidence: {
+              transport: attempts <= 6 ? "websocket" : "http",
+              phase: "sent_unacknowledged",
+            },
+          });
+          if (attempts > 100) yield { type: "done" };
+          throw Object.assign(
+            new Error(
+              "Codex API error 503: Our servers are currently overloaded. Please try again later.",
+            ),
+            { status: 503 },
+          );
+        },
+      };
+      const backoffSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") queueMicrotask(() => fn());
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession({ ...testConfig, model: TEST_MODEL });
+        session.providerId = "codex";
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+        const warnings = events.filter(
+          (event): event is Extract<AgentEvent, { type: "warning" }> =>
+            event.type === "warning",
+        );
+
+        // Recovery limits are unchanged: 11 retries, 12 dispatches.
+        expect(attempts).toBe(12);
+        expect(warnings).toHaveLength(11);
+        for (const warning of warnings) {
+          expect(warning.message).toMatch(/^Codex is overloaded \(503\)\. /);
+          expect(warning.message).not.toContain("Response interrupted");
+          expect(warning.message).toContain(
+            `etry ${warning.retryAttempt} of 11 in ${
+              Math.round((warning.retryDelayMs ?? 0) / 100) / 10
+            }`,
+          );
+          expect(warning.retryMaxAttempts).toBe(11);
+        }
+        expect(warnings.map((warning) => warning.retryAttempt)).toEqual([
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        ]);
+        expect(warnings[0].message).toMatch(/over WebSocket\.$/);
+        expect(warnings[5].message).toMatch(
+          /WebSocket retries exhausted; retry 6 of 11 in .+ over HTTP\.$/,
+        );
+        expect(warnings[10].message).toMatch(/over HTTP\.$/);
+        const error = events.find((event) => event.type === "error");
+        expect((error as { error?: string }).error).toContain("overloaded");
       } finally {
         backoffSpy.mockRestore();
       }
