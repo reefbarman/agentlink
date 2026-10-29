@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadRemoteTranscriptBlockDetail } from "./toolDetailTransport";
+import {
+  loadRemoteFinalResult,
+  loadRemoteTranscriptBlockDetail,
+} from "./toolDetailTransport";
+import { BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
 import {
   encodeTranscriptBlockDetail,
   parseTranscriptBlockDetailResponse,
@@ -43,6 +47,50 @@ function deliver(request: TranscriptBlockDetailRequest) {
 }
 
 describe("tool detail transport", () => {
+  it("loads the full final result with the selected session and immutable revision", async () => {
+    const result = {
+      type: "text",
+      text: "Full detail ".repeat(2_000),
+    } as const;
+    const request = vi.fn(async (selection: TranscriptBlockDetailRequest) => ({
+      request: selection,
+      state: "final_result" as const,
+      result,
+    }));
+    expect(
+      await loadRemoteFinalResult(
+        { messageId: "final-message", contentRevision: 42 },
+        "selected-session",
+        request,
+      ),
+    ).toEqual(result);
+    expect(request).toHaveBeenCalledWith({
+      kind: "transcript.block-detail",
+      sessionId: "selected-session",
+      messageId: "final-message",
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      contentRevision: 42,
+      resource: { kind: "final-result", index: 0 },
+    });
+  });
+
+  it.each([
+    ["stale_revision", "result has changed"],
+    ["not_found", "no longer available"],
+    ["too_large", "8 MiB"],
+  ] as const)(
+    "reports unavailable final results (%s)",
+    async (state, message) => {
+      await expect(
+        loadRemoteFinalResult(
+          { messageId: "final-message", contentRevision: 42 },
+          "session",
+          async (request) => ({ request, state }),
+        ),
+      ).rejects.toThrow(message);
+    },
+  );
+
   it("restores full display text and separate image/document responses", async () => {
     const request = vi.fn(async (selection: TranscriptBlockDetailRequest) =>
       deliver(selection),

@@ -1,10 +1,12 @@
 import type {
   ContentBlock,
   RemoteDisplayImageDetail,
+  RemoteFinalResultDetail,
   RemoteWorkSummaryDetail,
 } from "@agentlink/protocol/chat-transcript";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import type { WorkSummary } from "@agentlink/protocol/final-status";
 import { createContext } from "preact";
 
@@ -20,6 +22,9 @@ interface RemoteToolDetailContextValue {
   ) => Promise<RemoteToolBlock>;
   loadDisplayImage: (reference: RemoteDisplayImageDetail) => Promise<string>;
   loadWorkSummary: (reference: RemoteWorkSummaryDetail) => Promise<WorkSummary>;
+  loadFinalResult: (
+    reference: RemoteFinalResultDetail,
+  ) => Promise<FleetResultEnvelope>;
 }
 
 const RemoteToolDetailContext =
@@ -40,7 +45,7 @@ interface QueuedLoad<T> {
   reject: (error: unknown) => void;
 }
 
-function byteSize(block: RemoteToolBlock): number {
+function byteSize(block: RemoteToolBlock | FleetResultEnvelope): number {
   const json = JSON.stringify(block);
   return typeof TextEncoder !== "undefined"
     ? new TextEncoder().encode(json).byteLength
@@ -63,6 +68,9 @@ export function RemoteToolDetailProvider(props: {
   loadWorkSummary?: (
     reference: RemoteWorkSummaryDetail,
   ) => Promise<WorkSummary>;
+  loadFinalResult?: (
+    reference: RemoteFinalResultDetail,
+  ) => Promise<FleetResultEnvelope>;
   children: preact.ComponentChildren;
 }) {
   return (
@@ -71,6 +79,7 @@ export function RemoteToolDetailProvider(props: {
       loadDetail={props.loadDetail}
       loadDisplayImage={props.loadDisplayImage}
       loadWorkSummary={props.loadWorkSummary}
+      loadFinalResult={props.loadFinalResult}
     >
       {props.children}
     </RemoteToolDetailScopeProvider>
@@ -81,6 +90,7 @@ function RemoteToolDetailScopeProvider({
   loadDetail,
   loadDisplayImage,
   loadWorkSummary,
+  loadFinalResult,
   children,
 }: {
   loadDetail: (block: RemoteToolBlock) => Promise<RemoteToolBlock>;
@@ -88,6 +98,9 @@ function RemoteToolDetailScopeProvider({
   loadWorkSummary?: (
     reference: RemoteWorkSummaryDetail,
   ) => Promise<WorkSummary>;
+  loadFinalResult?: (
+    reference: RemoteFinalResultDetail,
+  ) => Promise<FleetResultEnvelope>;
   children: preact.ComponentChildren;
 }) {
   const summaryLoader = useRef(loadWorkSummary);
@@ -109,6 +122,52 @@ function RemoteToolDetailScopeProvider({
       throw error;
     });
     summaries.current.set(key, promise);
+    return promise;
+  };
+  const resultLoader = useRef(loadFinalResult);
+  resultLoader.current = loadFinalResult;
+  const results = useRef(
+    new Map<string, { result: FleetResultEnvelope; bytes: number }>(),
+  );
+  const resultBytes = useRef(0);
+  const pendingResults = useRef(
+    new Map<string, Promise<FleetResultEnvelope>>(),
+  );
+  const loadResult = (
+    reference: RemoteFinalResultDetail,
+  ): Promise<FleetResultEnvelope> => {
+    const key = `${reference.messageId}:${reference.contentRevision}`;
+    const cached = results.current.get(key);
+    if (cached) {
+      results.current.delete(key);
+      results.current.set(key, cached);
+      return Promise.resolve(cached.result);
+    }
+    const existing = pendingResults.current.get(key);
+    if (existing) return existing;
+    const load = resultLoader.current;
+    if (!load)
+      return Promise.reject(new Error("Final results are unavailable."));
+    const promise = Promise.resolve()
+      .then(() => load(reference))
+      .then((result) => {
+        const bytes = byteSize(result);
+        if (bytes <= MAX_CACHE_BYTES) {
+          while (
+            resultBytes.current + bytes > MAX_CACHE_BYTES &&
+            results.current.size
+          ) {
+            const oldestKey = results.current.keys().next().value!;
+            resultBytes.current -= results.current.get(oldestKey)!.bytes;
+            results.current.delete(oldestKey);
+          }
+          results.current.set(key, { result, bytes });
+          resultBytes.current += bytes;
+        }
+        return result;
+      })
+      .finally(() => pendingResults.current.delete(key));
+    pendingResults.current.set(key, promise);
     return promise;
   };
   const cache = useRef(new Map<string, CacheEntry>());
@@ -258,6 +317,7 @@ function RemoteToolDetailScopeProvider({
       load,
       loadDisplayImage: loadImage,
       loadWorkSummary: loadSummary,
+      loadFinalResult: loadResult,
     };
 
   return (
@@ -364,6 +424,61 @@ export function useRemoteWorkSummary(
     summary: matching?.summary,
     loading: !matching,
     error: matching?.error ?? null,
+  };
+}
+
+/** Loads a relay-backed final result without retaining stale revisions. */
+export function useRemoteFinalResult(
+  reference: RemoteFinalResultDetail | undefined,
+): {
+  result?: FleetResultEnvelope;
+  loading: boolean;
+  error: string | null;
+  retry: () => void;
+} {
+  const context = useContext(RemoteToolDetailContext);
+  const key = reference
+    ? `${reference.messageId}:${reference.contentRevision}`
+    : null;
+  const [state, setState] = useState<{
+    key: string;
+    result?: FleetResultEnvelope;
+    error?: string;
+  } | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
+  useEffect(() => {
+    if (!key || !reference || !context) return;
+    let current = true;
+    setState(null);
+    context
+      .loadFinalResult(reference)
+      .then((result) => {
+        if (current) setState({ key, result });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setState({
+            key,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not load the final result",
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [context, key, retryVersion]);
+  const retry = () => setRetryVersion((version) => version + 1);
+  if (!key) return { loading: false, error: null, retry };
+  const matching = state?.key === key ? state : null;
+  if (!context && !matching)
+    return { loading: false, error: "Final result is unavailable.", retry };
+  return {
+    result: matching?.result,
+    loading: !matching,
+    error: matching?.error ?? null,
+    retry,
   };
 }
 

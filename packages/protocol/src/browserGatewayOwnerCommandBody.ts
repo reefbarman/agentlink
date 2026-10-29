@@ -28,9 +28,16 @@ export type BrowserGatewayOwnerCommandBody =
        * message's display-media revision. `work-summary` addresses the
        * message's final-marker work summary with
        * `BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID` and the summary revision.
+       * `final-result` addresses the message's final-marker result using
+       * `BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID` and the result revision.
        */
       resource?: {
-        kind: "image" | "document" | "display-image" | "work-summary";
+        kind:
+          | "image"
+          | "document"
+          | "display-image"
+          | "work-summary"
+          | "final-result";
         index: number;
       };
     }

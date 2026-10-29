@@ -1,9 +1,11 @@
 import {
   BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+  BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
   BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
 } from "@agentlink/protocol/browser-gateway-transcript-message";
 import type {
   RemoteDisplayImageDetail,
+  RemoteFinalResultDetail,
   RemoteWorkSummaryDetail,
 } from "@agentlink/protocol/chat-transcript";
 import type {
@@ -13,6 +15,35 @@ import type {
 } from "../dataPlane/transcriptBlockDetail";
 
 import type { WorkSummary } from "@agentlink/protocol/final-status";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
+
+/** Fetches the complete structured final result over the existing read-only detail route. */
+export async function loadRemoteFinalResult(
+  reference: RemoteFinalResultDetail,
+  sessionId: string,
+  requestDetail: (
+    request: TranscriptBlockDetailRequest,
+  ) => Promise<TranscriptBlockDetailResponse>,
+): Promise<FleetResultEnvelope> {
+  const response = await requestDetail({
+    kind: "transcript.block-detail",
+    sessionId,
+    messageId: reference.messageId,
+    blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+    contentRevision: reference.contentRevision,
+    resource: { kind: "final-result", index: 0 },
+  });
+  if (response.state !== "final_result") {
+    throw new Error(
+      response.state === "stale_revision"
+        ? "This result has changed. Retry to load the current version."
+        : response.state === "not_found"
+          ? "This final result is no longer available in the selected session."
+          : detailStateMessage(response.state),
+    );
+  }
+  return response.result;
+}
 
 /** Fetches one final marker's frozen work summary over the relay. */
 export async function loadRemoteWorkSummary(

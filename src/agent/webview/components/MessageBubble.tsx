@@ -29,12 +29,14 @@ import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
+import { FinalMarkerResult } from "./FinalMarkerResult";
 import type { FinalMarkerToolCall } from "@agentlink/protocol/final-status";
 import { Fragment } from "preact";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { useRemoteDisplayImage } from "./RemoteToolDetail";
+import { RemoteFinalMarkerResult } from "./RemoteFinalMarkerResult";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -719,6 +721,9 @@ export function MessageBubble({
           <div class={finalRegionClass}>
             <FinalMarkerHeader marker={finalMarker} />
             {(finalMarker.summary ||
+              finalMarker.result ||
+              message.remoteFinalResult ||
+              finalContinueAction ||
               finalMarker.toolCall ||
               finalMarker.workSummary ||
               message.remoteWorkSummary ||
@@ -726,6 +731,7 @@ export function MessageBubble({
               <FinalMarkerActions
                 marker={finalMarker}
                 remoteWorkSummary={message.remoteWorkSummary}
+                remoteFinalResult={message.remoteFinalResult}
                 citations={citations}
                 onContinue={onFinalMarkerContinue}
                 onOpenFile={onOpenFile}
@@ -968,6 +974,7 @@ function FinalMarkerHeader({
 function FinalMarkerActions({
   marker,
   remoteWorkSummary,
+  remoteFinalResult,
   citations,
   onContinue,
   onOpenFile,
@@ -975,6 +982,7 @@ function FinalMarkerActions({
 }: {
   marker: NonNullable<ChatMessage["finalMarker"]>;
   remoteWorkSummary?: ChatMessage["remoteWorkSummary"];
+  remoteFinalResult?: ChatMessage["remoteFinalResult"];
   citations: readonly CoreWebCitation[];
   onContinue?: (prompt: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
@@ -998,6 +1006,23 @@ function FinalMarkerActions({
           <CopyButton text={marker.summary} />
         </div>
       )}
+      {marker.result ? (
+        <FinalMarkerResult
+          result={marker.result}
+          summary={marker.summary}
+          citations={citations}
+          onOpenFile={onOpenFile}
+          onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+        />
+      ) : remoteFinalResult ? (
+        <RemoteFinalMarkerResult
+          reference={remoteFinalResult}
+          summary={marker.summary}
+          citations={citations}
+          onOpenFile={onOpenFile}
+          onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+        />
+      ) : null}
       {marker.workSummary ? (
         <WorkSummaryBlock
           summary={marker.workSummary}
@@ -1018,15 +1043,23 @@ function FinalMarkerActions({
       {marker.toolCall && (
         <FinalMarkerToolCallBlock toolCall={marker.toolCall} />
       )}
-      {action && onContinue && (
-        <button
-          class="final-marker-continue"
-          type="button"
-          title={`Edit in composer before sending:\n${action.prompt}`}
-          onClick={() => onContinue(action.prompt)}
-        >
-          {action.label}
-        </button>
+      {action && (
+        <section class="final-marker-next-step" aria-label="Next step">
+          <div class="final-marker-next-step-content">
+            <div class="final-marker-section-label">Next step</div>
+            <div class="final-marker-continue-prompt">{action.prompt}</div>
+          </div>
+          {onContinue && (
+            <button
+              class="final-marker-continue"
+              type="button"
+              title="Add to composer for review before sending"
+              onClick={() => onContinue(action.prompt)}
+            >
+              {action.label}
+            </button>
+          )}
+        </section>
       )}
     </div>
   );

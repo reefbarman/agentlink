@@ -8,6 +8,9 @@ export const BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID = "display-media";
 /** Block id used by `work-summary` detail requests for a final marker's summary. */
 export const BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID = "work-summary";
 
+/** Block id used by `final-result` detail requests for a final marker's result. */
+export const BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID = "final-result";
+
 /**
  * Byte-free descriptors for message-level display media. Image bytes are
  * fetched lazily through a `display-image` transcript detail request.
@@ -52,6 +55,8 @@ export interface BrowserGatewayTranscriptMessage {
      * `transcript-work-summary-v1`, so older strict validators never see it.
      */
     workSummary?: { contentRevision: number };
+    /** Lazy final result, negotiated with transcript-final-result-v1. */
+    result?: { contentRevision: number };
     /**
      * Wall-clock duration of the ask this marker ends. Sent only to helpers
      * advertising `transcript-final-elapsed-v1`.

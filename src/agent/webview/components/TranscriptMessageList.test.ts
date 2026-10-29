@@ -1,6 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/preact";
+import { RemoteToolDetailProvider } from "./RemoteToolDetail";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
@@ -965,6 +972,63 @@ describe("TranscriptMessageList model change rendering", () => {
 });
 
 describe("TranscriptMessageList final marker rendering", () => {
+  it("keeps lazy final results on the last split row and updates changed revisions", async () => {
+    const message: ChatMessage = {
+      id: "split-final",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [
+        { type: "text", text: "Before background result" },
+        {
+          type: "bg_agent_result",
+          sessionId: "bg",
+          task: "Review",
+          status: "completed",
+          resultText: "Background done",
+        },
+        { type: "text", text: "After background result" },
+      ],
+      finalMarker: { status: "blocked", source: "tool" },
+      remoteFinalResult: { messageId: "split-final", contentRevision: 1 },
+    };
+    const loadFinalResult = vi.fn(
+      async (reference: { contentRevision: number }) => ({
+        type: "text" as const,
+        text: `Loaded final result ${reference.contentRevision}`,
+      }),
+    );
+    const view = (current: ChatMessage) =>
+      h(RemoteToolDetailProvider, {
+        scopeKey: "split-result",
+        loadDetail: async (block) => block,
+        loadFinalResult,
+        children: h(TranscriptMessageList, {
+          messages: [current],
+          streaming: false,
+        }),
+      });
+    const { container, rerender } = render(view(message));
+    await waitFor(() =>
+      expect(screen.getAllByText("Loaded final result 1")).toHaveLength(1),
+    );
+    expect(container.querySelectorAll(".assistant-final-region")).toHaveLength(
+      1,
+    );
+    expect(loadFinalResult).toHaveBeenCalledTimes(1);
+    rerender(
+      view({
+        ...message,
+        remoteFinalResult: { messageId: "split-final", contentRevision: 2 },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Loaded final result 2")).toBeTruthy(),
+    );
+    expect(screen.queryByText("Loaded final result 1")).toBeNull();
+    cleanup();
+  });
+
   it("renders a completed interjection summary while the next segment streams", () => {
     const messages: ChatMessage[] = [
       {
@@ -1102,7 +1166,7 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(screen.queryByText("(No response)")).toBeNull();
   });
 
-  it("renders header-only final markers without action content", () => {
+  it("shows the default continuation prompt without an action button in read-only transcripts", () => {
     const messages: ChatMessage[] = [
       {
         id: "a1",
@@ -1125,7 +1189,10 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(screen.getByText("Finished.")).toBeTruthy();
     expect(finalRegion).toBeTruthy();
     expect(finalRegion?.textContent).toContain("Task complete");
-    expect(finalRegion?.querySelector(".final-marker-actions")).toBeNull();
+    expect(
+      finalRegion?.querySelector(".final-marker-continue-prompt")?.textContent,
+    ).toContain("Continue working from where you left off.");
+    expect(finalRegion?.querySelector(".final-marker-continue")).toBeNull();
   });
 
   it("scopes final marker styling to the bottom final marker region", () => {

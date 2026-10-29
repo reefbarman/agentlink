@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { BrowserGatewayDataPlaneFeature } from "../protocol.js";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import {
@@ -303,7 +304,9 @@ function createLegacySnapshot(
   };
 }
 
-function createHarness() {
+function createHarness(
+  dataPlaneFeatures: BrowserGatewayDataPlaneFeature[] = [],
+) {
   const readSet = createReadSet();
   const legacy = createLegacySnapshot(readSet);
   const sources = new MutableProjectionSources(readSet);
@@ -314,6 +317,7 @@ function createHarness() {
     now: () => now,
     createId: (kind, sequence) => `${kind}-${sequence}`,
     createDetailId: (locator, revision) => `${locator}:${revision}`,
+    dataPlaneFeatures,
   });
   adapter.onDidPublish((publication) => {
     publications.push(publication);
@@ -386,6 +390,31 @@ function syncLegacyForeground(
 }
 
 describe("browser gateway state equivalence oracle", () => {
+  it("compares complete legacy final results with relay revisions and detects missing results", () => {
+    const harness = createHarness([
+      "transcript-block-detail-v1",
+      "transcript-final-result-v1",
+    ]);
+    const final = harness.readSet.foreground!.messages.at(-1)!;
+    final.finalMarker = {
+      status: "blocked",
+      source: "tool",
+      result: {
+        type: "verification",
+        passed: false,
+        summary: "Distinct final result",
+        logs: ["Full validation output"],
+      },
+    };
+    syncLegacyForeground(harness.legacy, harness.readSet);
+    harness.sources.fire("foreground");
+    expect(harness.compare().diffs).toEqual([]);
+    delete harness.legacy.session.foreground!.projectedMessages.at(-1)!
+      .finalMarker!.result;
+    expect(harness.compare().equivalent).toBe(false);
+    harness.adapter.dispose();
+  });
+
   it("matches the supported checkpoint semantics while preserving explicit cutover blockers", () => {
     const harness = createHarness();
     const result = harness.compare();

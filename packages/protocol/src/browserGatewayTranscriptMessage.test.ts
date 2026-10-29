@@ -35,6 +35,8 @@ it("pins the complete browser gateway transcript-message contract", () => {
       continueActionConsumed?: boolean;
       autoContinueStopReason?: string;
       workSummary?: { contentRevision: number };
+      /** Lazy final result, negotiated with transcript-final-result-v1. */
+      result?: { contentRevision: number };
       elapsedMs?: number;
     };
     surfaceChange?: {

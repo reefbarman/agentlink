@@ -10,6 +10,7 @@ import { BrowserGatewayProtocolError } from "./protocol.js";
 import { parseTranscriptBlockDetailResponse } from "./transcriptBlockDetail.js";
 import {
   BROWSER_GATEWAY_DISPLAY_MEDIA_BLOCK_ID,
+  BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
   BROWSER_GATEWAY_WORK_SUMMARY_BLOCK_ID,
 } from "@agentlink/protocol/browser-gateway-transcript-message";
 import type { WorkSummary } from "@agentlink/protocol/final-status";
@@ -408,6 +409,109 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         request,
       ).state,
     ).toBe("not_found");
+  });
+
+  it("negotiates lazy final results and serves full details without inline payloads", () => {
+    const source = readSet();
+    const result = {
+      type: "patch" as const,
+      summary: "Distinct result",
+      files: ["src/private-detail.ts"],
+      verification: "focused tests passed",
+    };
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        {
+          ...message("message-assistant", "assistant", "done", 800),
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            summary: "Done",
+            result,
+          },
+        },
+      ],
+    };
+    const legacy = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-block-detail-v1"],
+    });
+    const noDetails = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["transcript-final-result-v1"],
+    });
+    for (const adapter of [legacy, noDetails]) {
+      expect(
+        adapter.getCheckpoint().transcript.messages[0]?.finalMarker,
+      ).not.toHaveProperty("result");
+    }
+    const sources = new ProjectionSources(source);
+    const adapter = makeAdapter(sources, {
+      dataPlaneFeatures: [
+        "transcript-block-detail-v1",
+        "transcript-final-result-v1",
+      ],
+    });
+    const reference =
+      adapter.getCheckpoint().transcript.messages[0]?.finalMarker?.result;
+    expect(reference).toEqual({ contentRevision: expect.any(Number) });
+    expect(JSON.stringify(adapter.getCheckpoint())).not.toContain(
+      "private-detail",
+    );
+    const request = {
+      kind: "transcript.block-detail" as const,
+      sessionId: source.foreground.sessionId,
+      messageId: "message-assistant",
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      contentRevision: reference!.contentRevision,
+      resource: { kind: "final-result" as const, index: 0 },
+    };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(request),
+        request,
+      ),
+    ).toEqual({ request, state: "final_result", result });
+    for (const disabled of [legacy, noDetails]) {
+      expect(
+        parseTranscriptBlockDetailResponse(
+          disabled.getBlockDetailContent(request),
+          request,
+        ).state,
+      ).toBe("not_found");
+    }
+    const stale = { ...request, contentRevision: request.contentRevision + 1 };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(stale),
+        stale,
+      ).state,
+    ).toBe("stale_revision");
+    const missing = { ...request, messageId: "missing" };
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(missing),
+        missing,
+      ).state,
+    ).toBe("not_found");
+    sources.readSet.foreground!.messages = [
+      {
+        ...source.foreground.messages[0]!,
+        finalMarker: {
+          status: "completed",
+          source: "tool",
+          result: { ...result, verification: "new verification" },
+        },
+      },
+    ];
+    const updated =
+      adapter.getCheckpoint().transcript.messages[0]?.finalMarker?.result;
+    expect(updated?.contentRevision).not.toBe(reference?.contentRevision);
+    expect(
+      parseTranscriptBlockDetailResponse(
+        adapter.getBlockDetailContent(request),
+        request,
+      ).state,
+    ).toBe("stale_revision");
   });
 
   it("relays the final-marker ask duration only to helpers that advertise it", () => {

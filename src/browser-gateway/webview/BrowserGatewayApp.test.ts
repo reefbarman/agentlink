@@ -35,6 +35,7 @@ import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIde
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
 import { h, type ComponentChildren } from "preact";
+import { BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
 import { within } from "@testing-library/preact";
 import * as relayGatewayConnection from "./relay/useRelayGatewayConnection";
 import {
@@ -1318,6 +1319,84 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         messageId: "ask-detail-message",
         blockId: "ask-detail-tool",
         contentRevision: revision,
+      });
+    } finally {
+      cleanup();
+      hookSpy.mockRestore();
+    }
+  });
+
+  it("loads final results through the app's real provider and shared final card", async () => {
+    const response = createAskAgentSessionResponse();
+    response.snapshot.session.foreground.projectedMessages = [
+      {
+        id: "final-result-message",
+        role: "assistant",
+        content: "",
+        timestamp: 1_000,
+        blocks: [],
+        finalMarker: {
+          status: "blocked",
+          source: "tool",
+          summary: "Visible short summary",
+        },
+        remoteFinalResult: {
+          messageId: "final-result-message",
+          contentRevision: 44,
+        },
+      },
+    ];
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const originalFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) =>
+      String(input).includes("/api/ask-agent/session")
+        ? Promise.resolve(jsonResponse(response))
+        : originalFetch(input, init),
+    );
+    const result = {
+      type: "verification",
+      passed: false,
+      summary: "Distinct remote verification",
+      logs: ["Full remote log ".repeat(1_000) + "END OF DISTINCTIVE RESULT"],
+    } as const;
+    const requestDetail = vi.fn(
+      async (request: TranscriptBlockDetailRequest) => ({
+        request,
+        state: "final_result" as const,
+        result: { ...result, logs: [...result.logs] },
+      }),
+    );
+    const originalHook = relayGatewayConnection.useRelayGatewayConnection;
+    const hookSpy = vi
+      .spyOn(relayGatewayConnection, "useRelayGatewayConnection")
+      .mockImplementation((options) => ({
+        ...originalHook(options),
+        requestBlockDetail: requestDetail,
+        blockDetailScopeKey: "helper:final-result:generation",
+      }));
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "",
+          workspaceName: "Ask Agent",
+          routeByInstance: true,
+        }),
+      );
+      expect(
+        await screen.findByText("Distinct remote verification"),
+      ).toBeTruthy();
+      expect(screen.getByText("Visible short summary")).toBeTruthy();
+      expect(
+        document.querySelector(".final-marker-result-log")?.textContent,
+      ).toBe(result.logs[0]);
+      expect(requestDetail).toHaveBeenCalledWith({
+        kind: "transcript.block-detail",
+        sessionId: "browser-gateway:ask-agent:default",
+        messageId: "final-result-message",
+        blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+        contentRevision: 44,
+        resource: { kind: "final-result", index: 0 },
       });
     } finally {
       cleanup();
@@ -4402,6 +4481,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           status: "completed",
           source: "tool",
           summary: "Ready for the next slice.",
+          result: { type: "text", text: "Distinct project result details." },
           continueAction: {
             label: "Continue",
             prompt: "Please continue the next slice.",
@@ -4460,6 +4540,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     await selectWorkspaceTab();
+    expect(
+      await screen.findByText("Distinct project result details."),
+    ).toBeTruthy();
+    expect(screen.getByText("Please continue the next slice.")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
 
     const draft = screen.getByTestId(
@@ -4505,6 +4589,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           status: "completed",
           source: "tool",
           summary: "Ready for the next Ask Agent step.",
+          result: {
+            type: "verification",
+            passed: true,
+            summary: "Distinct Ask Agent verification details.",
+            logs: ["Ask Agent validation passed"],
+          },
           continueAction: {
             label: "Continue",
             prompt: "Please continue in Ask Agent.",
@@ -4572,6 +4662,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     const draft = screen.getByTestId(
       "continuation-draft",
     ) as HTMLTextAreaElement;
+    expect(
+      screen.getByText("Distinct Ask Agent verification details."),
+    ).toBeTruthy();
+    expect(screen.getByText("Ask Agent validation passed")).toBeTruthy();
+    expect(screen.getByText("Please continue in Ask Agent.")).toBeTruthy();
     expect(draft.value).toBe("Please continue in Ask Agent.");
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("/send")),

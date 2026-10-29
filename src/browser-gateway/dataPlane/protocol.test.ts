@@ -1332,6 +1332,7 @@ describe("browser gateway owner protocol", () => {
         continueAction: { label: "Continue", prompt: "Continue work" },
         continueActionConsumed: false,
         autoContinueStopReason: "none",
+        result: { contentRevision: 123 },
         elapsedMs: 252_000,
       },
       surfaceChange: {
@@ -1384,6 +1385,42 @@ describe("browser gateway owner protocol", () => {
         event("transcript.message.appended", { message }),
       ),
     ).toMatchObject({ payload: { message } });
+  });
+
+  it("accepts final-result detail requests over the existing read-only command", () => {
+    const source = command("transcript.block-detail");
+    const body = {
+      ...source.command,
+      blockId: "final-result",
+      resource: { kind: "final-result", index: 0 },
+    };
+    expect(
+      parseBrowserGatewayOwnerCommand({ ...source, command: body }),
+    ).toMatchObject({ command: body });
+  });
+
+  it.each([
+    { contentRevision: -1 },
+    { contentRevision: 1.5 },
+    { contentRevision: "123" },
+    { contentRevision: 123, text: "must stay lazy" },
+    { type: "text", text: "inline result" },
+  ])("rejects invalid or inline final-result references: %j", (result) => {
+    const baseMessage = (
+      payloadByKind["transcript.message.appended"] as {
+        message: Record<string, unknown>;
+      }
+    ).message;
+    expect(() =>
+      parseBrowserGatewayOwnerEvent(
+        event("transcript.message.appended", {
+          message: {
+            ...baseMessage,
+            finalMarker: { status: "completed", source: "tool", result },
+          },
+        }),
+      ),
+    ).toThrow(BrowserGatewayProtocolError);
   });
 
   it("rejects private transcript fields, invalid detail kinds, and oversized inline text", () => {

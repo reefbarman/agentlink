@@ -430,16 +430,27 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
 }
 
 /**
- * Relay final markers carry only a work-summary revision; the transcript loads
- * the frozen summary lazily through a `work-summary` detail request.
+ * Relay final markers carry revisions for lazily loaded work summaries and
+ * structured results, never the potentially large detail payloads themselves.
  */
 function projectFinalMarker(
   message: BrowserGatewayTranscriptMessage,
-): Pick<ChatMessage, "finalMarker" | "remoteWorkSummary"> {
+): Pick<
+  ChatMessage,
+  "finalMarker" | "remoteWorkSummary" | "remoteFinalResult"
+> {
   if (!message.finalMarker) return {};
-  const { workSummary, ...finalMarker } = message.finalMarker;
+  const { workSummary, result, ...finalMarker } = message.finalMarker;
   return {
     finalMarker,
+    ...(result
+      ? {
+          remoteFinalResult: {
+            messageId: message.messageId,
+            contentRevision: result.contentRevision,
+          },
+        }
+      : {}),
     ...(workSummary
       ? {
           remoteWorkSummary: {

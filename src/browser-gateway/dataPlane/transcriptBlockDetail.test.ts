@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeTranscriptBlockDetail,
+  encodeFinalResultDetail,
+  finalResultContentRevision,
   parseTranscriptBlockDetailResponse,
   transcriptBlockContentRevision,
   transcriptBlockDetailSummary,
@@ -8,6 +10,9 @@ import {
   type TranscriptBlockDetailRequest,
 } from "./transcriptBlockDetail.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "@agentlink/protocol/browser-gateway-data-plane-limits";
+import { BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 
 const block: TranscriptDisplayBlock = {
   type: "tool_call",
@@ -176,6 +181,179 @@ describe("transcript block detail", () => {
     expect(JSON.stringify(transcriptBlockDetailSummary(block))).not.toContain(
       "README.md",
     );
+  });
+
+  it.each<FleetResultEnvelope>([
+    { type: "text", text: "complete answer" },
+    {
+      type: "review_findings",
+      findings: [
+        { severity: "high", message: "Fix this", path: "src/a.ts", line: 3 },
+      ],
+      emptyDiff: false,
+      reviewedScope: "HEAD~1..HEAD",
+    },
+    {
+      type: "patch",
+      summary: "fixed",
+      files: ["src/a.ts"],
+      verification: "passed",
+    },
+    {
+      type: "verification",
+      passed: false,
+      summary: "failed",
+      screenshots: ["out/a.png"],
+      logs: ["failure log"],
+    },
+  ])("round trips the full $type final result", (result) => {
+    const selection: TranscriptBlockDetailRequest = {
+      ...request,
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      contentRevision: finalResultContentRevision(result),
+      resource: { kind: "final-result", index: 0 },
+    };
+    const message: ChatMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "",
+      blocks: [],
+      timestamp: 1,
+      finalMarker: { status: "completed", source: "tool", result },
+    };
+    const decode = (
+      selected = selection,
+      source: ChatMessage | undefined = message,
+    ) =>
+      parseTranscriptBlockDetailResponse(
+        encodeFinalResultDetail(selected, source),
+        selected,
+      );
+    expect(decode()).toEqual({
+      request: selection,
+      state: "final_result",
+      result,
+    });
+    expect(
+      decode({ ...selection, contentRevision: selection.contentRevision + 1 })
+        .state,
+    ).toBe("stale_revision");
+    expect(
+      decode({ ...selection, resource: { kind: "final-result", index: 1 } })
+        .state,
+    ).toBe("not_found");
+    expect(decode({ ...selection, blockId: "wrong" }).state).toBe("not_found");
+    expect(
+      parseTranscriptBlockDetailResponse(
+        encodeFinalResultDetail(selection, undefined),
+        selection,
+      ).state,
+    ).toBe("not_found");
+  });
+
+  it("bounds large final results and changes revisions with content", () => {
+    const result: FleetResultEnvelope = {
+      type: "text",
+      text: "x".repeat(
+        BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes,
+      ),
+    };
+    const selection: TranscriptBlockDetailRequest = {
+      ...request,
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      contentRevision: finalResultContentRevision(result),
+      resource: { kind: "final-result", index: 0 },
+    };
+    expect(finalResultContentRevision(result)).toBe(selection.contentRevision);
+    expect(
+      finalResultContentRevision({ type: "text", text: "changed" }),
+    ).not.toBe(selection.contentRevision);
+    expect(
+      parseTranscriptBlockDetailResponse(
+        encodeFinalResultDetail(selection, {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          blocks: [],
+          timestamp: 1,
+          finalMarker: { status: "completed", source: "tool", result },
+        }),
+        selection,
+      ).state,
+    ).toBe("too_large");
+  });
+
+  it.each([
+    { type: "text", text: 1 },
+    { type: "review_findings", findings: {} },
+    {
+      type: "review_findings",
+      findings: [{ severity: "urgent", message: "a" }],
+    },
+    {
+      type: "review_findings",
+      findings: [{ severity: "high", message: "a", line: 0 }],
+    },
+    { type: "review_findings", findings: [], emptyDiff: "true" },
+    { type: "patch", summary: "ok", files: ["../secret"] },
+    { type: "patch", summary: "ok", files: [], verification: 1 },
+    { type: "verification", summary: "ok", passed: "yes" },
+    { type: "verification", summary: "ok", passed: true, logs: [1] },
+    {
+      type: "verification",
+      summary: "ok",
+      passed: true,
+      screenshots: ["/secret"],
+    },
+    { type: "other" },
+  ])("rejects malformed final results before rendering: %j", (result) => {
+    const selection: TranscriptBlockDetailRequest = {
+      ...request,
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      resource: { kind: "final-result", index: 0 },
+    };
+    const content = new TextEncoder().encode(
+      JSON.stringify({ request: selection, state: "final_result", result }),
+    );
+    expect(() =>
+      parseTranscriptBlockDetailResponse(content, selection),
+    ).toThrow("payload_invalid");
+  });
+
+  it("rejects final results returned for other resources and mismatched identities", () => {
+    const selection: TranscriptBlockDetailRequest = {
+      ...request,
+      blockId: BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID,
+      resource: { kind: "final-result", index: 0 },
+    };
+    const content = (
+      request: TranscriptBlockDetailRequest,
+      state = "final_result",
+    ) =>
+      new TextEncoder().encode(
+        JSON.stringify({
+          request,
+          state,
+          result: { type: "text", text: "answer" },
+          data: "a",
+          mimeType: "image/png",
+        }),
+      );
+    expect(() =>
+      parseTranscriptBlockDetailResponse(content(request), request),
+    ).toThrow("payload_invalid");
+    expect(() =>
+      parseTranscriptBlockDetailResponse(content(selection), {
+        ...selection,
+        messageId: "wrong",
+      }),
+    ).toThrow("identity_mismatch");
+    expect(() =>
+      parseTranscriptBlockDetailResponse(
+        content(selection, "media"),
+        selection,
+      ),
+    ).toThrow("payload_invalid");
   });
 
   it("rejects malformed work summaries before they reach the UI", () => {

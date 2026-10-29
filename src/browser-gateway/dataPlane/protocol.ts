@@ -2270,6 +2270,7 @@ function parseFinalMarker(
     "continueActionConsumed",
     "autoContinueStopReason",
     "workSummary",
+    "result",
     "elapsedMs",
   ]);
   const summary = optionalString(object, "summary", path, 8_000);
@@ -2277,6 +2278,22 @@ function parseFinalMarker(
     object.elapsedMs === undefined
       ? undefined
       : nonNegativeSafeInteger(object.elapsedMs, `${path}.elapsedMs`);
+  const result = optionalObject(
+    object,
+    "result",
+    path,
+    (candidate, candidatePath) => {
+      const reference = strictRecord(candidate, candidatePath, [
+        "contentRevision",
+      ]);
+      return {
+        contentRevision: nonNegativeSafeInteger(
+          reference.contentRevision,
+          `${candidatePath}.contentRevision`,
+        ),
+      };
+    },
+  );
   const workSummary = optionalObject(
     object,
     "workSummary",
@@ -2335,6 +2352,7 @@ function parseFinalMarker(
     ...(continueActionConsumed !== undefined ? { continueActionConsumed } : {}),
     ...(autoContinueStopReason ? { autoContinueStopReason } : {}),
     ...(workSummary ? { workSummary } : {}),
+    ...(result ? { result } : {}),
     ...(elapsedMs !== undefined ? { elapsedMs } : {}),
   };
 }
@@ -3105,8 +3123,19 @@ function parseCommandBody(
           kind: enumValue(
             item.kind,
             `${path}.resource.kind`,
-            new Set(["image", "document", "display-image", "work-summary"]),
-          ) as "image" | "document" | "display-image" | "work-summary",
+            new Set([
+              "image",
+              "document",
+              "display-image",
+              "work-summary",
+              "final-result",
+            ]),
+          ) as
+            | "image"
+            | "document"
+            | "display-image"
+            | "work-summary"
+            | "final-result",
           index: nonNegativeSafeInteger(item.index, `${path}.resource.index`),
         };
       }

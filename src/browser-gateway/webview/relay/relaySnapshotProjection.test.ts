@@ -214,6 +214,63 @@ function checkpoint(
 }
 
 describe("RelaySnapshotProjector", () => {
+  it("projects lazy final-result references without treating them as inline envelopes", () => {
+    const projector = new RelaySnapshotProjector();
+    const source = message("final-message", 1);
+    source.finalMarker = {
+      status: "completed",
+      source: "tool",
+      summary: "Done",
+      result: { contentRevision: 123 },
+      workSummary: { contentRevision: 456 },
+    };
+    const first = projector.project(
+      checkpoint({
+        transcript: {
+          messages: [source],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    ).session.foreground!.projectedMessages[0]!;
+    expect(first.finalMarker).toEqual({
+      status: "completed",
+      source: "tool",
+      summary: "Done",
+    });
+    expect(first.remoteFinalResult).toEqual({
+      messageId: "final-message",
+      contentRevision: 123,
+    });
+    expect(first.remoteWorkSummary).toEqual({
+      messageId: "final-message",
+      contentRevision: 456,
+    });
+    const next = projector.project(
+      checkpoint({
+        checkpointSequence: 2,
+        transcript: {
+          messages: [
+            {
+              ...source,
+              revision: 2,
+              finalMarker: {
+                ...source.finalMarker,
+                result: { contentRevision: 789 },
+              },
+            },
+          ],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    ).session.foreground!.projectedMessages[0]!;
+    expect(next).not.toBe(first);
+    expect(next.remoteFinalResult?.contentRevision).toBe(789);
+    const legacy = projector.project(checkpoint({ checkpointSequence: 3 }))
+      .session.foreground!.projectedMessages[0]!;
+    expect(legacy).not.toHaveProperty("remoteFinalResult");
+  });
   it("restores relay display media as lazily loaded image previews", async () => {
     const imageSrc = "data:image/png;base64,UkVMQVlfSU1BR0U=";
     const ownerMessage: ChatMessage = {

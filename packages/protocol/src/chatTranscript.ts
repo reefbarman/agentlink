@@ -33,6 +33,12 @@ export interface RemoteWorkSummaryDetail {
   contentRevision: number;
 }
 
+/** Relay reference for a lazily loaded final-marker result. */
+export interface RemoteFinalResultDetail {
+  messageId: string;
+  contentRevision: number;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -220,6 +226,8 @@ export interface ChatMessage {
   finalMarker?: FinalMessageMarker;
   /** Relay reference for a final marker's work summary, loaded lazily. */
   remoteWorkSummary?: RemoteWorkSummaryDetail;
+  /** Relay reference for a final marker's full result, loaded lazily. */
+  remoteFinalResult?: RemoteFinalResultDetail;
   /** Explicit user-facing control change rendered at the point it occurred. */
   surfaceChange?: {
     model?: { previousModel: string; model: string };

@@ -85,6 +85,7 @@ import type {
 } from "../../shared/markdownImageSource";
 import {
   loadRemoteDisplayImage,
+  loadRemoteFinalResult,
   loadRemoteTranscriptBlockDetail,
   loadRemoteWorkSummary,
 } from "./toolDetailTransport";
@@ -11235,6 +11236,13 @@ export function BrowserGatewayApp({
                     }
                     loadDisplayImage={(reference) =>
                       loadRemoteDisplayImage(
+                        reference,
+                        foreground?.sessionId ?? "",
+                        requestRelayBlockDetail,
+                      )
+                    }
+                    loadFinalResult={(reference) =>
+                      loadRemoteFinalResult(
                         reference,
                         foreground?.sessionId ?? "",
                         requestRelayBlockDetail,

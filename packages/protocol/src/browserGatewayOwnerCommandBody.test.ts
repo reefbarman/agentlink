@@ -26,7 +26,12 @@ it("pins the complete browser gateway owner-command body contract", () => {
         blockId: string;
         contentRevision: number;
         resource?: {
-          kind: "image" | "document" | "display-image" | "work-summary";
+          kind:
+            | "image"
+            | "document"
+            | "display-image"
+            | "work-summary"
+            | "final-result";
           index: number;
         };
       }

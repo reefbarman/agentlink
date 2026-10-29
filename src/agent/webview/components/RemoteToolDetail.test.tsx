@@ -9,10 +9,15 @@ import {
   waitFor,
 } from "@testing-library/preact";
 
-import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
+import type {
+  ContentBlock,
+  RemoteFinalResultDetail,
+} from "@agentlink/protocol/chat-transcript";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import {
   RemoteToolDetailProvider,
   useRemoteToolDetail,
+  useRemoteFinalResult,
 } from "./RemoteToolDetail";
 
 const projected = {
@@ -47,11 +52,188 @@ function DetailHarness({ block = projected }: { block?: typeof projected }) {
   );
 }
 
+function FinalResultHarness({
+  reference,
+}: {
+  reference?: RemoteFinalResultDetail;
+}) {
+  const { result, loading, error, retry } = useRemoteFinalResult(reference);
+  return (
+    <div>
+      {loading && <span>loading result</span>}
+      {result?.type === "text" && <span>{result.text}</span>}
+      {error && <span role="alert">{error}</span>}
+      <button onClick={retry}>Retry result</button>
+    </div>
+  );
+}
+
 import { useState } from "preact/hooks";
 
 afterEach(cleanup);
 
 describe("RemoteToolDetailProvider", () => {
+  it("loads final results on demand, deduplicates consumers and resets cache with scope", async () => {
+    const reference = { messageId: "final-1", contentRevision: 3 };
+    const loadFinalResult = vi.fn(async (): Promise<FleetResultEnvelope> => ({
+      type: "text",
+      text: "full final answer",
+    }));
+    const view = (scopeKey: string, mounted: boolean) => (
+      <RemoteToolDetailProvider
+        scopeKey={scopeKey}
+        loadDetail={async (block) => block}
+        loadFinalResult={loadFinalResult}
+      >
+        {mounted && (
+          <>
+            <FinalResultHarness reference={reference} />
+            <FinalResultHarness reference={reference} />
+          </>
+        )}
+      </RemoteToolDetailProvider>
+    );
+    const { rerender } = render(view("session-a", false));
+    expect(loadFinalResult).not.toHaveBeenCalled();
+    rerender(view("session-a", true));
+    await waitFor(() =>
+      expect(screen.getAllByText("full final answer")).toHaveLength(2),
+    );
+    expect(loadFinalResult).toHaveBeenCalledTimes(1);
+    rerender(view("session-a", false));
+    rerender(view("session-a", true));
+    await waitFor(() =>
+      expect(screen.getAllByText("full final answer")).toHaveLength(2),
+    );
+    expect(loadFinalResult).toHaveBeenCalledTimes(1);
+    rerender(view("session-b", true));
+    await waitFor(() => expect(loadFinalResult).toHaveBeenCalledTimes(2));
+    expect(loadFinalResult).toHaveBeenLastCalledWith(reference);
+  });
+
+  it("evicts least-recently used final results at the shared byte budget", async () => {
+    const payload = "x".repeat(6 * 1024 * 1024);
+    const loadFinalResult = vi.fn(async (): Promise<FleetResultEnvelope> => ({
+      type: "text",
+      text: payload,
+    }));
+    function CacheHarness({ id }: { id: string }) {
+      const { result } = useRemoteFinalResult({
+        messageId: id,
+        contentRevision: 1,
+      });
+      return <span>{result ? id : "loading"}</span>;
+    }
+    const view = (id: string, mount = true) => (
+      <RemoteToolDetailProvider
+        scopeKey="bounded"
+        loadDetail={async (block) => block}
+        loadFinalResult={loadFinalResult}
+      >
+        {mount && <CacheHarness key={id} id={id} />}
+      </RemoteToolDetailProvider>
+    );
+    const { rerender } = render(view("first"));
+    await waitFor(() => expect(screen.getByText("first")).toBeTruthy());
+    rerender(view("second"));
+    await waitFor(() => expect(screen.getByText("second")).toBeTruthy());
+    rerender(view("third"));
+    await waitFor(() => expect(screen.getByText("third")).toBeTruthy());
+    expect(loadFinalResult).toHaveBeenCalledTimes(3);
+    rerender(view("third", false));
+    rerender(view("third"));
+    await waitFor(() => expect(screen.getByText("third")).toBeTruthy());
+    expect(loadFinalResult).toHaveBeenCalledTimes(3);
+    rerender(view("first"));
+    await waitFor(() => expect(screen.getByText("first")).toBeTruthy());
+    expect(loadFinalResult).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not cache failed final results and retries with the current loader", async () => {
+    const reference = { messageId: "final-1", contentRevision: 1 };
+    const failed = vi.fn(async (): Promise<FleetResultEnvelope> => {
+      throw new Error("Result expired");
+    });
+    const recovered = vi.fn(async (): Promise<FleetResultEnvelope> => ({
+      type: "text",
+      text: "recovered answer",
+    }));
+    const view = (loadFinalResult: typeof failed) => (
+      <RemoteToolDetailProvider
+        scopeKey="session"
+        loadDetail={async (block) => block}
+        loadFinalResult={loadFinalResult}
+      >
+        <FinalResultHarness reference={reference} />
+      </RemoteToolDetailProvider>
+    );
+    const { rerender } = render(view(failed));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("Result expired"),
+    );
+    rerender(view(recovered));
+    fireEvent.click(screen.getByRole("button", { name: "Retry result" }));
+    await waitFor(() =>
+      expect(screen.getByText("recovered answer")).toBeTruthy(),
+    );
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("ignores late final results after the reference changes", async () => {
+    const resolvers: Array<(result: FleetResultEnvelope) => void> = [];
+    const loadFinalResult = vi.fn(
+      () =>
+        new Promise<FleetResultEnvelope>((resolve) => resolvers.push(resolve)),
+    );
+    const view = (contentRevision: number) => (
+      <RemoteToolDetailProvider
+        scopeKey="session"
+        loadDetail={async (block) => block}
+        loadFinalResult={loadFinalResult}
+      >
+        <FinalResultHarness
+          reference={{ messageId: "final-1", contentRevision }}
+        />
+      </RemoteToolDetailProvider>
+    );
+    const { rerender } = render(view(1));
+    await waitFor(() => expect(loadFinalResult).toHaveBeenCalledTimes(1));
+    rerender(view(2));
+    await waitFor(() => expect(loadFinalResult).toHaveBeenCalledTimes(2));
+    resolvers[1]({ type: "text", text: "current final answer" });
+    await waitFor(() =>
+      expect(screen.getByText("current final answer")).toBeTruthy(),
+    );
+    resolvers[0]({ type: "text", text: "stale final answer" });
+    await waitFor(() =>
+      expect(screen.queryByText("stale final answer")).toBeNull(),
+    );
+    expect(screen.getByText("current final answer")).toBeTruthy();
+  });
+
+  it("reports unavailable final results without a provider or loader", async () => {
+    const reference = { messageId: "final-1", contentRevision: 1 };
+    const { unmount } = render(<FinalResultHarness reference={reference} />);
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Final result is unavailable.",
+    );
+    unmount();
+    render(
+      <RemoteToolDetailProvider
+        scopeKey="session"
+        loadDetail={async (block) => block}
+      >
+        <FinalResultHarness reference={reference} />
+      </RemoteToolDetailProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Final results are unavailable.",
+      ),
+    );
+  });
+
   it("loads only after expansion and shares the cached detail within its scope", async () => {
     const loaded = { ...projected, result: "completed result", complete: true };
     const loadDetail = vi.fn(async () => loaded);

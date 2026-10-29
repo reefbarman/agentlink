@@ -4,9 +4,12 @@ import type {
 } from "@agentlink/protocol/chat-transcript";
 
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "@agentlink/protocol/browser-gateway-data-plane-limits";
+import { BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID } from "@agentlink/protocol/browser-gateway-transcript-message";
 import type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
 import type { BrowserGatewayTranscriptBlockDetailSummary } from "@agentlink/protocol/browser-gateway-transcript-block";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import type { WorkSummary } from "@agentlink/protocol/final-status";
+import { validateFleetResult } from "../../shared/fleetResultSchema.js";
 
 export type TranscriptDisplayBlock = Extract<
   ContentBlock,
@@ -35,6 +38,7 @@ export type TranscriptBlockDetailResponse = {
     }
   | { state: "media"; data: string; mimeType: string; name?: string }
   | { state: "work_summary"; summary: WorkSummary }
+  | { state: "final_result"; result: FleetResultEnvelope }
   | { state: "not_found" | "stale_revision" | "too_large" }
 );
 
@@ -164,6 +168,41 @@ export function workSummaryContentRevision(summary: WorkSummary): number {
   const revision = hashString(JSON.stringify(summary));
   workSummaryRevisions.set(summary, revision);
   return revision;
+}
+
+const finalResultRevisions = new WeakMap<FleetResultEnvelope, number>();
+
+/** Stable revision for a frozen final result, cached per object identity. */
+export function finalResultContentRevision(
+  result: FleetResultEnvelope,
+): number {
+  const cached = finalResultRevisions.get(result);
+  if (cached !== undefined) return cached;
+  const revision = hashString(JSON.stringify(result));
+  finalResultRevisions.set(result, revision);
+  return revision;
+}
+
+/** Encodes a final marker's result through the existing bounded detail route. */
+export function encodeFinalResultDetail(
+  request: TranscriptBlockDetailRequest,
+  message: ChatMessage | undefined,
+): Uint8Array {
+  const result = message?.finalMarker?.result;
+  let response: TranscriptBlockDetailResponse;
+  if (
+    !result ||
+    request.blockId !== BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID ||
+    request.resource?.kind !== "final-result" ||
+    request.resource.index !== 0
+  ) {
+    response = { request, state: "not_found" };
+  } else if (finalResultContentRevision(result) !== request.contentRevision) {
+    response = { request, state: "stale_revision" };
+  } else {
+    response = { request, state: "final_result", result };
+  }
+  return encodeDetailResponse(request, response);
 }
 
 /** Encodes a final marker's work summary addressed by a `work-summary` request. */
@@ -341,6 +380,21 @@ export function parseTranscriptBlockDetailResponse(
   ) {
     return { request, state: value.state };
   }
+  if (value.state === "final_result") {
+    if (
+      request.blockId !== BROWSER_GATEWAY_FINAL_RESULT_BLOCK_ID ||
+      request.resource?.kind !== "final-result" ||
+      request.resource.index !== 0 ||
+      validateFleetResult(value.result).length > 0
+    ) {
+      throw new Error("relay_block_detail_payload_invalid");
+    }
+    return {
+      request,
+      state: "final_result",
+      result: value.result as FleetResultEnvelope,
+    };
+  }
   if (value.state === "work_summary") {
     if (
       request.resource?.kind !== "work-summary" ||
@@ -353,6 +407,7 @@ export function parseTranscriptBlockDetailResponse(
   if (
     value.state === "media" &&
     request.resource &&
+    ["image", "document", "display-image"].includes(request.resource.kind) &&
     typeof value.data === "string" &&
     typeof value.mimeType === "string" &&
     (value.name === undefined || typeof value.name === "string")

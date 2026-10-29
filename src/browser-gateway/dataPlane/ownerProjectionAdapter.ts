@@ -57,6 +57,8 @@ import {
   encodeDisplayImageDetail,
   encodeWorkSummaryDetail,
   workSummaryContentRevision,
+  encodeFinalResultDetail,
+  finalResultContentRevision,
   type TranscriptBlockDetailRequest,
 } from "./transcriptBlockDetail.js";
 
@@ -106,6 +108,8 @@ interface ProjectionContext {
   readonly imageAttribution?: boolean;
   /** Receiver accepts final-marker work summary references. */
   readonly workSummaries?: boolean;
+  /** Receiver accepts lazy final-marker result references. */
+  readonly finalResults?: boolean;
   /** Receiver accepts the final marker's ask duration. */
   readonly finalElapsed?: boolean;
 }
@@ -155,6 +159,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly displayMedia: boolean;
   private readonly imageAttribution: boolean;
   private readonly workSummaries: boolean;
+  private readonly finalResults: boolean;
   private readonly finalElapsed: boolean;
   private historySessionId: string | null = null;
   private readonly historyMessages = new Map<string, ChatMessage>();
@@ -200,6 +205,10 @@ export class BrowserGatewayOwnerProjectionAdapter {
     this.workSummaries =
       this.blockDetails &&
       (options.dataPlaneFeatures?.includes("transcript-work-summary-v1") ??
+        false);
+    this.finalResults =
+      this.blockDetails &&
+      (options.dataPlaneFeatures?.includes("transcript-final-result-v1") ??
         false);
     this.finalElapsed =
       options.dataPlaneFeatures?.includes("transcript-final-elapsed-v1") ??
@@ -284,6 +293,12 @@ export class BrowserGatewayOwnerProjectionAdapter {
         this.displayMedia ? message : undefined,
       );
     }
+    if (request.resource?.kind === "final-result") {
+      return encodeFinalResultDetail(
+        request,
+        this.finalResults ? message : undefined,
+      );
+    }
     if (request.resource?.kind === "work-summary") {
       return encodeWorkSummaryDetail(
         request,
@@ -336,6 +351,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
         displayMedia: this.displayMedia,
         imageAttribution: this.imageAttribution,
         workSummaries: this.workSummaries,
+        finalResults: this.finalResults,
         finalElapsed: this.finalElapsed,
       }),
     );
@@ -657,6 +673,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       displayMedia: this.displayMedia,
       imageAttribution: this.imageAttribution,
       workSummaries: this.workSummaries,
+      finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
@@ -683,6 +700,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       displayMedia: this.displayMedia,
       imageAttribution: this.imageAttribution,
       workSummaries: this.workSummaries,
+      finalResults: this.finalResults,
       finalElapsed: this.finalElapsed,
     });
     const referencedDetails = detailsForMessages(
@@ -1343,6 +1361,15 @@ function projectMessage(
                     message.finalMarker.autoContinueStopReason,
                     4_000,
                   ),
+                }
+              : {}),
+            ...(message.finalMarker.result && context.finalResults
+              ? {
+                  result: {
+                    contentRevision: finalResultContentRevision(
+                      message.finalMarker.result,
+                    ),
+                  },
                 }
               : {}),
             ...(message.finalMarker.workSummary && context.workSummaries

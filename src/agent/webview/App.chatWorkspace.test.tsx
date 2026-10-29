@@ -366,6 +366,8 @@ describe("App chat workspace integration", () => {
         marker: {
           status: "completed",
           source: "tool",
+          summary: "Short final summary.",
+          result: { type: "text", text: "Detailed final result." },
           continueAction: {
             label: "Implement next slice",
             prompt: "Please implement the next UI slice, without releasing it.",
@@ -391,6 +393,13 @@ describe("App chat workspace integration", () => {
       const continueButton = screen.getByRole("button", {
         name: "Implement next slice",
       });
+      expect(screen.getByText("Short final summary.")).toBeTruthy();
+      expect(screen.getByText("Detailed final result.")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Please implement the next UI slice, without releasing it.",
+        ),
+      ).toBeTruthy();
       fireEvent.click(continueButton);
       await waitFor(() => {
         expect(composer.value).toBe(

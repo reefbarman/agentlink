@@ -11,6 +11,7 @@ import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
 import { isBrowserGatewaySafeThemeVariable } from "../dataPlane/protocol.js";
+import { finalResultContentRevision } from "../dataPlane/transcriptBlockDetail.js";
 import type {
   BrowserGatewayContextBudget,
   BrowserGatewayDataPlaneIdentity,
@@ -612,17 +613,27 @@ export class BrowserGatewayRelayProjectionAccumulator {
 }
 
 /**
- * Work summaries travel as a full object on legacy transcripts and as a lazy
- * revision reference over the relay; equivalence compares the marker without it.
+ * Work summaries are compared separately; final results compare by revision
+ * because the relay carries a lazy reference rather than the full envelope.
  */
 function normalizeFinalMarker(
   marker: NonNullable<
     ChatMessage["finalMarker"] | BrowserGatewayTranscriptMessage["finalMarker"]
   >,
 ): BrowserGatewayNormalizedTranscriptMessage["finalMarker"] {
-  const { workSummary, ...rest } = marker;
+  const { workSummary, result, ...rest } = marker;
   void workSummary;
-  return rest;
+  return {
+    ...rest,
+    ...(result
+      ? {
+          result:
+            "contentRevision" in result
+              ? result
+              : { contentRevision: finalResultContentRevision(result) },
+        }
+      : {}),
+  };
 }
 
 function normalizeLegacyTranscript(

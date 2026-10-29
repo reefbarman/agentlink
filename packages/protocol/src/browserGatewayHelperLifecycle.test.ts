@@ -16,6 +16,7 @@ describe("browser gateway helper lifecycle", () => {
       "transcript-image-attribution-v1",
       "transcript-work-summary-v1",
       "transcript-final-elapsed-v1",
+      "transcript-final-result-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);

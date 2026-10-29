@@ -87,7 +87,10 @@ import {
 import { InMemoryRetrievalRepository } from "../../core/retrieval/InMemoryRetrievalRepository.js";
 import { DerivedSessionRetrievalService } from "../../core/session/DerivedSessionRetrievalService.js";
 import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
-import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_FEATURES,
+  type BrowserGatewayMemoryRuntimeDescriptor,
+} from "../protocol.js";
 import {
   BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
   BROWSER_GATEWAY_HELPER_SECRET_HEADER,
@@ -1603,14 +1606,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     const health = await fetch(`${helperBase}/health`);
     await expect(health.json()).resolves.toMatchObject({
-      dataPlaneFeatures: [
-        "typed-background-results-v1",
-        "transcript-block-detail-v1",
-        "transcript-display-media-v1",
-        "transcript-image-attribution-v1",
-        "transcript-work-summary-v1",
-        "transcript-final-elapsed-v1",
-      ],
+      dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
     });
 
     const headers = {
@@ -1678,14 +1674,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(register.ok).toBe(true);
     await expect(register.json()).resolves.toMatchObject({
       ok: true,
-      dataPlaneFeatures: [
-        "typed-background-results-v1",
-        "transcript-block-detail-v1",
-        "transcript-display-media-v1",
-        "transcript-image-attribution-v1",
-        "transcript-work-summary-v1",
-        "transcript-final-elapsed-v1",
-      ],
+      dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
       ownerRegistration: {
         owner: {
           ownerId: "owner-vscode-1",

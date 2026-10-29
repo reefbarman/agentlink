@@ -153,6 +153,7 @@ function messageRevision(message: ChatMessage): string {
     objectRevision(message.displayMedia),
     objectRevision(message.media),
     objectRevision(message.finalMarker),
+    objectRevision(message.remoteFinalResult),
     objectRevision(message.error),
     objectRevision(message.memoryDisclosure),
     objectRevision(message.surfaceChange),
@@ -180,11 +181,19 @@ function cloneAssistantSegment(
   const cached = segments?.get(id);
   if (cached) return cached;
 
-  const { apiRequest, error, finalMarker, remoteWorkSummary, ...base } = source;
+  const {
+    apiRequest,
+    error,
+    finalMarker,
+    remoteWorkSummary,
+    remoteFinalResult,
+    ...base
+  } = source;
   void apiRequest;
   void error;
   void finalMarker;
   void remoteWorkSummary;
+  void remoteFinalResult;
   const segment = {
     ...base,
     id,
@@ -320,6 +329,7 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
         ...rows[targetIndex].message,
         finalMarker: message.finalMarker,
         remoteWorkSummary: message.remoteWorkSummary,
+        remoteFinalResult: message.remoteFinalResult,
         apiRequest: message.apiRequest,
         error: message.error,
       },
@@ -923,7 +933,11 @@ function canOpenSpecialBlockPanel(message: ChatMessage): boolean {
   return (
     message.role === "assistant" &&
     (message.blocks.some((block) => block.type === "text") ||
-      Boolean(message.finalMarker?.summary))
+      Boolean(
+        message.finalMarker?.summary ||
+        message.finalMarker?.result ||
+        message.remoteFinalResult,
+      ))
   );
 }
 

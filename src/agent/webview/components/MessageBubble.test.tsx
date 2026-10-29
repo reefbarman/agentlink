@@ -1175,6 +1175,63 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.queryByText("(No response)")).toBeNull();
   });
 
+  it.each([undefined, "Short summary"])(
+    "renders result-only and distinct result content (summary=%s)",
+    (summary) => {
+      render(
+        <MessageBubble
+          message={{
+            id: "result-content",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [],
+            finalMarker: {
+              status: "blocked",
+              source: "tool",
+              summary,
+              result: { type: "text", text: "Full result body" },
+            },
+          }}
+          streaming={false}
+        />,
+      );
+      expect(screen.getByText("Full result body")).toBeTruthy();
+      if (summary) expect(screen.getByText(summary)).toBeTruthy();
+      expect(screen.queryByText("(No response)")).toBeNull();
+    },
+  );
+
+  it("shows continuation text even without an action handler", () => {
+    render(
+      <MessageBubble
+        message={{
+          id: "readonly-next-step",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [],
+          finalMarker: {
+            status: "blocked",
+            source: "tool",
+            continueAction: {
+              label: "Retry",
+              prompt:
+                "Retry when the service is ready.\nKeep the existing scope.",
+            },
+          },
+        }}
+        streaming={false}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Retry when the service is ready. Keep the existing scope.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
   it("copies final marker summaries as Markdown", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -1252,6 +1309,13 @@ describe("MessageBubble slash-command rendering", () => {
     );
     const button = screen.getByRole("button", { name: "Implement this" });
     expect(button).toBeTruthy();
+    expect(screen.getByText("Please implement this plan.")).toBeTruthy();
+    expect(
+      button
+        .closest(".final-marker-next-step")
+        ?.querySelector(".final-marker-continue-prompt")?.textContent,
+    ).toBe("Please implement this plan.");
+    expect(onContinue).not.toHaveBeenCalled();
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledWith("Please implement this plan.");
     expect(finalRegion?.textContent).not.toContain(
@@ -1284,6 +1348,11 @@ describe("MessageBubble slash-command rendering", () => {
 
     const button = screen.getByRole("button", { name: "Continue" });
     expect(button).toBeTruthy();
+    expect(
+      button
+        .closest(".final-marker-next-step")
+        ?.querySelector(".final-marker-continue-prompt")?.textContent,
+    ).toContain("Continue working from where you left off.");
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledWith(
       "Continue working from where you left off. Before deciding the overall task is complete, re-check the original user request. If the completed work is a phase, handover, or scoped subtask, treat that boundary as a navigation point—not proof of overall completion—and locate and inspect its parent/source-of-truth plan, following references outward through higher-level plans if nested. Within the user-approved scope, identify and begin the next explicit unfinished phase, plan item, subtask, or validation step. If it needs a missing decision or prerequisite, surface that blocker. Do not invent work or broaden scope. Only if the full approved scope is complete, briefly confirm that no work remains.",
