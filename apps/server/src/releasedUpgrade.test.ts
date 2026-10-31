@@ -123,6 +123,7 @@ async function run(
   extraEnv: Record<string, string> = {},
 ) {
   return execFileAsync("/bin/bash", [upgrade, "--deploy", fx.deploy, ...args], {
+    timeout: 20_000,
     env: {
       ...process.env,
       PATH: `${fx.bin}:${process.env.PATH}`,
@@ -158,7 +159,9 @@ async function stageAssets(fx: Awaited<ReturnType<typeof fixture>>) {
   return stage;
 }
 
-describe("released-image upgrade", () => {
+// These tests launch real shells and filesystem utilities. Allow for loaded
+// macOS CI runners, while the child-process timeout still catches stuck scripts.
+describe("released-image upgrade", { timeout: 30_000 }, () => {
   it("never moves live data when automatic EXIT-trap rollback cannot restore a backup", async () => {
     const fx = await fixture({ restoreFails: true, resumeFails: true });
     try {

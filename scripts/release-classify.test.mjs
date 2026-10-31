@@ -151,6 +151,94 @@ test("sends a strict schema with privacy routing and records the model used", as
   });
 });
 
+test("retries only omitted commits and preserves validated decisions and model attribution", async () => {
+  const requests = [];
+  const first = {
+    sha: "a",
+    bump: "minor",
+    breakingUnits: ["sdk"],
+    summary: "Adds A.",
+  };
+  const second = {
+    sha: "b",
+    bump: "patch",
+    breakingUnits: [],
+    summary: "Fixes B.",
+  };
+  const { decisions, omitted } = await classifyCommits(
+    [commit("a", ["sdk"]), commit("b")],
+    {
+      apiKey: "k",
+      fetchImpl: async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return requests.length === 1
+          ? okResponse([first], "first-model")
+          : okResponse([{ ...first, bump: "none" }, second], "retry-model");
+      },
+    },
+  );
+  assert.equal(requests.length, 2);
+  const requestedShas = (request) =>
+    JSON.parse(
+      request.messages[1].content.slice(
+        "Untrusted commit data (JSON):\n".length,
+      ),
+    ).map((entry) => entry.sha);
+  assert.deepEqual(requestedShas(requests[0]), ["a", "b"]);
+  assert.deepEqual(requestedShas(requests[1]), ["b"]);
+  // Keep the existing provider-compatible schema, with exact coverage checked
+  // locally instead of adding unsupported array constraints to strict output.
+  for (const request of requests) {
+    const schema =
+      request.response_format.json_schema.schema.properties.commits;
+    assert.equal("minItems" in schema, false);
+    assert.equal("maxItems" in schema, false);
+  }
+  assert.equal(decisions.a.bump, "minor");
+  assert.deepEqual(decisions.a.breakingUnits, ["sdk"]);
+  assert.equal(decisions.a.model, "first-model");
+  assert.equal(decisions.b.model, "retry-model");
+  assert.deepEqual(omitted, []);
+});
+
+test("persistent omissions fail closed after bounded retries", async () => {
+  let calls = 0;
+  await assert.rejects(
+    classifyCommits([commit("a"), commit("b")], {
+      apiKey: "k",
+      fetchImpl: async () => {
+        calls++;
+        return okResponse([
+          { sha: "a", bump: "patch", breakingUnits: [], summary: "A." },
+        ]);
+      },
+    }),
+    /Release classification failed: Classifier omitted b/u,
+  );
+  assert.equal(calls, 2);
+});
+
+test("invalid partial responses cannot supply retained decisions", async () => {
+  const requests = [];
+  await assert.rejects(
+    classifyCommits([commit("a"), commit("b")], {
+      apiKey: "k",
+      fetchImpl: async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return okResponse([
+          { sha: "a", bump: "major", breakingUnits: [], summary: "A." },
+        ]);
+      },
+    }),
+    /Invalid bump for a/u,
+  );
+  assert.equal(requests.length, 2);
+  assert.equal(
+    requests[0].messages[1].content,
+    requests[1].messages[1].content,
+  );
+});
+
 test("reuses cached decisions and only sends new commits", async () => {
   const sent = [];
   const cached = {

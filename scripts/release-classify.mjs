@@ -48,6 +48,7 @@ export function classificationSchema() {
     properties: {
       commits: {
         type: "array",
+
         items: {
           type: "object",
           additionalProperties: false,
@@ -148,9 +149,12 @@ export function validateClassification(value, batch) {
   }
   const missing = batch.filter((commit) => !decisions[commit.sha]);
   if (missing.length > 0) {
-    throw new Error(
+    const error = new Error(
       `Classifier omitted ${missing.map((commit) => commit.sha).join(", ")}`,
     );
+    error.missingCommits = missing;
+    error.decisions = decisions;
+    throw error;
   }
   return decisions;
 }
@@ -159,34 +163,37 @@ async function requestBatch(
   batch,
   { apiKey, model, fallbackModel, fetchImpl },
 ) {
-  const body = {
-    models: [model, fallbackModel].filter(Boolean),
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Untrusted commit data (JSON):\n${JSON.stringify(
-          batch.map(({ coverage: _coverage, ...commit }) => commit),
-        )}`,
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "release_classification",
-        strict: true,
-        schema: classificationSchema(),
-      },
-    },
-    // require_parameters keeps the strict schema enforced. Do not add
-    // sampling parameters such as temperature: current reasoning-model
-    // endpoints reject them, which leaves no eligible provider (HTTP 404).
-    provider: { require_parameters: true, data_collection: "deny" },
-    // Headroom for reasoning tokens, which count against max_tokens.
-    max_tokens: Math.min(32_000, 4_000 + batch.length * 300),
-  };
+  const decisions = {};
+  let pending = batch;
   let lastError;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const body = {
+      models: [model, fallbackModel].filter(Boolean),
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Untrusted commit data (JSON):\n${JSON.stringify(
+            pending.map(({ coverage: _coverage, ...commit }) => commit),
+          )}`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "release_classification",
+          strict: true,
+          schema: classificationSchema(),
+        },
+      },
+      // require_parameters keeps the strict schema enforced. Do not add
+      // sampling parameters such as temperature: current reasoning-model
+      // endpoints reject them, which leaves no eligible provider (HTTP 404).
+      provider: { require_parameters: true, data_collection: "deny" },
+      // Headroom for reasoning tokens, which count against max_tokens.
+      max_tokens: Math.min(32_000, 4_000 + pending.length * 300),
+    };
+    let usedModel = model;
     try {
       const response = await fetchImpl(ENDPOINT, {
         method: "POST",
@@ -209,17 +216,24 @@ async function requestBatch(
       }
       const payload = await response.json();
       const content = payload?.choices?.[0]?.message?.content;
-      const decisions = validateClassification(
+      usedModel = typeof payload?.model === "string" ? payload.model : model;
+      const result = validateClassification(
         JSON.parse(typeof content === "string" ? content : ""),
-        batch,
+        pending,
       );
-      const usedModel =
-        typeof payload.model === "string" ? payload.model : model;
-      for (const decision of Object.values(decisions))
-        decision.model = usedModel;
-      return decisions;
+      for (const decision of Object.values(result)) decision.model = usedModel;
+      return { ...decisions, ...result };
     } catch (error) {
       lastError = error;
+      // A valid partial response is useful. Retry only the missing commits so
+      // a large batch cannot keep crowding out the same entries. Other invalid
+      // output still retries the entire pending set and never bypasses validation.
+      if (error.missingCommits) {
+        for (const decision of Object.values(error.decisions))
+          decision.model = usedModel;
+        Object.assign(decisions, error.decisions);
+        pending = error.missingCommits;
+      }
     }
   }
   throw new Error(`Release classification failed: ${lastError?.message}`, {

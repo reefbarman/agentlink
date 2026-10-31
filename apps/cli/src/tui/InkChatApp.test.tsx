@@ -19,7 +19,7 @@ import {
 import { buildActivityShelfItems } from "./ActivityShelf.js";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
 import { render as renderInk } from "ink-testing-library";
-import { useFocusManager } from "ink";
+import { useFocusManager, useInput } from "ink";
 import { wordmarkLines } from "./Wordmark.js";
 
 /**
@@ -29,9 +29,14 @@ import { wordmarkLines } from "./Wordmark.js";
  */
 function FocusProbe({
   onActiveId,
+  onEscape,
 }: {
   readonly onActiveId: (id: string | undefined) => void;
+  readonly onEscape: () => void;
 }): null {
+  useInput((_input, key) => {
+    if (key.escape) onEscape();
+  });
   const { activeId } = useFocusManager();
   React.useEffect(() => onActiveId(activeId), [activeId, onActiveId]);
   return null;
@@ -44,10 +49,15 @@ function FocusProbe({
  */
 function render(tree: React.ReactElement) {
   let composerFocused = false;
+  let escapeHandled = false;
   const probe = (
     <FocusProbe
       onActiveId={(id) => {
         composerFocused = id === "composer";
+      }}
+      onEscape={() => {
+        composerFocused = false;
+        escapeHandled = true;
       }}
     />
   );
@@ -69,6 +79,11 @@ function render(tree: React.ReactElement) {
     composerReady: () =>
       vi.waitFor(() => {
         if (!composerFocused) throw new Error("Composer is not focused yet");
+      }),
+    escapeHandled: () =>
+      vi.waitFor(() => {
+        if (!escapeHandled)
+          throw new Error("Escape has not been dispatched yet");
       }),
   };
 }
@@ -464,13 +479,14 @@ describe("Ink chat app", () => {
       />,
     );
 
-    await nextInputDispatch();
+    await screen.composerReady();
     screen.stdin.write("\u001b");
-    // Ink waits 20ms before treating a lone ESC as the Escape key. Leave
-    // generous headroom: on a loaded CI runner, typing before that timer fires
-    // makes Ink parse ESC plus the text as one Alt-key sequence and drop it.
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    await nextInputDispatch();
+    // Wait for Ink to dispatch the lone ESC, rather than guessing when its
+    // parser timer has fired and risking an Alt-key sequence on busy runners.
+    await screen.escapeHandled();
+    // Escape also clears Ink's focus. Wait for the app's refocus effect and
+    // the composer's input-listener registration before sending more text.
+    await screen.composerReady();
     screen.stdin.write("still typing");
     await vi.waitFor(
       () => expect(stripAnsi(screen.lastFrame())).toContain("still typing"),
