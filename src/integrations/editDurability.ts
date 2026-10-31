@@ -16,6 +16,7 @@ import {
 } from "../core/editDurability.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 import { MAX_EDITOR_RECOVERY_BYTES } from "./editorRecoveryPolicy.js";
+import { primaryEditorColumn } from "../util/editorPlacement.js";
 import { workHistoryRegistry } from "../agent/WorkHistoryRegistry.js";
 
 export interface CommitAndVerifyEditRequest {
@@ -304,6 +305,17 @@ async function saveWithoutFormatting(
   if (!documentMatchesTarget(document, absolutePath)) return false;
   const previousEditor = vscode.window.activeTextEditor;
   const targetPath = canonicalizePath(absolutePath);
+  // VS Code cannot activate another editor group without taking keyboard
+  // focus, so this save briefly opens the document in the active group. When
+  // that group is not the primary one, close the temporary tab afterwards so
+  // agent-edited files only stay open in the primary (left) column.
+  const activeGroup = vscode.window.tabGroups?.activeTabGroup;
+  const temporaryTabGroup =
+    activeGroup &&
+    activeGroup.viewColumn !== primaryEditorColumn() &&
+    !findTextTab(activeGroup, targetPath)
+      ? activeGroup
+      : undefined;
   // The save command needs an active editor, not keyboard focus. Keeping focus
   // in the sidebar lets the user continue typing while this document is saved.
   const targetEditor = await vscode.window.showTextDocument(document, {
@@ -347,7 +359,29 @@ async function saveWithoutFormatting(
           : {}),
       });
     }
+    if (temporaryTabGroup) {
+      const group = vscode.window.tabGroups.all.find(
+        (candidate) => candidate.viewColumn === temporaryTabGroup.viewColumn,
+      );
+      const tab = group && findTextTab(group, targetPath);
+      // A dirty tab holds a failed save; leave it for the user to inspect.
+      if (tab && !tab.isDirty) {
+        await vscode.window.tabGroups.close(tab, true);
+      }
+    }
   }
+}
+
+function findTextTab(
+  group: vscode.TabGroup,
+  targetPath: string,
+): vscode.Tab | undefined {
+  return group.tabs.find(
+    (tab) =>
+      tab.input instanceof vscode.TabInputText &&
+      tab.input.uri.scheme === "file" &&
+      canonicalizePath(tab.input.uri.fsPath) === targetPath,
+  );
 }
 
 async function replaceDocumentContent(

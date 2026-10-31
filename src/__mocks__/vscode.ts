@@ -66,6 +66,7 @@ export const languages = {
 
 export const ViewColumn = {
   One: 1,
+  Two: 2,
   Active: -1,
   Beside: -2,
 };
@@ -228,3 +229,7 @@ export const WorkspaceEdit = class {
 };
 
 export const TabInputTextDiff = class {};
+
+export const TabInputText = class {
+  constructor(public readonly uri: unknown) {}
+};
