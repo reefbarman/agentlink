@@ -2635,7 +2635,11 @@ async function executeCommandWithAudit(
         workspaceRoots,
       );
       if (rejectionReason) {
-        return readOnlyRejectedCommandResult(params.command, rejectionReason);
+        return readOnlyRejectedCommandResult(
+          params.command,
+          rejectionReason,
+          providers.availableToolNames,
+        );
       }
       if (routeContext.commandApprovalPolicySnapshot !== "approve-for-me") {
         return rejectedCommandResult(
@@ -4853,9 +4857,45 @@ function getReadOnlyCommandRejectionReason(
   return undefined;
 }
 
+const READ_ONLY_REJECTION_RECOVERY =
+  "Use a dedicated read/search tool or a simpler classifier-recognized local read. Network reads and ambiguous commands require a writable foreground session with the normal approval flow.";
+
+/** True when any segment is a remote read (gh, curl, wget, or a networked git subcommand). */
+function isNetworkReadCommand(command: string): boolean {
+  return splitCompoundCommand(command).some((segment) => {
+    const tokens = singleCommandTokens(segment);
+    const words = tokens ?? segment.trim().split(/\s+/);
+    const executable = words[0];
+    if (executable === "gh" || executable === "curl" || executable === "wget") {
+      return true;
+    }
+    return (
+      executable === "git" &&
+      (GIT_NETWORK_SUBCOMMANDS.has(words[1] ?? "") ||
+        (words[1] === "remote" && words[2] === "update"))
+    );
+  });
+}
+
+function readOnlyNetworkRejectionRecovery(
+  availableToolNames: ReadonlySet<string> | undefined,
+): string {
+  const canAsk = availableToolNames
+    ? availableToolNames.has("ask_user")
+    : undefined;
+  const escalation =
+    canAsk === true
+      ? "If you are a background agent, call ask_user now: background questions go to the coordinator."
+      : canAsk === false
+        ? "If you are a background agent, report the missing evidence now in a concise status message or a blocked set_task_status instead of waiting for the final result."
+        : "If you are a background agent, call ask_user now if it is available (background questions go to the coordinator); otherwise report the missing evidence in a concise status message or a blocked set_task_status instead of waiting for the final result.";
+  return `This read-only session cannot run network commands such as gh, curl, wget, or git fetch/ls-remote. Do not retry through another network transport. ${escalation} Name the exact remote data you need (for example PR head/base SHAs, the diff, or CI status), then continue with local evidence only.`;
+}
+
 function readOnlyRejectedCommandResult(
   command: string,
   reason: string,
+  availableToolNames?: ReadonlySet<string>,
 ): ToolResult {
   const alternative =
     command.includes("rg ") && !command.includes("--no-config")
@@ -4863,6 +4903,7 @@ function readOnlyRejectedCommandResult(
       : command.includes("git diff")
         ? "Use git diff --no-ext-diff --no-textconv for workspace inspection."
         : undefined;
+  const networkRead = isNetworkReadCommand(command);
   return {
     content: [
       {
@@ -4874,8 +4915,10 @@ function readOnlyRejectedCommandResult(
           reason,
           ...(alternative ? { recognized_alternative: alternative } : {}),
           guardian_review_available: false,
-          recovery:
-            "Use a dedicated read/search tool or a simpler classifier-recognized local read. Network reads and ambiguous commands require a writable foreground session with the normal approval flow.",
+          recovery: networkRead
+            ? `${readOnlyNetworkRejectionRecovery(availableToolNames)} ${READ_ONLY_REJECTION_RECOVERY}`
+            : READ_ONLY_REJECTION_RECOVERY,
+          ...(networkRead ? { coordinator_evidence_needed: true } : {}),
           command_sent: false,
           process_launched: false,
         }),

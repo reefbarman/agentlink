@@ -1303,15 +1303,20 @@ function classifyStaticFileInspection(
   args: string[],
   ctx: CommandTierContext,
 ): CommandTierResult {
-  if (command === "dyld_info" && args.length === 1 && args[0] === "-help") {
-    return safe("dyld_info help", "read_only", command);
+  // macOS dyld_info has no -help flag; running it without arguments prints
+  // usage. Keep -help accepted too: it only prints an unknown-option error.
+  if (
+    command === "dyld_info" &&
+    (args.length === 0 || (args.length === 1 && args[0] === "-help"))
+  ) {
+    return safe("dyld_info usage", "read_only", command);
   }
 
   const invalid = () =>
     sensitive(
       command === "xxd"
         ? "xxd requires [-g 1|2|4|8|16] [-s offset] -l 1..65536 and one regular workspace file"
-        : "dyld_info requires -help or -disassemble/-uuid and one regular workspace file",
+        : "dyld_info requires no arguments (usage) or -disassemble/-uuid and one regular workspace file",
       "unrecognized_operation",
       command,
     );
@@ -1360,7 +1365,10 @@ function classifyStaticFileInspection(
   if (isSecretPath(resolved) || isSecretPath(physical)) {
     return dangerous("read targets secret path", "secret_path", command);
   }
-  if (!isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)) {
+  if (
+    !isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots) &&
+    !(command === "dyld_info" && isAppleSystemImagePath(resolved, physical))
+  ) {
     return dangerous("read target outside workspace", "external_path", command);
   }
   try {
@@ -1369,6 +1377,22 @@ function classifyStaticFileInspection(
     return invalid();
   }
   return safe(`static file inspection (${command})`, "read_only", command);
+}
+
+/**
+ * Static dyld_info inspection may also target Apple's SIP-protected system
+ * images, which hold no user data. Both the requested and canonical paths must
+ * stay inside these roots, so a symlink cannot redirect the read elsewhere.
+ */
+const APPLE_SYSTEM_IMAGE_ROOTS = ["/System/Library", "/usr/lib"] as const;
+
+function isAppleSystemImagePath(resolved: string, physical: string): boolean {
+  if (process.platform !== "darwin") return false;
+  const inside = (candidate: string) =>
+    APPLE_SYSTEM_IMAGE_ROOTS.some((root) =>
+      candidate.startsWith(`${root}${path.sep}`),
+    );
+  return inside(path.normalize(resolved)) && inside(path.normalize(physical));
 }
 
 function classifyReadPathGuard(

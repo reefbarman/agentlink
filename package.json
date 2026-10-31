@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink: AI Coding Agent",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.68.22",
+  "version": "1.68.23",
   "publisher": "agentlink",
   "repository": {
     "type": "git",

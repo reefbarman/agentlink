@@ -240,6 +240,47 @@ describe("executeCodexStandaloneWeb", () => {
     },
   );
 
+  it.each([
+    [
+      "Internal Error ()\nL0: Failed to fetch https://raw.githubusercontent.com/o/r/main/a.c: Cache miss",
+      "provider_page_internal_error: cache_miss",
+      "unlikely to help",
+    ],
+    [
+      "Internal Error ()\nL0: URL https://host.invalid/page is not accessible via this tool.",
+      "provider_page_internal_error: not_accessible",
+      "unlikely to help",
+    ],
+    [
+      "Internal Error ()",
+      "(provider_page_internal_error)",
+      "One retry may help",
+    ],
+  ])(
+    "reports a bounded provider failure category: %s",
+    async (output, reason, guidance) => {
+      const error: Error = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-1",
+        model: "gpt-test",
+        operation: "fetch",
+        input: { url: "https://example.com" },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch: (async () =>
+          new Response(JSON.stringify({ output }), {
+            status: 200,
+          })) as typeof globalThis.fetch,
+      }).then(
+        () => new Error("expected rejection"),
+        (reason: unknown) => reason as Error,
+      );
+      expect(error.message).toContain(reason);
+      expect(error.message).toContain(guidance);
+      expect(error.message).toContain("ask the coordinator");
+      expect(error.message).not.toContain("raw.githubusercontent.com");
+    },
+  );
+
   it("retains partial content when a continuation page fails internally", async () => {
     const outputs = ["Total lines: 4\nL0: zero\nL1: one", "Internal Error ()"];
     const retainOutput = vi.fn(() => "/tmp/not-complete.txt");

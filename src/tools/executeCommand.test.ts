@@ -11095,6 +11095,114 @@ describe("handleExecuteCommand", () => {
       },
     );
 
+    describe("network read rejection guidance", () => {
+      const rejectWith = async (
+        command: string,
+        extraProviders: Record<string, unknown> = {},
+      ) => {
+        const enqueueCommandApproval = vi.fn();
+        const { handleExecuteCommand } = await import("./executeCommand.js");
+        const result = await handleExecuteCommand(
+          { command },
+          {
+            isCommandApproved: () => true,
+            findMatchingCommandRule: () => undefined,
+          } as never,
+          {
+            isRecentlyApproved: () => true,
+            enqueueCommandApproval,
+          } as never,
+          "readonly-network-guidance",
+          undefined,
+          { ...providers(), ...extraProviders } as never,
+        );
+        expect(executeCommand).not.toHaveBeenCalled();
+        expect(enqueueCommandApproval).not.toHaveBeenCalled();
+        return textPayload(result) as Record<string, unknown>;
+      };
+
+      it.each([
+        "gh pr view 123 --json headRefOid",
+        "gh pr diff 123",
+        "curl -sS https://api.github.com/repos/o/r/pulls/1",
+        "wget -qO- https://example.com/pr.diff",
+        "git fetch origin main",
+        "git ls-remote origin",
+        "git status && gh pr checks 1",
+      ])(
+        "tells background agents to ask the coordinator for %s",
+        async (command) => {
+          const payload = await rejectWith(command);
+
+          expect(payload).toMatchObject({
+            status: "rejected",
+            code: "readonly_policy_rejected",
+            coordinator_evidence_needed: true,
+            command_sent: false,
+            process_launched: false,
+          });
+          expect(payload.recovery).toEqual(
+            expect.stringContaining("Do not retry through another network"),
+          );
+          expect(payload.recovery).toEqual(
+            expect.stringContaining("background agent"),
+          );
+          expect(payload.recovery).toEqual(
+            expect.stringContaining("PR head/base SHAs"),
+          );
+          expect(payload.recovery).toEqual(
+            expect.stringContaining("writable foreground session"),
+          );
+        },
+      );
+
+      it("names ask_user when it is available", async () => {
+        const payload = await rejectWith("gh pr view 1", {
+          availableToolNames: new Set(["ask_user", "set_task_status"]),
+        });
+
+        expect(payload.recovery).toEqual(
+          expect.stringContaining("call ask_user now: background questions go"),
+        );
+      });
+
+      it("falls back to a status report when ask_user is unavailable", async () => {
+        const payload = await rejectWith("gh pr view 1", {
+          availableToolNames: new Set(["set_task_status"]),
+        });
+
+        expect(payload.recovery).toEqual(
+          expect.stringContaining("concise status message"),
+        );
+        expect(payload.recovery).toEqual(
+          expect.stringContaining("blocked set_task_status"),
+        );
+        expect(payload.recovery).not.toEqual(
+          expect.stringContaining("call ask_user"),
+        );
+      });
+
+      it("phrases ask_user conditionally when tool availability is unknown", async () => {
+        const payload = await rejectWith("curl https://example.com");
+
+        expect(payload.recovery).toEqual(
+          expect.stringContaining("call ask_user now if it is available"),
+        );
+      });
+
+      it("keeps the generic recovery for non-network rejections", async () => {
+        const payload = await rejectWith("shasum ~/.ssh/id_rsa");
+
+        expect(payload).not.toHaveProperty("coordinator_evidence_needed");
+        expect(payload.recovery).toEqual(
+          expect.stringContaining("dedicated read/search tool"),
+        );
+        expect(payload.recovery).not.toEqual(
+          expect.stringContaining("Do not retry through another network"),
+        );
+      });
+    });
+
     it("returns structured outside-workspace guidance before approval or execution", async () => {
       const enqueueCommandApproval = vi.fn();
       const { handleExecuteCommand } = await import("./executeCommand.js");

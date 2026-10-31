@@ -47,6 +47,39 @@ describe("static binary file inspection", () => {
     fs.rmSync(outside, { recursive: true, force: true });
   });
 
+  it.runIf(process.platform === "darwin" && fs.existsSync("/usr/lib/dyld"))(
+    "lets dyld_info, but not xxd, inspect Apple system images",
+    () => {
+      for (const command of [
+        "dyld_info -uuid /usr/lib/dyld",
+        "dyld_info -disassemble /usr/lib/dyld",
+      ]) {
+        expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+          eligible: true,
+        });
+      }
+      for (const command of [
+        "xxd -l 4 /usr/lib/dyld",
+        "dyld_info -uuid /usr/lib",
+        "dyld_info -uuid /usr/lib/../../etc/hosts",
+        "dyld_info -uuid /usr/libexec/../lib/dyld/../../../etc/hosts",
+        "dyld_info -uuid /System/Library",
+      ]) {
+        expect(
+          isCommandEligibleForReadOnlyExecution(command, ctx).eligible,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("rejects dyld_info through a workspace symlink to a non-system external file", () => {
+    fs.symlinkSync("/etc/hosts", path.join(root, "hosts-link"));
+    expect(
+      isCommandEligibleForReadOnlyExecution("dyld_info -uuid hosts-link", ctx)
+        .eligible,
+    ).toBe(false);
+  });
+
   it.each([
     "xxd -g 1 -l 512 capture.bin",
     "xxd -g 4 -s 172 -l 856 capture.bin",
@@ -56,6 +89,7 @@ describe("static binary file inspection", () => {
     "xxd -g 2 -l 1 inside-link",
     "xxd -l 4 'image file'",
     'xxd -l 4 "image file"',
+    "dyld_info",
     "dyld_info -help",
     "dyld_info -disassemble capture.bin",
     "dyld_info -uuid capture.bin",
@@ -107,8 +141,8 @@ describe("static binary file inspection", () => {
     "xxd -l 4 $(echo capture.bin)",
     "/usr/bin/xxd -l 4 capture.bin",
     "./xxd -l 4 capture.bin",
-    "dyld_info",
     "dyld_info capture.bin",
+    "dyld_info > output.txt",
     "dyld_info -help capture.bin",
     "dyld_info -disassemble",
     "dyld_info -disassemble capture.bin output.bin",

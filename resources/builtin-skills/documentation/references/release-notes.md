@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Codex `web_fetch` page-access failures now include a bounded cause (`cache_miss`, `not_accessible` or `fetch_failed`) when the provider reports one, and no longer suggest repeating a read the provider cannot reach. Background agents are pointed to the coordinator for the content instead.
+- Read-only `dyld_info` usage now works with bare `dyld_info`, which is how macOS prints its options. `-help` is still accepted but only produces an unknown-option error. On macOS, read-only `dyld_info -disassemble`/`-uuid` can also inspect Apple system images under `/System/Library` and `/usr/lib`, such as GPU driver bundles. Other external paths, and `xxd` on system files, remain blocked.
+
+- Read-only sessions that try a networked command such as `gh`, `curl`, `wget` or `git fetch` now get recovery guidance telling background agents to ask the coordinator (or report a blocked status) for the exact remote data they need, such as PR head/base SHAs, the diff or CI status, instead of retrying through other network transports. The read-only network policy is unchanged.
 - MCP reconnects now stop after five repeated connect-then-crash attempts instead of resetting the retry budget on every brief connection. VS Code also rechecks current server configuration before reconnecting, so removed, disabled or changed definitions cannot restart from stale queued work.
 - Command failures now identify mismatched terminal environment keys, safe shell-startup categories and the sandbox preparation phase without exposing environment values or raw host errors. Targeted native terminals can re-enter the requested working directory. Human overrides retain the completed automatic review's bounded risk and rationale.
 - Read-only agents can inspect bounded workspace binary ranges with `xxd` and use static `dyld_info -disassemble`/`-uuid` inspection. External files, secret paths, output files, reverse mode and arbitrary scripts remain blocked.

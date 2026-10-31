@@ -23,12 +23,36 @@ const MAX_STANDALONE_OUTPUT_TOKENS = 16_384;
 const FETCH_CHARS_PER_TOKEN = 4;
 const MAX_FETCH_PAGE_REQUESTS = 64;
 
+type ProviderPageFailureDetail =
+  | "cache_miss"
+  | "not_accessible"
+  | "fetch_failed";
+
 class CodexPageAccessError extends Error {
-  constructor(reason = "provider_page_internal_error") {
+  constructor(
+    reason = "provider_page_internal_error",
+    detail?: ProviderPageFailureDetail,
+  ) {
     super(
-      `Codex page access failed (${reason}). No successful page result is available. Retry the read or use another approved web transport.`,
+      `Codex page access failed (${reason}${detail ? `: ${detail}` : ""}). No successful page result is available. ${
+        detail === "cache_miss" || detail === "not_accessible"
+          ? "The provider could not reach this page, so repeating the same read is unlikely to help. "
+          : "One retry may help; repeated failures for the same host usually persist. "
+      }Use another approved web transport such as an MCP page reader, or, as a background agent, ask the coordinator to supply the content.`,
     );
   }
+}
+
+/** Bounded category from the provider's own fetch-failure line; never raw text. */
+function providerPageFailureDetail(
+  output: string,
+): ProviderPageFailureDetail | undefined {
+  if (/is not accessible via this tool/i.test(output)) return "not_accessible";
+  if (/Failed to fetch\s+https?:\/\/\S+?:\s*Cache miss/i.test(output)) {
+    return "cache_miss";
+  }
+  if (/Failed to fetch\s+https?:\/\//i.test(output)) return "fetch_failed";
+  return undefined;
 }
 
 interface CodexStandaloneWebResponse {
@@ -108,7 +132,10 @@ export async function executeCodexStandaloneWeb(
       typeof payload.output === "string" &&
       isProviderPageAccessErrorOutput(payload.output)
     ) {
-      throw new CodexPageAccessError();
+      throw new CodexPageAccessError(
+        undefined,
+        providerPageFailureDetail(payload.output),
+      );
     }
     return payload;
   };
